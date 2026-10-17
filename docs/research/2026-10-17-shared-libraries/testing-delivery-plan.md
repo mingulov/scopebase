@@ -1,0 +1,107 @@
+# Delivering and maintaining trustworthy regression tests
+
+2026-10-17. Proposed future engineering workflow. This study implements and runs none of these tests, fixtures, packages or CI jobs. Donor test source and historical receipts remain evidence about their named donors. The [testing strategy](testing-strategy.md) defines H01–H32 and tiers; [user conformance](user-conformance.md) defines UC01–UC14; [gap analysis](gap-analysis.md) defines G01–G23. Those are related obligations, not 69 interchangeable tests. The planned [regression catalog](regression-catalog.json) is an initial index of the 32 H families, not executable CI or a passing result ledger.
+
+## First delivery and present gaps
+
+The requested outcome is a ready mapped-image package with shipped developer/operator checks, two actual consumer adapters and qualified declared filesystem profiles. The held-file/read pilot is an intermediate implementation checkpoint. Its completion cannot close mapping evidence, both calibration policies, real split/collision/namespace fixtures, installed delivery or their relevant public-contract gaps. BPF attachment, capture shutdown and compiler infrastructure are separate profiles; a mapping-only package does not need a BPF compiler or live attachment merely to inspect mappings.
+
+What is missing here: a frozen public operation contract, runnable shared production code/adapters, case implementations and independent fixtures, a qualified runner/verdict engine, provisioned environment cells, packaged offline checks, and new candidate results. A historical reproducer is a starting input. Every adopted regression still needs to be demonstrated against the selected donor/extracted mechanism and a plausible broken implementation before its extraction gate can be trusted.
+
+Assign one integration owner for contracts/versions and one owner per production slice, oracle/fixture and consumer adapter. An independent reviewer checks the oracle and the failure it detects. Small changes may use one implementer plus a reviewer; organizational independence does not require a permanent second implementation. Serialize shared guests/mounts/BPF resources and give build/run lanes separate directories.
+
+## One issue travels through an explicit lifecycle
+
+| Step | Concrete output and acceptance |
+|---|---|
+| 1. State the issue | Record observed defect or proposed risk, donor pin/WIP hash, affected operation, trigger, violated invariant, permitted outcomes, scope and non-goals. Label unreproduced reports explicitly. Resolve relevant G decisions before fixing an ambiguous contract. |
+| 2. Choose the smallest reproducer | Minimize bytes, operation script and environment while preserving the causal trigger. Identify H family and UC/G refinements, named subcases, tier and consumer call sites. A source-only fake cannot replace a real filesystem or emitted-object trigger. |
+| 3. Author independent truth | Write expected identities/bytes/arithmetic or permitted outcomes from fixture intent and a separate small evidence path. Identify shared assumptions with the implementation. If truth cannot be established, narrow the assertion or leave it unqualified. |
+| 4. Demonstrate sensitivity | Run a known-bad donor revision or targeted mutant that reaches the same operation and fails the intended assertion. Then restore a valid twin. A build failure, setup timeout or missing positive is not detection of the named semantic bug. |
+| 5. Implement the repair | Change the production mechanism and its contract together. The fixed candidate must pass the reproducer without weakening expected outcomes, dropping a branch or changing its evidence tier. Review resource and partial-effect behavior as part of the repair. |
+| 6. Follow affected contracts | Select downstream checks through the dependency reasoning below, including the two real reference adapters and, when migration is selected, each migrated p11scope/OSSLscope adapter with its own observable behavior. Run additional BPF/product checks only where the changed mechanism reaches them. |
+| 7. Test the distributed package | Rebuild from the packaged source independently of donor workspaces; run the installed offline suite and product-built adapters against their exact resolved code/features. An unrelated CLI's same-semver success is insufficient. |
+| 8. Retire duplication/workaround | Remove the old copy or selected patch only after equivalent required gates pass through its replacement. Preserve the minimized issue case, provenance and removal rationale; verify consumers no longer resolve the retired path. Rollback restores the prior dependency/adaptor, not a permanent second implementation. |
+
+For each issue, keep a compact contract-to-case mapping in the catalog or adjacent issue record: invariant → production operations → consumers → oracle → case/subcases → selected cells → required evidence. Add UC/G references to H families; add a new family only for a distinct failure mechanism. Individual ordinary unit tests need no durable evidence archive; a failing minimized input and the issue explanation are the maintained assets.
+
+## Choose checks from causal impact
+
+The change author supplies a short affected-contract argument; the reviewer checks both inclusions and exclusions. Start with changed behavior, dependency/compiler effects and public claims, then walk callers, ownership transfers, representation conversions, caches and exported outputs. Paths can suggest this graph but cannot define it: a dependency upgrade, feature unification, compiler flag or fixture change can affect unchanged source. If reachability is uncertain, broaden to the named boundary or resolve the uncertainty before acceptance.
+
+| Change effect | Required checks to consider |
+|---|---|
+| Read/acquire semantics, bounds or error effects | G01–G06/G18/G22 cases, H04/H06, UC01/UC08–UC11/UC13; actual p11/OSSL read/acquire adapters. Re-run mapping validity cases when evidence is created from those reads. |
+| Identity-domain conversion, mount/proc parser or proof cache | H05; UC02–UC07/UC09–UC11 and relevant namespace/filesystem cells; G02/G06/G12. Trace both accepted matches and rejected/inconclusive paths. |
+| File/link/worker lifetime, concurrency or cancellation | Applicable H02/H19/H20 and UC11–UC13; G04/G07–G11/G18. Actual live attachment is required only for claims that include its lifecycle. |
+| Dependency/features/public API or packaging | G19/G20, source archive, documented MSRV/default/minimal/supported feature union, doctests, two downstream builds and UC14. Add underlying mechanism cases when the dependency actually implements them. |
+| Compiler/linker/loader/ABI or emitted producer shape | H07–H11/H15/H16/H29–H32 as reached, exact final object checks and affected verifier/behavior cells. Host tests cannot close these gates. |
+| Runner/oracle/fixture/schema/selection logic | Harness controls below and every verdict branch affected; requalify the cases whose prior PASS depended on changed truth or admission. Changing only a fixture can invalidate earlier release evidence. |
+
+Two-consumer conformance compares the shared contract, not normalized whole reports. Each consumer also checks its own policy, parsing, error handling and resource handoff. Do not discard distinctions in generation, ambiguity, partialness or late evidence to obtain equality. A change to bounded byte acquisition need not run every crypto workload; a changed attach descriptor lifetime must reach the actual loader/link consumer.
+
+## A finite matrix selected before the run
+
+Maintain a versioned matrix of required cells for each advertised profile. Each cell names fixture recipe/observed trigger, architecture/ABI, relevant filesystem and namespace options, kernel/config, permissions, exact production/fixture artifacts and the assertions it can establish. Reuse a cell for several invariants. Select interactions by mechanism; do not multiply every compiler, filesystem, kernel and feature combination. A diagnostic discovers eligibility against this preselected matrix; it cannot rewrite requirements around what happened to be available.
+
+For the first ready mapping package, start with the following bounded matrix, then freeze exact provisioner manifests before implementation acceptance. Both mapping policies and their permitted outcomes need coverage wherever applicable; an environment need not support positive proof in both policies.
+
+| Cell group | Required discriminating behavior |
+|---|---|
+| Ordinary control | One declared ordinary local filesystem; regular read, replacement/alias and matching mapped-range control. Add other ordinary filesystem claims only with their applicable results. |
+| Btrfs domains | Owned base/subvolume fixture with independently observed stat/maps split, plus distinct subvolume/snapshot objects whose actual raw mapping keys collide. Separate fixture validation from resolver judgment. |
+| Overlay split | Declared lower/upper/work layout and xino configuration reproducing the relevant split; lower-only and upper-existing objects. Record actual behavior, not eligibility inferred from a kernel string. |
+| Overlay aligned/copy-up | An aligned control and an independently verified copy-up transition, with selected same/split-layer, xino and metacopy options named. Combine cells when one manifest exercises both; do not advertise every option combination. |
+| Foreign mount view | Owned target namespace, wrong-table negative and synchronized mount-view churn; bind aliases where part of the supported profile. |
+| Restrictions/effects | Real restricted-credential denial and declared proc/mmap/audit limitations, plus deterministic fault controls. Include transient forbidden target-backed mmap detection under the no-new policy. |
+
+If a required split, collision or copy-up trigger does not occur, its regression remains unexercised. The aligned/refusal branch may still pass, but cannot substitute for it. Missing provisioning blocks that claim; it does not block unrelated held-file diagnostics. Exact overlay axes and filesystem scope come from UC02–UC05, not a blanket “overlay supported” label. Before release, run required mapping cells through the packaged operator route and the relevant production consumer adapters; admit exclusions openly before qualification, never in response to a failing required case.
+
+For later BPF/compiler work, use a separate small matrix per issue: actual intended oldest supported profile, ordinary current profile and the precise reproducing/new-kernel cell when distinct. One architecture is sufficient for an explicitly single-architecture claim. Add Arm/other endianness only with its own ordering/ABI design and results. Compile candidate objects once under pinned producer toolchains, identify their hashes, then execute those exact objects in admitted runtime cells; do not rebuild implicitly inside a guest and treat the bytes as unchanged.
+
+## Qualify the harness before trusting green output
+
+The runner has its own tests. A trusted required-case inventory is supplied by the package/profile, not inferred from collected successes or a candidate-controlled manifest. Verify compatible suite/build/fixture bindings, unique case IDs, setup handshakes, trigger completion, expected positive and active excluded populations, assertion verdicts and cleanup. Hash agreement is artifact binding; it cannot make a lying fixture or verdict truthful.
+
+| Planted invalid run | Assertion required from the harness |
+|---|---|
+| Wrong library/object/worker, modified fixture or stale suite | Reject qualification at artifact/contract admission; identify which binding differs. An intentionally rebuilt artifact gets a new identity and a new run. |
+| Worker claims ready but never maps, copies or executes; replayed unrelated ledger | Reject the missing trigger/operation binding through independent raw evidence or observed handshake. A control fixture with the genuine trigger must be accepted. A coherently malicious host is outside the local test's trust model. |
+| Filter out the positive branch, silently deselect a case, remove active excluded target | Report missing required coverage/non-vacuity, even if every collected assertion passes. Optional unrequested features may remain skipped with reasons. |
+| Setup EACCES, missing file or parser exception presented as expected “not equal” | Return setup/error/incomplete, not semantic-negative PASS. An expected refusal passes only after its specified operation, denial stage and positive twin are established. |
+| Production resolver supplies its device/digest as expected output | Reject the oracle arrangement in review; a wrong-domain/constant-success mutant must fail against independently acquired truth. |
+| Semantic failure or leaked owner followed by zero exit; duplicate terminal record | Keep the failed assertion/cleanup and reject a contradictory summary. An orderly terminal record cannot erase earlier required failures or unresolved ownership. |
+
+Exercise these controls when their code changes and for the initial installed runner. Keep an ordinary successful run, each intended rejection and a restored successful twin. Separate `case assertion`, `capability`, `coverage`, `harness validity` and `cleanup`; a correct denial/inconclusive result may pass its case while capability remains denied/unknown. A required positive-support branch still needs positive evidence. Do not demand a positive support result from a profile explicitly testing correct refusal.
+
+## Use each testing technique for the uncertainty it can resolve
+
+- Deterministic table/fault tests cover every named outcome and transfer barrier, N/N+1 bounds, malformed structures, public error effects and safe backend misuse. Use fake clocks for deadlines; use a real outer watchdog only to prevent a stuck test from hanging its lane.
+- Small reference models explore declared state/schedule bounds independently of production caches. Loom/Shuttle apply only where real Rust synchronization is modeled; report omitted syscall/mmap/BPF/FFI edges. Compile-time tests enforce intended owner traits and API misuse boundaries.
+- Property tests generate operation histories with explicit valid/invalid grammars; fuzz parser/decoder and bounded transition inputs. Record seeds/version and minimize failures into deterministic cases. A bounded campaign's success is scoped exploration, never proof of every race or input.
+- Real filesystem/process tests use IPC barriers rather than sleeps to arrange acquisition, mutation, copy-up, transfer and cancellation. Live BPF tests use known workload operations and named timing/admission windows. Some kernel schedules require stress; predeclare repetitions/duration, observed coverage and failure thresholds, and report when the intended schedule was not reached.
+- Every flaky failure is investigated or explicitly quarantined with an affected claim left incomplete. A retry diagnoses reproducibility; it cannot erase a semantic failure. Permit a fresh attempt after a classified provisioning failure, preserving the earlier outcome. Stop once required checks pass unless bytes, prerequisites or a named concern change.
+
+## Build isolation, execution isolation and bounded cleanup
+
+Package verification builds source archives in a fresh downstream workspace with an independent lockfile, no sibling paths and declared tool inputs. Test minimal/default/supported-union features and doctests explicitly. Then install to a read-only prefix and execute the offline closure with a separate writable root, without source, compilers or network. This detects packaging dependencies; it does not provide runtime filesystem/kernel isolation.
+
+Host execution uses owned scratch files/workers. Filesystem provisioners, namespace/audit helpers and BPF tests run in separately owned disposable environments with explicit authorization/effects; no test changes global host policy to turn a denial green. Each profile has operation/total-time, read/retained/peak-memory, FD/worker/mapping and relevant map/link/ticket budgets. A byte cap is not a promise that arbitrary filesystem syscalls are interruptible; either narrow the wait guarantee or use a bounded-custody worker design and test abandonment capacity.
+
+At each transfer, one owner or an explicit pending record retains authority. Inject failure before/after acquire/read/map/handoff/close/publication; inspect resource identities and peaks during the run. Cleanup rechecks owned identity, stops new admission, retires bounded work and records unresolved custody. It never kills a guessed PID or deletes an unproven path. Crash recovery reconciles only the named run's verified ledger. Unresolved cleanup prevents a clean profile verdict; retain sufficient local recovery information, not an unlimited archive or hidden quarantine.
+
+Ordinary tests need ordinary diagnostics and reproducible failures. Compatibility/release/user-support runs keep a compact manifest and local summary: candidate/tree/package/build hashes, resolved dependency/features, suite/fixture/oracle versions, exact selected cells, effective context, trigger/population counts, seed/schedule/limits and cleanup. Preserve minimized failing inputs and selected raw evidence needed for the claim or recovery; sanitize shareable output. No automatic upload, mandatory raw transcript retention for every unit test or new evidence-signing service is required.
+
+## Worked regressions
+
+**Btrfs collision (H05/UC02).** The provisioner creates/admits two distinct owned objects in the required subvolume/snapshot setup. Worker-held descriptors, object bytes, subvolume/mount provenance and address-containing raw maps lines establish both that they are different and that their raw mapping keys collide. If the collision is absent, the fixture is not qualified for this branch. A mutant equating raw maps keys must wrongly accept the cross-object join and fail the independent assertion; a single-inode alias control must remain acceptable under its declared proof. The repaired resolver returns per-range/object-bound evidence when sufficient, otherwise inconclusive; it must never upgrade collision equality into unique file identity. Run both policies, stale/wrong-table negatives, retained-owner cleanup, two materially different real standalone reference adapters (and selected migrated adapters later) and installed UC14. Reopen this family for changes to conversion, evidence validity, mapping policy, mount parsing or filesystem behavior, even when the resolver source file is unchanged.
+
+**LLVM used-result RMW (H29).** Compile minimal operations with used old values under pinned known-affected and selected fixed backends, plus unused-result and CAS controls. Independently compute expected old/new values; decode actual fetch encoding. Execute owned programs in the admitted kernel cell and assert returned old value as well as stored new value: memory-only success would reproduce the historical false negative. A non-fetch mutant must compile/reach execution and fail the return assertion, not merely be rejected during setup. Then exercise the actual final mixed C/Rust object/toolchain path and the affected consumers; an upstream merged PR or standalone llc pass cannot close their gate. Concurrent shared-map linearization/order claims require separate schedules and are not inferred from this stack-memory oracle. Filesystem cells are irrelevant to this compiler regression unless its consumer change also reaches file handling.
+
+## Close, stop and reopen rules
+
+A library issue closes when its frozen invariant has a valid fixture/oracle, its known-bad control fails for the intended reason, the fixed candidate and affected consumers pass the selected required tiers/cells, packaged checks work, cleanup is acceptable and selected library duplicates/workarounds are retired or deliberately retained with a reason. Product adoption and retirement of donor copies remain separate open MG items until their own application gates pass. A narrowed guarantee closes only the narrowed issue; it cannot silently close the original stronger requirement.
+
+For a requested profile, accept only if the required case/subcase set is fully accounted, the harness and artifacts are valid, every required assertion passes, required positive-support branches demonstrate their triggers/capability, and cleanup meets the contract. `FAIL` means an assertion failed; `ERROR` means the harness/run cannot judge; `BLOCKED/NOT_RUN/SKIPPED` leave required coverage incomplete. Optional out-of-profile omissions do not fail the requested profile. Emit distinct nonzero failure/incomplete/error outcomes as designed in user conformance, not one green count.
+
+Stop a dependent lane on invalid fixture truth, wrong artifact/context, escaped resource ownership or an unresolved semantic failure; independent unaffected work may continue. Reopen affected evidence after a production/adapter/feature/dependency/compiler change, changed oracle or fixture admission, new counterexample, relevant kernel/filesystem behavior change or newly advertised guarantee. Refresh only causally affected cells with explicit reasoning. T0/T1 evidence remains bounded logic/model evidence; T2 emitted artifacts, T3 real host operations, T4 exact live cells and T5 distributed consumer integration remain separate. Passing a higher label does not silently supply an omitted lower-layer assertion or a universal release guarantee.

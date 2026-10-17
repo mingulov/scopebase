@@ -1,0 +1,198 @@
+# Shipped user conformance and filesystem readiness
+
+2026-10-17. Proposed design and gap analysis; no commands below exist as a result of this study. No fixtures, mounts, builds, installs, BPF programs or tests were run. All UC cases below and H01–H32 in the [testing strategy](testing-strategy.md) remain proposed extraction work, not executed results. This document supplements that strategy and the [architecture review](architecture-review.md); it does not enlarge a donor's proven guarantees.
+
+## Decision: explicit checks are a delivered feature
+
+**A ready package must ship the means for library developers and installed users to run its advertised checks in their own environments.** Making filesystem calibration explicit controls its side effects; it does not make the checks an optional future deliverable. Maintainers must exercise all advertised modes, refusal paths and supported environment cells before claiming readiness. Users receive the same scenario contracts and a practical installed diagnostic client, with independent fixture truth and machine-readable results.
+
+Keep two milestones visible:
+
+| Milestone | Required delivery and acceptable claim |
+|---|---|
+| First internal held-file pilot | Shared regular-file acquisition/bounded reads, two consumer adapters and their applicable regressions. A useful incremental mechanism; no advertised maps-domain support or mapping-ready claim. H04/H06 and selected ownership/resource cases apply. |
+| Ready held-file package | Standalone source and installed conformance for the held-file contract, exact version identification, shipped fixtures/oracles, refusal and cleanup tests, and bounded documented claims. Mapping features are explicitly absent if not shipped. |
+| Ready advertised mapping feature | Production mapping checks, explicit calibration and no-new-target-mapping modes, the filesystem/namespace cases below, installed reproduction tooling and maintainer results across the declared matrix. H05 is mandatory; advertising descriptor-bound attachment also adds actual live H04/H19 evidence. |
+
+This preserves the small first mechanism without redefining a pilot as a complete advertised mapping facility. A mapping release cannot defer its Btrfs/overlay tests merely because those environments require provisioning. It can withhold an unsupported cell or the mapping feature until the corresponding gates pass.
+
+## Evidence and what it presently establishes
+
+Donor aliases resolve to the roots in the [testing strategy](testing-strategy.md#source-and-evidence-rules). P was inspected at `eb6bbe1df910a3cf40b6b7e8965cc65c69f203ae`; O at `4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a`. These are source pins, not newly qualified releases. Full provenance and older research pins remain in [p11scope](p11scope.md) and [OSSLscope](osslscope.md).
+
+| Inspected source | Existing mechanism/test source | Consequence for the proposed package |
+|---|---|---|
+| P `crates/manifest/src/identity.rs:111–169,177–195` | Resolves an FD mount ID through a caller-supplied mount table; distinguishes Btrfs stat and mapping devices. `open_regular` uses O_PATH, checks a regular inode, then reopens the held FD. | Preserve mount-table provenance and regular-file acquisition. A numeric mount ID alone cannot identify a global namespace. Test actual subvolume/domain cases and FIFO/device refusal. |
+| P `crates/manifest/src/identity.rs:334–351,401–520` | Overlay fallback is an explicit private read-only mapping of the held FD; `None` refuses. A guard unmaps on return. `fd_is_on_overlayfs` currently collapses fstatfs failure into false. | Mapping behavior and its side effects belong in the public contract. A neutral diagnostic needs an error-bearing classification rather than presenting failure as demonstrated non-overlay. Guard source alone is not cleanup proof. |
+| P `src/discovery/identity.rs:3192–3225,3322–3389,3434–3497` | Split-overlay match/mismatch/inconclusive cases use a scripted probe; a separate real-map oracle reads the kernel maps line with a minimal parser. | Preserve both kinds. Scripted acceptance/refusal tests do not establish a real old-overlay filesystem cell. The independent parser is a useful oracle donor. |
+| P `src/discovery/identity.rs:154–207,4189–4207,5196–5345` | Retained proof owns the original file and checks both held and candidate metadata. Foreign-mount-table test supplies synthetic text; proof tests script calibration. | Need real namespace and calibration-reuse cases as well as synthetic tests. Do not generalize retained-proof reuse to overlay or every filesystem; current tests explicitly refuse overlay/unknown/unproved cases. |
+| P `src/discovery/identity.rs:5150–5193` | The `key_is_identity` test permits a small filesystem allowlist and explicitly excludes Btrfs, overlay, tmpfs and unknown filesystems from treating the raw mapping key as file identity. | Fixing stat-versus-maps device conversion is not enough: preserve per-range evidence where a raw key cannot prove a unique file. Include a real collision control where the selected filesystem fixture can produce one. |
+| P `src/discovery/kernel_identity.rs:29–73` | Watched-file exclusions retain file owners; collisions remove acceleration rather than establish identity. | A general mapping feature needs a public way to forbid fresh target mappings and return inconclusive when proof cannot safely be acquired. |
+| O `src/plan.rs:193–240,339–427`; O `src/discovery/session.rs:3801–3838` | `PinnedFile` records fstat identity and attaches via an FD path. `LinkEntry` owns link then pin. Bounded read checks identity/length and caps reads. | Retained bytes, stat evidence, mapped identity and link ownership need separate contracts. A held FD does not freeze bytes. Preserve bounds without inheriting a universal content-immutability claim. |
+| O `tests/count_deadline.rs:552–665`; O `tests/identity_domain_audit.rs:105` | H4 uses real files with `FakeCountBackend`/`SwapBackend`; H5 audits domain annotations in source. | Strong source-level custody/domain regressions, not proof that a kernel attachment fires on the held inode or that real filesystem domains reconcile. |
+| P `src/attach/native_retirement_tests.rs:11–88,100–150,490–535` | Scripted link FDs/closers exercise retention, delayed cleanup and failed transfer. | Port these deterministic ownership cases and add a live adapter gate. Do not claim that fake retirement tests prove real detach completion. |
+
+These findings identify missing production contracts and extraction evidence. They do not assert that all corresponding donor behavior is defective. The research has not audited every current donor path.
+
+## Two user surfaces, one case specification
+
+Ship a versioned conformance corpus with every ready component. Each case declares the contract/version, applicable feature, prerequisites, fixture recipe, expected permitted outcomes, independent oracle, cleanup obligations and evidence tier. Testkit adapters execute the production public API; they must not replace the mechanism under test with the oracle.
+
+1. **Library developer surface:** a separately consumable `scopebase-testkit` package with integration helpers, case manifest, fixture protocol and independently authored expected vectors. A small adapter supplies the downstream application's actual library calls and ownership handoff. The adapter reports the exact library/build/features it exercised. Compile a standalone example consumer against the packaged source archive or registry dependency, using its own lockfile and no sibling workspaces. A workspace-only `cargo test` invocation is insufficient packaging evidence.
+2. **Installed operator surface:** a proposed `scopebase-conformance` executable or an application-embedded command using the same case protocol, plus bounded fixture workers, fixture data, case manifest, result schema and local instructions. At least one runnable route is required; a separate binary is not mandatory. It runs without a Rust/BPF compiler or donor checkout. Its normal host mode uses the exact production library code embedded in that executable/application. Prebuilt architecture-specific mapping workers and optional BPF objects have checksummed manifests; fixture source remains available for audit/rebuild. Unsupported architecture is explicit, not an attempt to build tooling silently.
+
+Use shared case IDs and protocols, with independent oracle implementations kept small and reviewable. Rust test helpers and the installed executable must not each evolve their own interpretation of success. Golden results test their result encoders; fixture truth never comes from an encode/decode round trip through the production library.
+
+An installed executable tests its own linked library. It does **not** certify whichever copy a separate application uses. For a product support receipt, require a product-built conformance adapter linked to the product's resolved library/features, or a documented in-product diagnostic entry point using that same code. A static CLI with the same semver is not sufficient. Do not add a C ABI or dynamic plugin system solely to solve this distinction.
+
+Proposed public development integration shape, to design before implementation:
+
+```text
+ConformanceAdapter:
+  build_identity() -> exact artifact/library/feature identity
+  acquire_regular(owned fixture locator, limits) -> held object + stat evidence
+  read_bounded(held object, limits) -> retained bytes + read evidence
+  mapping_evidence(held object, retained view, mapping policy) -> scoped result
+  retire(attachment owner, deadline) -> settled | pending | refused
+
+run_case(adapter, case_id, fixture_session) -> case record + cleanup record
+```
+
+Only implement methods for advertised features. Production file APIs must remain independent of a test framework and BPF dependencies. Deterministic fault injection is a separate development adapter seam, unavailable by accident in normal production behavior.
+
+## Modes and proposed operator workflow
+
+All names/options below are **proposals**, not runnable current commands. Publish final syntax with the package and exercise examples in package CI. Every mode prints its side-effect scope before execution through a machine-readable plan as well as human text.
+
+| Proposed mode | Allowed work and claim boundary |
+|---|---|
+| `describe` / `plan` | Identify installed build, available cases, prerequisites, selected root/filesystem and intended effects. Read-only metadata/proc inspection; no fixture writes, target mapping, mount or BPF load. Reports eligibility, not tested behavior. |
+| `run --profile held-file` | Owned files/subprocesses under an explicit writable fixture root; bounded reads, replacement, mutation, refusal and handle-release tests. No mounts or BPF. Permission probes use only the owned fixture. |
+| `run --profile mappings --mapping-policy no-new-target-mappings` | Observe fixture mappings established by an owned worker during declared setup. The production observer path may reuse valid held proof or read existing mapping evidence; it must not mmap the target to obtain new proof. Report inconclusive when that evidence is insufficient. |
+| `run --profile mappings --mapping-policy allow-private-calibration` | Explicit permission to privately map a bounded range of owned fixture files, read-only and non-executable, then unmap. No production/unrelated process targets. This path must be available in the ready package, with its own cleanup and boundedness tests. |
+| `run --profile filesystem-matrix --fixture-manifest …` | Consume explicitly provisioned Btrfs/overlay/namespace fixture roots. Inspect the manifest and actual mount evidence before running; never format a disk or auto-mount host paths. Per-cell prerequisites remain explicit. |
+| `run --profile attach --fixture-manifest …` | Separate privileged/isolated profile with declared owned workload, links and maps, exact prebuilt objects and cleanup. Never hidden in host inspection or mapping checks. Refusal/permission outcomes do not prove successful attach/firing. |
+| `verify-receipt` / `cleanup --run …` | Offline integrity/schema/completeness validation, or reconciliation of a named owned run. Receipt verification does not rerun behavior. Cleanup requires verified resource identity and recorded ownership, not path-prefix or PID matching alone. |
+
+For example, the following illustrates a **future** workflow, including the expected distinction between planning and active checks:
+
+```text
+scopebase-conformance describe --format json
+scopebase-conformance plan --profile held-file --fixture-root /chosen/scratch
+scopebase-conformance run --profile held-file --fixture-root /chosen/scratch --output /chosen/results
+scopebase-conformance run --profile mappings --mapping-policy no-new-target-mappings --fixture-root /chosen/scratch
+scopebase-conformance run --profile mappings --mapping-policy allow-private-calibration --fixture-root /chosen/scratch
+scopebase-conformance run --profile filesystem-matrix --fixture-manifest /chosen/fixture-set.json
+```
+
+Specify separate operation, total-duration, read-byte, retained-byte, FD, process and mapping limits. Reaching a limit yields a bounded refusal/incomplete result with cleanup status. A fixture root cannot become a broad recursive scan. Diagnostics should recommend the smallest missing profile or prerequisite, with no automatic privilege escalation, package installation or network downloads.
+
+The no-new-target-mapping promise is target/file scoped: allocator/runtime mappings may still occur. Fixture setup mappings and production observation are distinct recorded phases. An external worker can map the file to make a testable existing mapping, but the operator must see that setup effect. A development syscall seam plus an installed isolated syscall-audit test must detect a hidden target-backed mmap in the production observation phase. An unchanged before/after maps count would miss a short-lived violating mmap.
+
+Ship that audit helper for admitted architectures, with a separately declared tracing prerequisite and recorded observer effect; do not require users to assemble an undeclared tracing toolchain. When tracing is denied, retain other results and mark this enforcement subcase blocked. Opening/reading files can affect atime, caches or filesystem/LSM audit activity, so even a metadata/read-only mode is not described as having zero effects.
+
+## Fixture provisioning, independent truth and safe ownership
+
+Default fixtures require only a writable directory. Create a fresh unpredictable run directory through a retained parent directory FD, restricted to the user, and bind fixture operations to owned FDs. Refuse ambiguous existing manifests, symlink redirection and unowned entries. Use distinct A/B byte patterns, file identities, hardlinks and mapped ranges with an explicit worker protocol. Do not copy an arbitrary system executable as the only fixture; ship a small licensed native fixture with stable operation IDs and a recorded build hash.
+
+The fixture worker acquires and retains its own A/B FDs, maps the exact FD/range, and announces phase/operation IDs over an owned IPC channel. Its ledger records intended bytes and completed operations before the library result is assessed. A deliberately separate minimal oracle reads raw fstat/fdinfo/mountinfo/maps evidence. The library's parsed mapping device or reported digest must never supply its own expected answer. Timestamps may order logs; they do not prove object identity or join operations.
+
+| Fixture family | User-run provisioning contract | Required maintainer provisioning |
+|---|---|---|
+| Ordinary local filesystem | Existing writable root; detect filesystem and mount/namespace evidence. Defaults run here only. | At least one declared ordinary filesystem control, plus all ordinary filesystems explicitly supported by the release. |
+| Btrfs | Existing explicitly supplied scratch root on Btrfs; run ordinary Btrfs cases without creating a subvolume. Subvolume cases consume an owned preprovisioned subvolume or use a separate explicit provisioning operation. | Disposable Btrfs base/subvolume fixtures, including a real observed stat-versus-maps split where that regression is claimed; no synthetic success credited as that cell. Record actual domains rather than require a split on every environment. |
+| Overlay | Explicit manifest for an owned lower/upper/work/merged fixture with verified actual overlay mount and options. Rootless/container fixtures are eligible only if the needed behavior is actually observed. | Disposable isolated lower-only, upper-existing and copy-up cases. Select and declare same-filesystem versus split-filesystem layers, xino off/on/auto and admitted overflow fallback, metacopy state, and credential/mount context as supported profile axes. Include the historical split behavior and a currently aligned control when advertising that compatibility. Kernel version alone does not prove which behavior occurred. |
+| Mount namespace | Owned worker and explicitly provisioned namespace fixture. A namespace-capable provisioner may create it in an isolated worker; user mode never silently joins or changes the caller's namespace. | Observer/target differing mount tables, bind aliases and deliberate mount-table churn in a disposable namespace. Record procfs visibility and mount namespace identity; a container-only receipt does not cover the host. |
+| Attachment | Explicit isolated live fixture, supported architecture, verified exact objects and functional kernel permissions. | Relevant actual loaders/backends, file/range identities, positive and excluded-active workloads, bounded detach and resource evidence. Fake links remain a separate test tier. |
+
+Provide a human recipe and a versioned provisioner interface for each family, shipped with the fixture sources. A script needing root must explain exactly which owned mount/subvolume/namespace it creates. Default execution never formats devices, alters global mount propagation, remounts an existing filesystem, relaxes host ptrace/LSM settings or changes a user's limits. CI may create disposable filesystem images/guests through its separately authorized provisioner; the installed client does not automatically do so. Users with no suitable Btrfs/overlay fixture still receive a meaningful held-file result and an explicit untested mapping matrix.
+
+These overlay axes are material: upstream documents different inode/device behavior across layouts and xino modes, overflow fallback, copy-up, and credential-dependent permission checking. A single generic “overlay passed” receipt cannot cover them. Select supported combinations deliberately and state exclusions; do not imply every combination was tested. [Linux overlayfs documentation](https://docs.kernel.org/filesystems/overlayfs.html).
+
+## Concrete filesystem acceptance cases
+
+UC IDs refine H04/H05/H06/H19 rather than replace the 32-case inventory. Each case needs a positive twin, fault/negative control and a cleanup assertion. Rows with multiple branches become named subcases; a run reports exactly which branches executed. A supported feature's required branch cannot disappear because a test runner filtered or skipped it.
+
+| ID / scope | Trigger and independent oracle | Required result / counterexample caught |
+|---|---|---|
+| **UC01 regular acquisition and bounds** (H06, T0/T3/T5) | Exact owned A bytes; cap N and N+1; huge advertised length through a development source; actual grow/truncate barriers; FIFO, directory and non-UTF8/symlink paths. Worker ledger knows inode/bytes; guarded reader accounts allocations and actual reads. | Read the held regular inode under limits, or precise refusal; never open FIFO for data or allocate from untrusted advertised length. Do not claim a local file test proves arbitrary remote-filesystem syscall deadlines. |
+| **UC02 distinct identity domains** (H05, T0/T3/T5) | Compare raw fstat identity, FD mount-ID lookup through the correct table, actual worker address-containing maps line, and namespace identity. Ordinary control plus Btrfs base/subvolume. Add distinct held files from admitted subvolume/snapshot fixtures whose raw maps keys actually collide, when supporting that case. | Return tagged evidence and only justified relationships. Real split/collision subcases must observe their triggers; otherwise mark them unexercised. Wrong-domain substitution must fail on the split fixture; treating an equal maps key as unique file identity must fail on the collision fixture. Exact per-range proof or an honest inconclusive result is required. |
+| **UC03 overlay lower/upper** (H05, T3/T5) | Independently map lower-only and upper-existing descriptors through the owned merged mount; use the worker's raw maps lines, never the production resolver, as expected evidence. | Aligned and split cases use their actual observed domains; exact match succeeds where supported, mismatch refuses. Equal hash/path/size across distinct overlay instances cannot authorize physical identity. |
+| **UC04 overlay copy-up** (H05/H06, T3/T5) | Hold/map original FD; barrier an owned write/metadata operation that demonstrably triggers the declared copy-up mode; acquire new merged-path FD. Ledger and raw descriptor/mapping evidence establish what changed. | Old held evidence continues to describe that held object; a new object cannot inherit it through pathname or inode-number coincidence. Re-resolve or refuse the changed generation. If copy-up did not happen, the copy-up subcase is incomplete, even if all comparisons matched. Use nonexecuted data fixtures for write races; live ELF attachment is a separate case. |
+| **UC05 foreign mount view and churn** (H05/H02, T0/T3/T5) | Target namespace worker opens/maps an object unavailable or differently mounted in the observer view. Record retained proc/view and namespace identity; explicitly test an inappropriate mount table. A synchronized bind/mount change supplies a real churn case. | Observer table cannot silently authorize foreign-view evidence. Missing mount ID permits only declared bounded refresh; wrong namespace, disappearance or contradictory evidence refuses/inconclusive. Synthetic mountinfo controls check parsing separately and do not cover this real cell. |
+| **UC06 explicit calibration** (H05, T0/T3/T5) | Allow policy; map only owned held FD; raw minimal maps oracle checks address/range and exact key. Inject maps-read error, cap exhaustion, mmap denial, empty file and mismatch. | Match/mismatch/inconclusive remain distinct. Private read-only nonexecuting range is bounded and always retired. Zero/new unsupported results cannot be promoted to “same file.” fstatfs failure is reported, not converted to confirmed ordinary filesystem. |
+| **UC07 no new target mapping** (H05, T0/T3/T5) | Fixture establishes existing mappings during setup. Run without held proof, with valid retained proof, and with stale/foreign proof. Independent audit observes target-backed mmap calls during production observation, including transient mappings. | No new target mmap in every branch. Reuse succeeds only under its declared evidence contract; otherwise return inconclusive. A deliberately hidden calibration attempt must fail this test even if it later unmaps successfully. |
+| **UC08 replacement, deletion and aliases** (H04, T3/T5; T4 for attach) | Deterministic A→B→A rename barriers after acquisition and during handoff; unlink A; hardlink A; independent A/B identities and bytes. Renaming the original A back is distinct from recreating identical A bytes in a new inode. | Existing handle remains bound to original A; fresh path acquisition identifies its actual object; distinct byte-identical copies are not file identity. Held-link ownership persists until detach or unresolved quarantine. A stale or reused FD number is not an identity oracle. |
+| **UC09 in-place mutation and proof invalidation** (H06, T0/T3/T5) | Write through a second FD: grow, truncate, same-length changed bytes, and same-length write with restored mtime where permitted. Controlled mid-read barriers; compare known byte patterns/hash independently. | Detect the changes the selected contract promises to detect and invalidate dependent cached/calibrated evidence accordingly. For metadata-indistinguishable mutation, report/document that immutable contents are unproven; do not assert guaranteed race detection from length/mtime alone. Returned owned bytes can remain stable while the underlying file changes. |
+| **UC10 permission and environmental denial** (H05/H06, T0/T3/T5) | Owned unreadable file under an actually restricted credential; denied proc/maps/map_files/mountinfo/fstatfs/mmap paths; configured hidepid/LSM/seccomp cells where advertised. Fault seams are labeled separately from real denial. | Preserve denied/unsupported/unknown/incompatible reasons. No weaker fallback may invent identity. Root bypassing mode bits does not establish the file-denial subcase. Successful refusal tests can PASS their refusal assertion while mapping capability remains DENIED, not supported. |
+| **UC11 retained proof and concurrent lifetime** (H04/H05/H19, T0/T1/T3/T5) | Acquire proof once; remove original owner; retain second owner; cancel during transfer; race two consumers; mutate candidate and held file; reuse FD integers after release. Development fault schedules bracket each transfer. | Proof owns the original capability through every valid use, validates applicable domain/generation/metadata, and cannot attach to foreign/stale state. Expiry and resource caps are explicit. Adapters cannot return success while dropping a needed owner. |
+| **UC12 actual attachment/retirement** (H04/H19, T4/T5) | Prebuilt workload executes exact A and active excluded B operation IDs through independently held images; swap/unlink pathname while link lives. Verify real A firing and B exclusion; cancel/retire with deterministic fault seams and a separate real successful-detach branch. | Link demonstrably names A; retained capability survives pending/failed retirement. Detach evidence distinguishes already-admitted/buffered events from fresh controlled post-detach operation IDs; it does not prove universal writer quiescence or final collection. A stronger finalization claim needs its own protocol predicates. Quiet intervals, fake links or aggregate-only totals cannot establish this; unresolved cleanup blocks a clean receipt. |
+| **UC13 cleanup, exhaustion and interruption** (H04/H19, T0/T3/T4/T5) | Fail each acquisition/read/map/transfer/close/publication stage; TERM and worker death at known barriers; FD/byte/map caps N and N+1; outer watchdog for hang safety. Independently enumerate owned FDs/mappings/children/resources throughout. | Bounds hold before overshoot; each owned resource released or recorded unresolved. No foreign FD/process/mount is touched. Cancellation retains truthful partial results and cleanup status. Abrupt death recovery is reconciliation, never a promise that a destructor ran. |
+| **UC14 installed and downstream parity** (all selected cases, T5) | Clean source-free environment, read-only installation prefix, writable output root, offline fixture closure. Test installed diagnostic and separate downstream/product adapter at exact build identities. | Same applicable case contracts, independent expected outcomes and feature gates. No hidden workspace/compiler/network dependency. A deliberately mismatched manifest/fixture/library identity prevents qualification. |
+
+For UC02/UC03, a real current environment that has no mismatch may PASS its aligned subcase; it cannot PASS the historical split regression. The release matrix must independently contain the admitted mismatch cell if that behavior is supported. Conversely a split is not itself a failure: unsupported conversion, false equality or failure to report inconclusive is the defect.
+
+UC09 must freeze the promised guarantee before implementation. The narrow file library need not guarantee an atomic snapshot against concurrent writes. If consumers need stronger content authorization, separately design its mechanism and impossibility/refusal boundary; do not smuggle that property into a metadata check. Installed users should see `content_snapshot: not_proven` alongside successful descriptor custody where applicable.
+
+## Production work, tests and documents are distinct obligations
+
+| Gap | Production/package work | Tests and documentation required before the corresponding ready claim |
+|---|---|---|
+| Domain evidence | Named stat/mapping/mount/view/content evidence; APIs prevent accidental comparison or require an explicit checked conversion. Mapping proof records its source, scope, retained owner and validity assumptions. | UC02–UC05; compile-fail misuse cases where types enforce this; documented evidence limits. OSSL source domain tags are useful seeds, not the generic API contract. |
+| Mapping policy and refusal | Public no-new-target-mapping policy; explicit bounded calibration; failure-bearing filesystem/proc/mmap results; no silent “ordinary” classification after an error. | UC06–UC07/UC10; no-new syscall control; public side-effect disclosure and unknown/inconclusive examples. |
+| Cache and content scope | Bounded proof cache with ownership, domain/generation and invalidation rules; bytes returned separately from current-file assertions. No global unbounded cache. | UC04/UC08–UC11; same-size/restored-mtime limitation and supported proof-reuse filesystems explicitly documented. |
+| Attachment handoff | Adapter owns file plus links through successful detach or explicit unresolved quarantine; Linux crate stays below BPF adapters. | UC11–UC13 plus actual live H04/H19 where advertised; partial/cancel/error states in the public API. Field-order comments alone do not qualify a new adapter. |
+| Installed distribution | Versioned case/fixture/oracle closure, exact build manifest, offline installed runner and optional exact-object live profile. | UC14; clean source-free package tests; reproducible instructions and rootless/privileged prerequisites. |
+| Support statement | Machine-readable required-case matrix and explicit unsupported cells; result validator cannot infer support from uname/metadata alone. | Full applicable matrix at candidate bytes; denied/incomplete examples; support documentation derived from admitted results rather than unchecked prose. |
+
+The L04/T01/T03–T07 work in [TODO](TODO.md) covers portions of these obligations but does not yet specify the delivered runner, fixture provisioning, exact downstream linkage or per-environment result contract. Add named implementation work for those deliverables; do not leave this document as the only owner of their acceptance criteria. The SDK's later shared CLI integration is not a prerequisite for shipping this narrow conformance client.
+
+## Exact artifacts, results and support claims
+
+Package a conformance manifest binding case-suite/schema versions, library version and source identity, production feature set, dependency-lock/build identity, installed executable digest, fixture-worker/data/object digests, and expected target ABI/architecture. A git SHA alone does not identify dirty builds; archive/tree and patch hashes belong in development receipts. A package version alone does not distinguish different features or locally patched dependencies. The testkit verifies compatible contract/suite versions and records the exact resolved production code rather than pretending every semver-compatible build is byte-identical.
+
+Fail closed for qualification on a missing/inconsistent manifest, modified fixture or incompatible suite. A rebuild can be tested, but it receives its own build identity and receipt. Dynamic linkage, if used, records the resolved loaded library identity. Receipt verification checks artifact agreement and result semantics, not merely a signature/checksum over self-reported “PASS.”
+
+Each result records:
+
+- Requested profile, declared claim, required case/subcase set, mapping policy and all opt-in provisioning/effects.
+- Exact artifacts above; adapter identity; start/end observation; architecture, kernel/config evidence when available, libc, namespace/proc view, filesystem/mount options and observed domain behavior. Missing metadata is explicitly unknown.
+- Effective credentials/capabilities, user/mount/PID namespaces and relevant confinement context. A root-only diagnostic pass does not certify a restricted application; its product adapter must run in the application's relevant context or explicitly leave those cells unqualified.
+- Per-case execution state `PASS`, `FAIL`, `BLOCKED`, `SKIPPED`, `NOT_RUN` or `ERROR`; expected and actual assertions/populations; capability state separately as supported, unsupported, denied, unknown or incompatible; evidence tier and oracle version.
+- Nonempty positive population, active excluded controls, operation/phase IDs, completed trigger counts, injection/mutation controls, byte/FD/worker/mapping peaks, all limits and unresolved ownership.
+- Cleanup verdict, resource ledger, failure reasons, evidence paths and hashes. Raw paths, addresses and process data stay in an explicitly selected local evidence bundle; the default shareable summary uses run-local labels. No upload is automatic.
+
+An expected permission-refusal assertion can PASS while its capability is DENIED. An expected “inconclusive without new mapping” assertion can PASS while identity remains UNKNOWN. Neither establishes working mapping support. A required unsupported/denied/unexercised cell makes qualification incomplete; it cannot disappear from the denominator or make a green summary. A case that triggered a harness error cannot count as a successful negative control.
+
+Proposed command exit semantics: `0` only when every required case/subcase for the requested claim passed with acceptable cleanup; `1` for a behavioral failure; `2` for incomplete qualification such as blocked/skipped/missing cells; separate nonzero usage/harness errors. Machine results retain all distinct states. Optional unrequested features do not block a genuinely held-file-only claim; a mapping profile cannot silently downgrade itself to held-file-only success.
+
+Example **illustrative, not observed** summary:
+
+```json
+{
+  "claim": "mappings-with-overlay-split",
+  "qualification": "INCOMPLETE",
+  "case_results": [
+    {"id":"UC02.ordinary", "execution":"PASS", "capability":"supported"},
+    {"id":"UC02.btrfs-split", "execution":"BLOCKED", "reason":"fixture_missing"},
+    {"id":"UC03.overlay-split", "execution":"NOT_RUN", "reason":"only_aligned_behavior_observed"},
+    {"id":"UC07.no-proof", "execution":"PASS", "capability":"unknown", "actual":"inconclusive"}
+  ],
+  "cleanup": "settled",
+  "exit_code": 2
+}
+```
+
+Maintainer readiness is a release obligation: run the complete applicable selected matrix on exact candidate packages and two materially different real standalone reference consumers (selected product migrations later add their own application gates), including source-free installed cells and the oldest/current/defect-specific environments actually advertised. Exercise both mapping policies and every production refusal/fallback branch; sensitivity controls must reject incorrect domain substitution, hidden mapping, stale proof, early FD release and empty positive populations for the intended reasons. Re-run affected cells when code/features/dependencies/compiler/fixtures/profiles change. Historical donor receipts cannot qualify extracted bytes.
+
+A user receipt supports only its named artifact, scope, filesystem/namespace and permissions at that run. Changing the kernel, mount options, namespace, credentials, library features or artifact invalidates any automatic reuse for those changed assumptions. A passed disposable fixture demonstrates behavior in that cell; it is not proof that an unrelated mutable application image stayed unchanged after the test. Runtime production checks must still enforce their own contract on every relevant operation.
+
+## Cleanup and support handoff
+
+Keep an explicit per-run ownership ledger for resource transfers. Ordinary file/worker tests can use live owned handles plus a minimal run/fixture manifest; they do not need a transactional durable log before every handoff. Profiles creating persistent resources or promising crash reconciliation additionally need a durable ownership record before those effects. Track the applicable directory/file identities, child authority, namespace/mount identities, mapping ranges and attachment handles. A successful before/after count is insufficient: assert identity and maximum occupancy during transfers. Close/unmap/reap only resources acquired by that run and still proven owned. Never kill a PID from a stale text ledger or recursively delete a path that was replaced by a foreign inode.
+
+On orderly cancellation, stop new work, retain pending owners, finish bounded cleanup, then write a terminal receipt with settled or unresolved disposition. Test failed result publication separately from successful resource retirement. On abrupt death, kernel-owned FDs/private mappings usually have process-lifetime cleanup, while filesystem fixtures, external namespaces/mounts or explicitly persistent BPF resources need separately proven reconciliation; do not rely on this expectation as a complete crash-cleanup claim. Default profiles should avoid persistent pinned BPF resources entirely.
+
+A cleanup retry consumes only the named ledger and verifies authority again. Unresolved identity or teardown is reported and preserved with exact operator instructions; timeout never proves settlement or authorizes destructive guessing. A clean pass requires the applicable cleanup obligations to succeed. Users should be able to attach the local summary and selected sanitized evidence to a support request; shipping a conformance runner must not depend on maintainers having access to private workspaces or the user's live system.
+
+The deliverable is thus a production contract, a runnable installed operator route and developer adapter surface, owned fixture recipes, independent expected behavior, and exact per-cell evidence. Writing a proposed command list alone does not complete any of these gates.

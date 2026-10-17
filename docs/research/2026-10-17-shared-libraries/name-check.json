@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-17",
+  "note": "Availability observation only. Names are not reserved; no trademark or exhaustive project-name search.",
+  "names": [
+    {
+      "name": "scopekit",
+      "status": "exists",
+      "version": "0.1.0",
+      "repository": "https://github.com/holg/scopekit",
+      "url": "https://crates.io/crates/scopekit"
+    },
+    {
+      "name": "scopekit-linux",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopekit-linux"
+    },
+    {
+      "name": "scopekit-capture",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopekit-capture"
+    },
+    {
+      "name": "scopekit-bpf",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopekit-bpf"
+    },
+    {
+      "name": "scopekit-testkit",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopekit-testkit"
+    },
+    {
+      "name": "scopekit-btf",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopekit-btf"
+    },
+    {
+      "name": "bpfscope",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/bpfscope"
+    },
+    {
+      "name": "scope-foundation",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scope-foundation"
+    },
+    {
+      "name": "scopebase",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase"
+    },
+    {
+      "name": "scopebase-linux",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-linux"
+    },
+    {
+      "name": "scopebase-capture",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-capture"
+    },
+    {
+      "name": "scopebase-bpf",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-bpf"
+    },
+    {
+      "name": "scopebase-testkit",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-testkit"
+    },
+    {
+      "name": "scopebase-btf",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-btf"
+    },
+    {
+      "name": "scopebase-sdk",
+      "status": "not_found",
+      "http_status": 404,
+      "url": "https://crates.io/crates/scopebase-sdk"
+    }
+  ]
+}

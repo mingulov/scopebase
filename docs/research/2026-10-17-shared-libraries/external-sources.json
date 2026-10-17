@@ -1,0 +1,146 @@
+{
+  "retrieved": "2026-10-17",
+  "note": "Read-only upstream default-branch metadata, not tested dependency pins or license clearance.",
+  "sources": [
+    {
+      "repo": "sunfishcode/cap-std",
+      "url": "https://github.com/sunfishcode/cap-std",
+      "default_branch": "main",
+      "sha": "0e476ad94ec98ef65fb236e471e0aaf20b7eb1e9",
+      "commit_date": "2026-10-15T23:39:29Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "NOASSERTION"
+    },
+    {
+      "repo": "retis-org/btf-rs",
+      "url": "https://github.com/retis-org/btf-rs",
+      "default_branch": "main",
+      "sha": "0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+      "commit_date": "2026-09-14T12:00:32Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "LGPL-2.1"
+    },
+    {
+      "repo": "aya-rs/aya",
+      "url": "https://github.com/aya-rs/aya",
+      "default_branch": "main",
+      "sha": "794f43bf69eb417ba4d7a4a6856fc89ad92a3fcc",
+      "commit_date": "2026-10-17T15:04:34Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "aya-rs/bpf-linker",
+      "url": "https://github.com/aya-rs/bpf-linker",
+      "default_branch": "main",
+      "sha": "537997d904d040bb4a751c290f84768f8067529c",
+      "commit_date": "2026-10-17T08:18:21Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "libbpf/libbpf-rs",
+      "url": "https://github.com/libbpf/libbpf-rs",
+      "default_branch": "master",
+      "sha": "37139b4abe8327c90d8d5d6f56b6a78ffcb347b7",
+      "commit_date": "2026-10-14T20:39:43Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "NOASSERTION"
+    },
+    {
+      "repo": "libbpf/libbpf",
+      "url": "https://github.com/libbpf/libbpf",
+      "default_branch": "master",
+      "sha": "85c0d575a447651bbeb8e2376eacd64c30dce9a6",
+      "commit_date": "2026-10-02T20:04:03Z",
+      "archived": false,
+      "language": "C",
+      "license_metadata": "NOASSERTION"
+    },
+    {
+      "repo": "libbpf/blazesym",
+      "url": "https://github.com/libbpf/blazesym",
+      "default_branch": "dependabot/cargo/zip-9.0.0",
+      "sha": "e325200d384d5a05d50c74ac20fab68526d92d3e",
+      "commit_date": "2026-10-13T11:51:18Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "BSD-3-Clause"
+    },
+    {
+      "repo": "cyphar/libpathrs",
+      "url": "https://github.com/cyphar/libpathrs",
+      "default_branch": "main",
+      "sha": "fbcd2a0b594c546592213d54e3030d6e8319936d",
+      "commit_date": "2026-10-15T08:30:56Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "NOASSERTION"
+    },
+    {
+      "repo": "bpfman/bpfman",
+      "url": "https://github.com/bpfman/bpfman",
+      "default_branch": "main",
+      "sha": "bd900e1262c4a5c17e5e614f8e8947e2e198c51c",
+      "commit_date": "2026-10-12T05:13:01Z",
+      "archived": false,
+      "language": "Go",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "eunomia-bpf/eunomia-bpf",
+      "url": "https://github.com/eunomia-bpf/eunomia-bpf",
+      "default_branch": "master",
+      "sha": "a5408a8c3614bd4e008c1f999bb4ee9738e2fc41",
+      "commit_date": "2026-08-09T07:40:47Z",
+      "archived": false,
+      "language": "Rust",
+      "license_metadata": "MIT"
+    },
+    {
+      "repo": "aquasecurity/btfhub",
+      "url": "https://github.com/aquasecurity/btfhub",
+      "default_branch": "main",
+      "sha": "dac41b8047f90d16c88f808eced729dcb5680871",
+      "commit_date": "2026-08-03T12:12:15Z",
+      "archived": false,
+      "language": "Go",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "inspektor-gadget/inspektor-gadget",
+      "url": "https://github.com/inspektor-gadget/inspektor-gadget",
+      "default_branch": "main",
+      "sha": "eacc68f33efd8a43577561c7c8a4eb1035124959",
+      "commit_date": "2026-10-15T12:57:08Z",
+      "archived": false,
+      "language": "C",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "cilium/tetragon",
+      "url": "https://github.com/cilium/tetragon",
+      "default_branch": "main",
+      "sha": "c9600dc8ccb43e7d4dfd14017680b7d3f3979bb6",
+      "commit_date": "2026-10-16T15:52:14Z",
+      "archived": false,
+      "language": "C",
+      "license_metadata": "Apache-2.0"
+    },
+    {
+      "repo": "aquasecurity/tracee",
+      "url": "https://github.com/aquasecurity/tracee",
+      "default_branch": "main",
+      "sha": "2f9dc40c20b17c2ba27f6d92b25e62790bd48a62",
+      "commit_date": "2026-09-29T14:46:58Z",
+      "archived": false,
+      "language": "Go",
+      "license_metadata": "Apache-2.0"
+    }
+  ]
+}

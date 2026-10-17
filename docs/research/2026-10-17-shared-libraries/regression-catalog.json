@@ -1,0 +1,2982 @@
+{
+  "schema_version": "0.2.0",
+  "catalog_kind": "INITIAL_RESEARCH_CASE_FAMILY_CATALOG",
+  "status": "RESEARCH_ONLY",
+  "implementation_status": "NOT_IMPLEMENTED",
+  "execution_status": "NOT_RUN",
+  "runnable": false,
+  "created_date": "2026-10-17",
+  "scope": {
+    "case_families": "H01-H32",
+    "case_count": 32,
+    "coverage_boundary": "Initial mapping of the existing H families, not an exhaustive catalog of every historical bug. UC01-UC14, G01-G23 and capability-specific obligations remain additional requirements.",
+    "primary_source": "testing-strategy.md",
+    "test_runner_implemented": false,
+    "ci_selector_implemented": false,
+    "selected_source_bytes_qualified": false
+  },
+  "selection_policy": {
+    "rule": "Select applicable cases/subcases and tiers from the advertised operation and support claims before environment discovery. Missing required prerequisites/results remain incomplete.",
+    "candidate_applicability": "Candidate consumer mappings are proposed impact/CI selection inputs, not evidence of adopted implementation, complete donor coverage or current test qualification.",
+    "before_porting": [
+      "Resolve the donor alias to the exact selected full source SHA and relevant WIP/dirty hashes using the cited donor inventory.",
+      "Record provenance/license and identify the concrete defect/subcase accepted by the new contract.",
+      "Instantiate independent workload/fixture truth, positive and active excluded controls, and the named bad-control assertion.",
+      "Bind future results to exact candidate library/features/backend/object/profile/fixture/suite versions; do not reuse historical donor receipts for changed bytes."
+    ],
+    "not_a_pass": [
+      "NOT_RUN",
+      "BLOCKED",
+      "SKIPPED required case",
+      "missing required subcase",
+      "empty unverified positive population",
+      "setup or harness failure"
+    ],
+    "oracle_boundary": "Expected truth must be authored from independent fixture/workload/reference semantics; never copy the observer actual value or use same-engine round trip as sole oracle. Coherent custom-backend assertions retain their own provenance and cannot mint trusted Linux authority.",
+    "sensitivity_boundary": "A bad control is killed only when the named assertion is reached after setup and trigger verification; repeat a restored valid twin. It is not enough that the run crashes or times out.",
+    "component_boundary": "The file-only pilot does not wait for unrelated BPF/native features and does not complete the requested ready mapped-image package. Mapping readiness also requires the applicable UC real environment, policy and installed delivery obligations.",
+    "donor_coverage_boundary": "Inspected anchors establish only the named implementation/test/research source. No complete-family coverage, fresh test pass, extracted implementation or current-byte qualification follows. An anchor with alias null preserves an explicitly unresolved source-root association rather than guessing a product pin.",
+    "tier_and_cell_planning": {
+      "status": "REQUIRED_BEFORE_PORTING",
+      "selection_order": [
+        "Declare the supported operation, semantic strength, consumers and environment profile.",
+        "Select applicable H/UC/G obligations and name their concrete subcases.",
+        "Fix each subcase required tiers/cells, independent oracle, bad control, non-vacuity and cleanup criteria.",
+        "Then discover or provision admitted environments and run the plan."
+      ],
+      "inventory_is_not_a_requirement_union": true,
+      "unavailable_required_cell": "Remain BLOCKED/NOT_RUN/incomplete; do not remove a cell, narrow a claim silently or count a refusal as successful live capability solely because the environment is unavailable.",
+      "live_claim_rule": "Any advertised load/verifier/attachment/producer behavior, kernel ordering or live closure claim requires the corresponding T4 cell and semantic evidence. Host/model/object evidence cannot discharge that live obligation. A purely host or object claim does not inherit unrelated T4 gates.",
+      "plan_changes": "Changing claims or required cells is an explicit versioned plan change, never an automatic environment-dependent downgrade."
+    },
+    "cross_cutting_delivery_gate": {
+      "tier": "T5",
+      "required_when": "Delivering any selected Rust or native package/component/adapter/profile, including those whose H family inventory lacks T5.",
+      "required_evidence": "Applicable contracts run through the actual downstream/package surface and installed or source-free route specified by the selected delivery claim, with exact library/features/backend/fixture/suite identities and the independently authored oracle. The selected component acceptance also retains its real consumer integration requirements.",
+      "scope": "Rust delivery is priority one. Native C/Mojo adapter delivery remains later unless explicitly selected; listing a later native profile does not gate the first Rust component.",
+      "h13_clarification": "Installed Rust transport/staging adapters require T5 just as selected native adapters do; H13 T5 is not restricted to C/Mojo or cross-language use.",
+      "not_sufficient_alone": "T5 complements and does not replace applicable T0-T4 or real filesystem/namespace cells."
+    }
+  },
+  "source_aliases": {
+    "P": {
+      "root_as_recorded": "`/home/user/src/m/p11scope-ws/.worktrees/v040-integration`",
+      "pin_document": "p11scope.md#revision-and-authority",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "W": {
+      "root_as_recorded": "`/home/user/src/m/p11scope-ws`; preserved compiler research at workspace commit `33fdd75ee69575cf3f309da1ddef2e0fad5d3181`",
+      "pin_document": "p11scope.md#revision-and-authority",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "K": {
+      "root_as_recorded": "`/home/user/src/m/kryprobe-ws/kryprobe`",
+      "pin_document": "kryprobe.md#revision-and-custody",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "O": {
+      "root_as_recorded": "`agent@um790:/work/osslscope-ws/osslscope/.worktrees/preview-r21`",
+      "pin_document": "osslscope.md#source-custody-and-current-state",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "M": {
+      "root_as_recorded": "`agent@um790:/work/memveil-ws/repos/memveil`",
+      "pin_document": "memveil.md#revision-and-custody-boundary",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "L": {
+      "root_as_recorded": "`agent@um790:/work/memveil-ws/repos/libbpf-mojo`",
+      "pin_document": "memveil.md#revision-and-custody-boundary",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "J": {
+      "root_as_recorded": "`agent@um790:/work/mojobpf-ws/.worktrees/mojobpf-cr09-m1`",
+      "pin_document": "memveil.md#mojobpf-limited-future-integration-reconnaissance",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    },
+    "LJ": {
+      "root_as_recorded": "`agent@um790:/work/mojobpf-ws/.worktrees/libbpf-joint-integration-20261016`",
+      "pin_document": "memveil.md#complete-memveillibbpf-branch-and-worktree-inventory",
+      "selected_full_sha_for_port": null,
+      "pin_status": "RESOLVE_AND_REFRESH_BEFORE_PORTING",
+      "qualification": "SOURCE_REFERENCE_ONLY_NOT_CURRENT_BYTE_EVIDENCE"
+    }
+  },
+  "evidence_tiers": {
+    "T0": "Pure Rust contract tests; no syscall/kernel claim.",
+    "T1": "Explicit userspace state/schedule models; only represented production edges.",
+    "T2": "Actual emitted and transformed objects, ELF/BTF/relocation checks; not live semantic proof.",
+    "T3": "Unprivileged owned Linux syscall/integration fixtures under named permissions.",
+    "T4": "Isolated live kernel cell with exact object and independent active workload.",
+    "T5": "Actual downstream/package/installed consumer conformance; later native adapters where applicable."
+  },
+  "related_documents": {
+    "UC": "user-conformance.md",
+    "G": "gap-analysis.md",
+    "TODO": "TODO.md"
+  },
+  "cases": [
+    {
+      "id": "H01",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Successful exec advances image lineage; fork and thread creation have distinct identity effects.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/native/image_identity_fork.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "tests/exec_task_continuity.rs:171",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:2224",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Owned workload ledger records fork, CLONE_THREAD, leader/nonleader successful exec and failed exec with explicit operation IDs; expected lineage changes follow the operation script, not observed events.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Advance image generation on failed exec or mint a process birth for CLONE_THREAD.",
+        "required_failure_layer": "identity transition assertion after the scripted operation is independently witnessed"
+      },
+      "affected_capabilities_or_profiles": [
+        "producer task birth and exec identity"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Existing task/image protocol donor; shared adapter candidate."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Connector lifecycle/image consumer candidate; transport semantics remain distinct."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G11",
+          "G12"
+        ],
+        "TODO": [
+          "B09",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H01"
+      },
+      "scope_limits": "A userspace model or polling PID set cannot qualify actual BPF/connector exec continuity; task replacement and observed image are separate.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Pure lineage scripts, emitted producer guards and actual fork/exec continuity have separate tiers; advertised producer continuity requires its live T4 cell.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H02",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Acquisition races and denied pidfd never retarget authority or promote weak observation to signaling rights.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/process.rs:719-756",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "src/pin.rs:144-176",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Fixture controls original child lifetime and acquisition barriers; independent child handles distinguish original and replacement, and a foreign sentinel must remain alive.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Reuse a numeric PID after death or attach signaling rights to a proc-stat-only fallback.",
+        "required_failure_layer": "authority/type or controlled signaling refusal, with foreign sentinel preserved"
+      },
+      "affected_capabilities_or_profiles": [
+        "process observation versus control authority"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Process pin acquisition donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "ExternalTarget versus owned-child authority donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate narrow helper custody adapter; no general target API implied."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC05",
+          "UC10"
+        ],
+        "G": [
+          "G03",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "TODO": [
+          "L02",
+          "L05",
+          "T01",
+          "T04"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H02"
+      },
+      "scope_limits": "Deterministic acquisition seam and real process fixture are separate; forced PID reuse requires an admitted isolated environment.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Deterministic authority/acquisition logic and unprivileged process fixtures do not automatically require privileged forced-reuse tests; advertised forced-reuse/live producer claims require their selected isolated cells.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H03",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Session/map domains and generations reject foreign/stale/exhausted tokens while preserving field-specific valid zero.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/native/image_identity.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/attach/native_retirement_tests.rs:274,329",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_identity.mojo",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Independent token ledger names issuer domain, epoch, generation and exhausted allocation boundary; fixtures explicitly designate cookie zero invalid and exec zero valid only in their own contracts.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Erase issuer domain, accept a stale generation or wrap an exhausted token allocator into a live identifier.",
+        "required_failure_layer": "token admission or retirement authorization assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "epoch scoped identity and retirement tickets"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Identity and retirement donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Session/lineage identity donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate stable-cookie/session domain adapter."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate request/transform generation adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC11"
+        ],
+        "G": [
+          "G06",
+          "G12",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "L02",
+          "L09",
+          "B09",
+          "T01",
+          "T02"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H03"
+      },
+      "scope_limits": "Restart starts a new domain unless a separately implemented recovery protocol exists; no persistent crash-resume claim.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T1",
+        "T2"
+      ],
+      "inventory_scope_notes": "Token models, host retirement authorization and emitted issuer protocol are separate subcases. New domain/refusal claims do not imply persistent crash-resume support.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H04",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Replacement, unlink and aliases do not retarget a held file; attachment retains its original file through retirement.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/count_deadline.rs:552,599",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/site_identity.rs:261,320",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "P",
+          "location": "src/discovery/identity.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Fixture opens distinct A/B inodes with independently known bytes and synchronizes A-to-B-to-A renames/unlink/hardlink; actual owned target executes distinguishable sites for live attach checks.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Reopen the original path after acquisition, or release the retained file before link retirement.",
+        "required_failure_layer": "held-object binding assertion; live attach must fail the A-site/B-site attribution assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "held file capability",
+        "descriptor bound attachment"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Held-image and retirement donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Descriptor-bound attachment donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate helper/file utility use; uprobe adoption not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC08",
+          "UC11",
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G02",
+          "G06",
+          "G08",
+          "G10"
+        ],
+        "TODO": [
+          "L03",
+          "L07",
+          "B02",
+          "T01",
+          "T04",
+          "U02",
+          "U06"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H04"
+      },
+      "scope_limits": "T4 applies when advertising attachment; file-only custody checks do not qualify live attachment. In-place content mutation is a separate limit.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Held-file byte/FD custody subcases use applicable T0/T3 and delivery T5 without inheriting attachment T4. Advertising descriptor-bound attachment adds actual live attach/firing/retirement evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H05",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Stat, mount, namespace and maps identities remain tagged; mappings require justified match, mismatch or inconclusive evidence.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/discovery/identity.rs:3322-3381",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "tests/identity_domain_audit.rs:105",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent worker opens/maps known held objects and records raw fstat, correct namespace mount-table data and address-containing maps lines; declared Btrfs/overlay/churn fixtures verify actual split or collision triggers.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Substitute stat device for maps device or treat equal raw maps keys as unique file identity.",
+        "required_failure_layer": "domain/relation assertion in an actually triggered split or collision subcase"
+      },
+      "affected_capabilities_or_profiles": [
+        "ready mapped image evidence",
+        "Btrfs overlay and foreign mount views"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Filesystem-domain calibration donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Explicit stat-domain donor; candidate maps-evidence adapter is new work."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate general Linux utility use; equivalent calibration not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC02",
+          "UC03",
+          "UC04",
+          "UC05",
+          "UC06",
+          "UC07",
+          "UC10",
+          "UC11",
+          "UC14"
+        ],
+        "G": [
+          "G02",
+          "G06",
+          "G12",
+          "G18"
+        ],
+        "TODO": [
+          "L04",
+          "U01",
+          "U02",
+          "U05",
+          "U06",
+          "U07",
+          "U08",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H05"
+      },
+      "scope_limits": "T4 only for corresponding live-attachment claims. Required real split/collision/copy-up branches cannot PASS when their trigger is absent; aligned controls are distinct. No generic kernel-version oracle.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Pure tagged-domain fixtures and real filesystem/namespace mapping cells are distinct. Ready mappings require actual declared UC cells and installed delivery; T4 is required for a corresponding advertised live-attachment claim, not merely to inspect an owned mapping.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H06",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Reads reject oversize before expensive allocation and expose promised growth, truncation, identity and budget failures.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/site_identity.rs:1247,1287,1322,1382",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/capture_controller.rs:7487,8782",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Scripted source/allocator independently counts requested reads and peak allocations at cap N/N+1; real owned files use known byte patterns and controlled growth/truncation barriers.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Allocate advertised length before checking cap, bypass remaining cache budget, or return successful bytes after a promised detectable read race.",
+        "required_failure_layer": "before-allocation/read-budget assertion or explicit changed-source result assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "held regular file bounded reads",
+        "consumer relevance cache budgets"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Bounded-read/cache regression donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate first file/read integration."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate capped helper/file reader adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC01",
+          "UC04",
+          "UC09",
+          "UC10",
+          "UC13",
+          "UC14"
+        ],
+        "G": [
+          "G01",
+          "G03",
+          "G04",
+          "G05",
+          "G18"
+        ],
+        "TODO": [
+          "L03",
+          "L07",
+          "L08",
+          "Q06",
+          "T01",
+          "T03",
+          "U03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H06"
+      },
+      "scope_limits": "Metadata-only schemes do not prove same-size/restored-mtime mutation impossible; byte bounds do not prove syscall latency bounds.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3"
+      ],
+      "inventory_scope_notes": "Host bounds/race/read semantics and delivered consumer behavior require their applicable T0/T3/T5 gates; unrelated BPF/live-kernel cells do not gate a file/read claim.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H07",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Local section-symbol relocation resolves each exact map definition and rejects interior, missing or ambiguous offsets.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/bpf_map_contracts.rs:61-100",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "third-party/patches/aya-obj-0.3.0/aya-obj-map-relocation.patch:149-178",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Two actual object map definitions receive independently assigned distinct sentinel FDs; expected relocation-to-definition table is authored from fixture layout, with signed-addend boundary vectors.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Resolve both section-symbol references to one arbitrary map FD or accept an interior/ambiguous definition offset.",
+        "required_failure_layer": "relocated-instruction sentinel-FD assertion or loader rejection before load"
+      },
+      "affected_capabilities_or_profiles": [
+        "BPF object map relocation"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Loader-patch and emitted-object donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate shared loader conformance corpus."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate loader upgrade/object checker conformance."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate emitted-object interchange checks; same bug not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B05",
+          "B06",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H07"
+      },
+      "scope_limits": "Actual live map IDs are required for replacement-loader live claims; legal section-symbol emission is not itself an LLVM defect.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Object relocation checker/transform subcases use T2 and delivery T5; advertised loader/kernel map binding adds relevant T4 distinct live map-ID evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H08",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Task-storage metadata, guarded CO-RE shapes and initialized padding admit only safe compiled paths.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/exec_task_continuity.rs:171,245",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "tests/python/test_bpf_map_defs.py",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "scripts/check-stop-gate-object.py",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Independently authored target-BTF scalar/bitmap/missing/unknown layouts and byte-level padding expectations are compared with the final object; oldest supported verifier and owned identity workload supply separate outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Remove a field-existence/shape guard or leave a padding byte uninitialized while retaining a nominal object build.",
+        "required_failure_layer": "object structural/shape assertion; separate oldest-cell verifier or live semantic assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "CO-RE task identity shape admission",
+        "old-kernel verifier compatibility"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Compiled shape/padding donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate shared object/profile checks."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate callback/loader shape corpus."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate BTF-emission contract vectors."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "B04",
+          "B09",
+          "B10",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H08"
+      },
+      "scope_limits": "Synthetic relocation/interpreter success, host verifier load and live identity behavior remain separate evidence.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Synthetic CO-RE/shape/object checks use T2; advertised old-kernel verifier acceptance or actual identity behavior adds the corresponding T4 cell.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H09",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Concurrent uprobes never observe another task START key; workaround removal is qualified per kernel cell.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/python/test_bpf_map_defs.py:274",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "crates/ebpf/src/main.rs:173-205",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Owned concurrent workload ledger supplies unique per-thread keys and exact entry/return joins; final object checker separately verifies the selected stack-preserving pattern.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Remove the stack-preserving path from the affected object; run the resulting mutant only in the declared affected-kernel reproduction cell.",
+        "required_failure_layer": "current structural rule rejects the mutant; live per-thread key oracle rejects cross-task contamination in affected cell"
+      },
+      "affected_capabilities_or_profiles": [
+        "uprobe stack isolation",
+        "kernel workaround retention or removal"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Private-stack workaround and structural regression donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate uprobe backend hazard corpus; equivalent workaround adoption not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC12"
+        ],
+        "G": [
+          "G12",
+          "G14",
+          "G15"
+        ],
+        "TODO": [
+          "B08",
+          "B10",
+          "C04",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H09"
+      },
+      "scope_limits": "A mutant not reproducing corruption on the pinned affected environment is inconclusive; a repaired-kernel control may support removal after independent semantics and remaining gates pass.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "T2 checks the current workaround pattern. Advertised affected-kernel reproduction/removal safety requires the appropriate affected/repaired T4 cells and independent thread-key oracle; a missing reproduction is not silently PASS.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H10",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Object graph transformations preserve valid calls, callback metadata and exact intended callback execution.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "xtask/src/bpf/strip.rs:1019-1193",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "O",
+          "location": "src/loader.rs:3110-3611",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/d_btf_load.rs:250,405,452,652,706",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Fixture independently specifies reachable functions, instruction boundaries, relocation ownership and N inputs times M callback executions; inspect final and translated images and compare live count with workload ledger.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Keep a dead builtin/call target, shift a relocation onto the wrong owner, or strip required callback BTF while preserving build exit zero.",
+        "required_failure_layer": "object/loader structural rejection; separate live exact callback-count assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "BPF object transformation",
+        "callback metadata and execution"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Dead-text/relocation transformation donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Callback BTF/load/execution donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate common object-kit consumer."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate final-object interface consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B05",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H10"
+      },
+      "scope_limits": "Successful parsing, transformation or verifier load cannot substitute for the live callback population.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Graph transformation/metadata checks use T2; advertised callback execution or live loader semantics adds T4 exact workload/callback evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H11",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Bounded BTF queries resolve exact base/split type identities and reject cycles, escapes and wrong prototypes/linkage.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/btf.rs:1966,2088,2394,2460",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "J",
+          "location": "tests/elf/test_map_btf.py",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#mojobpf-limited-future-integration-reconnaissance"
+        }
+      ],
+      "independent_oracle": "Hand-authored bounded graph fixtures specify expected parent/string/type/prototype relations independent of parser traversal; actual emitted map definitions and kernel map type linkage are checked separately.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Accept a same-name wrong type, follow a wrapper cycle indefinitely, or accept .BTF presence despite missing map type linkage.",
+        "required_failure_layer": "bounded semantic query refusal or explicit final-object/kernel type-linkage assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "BTF semantic admission",
+        "typed map BTF linkage"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Strict/split BTF query donor."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Current-branch typed map linkage donor, unqualified."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate existing-parser/profile adapter."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate bounded BTF/profile vector consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B04",
+          "C04",
+          "T01",
+          "T03",
+          "X03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H11"
+      },
+      "scope_limits": "Type IDs are local to their base/module context. Differential parser agreement is supplemental; J branch source does not imply the consumed MemVeil toolchain contains it.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Bounded graph/parser semantics use T0 and emitted linkage checks use T2; actual kernel type linkage or hook admission claims add their T4 cells.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H12",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Bounded ring consumption handles busy/discard/wrap and fixed boundaries without claiming premature completion.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "third-party/patches/aya-0.14.0/aya-ring-reader.patch:655-860",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/drain/frame.rs:86-144",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Controlled real-reader mappings use a separately computed cursor/frame ledger across wrap, busy, discard and producer extension; an actual owned producer supplies the independent live record population.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Treat BUSY as complete, advance past the fixed stop boundary, or advance/drop a record twice on wrap.",
+        "required_failure_layer": "cursor/conservation/boundary assertion in the maintained reader; live record ledger for producer claims"
+      },
+      "affected_capabilities_or_profiles": [
+        "ring cursor and fixed-tail drain"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Maintained Aya ring patch donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Frame-step/drain donor."
+        },
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate shared transport contract vectors; reader implementation stays native."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G08",
+          "G10",
+          "G15"
+        ],
+        "TODO": [
+          "B05",
+          "B07",
+          "Q03",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H12"
+      },
+      "scope_limits": "Controlled mappings do not prove kernel aliasing/producer memory order; snapshot cursor does not prove writer quiescence.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T1",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Cursor/frame tables, userspace schedules and controlled mappings use their T0/T1/T3 subcases; actual kernel producer/aliasing/memory-order claims add corresponding T4 evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H13",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Held ring bytes survive short retry/source mutation and are delivered once with disjoint transport accounting.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "L",
+          "location": "tests/native/ring_conformance.c:216-392,447-577",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_ring.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Fixture authors immutable source bytes and independently tracks received = delivered + held + malformed + dropped; mutation occurs after native callback and before repeated short destination retries.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Retain a borrowed callback pointer, consume/drop held bytes on short output, or count callback-negative consumption as kernel loss.",
+        "required_failure_layer": "byte identity and exactly-once transport conservation assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "native ring staging and retry semantics"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Native ring staging/conformance donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Existing bridge consumer; candidate exact consumed-version adapter."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate transport vector consumer."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate transport vector consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G06",
+          "G10",
+          "G18"
+        ],
+        "TODO": [
+          "B07",
+          "Q01",
+          "T01",
+          "T03",
+          "X01",
+          "X02"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H13"
+      },
+      "scope_limits": "Transport staging loss and kernel producer loss remain separate. Native/Mojo package conformance is later priority.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T5"
+      ],
+      "inventory_scope_notes": "Contract vectors and maintained native-reader controlled mappings use T0/T3. Any delivered Rust transport/staging or later native adapter adds T5 under the cross-cutting delivery gate; native rollout is not an initial Rust prerequisite.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H14",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Writer slots protect same-CPU cross-program and guarded same-program updates; refusals have independent miss accounting.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "docs/decisions/ADR-0013.md",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_fence.rs:406,534",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/bpf-kcrypto/src/bin/kcrypto.rs:815",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Small explicit interleaving schedule and owned live program/workload ledger specify expected increments, entries/refusals and writer partition; plain-store countermodel is separate from host atomic model.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Share a plain-load/store per-CPU slot across two program writers and schedule read/read/write/write.",
+        "required_failure_layer": "lost-update/reference-state assertion; independently triggered live total/miss conservation assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "cross-program writer partitioning",
+        "same-CPU reentry"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Writer-slot/countermodel donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate topology protocol tests; lease/private-stack protections are distinct."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate future live writer protocol tests; implemented equivalent topology not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G10",
+          "G15"
+        ],
+        "TODO": [
+          "B08",
+          "Q03",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H14"
+      },
+      "scope_limits": "Per-CPU does not imply exclusive writer. Host atomics/Loom cannot qualify plain-store BPF semantics or an untested architecture.",
+      "family_evidence_tier_inventory": [
+        "T1",
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Small writer schedules and emitted partition checks use T1/T2; advertised BPF writer isolation/increment conservation adds T4 named interleavings.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H15",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Insertion identity stays frozen across CPU migration and every per-CPU ABI lane is consumed at the correct stride.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_who.rs:532,585,637,661,677",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-abi/src/kcrypto_agg.rs:1172",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Independent task/operation ledger fixes first-insert identity including valid zero fields; synthetic byte layouts author lane sentinels for old/new ABI and live migration/first-insert barriers produce expected totals.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Overwrite insertion identity on migration, interpret valid UID/stack zero as unknown, or decode 88-byte lanes using 80-byte stride.",
+        "required_failure_layer": "identity provenance and independently expected lane-sum assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "insertion-frozen identity",
+        "per-CPU ABI consumers"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "WHO and ABI regression donor."
+        },
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate per-CPU layout vector consumer."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate first-insert concurrency scenario consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G16",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "B01",
+          "B08",
+          "Q01",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H15"
+      },
+      "scope_limits": "Model mirrors are not real migration proof; inventory every consumer changed by ABI evolution.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Host provenance/lane decoding and emitted ABI checks use T0/T2; real CPU migration/first-insert claims add T4 independent task/workload evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H16",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Per-CPU buffers use checked aligned value stride times possible CPUs, preserving offline lanes or refusing malformed topology.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/mapops.rs:526-616",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_maps.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:2528,2571",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Explicit independent topology snapshots include sparse/overlap/invalid ranges and offline lanes; protected output buffers with sentinel values verify align8(1/7/8/9/13) times possible CPU count.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use online CPU count, accept overlapping topology, skip an offline lane or multiply without overflow checking.",
+        "required_failure_layer": "geometry refusal before syscall/copy or protected-buffer/lane extent assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "possible CPU topology",
+        "checked per-CPU map geometry",
+        "lifecycle close CPU coverage"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Checked map geometry donor."
+        },
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Native per-CPU geometry source donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Lifecycle CPU-lane donor, not established generic geometry API."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate shared map geometry adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G15",
+          "G16",
+          "G18"
+        ],
+        "TODO": [
+          "B01",
+          "B08",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H16"
+      },
+      "scope_limits": "Changed-topology close must use its declared snapshot policy; generic feature names or guessed hardware counts are not geometry evidence.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Geometry arithmetic and controlled buffer/syscall fixtures use T0/T3; actual kernel map lane or lifecycle-close topology claims add applicable live cells rather than inheriting them for a pure geometry function.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H17",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Loss signaling survives full identity maps and caps degrade exactness without fabricating omitted counts.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_who.rs:783-1021",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-abi/src/kcrypto_agg.rs:133-154",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Independent attempted insertion ledger controls exact capacity, preexisting loss, repeated/cross-CPU failures and cap boundary; below-capacity positive twin proves normal admission.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Store diagnostic failure only in the already full map, erase prior loss, or present the capped flag as an exact omitted-event count.",
+        "required_failure_layer": "independent loss-presence/bound assertion after confirmed map exhaustion"
+      },
+      "affected_capabilities_or_profiles": [
+        "failure-independent loss channel",
+        "capped diagnostics"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Independent capped KATTRLOSS donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate analogous loss-site conformance after need is selected."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate analogous loss-site conformance after need is selected."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate loss semantics vectors; same producer mechanism not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G16",
+          "G22",
+          "G23"
+        ],
+        "TODO": [
+          "Q01",
+          "B08",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H17"
+      },
+      "scope_limits": "Each recipient must identify a real loss site and independent channel; no universal same-mechanism support is inferred.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Counter bounds and emitted independent-channel checks use T0/T2; advertised full-map diagnostic behavior adds T4 actual exhaustion and independent failure population.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H18",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Final settlement requires declared admission, writer, drain and post-drain sample predicates; late work invalidates early closure.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_fence.rs:534-627",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_stop.mojo:96-194,320-503",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/count_deadline.rs:1273-1284",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent schedule admits a writer before stop and completes it after an initial drain/sample; expected final population and proof predicates come from schedule, with stuck-writer and stale-sample branches.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Return an exact settlement receipt after detach/quiet poll/timeout or before the delayed admitted writer and final sample complete.",
+        "required_failure_layer": "terminal proof-predicate assertion; known weak close must refuse deliberately requested exact closure"
+      },
+      "affected_capabilities_or_profiles": [
+        "capture closure strength",
+        "writer quiescence and final sample"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Architecture-bound fence donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Best-effort delayed-hit countermodel donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Scripted stop-model donor; live protocol remains open."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate lease/drain/retirement conformance adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G07",
+          "G08",
+          "G14",
+          "G17",
+          "G23"
+        ],
+        "TODO": [
+          "B07",
+          "B08",
+          "Q03",
+          "Q04",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H18"
+      },
+      "scope_limits": "No universal close engine: x86 assumptions, owned-child death/reap and live/model boundaries remain named. A timeout is not quiescence.",
+      "family_evidence_tier_inventory": [
+        "T1",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Model close/refusal and controlled userspace integration use T1/T3; advertised live quiescence or exact settlement adds T4 mechanism/profile-specific proof.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H19",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Pending/failed retirement keeps original owner/file; foreign tickets and failed transfers cannot settle it.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/attach/native_retirement_tests.rs:100,274,329,490",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/attach/cleanup_worker.rs:416",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Capability/retirement ledger independently tracks exact original file/link ownership and ticket issuer at every acquisition/transfer/cancel/close point, including genuine native close failure.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Drop original file on pending close, settle with a foreign ticket, or count dropped owners as proven successful native detach.",
+        "required_failure_layer": "custody/ticket/explicit unresolved-result assertion; live detach outcome separate from fake destructor count"
+      },
+      "affected_capabilities_or_profiles": [
+        "asynchronous attachment retirement",
+        "bounded quarantine custody"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Retirement and worker ownership donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate retained attach owner adapter."
+        },
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate explicit native close/release contract vectors."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC08",
+          "UC11",
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G06",
+          "G07",
+          "G08",
+          "G09",
+          "G10"
+        ],
+        "TODO": [
+          "B02",
+          "L07",
+          "T01",
+          "T02",
+          "T04",
+          "U06"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H19"
+      },
+      "scope_limits": "Bounded caller return does not mean resources vanished; quarantine capacity/Drop behavior must follow selected public contract.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T1",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Host/model/fake-handle transfer and cancellation cases use T0/T1/T3; advertised native/live attachment retirement adds T4 genuine close outcome and retained-owner evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H20",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Stalled setup and late publishers have bounded caller cancellation while preserving successor output and foreign-process authority.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:802,865,1247,1386,1653,1740,1901",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/workload_launch.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Owned subprocess/FIFO and publisher barriers independently track custody, FDs, worker liveness and successor sentinel bytes; outer watchdog bounds harness, not the semantic expected result.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Wait on a stuck publication lock during cancellation, let an abandoned publisher truncate successor output, or signal unproven recycled PID/PGID.",
+        "required_failure_layer": "bounded caller-return/custody assertion and preserved successor/foreign-target sentinel assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "owned helper supervision",
+        "abandonment aware output publication"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Stopped/released child and publication donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Helper ownership/timeout donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate narrowly scoped child/probe supervision adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC13"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G13"
+        ],
+        "TODO": [
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T04"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H20"
+      },
+      "scope_limits": "Thread abandonment is not syscall interruption or completed cleanup; unresolved workers/handles remain accounted. Output publication is separate from child custody.",
+      "family_evidence_tier_inventory": [
+        "T1",
+        "T3"
+      ],
+      "inventory_scope_notes": "Owned userspace setup/publication/custody tests use applicable T1/T3; delivered supervision surfaces add cross-cutting T5, without an unrelated BPF requirement.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H21",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Attach isolation is bounded by 2n-1 attempts and permission/exhaustion policy preserves explicit partial-effect rollback.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/bpf-multi/src/lib.rs:268,398,408",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "src/plan.rs:675-707",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/attach_rollback.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Pre-authored site/error tree and fake-link custody ledger enumerate successful leaves, refused indices, exact attempt count and terminal effects; owned live good/bad sites supply independent hit population.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Bisect permission errors, exceed the attempt bound, misalign cookie/site arrays or lose successful leaf custody on later fatal error.",
+        "required_failure_layer": "attempt-policy/site-index/rollback-custody assertion; live binding and detach outcome independently checked"
+      },
+      "affected_capabilities_or_profiles": [
+        "bounded multi-attach planning",
+        "backend-specific error policy"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Bounded bisection donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Failure-salvage policy donor including RHEL errno behavior."
+        },
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Native rollback source donor; generic multi-uprobe support not implied."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G08",
+          "G18",
+          "G23"
+        ],
+        "TODO": [
+          "B02",
+          "T01",
+          "T03",
+          "T04"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H21"
+      },
+      "scope_limits": "Preserve policy differences; destructor invocation count is not proof that fallible native close succeeded.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3",
+        "T4"
+      ],
+      "inventory_scope_notes": "Planner/error-tree logic and controlled backend rollback use applicable T0/T3; advertised actual multi-attach binding/rollback adds T4 live good/bad sites and genuine retirement evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H22",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Capability evidence requires independently executed admitted positives and active excluded negatives.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/bpf-multi/src/lib.rs:600-620",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/uretprobe_hazard.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "K",
+          "location": "scripts/test_sudo_lane.py on active selftest branch",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Owned workload ledger proves own-thread triggers and an independently active excluded child; expected process/thread populations are fixed before probe execution.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Disable attach or trigger, widen PID filter, or accept an all-zero canary as clean/supported.",
+        "required_failure_layer": "non-vacuity or excluded-population assertion after independently verified trigger activity"
+      },
+      "affected_capabilities_or_profiles": [
+        "functional kernel capability probe",
+        "uretprobe/seccomp hazard probe"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Functional positive/negative probe donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Moving selftest policy source candidate, not accepted harness."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate feature/hazard probe result adapter."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC10",
+          "UC12"
+        ],
+        "G": [
+          "G12",
+          "G13",
+          "G14",
+          "G22"
+        ],
+        "TODO": [
+          "B03",
+          "B10",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H22"
+      },
+      "scope_limits": "Unsupported, denied, affected and unknown remain distinct; raw kernel release and an empty observation do not establish safety.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T4"
+      ],
+      "inventory_scope_notes": "Canary decision/refusal logic uses T0; any positive functional kernel capability or hazard verdict requires T4 verified own/excluded active populations.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H23",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Strict receipt parsing rejects malformed, ambiguous or contradictory records before evidence promotion.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "tests/kcrypto_perf/test_successor.py:316,335,386,393,570",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": null,
+          "location": "doc/validation/2026-10-15-f02-fullmatch-boundary.md",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#mojobpf-limited-future-integration-reconnaissance",
+          "source_context": "MojoBPF coordination workspace /work/mojobpf-ws as recorded in memveil.md; the matrix does not place this documentation under product alias J.",
+          "source_resolution_status": "RESOLVE_FULL_COORDINATION_SHA_AND_DOCUMENT_PATH_BEFORE_PORTING"
+        }
+      ],
+      "independent_oracle": "Immutable malicious corpus has independently authored expected rejection category for duplicate members/terminals, NaN, bool counts, exact pin grammar and missing operands; include valid restored twins.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use last-terminal-wins, accept newline-suffixed pins, coerce bool to count or silently supply missing loss as zero.",
+        "required_failure_layer": "strict parse/receipt-validation rejection before any qualified verdict"
+      },
+      "affected_capabilities_or_profiles": [
+        "strict qualification receipts",
+        "exact pin and numeric grammar"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Receipt parser/source-bound validation donor."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Exact-match boundary WIP/document donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate independent native schema-vector consumer."
+        },
+        {
+          "consumer": "scopebase-testkit",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate shared corpus and report validation consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G03",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "TODO": [
+          "Q05",
+          "T01",
+          "T03",
+          "U07",
+          "X01"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H23"
+      },
+      "scope_limits": "Harness inputs and product schemas remain distinct; success parsing a serializer round trip is not an independent oracle.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T3"
+      ],
+      "inventory_scope_notes": "Strict parser/receipt fixtures use T0 and selected filesystem/input integration uses T3; distributed Rust/native validation surfaces add T5 even though the original family row does not name it.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H24",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Checked construction and replay enforce the same identity, scope arithmetic, interval and synthetic-provenance invariants.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-core/src/workload/{evidence,scope,observation}.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_reader.mojo:330,339",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Independently authored valid/invalid records specify resolved versus unknown identity, cgroup-zero limits, ordered intervals, exact partition sums and u64 boundaries; compare parser and direct-constructor outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Bypass validation during deserialize/direct construction, erase synthetic provenance, or accept a resolved cgroup-zero identity/overflowed partition.",
+        "required_failure_layer": "semantic constructor or deserialization validation before usable evidence is created"
+      },
+      "affected_capabilities_or_profiles": [
+        "checked capture evidence",
+        "live replay semantic parity"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Checked scope/evidence/replay donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Reader integer/semantic vector donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate capture vocabulary adapter with product schema retained."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G16",
+          "G17",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "Q01",
+          "Q05",
+          "T01",
+          "T03",
+          "X01"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H24"
+      },
+      "scope_limits": "No universal cgroup/product schema is imposed; candidate adapters select only shared invariants and retain their own semantic oracle.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T5"
+      ],
+      "inventory_scope_notes": "Checked construction/replay semantics use T0; delivered consumer/schema adapters add T5. Product-specific live origin claims require their separate selected live obligations rather than being established by parsing.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H25",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Unknown identities do not collide and old-generation completions cannot retire reused successor objects.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_reader.mojo:1912",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:534-562",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs:593,613,816,886,1081,1129",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Append-only operation log independently assigns epochs/generations and expected live objects under reuse, repeated allocation, late completion and missing release; small explicit tombstone limits force exhaustion.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use one shared unknown ID, remove generation from completion key, or evict provenance and manufacture continuity.",
+        "required_failure_layer": "identity collision/successor-liveness assertion or explicit exhaustion uncertainty assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "generation aware lifetime registries",
+        "bounded tombstones"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Mapping/reader lifetime donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Transform/request lifecycle donor."
+        },
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate task/retirement protocol vectors."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate generation/cookie protocol vectors."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC11"
+        ],
+        "G": [
+          "G06",
+          "G12",
+          "G16",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "L09",
+          "B09",
+          "Q01",
+          "T01",
+          "T02",
+          "T03",
+          "X01"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H25"
+      },
+      "scope_limits": "DMA regions, kernel transforms, provider generations and process exec remain different state machines.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T1",
+        "T5"
+      ],
+      "inventory_scope_notes": "Bounded generation histories use T0/T1 and delivered adapters add T5. These models do not establish an unselected live producer identity or restart recovery protocol.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H26",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Independent facts survive missing relationships; alternate totals never double-count the same work.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:206-237,656-784,933-1205",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/evidence_model.rs:108,233,522,590",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Hand-authored fact-dependency graph states independent bytes/counts versus occupancy/correlation claims; expected bounds use disjoint operation sets and explicit units, with measured zero distinct from missing.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Sum detail and aggregate for the same work, erase known bytes after unrelated attribution loss, or claim occupancy despite missing release.",
+        "required_failure_layer": "unit/conservation/dependency-specific quality or bound assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "capture loss provenance and bounds",
+        "alternative views"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Fact dependency/alternative counter donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Ambiguity bound and alias-conservation donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate typed loss/scope adapter; algebra equivalence not established."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G14",
+          "G16",
+          "G18"
+        ],
+        "TODO": [
+          "Q01",
+          "Q02",
+          "Q04",
+          "T01",
+          "T03",
+          "X01"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H26"
+      },
+      "scope_limits": "Products retain different uncertainty meanings; no global quality lattice or automatic sum is implied.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T5"
+      ],
+      "inventory_scope_notes": "Pure fact-dependency/units/bounds semantics use T0; delivered consumer adapters add T5. Live data acquisition remains governed by the selected producer profile, not inferred from algebra.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H27",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Snapshots are non-destructive; ordered metrics require their proof and late corrections reach every holder.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:302-501",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_engine.mojo:762,805,890",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/scan_oracle.rs:1195,1244,2336,2581,2734",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent persistent fact log supplies release-before-map tie rules, valid/reordered intervals, snapshots and producer-admissible contradictory evidence; expected base facts and correction destinations are enumerated.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Permanently taint state on a temporary partial snapshot, sort away an invalid ordering proof, or suppress a correction to one retained holder.",
+        "required_failure_layer": "snapshot persistence/metric admissibility/correction propagation assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "report view isolation",
+        "ordered interval metrics",
+        "late correction protocol"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Snapshot/interval metric donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Causal join/correction donor."
+        },
+        {
+          "consumer": "scopebase-sdk",
+          "applicability": "CANDIDATE",
+          "reason": "Later candidate composition seam; no generic reducer implementation exists."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G09",
+          "G10",
+          "G17",
+          "G18"
+        ],
+        "TODO": [
+          "Q02",
+          "Q04",
+          "T01",
+          "T02",
+          "T03",
+          "S01",
+          "X01"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H27"
+      },
+      "scope_limits": "Wire-impossible adversarial records test reader refusal, not producer correctness. Real consumed loss persists within its epoch.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T1",
+        "T5"
+      ],
+      "inventory_scope_notes": "Persistent reducers and correction schedules use T0/T1; delivered holder/consumer integration adds T5. Producer-admissible wire scripts and live producer claims remain separate.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H28",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Native retained views, buffers and loader lifetimes enforce generation, map-kind, output and exactly-once destruction rules.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "L",
+          "location": "tests/native/generic_object.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_maps.c:469",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/mojo/compile_fail/",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "LJ",
+          "location": "tests/integration/standard_objects/test_first_live_maps.py",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#complete-memveillibbpf-branch-and-worktree-inventory"
+        }
+      ],
+      "independent_oracle": "Independent acquisition/destruction ledger, fixed layout sentinels, mutable-buffer guards and required-symbol list define permitted retained-parent, stale-generation, alias/short-output and bloom-membership outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Unload library before child destruction, accept stale view, acquire without destroy symbol, or treat bloom membership as ordinary output lookup.",
+        "required_failure_layer": "native/typed-wrapper lifetime, ABI or output-preservation refusal assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "existing native bridge ownership",
+        "later C Rust Mojo ABI adapters"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Native ownership/map/compile-fail donor."
+        },
+        {
+          "consumer": "MemVeil",
+          "applicability": "CANDIDATE",
+          "reason": "Existing bridge consumer at explicitly consumed pin."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Joint integration WIP consumer candidate."
+        },
+        {
+          "consumer": "scopebase Rust native wrapper",
+          "applicability": "CANDIDATE",
+          "reason": "Later demonstrated-use candidate, not required first crate."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G19",
+          "G20"
+        ],
+        "TODO": [
+          "T01",
+          "X01",
+          "X02",
+          "X04"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H28"
+      },
+      "scope_limits": "Single-thread restrictions remain explicit. Installed/live generic map success is a separate gate, not established by native host fixtures or newer sibling sources.",
+      "family_evidence_tier_inventory": [
+        "T3",
+        "T5"
+      ],
+      "inventory_scope_notes": "Native controlled boundary/ownership tests use T3 and selected delivered wrappers use T5. Advertising generic installed/live map or attach operations additionally requires their separate applicable live cells; source fixtures alone do not establish success.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H29",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Used-result atomic RMW returns the independently expected old value and stores the expected new value through the final consumer build.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-toolchain-experiment.md:46-75",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "W",
+          "location": "evidence/llvm-toolchain-review-20260922/kernel-oracle/{cases.json,prepare.py}",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Preselected initial values/operands and arithmetic independently specify old/new values for each operation and width; unused-result and CAS controls plus final-object fetch-bit decode distinguish the lowering defect.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Force non-fetch atomic lowering while leaving the memory update correct.",
+        "required_failure_layer": "returned-old-value semantic assertion, not merely memory-value or compile-exit assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "BPF atomic code generation",
+        "selected fixed unfixed compiler inclusion"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Preserved workspace compiler experiment; candidate actual mixed C/Rust build port."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate compiler regression corpus consumer."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate actual object/compiler path consumer."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate selected atomic-lowering conformance."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G20",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "C03",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H29"
+      },
+      "scope_limits": "Historical single-run stack-memory results do not establish concurrent shared-map atomic ordering; upstream LLVM fix does not establish installed rustc or bpf-linker inclusion.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4",
+        "T5"
+      ],
+      "inventory_scope_notes": "Decoded final atomic lowering uses T2; actual kernel old/new-value semantics adds T4; selected delivered build/consumer path adds T5. Concurrent shared-map ordering requires separately planned schedules/cells.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H30",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Compiler upgrades cannot emit instructions outside an explicitly selected advertised profile even when CPU preset names are unchanged.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-toolchain-experiment.md:77-110",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "W",
+          "location": "sdd/p11scope/SYSTEM-PLAN/task-bpf-v4-baseline-review.md:54-83",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Independently enumerated allowed instruction families and minimal per-family producers are checked against final decoded opcodes and exact backend/features; intended kernel cells independently accept/refuse actual objects.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Inject a forbidden opcode or broaden a preset feature while preserving the same nominal v4 label.",
+        "required_failure_layer": "instruction-profile admission rejection before support promotion; separate live kernel acceptance verdict"
+      },
+      "affected_capabilities_or_profiles": [
+        "explicit BPF instruction profile",
+        "compiler preset drift"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Preserved CPU-profile investigation donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate final-object profile consumer."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate build/loader profile consumer."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate target-contract consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "B10",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H30"
+      },
+      "scope_limits": "Empty CPU, generic, v3 and feature-controlled v4 are distinct; no universal kernel floor follows from a compiler feature name.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "An object-only instruction-profile checker uses T2 plus delivery T5 and does not inherit T4. Advertising kernel acceptance/support for the emitted profile requires independently selected T4 cells.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H31",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "AtomicLoad instruction selection compiles or refuses under its declared CPU/features without being mislabeled as a kernel failure.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-atomic-load-report.md:18-114",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Minimal monotonic aligned i64 atomic-load IR and real Rust/C consumer paths have predeclared compile/refusal categories; successful objects are decoded to identify actual ordinary/acquire loads.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use the wrong expected feature mask or classify compiler selector rejection as verifier failure.",
+        "required_failure_layer": "compiler diagnostic-category or decoded-object instruction-profile assertion"
+      },
+      "affected_capabilities_or_profiles": [
+        "AtomicLoad compiler selection",
+        "feature controlled BPF loads"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Preserved selector investigation donor."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate selected-backend atomic load corpus consumer."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate mixed build compiler contract consumer."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate target feature admission checks."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H31"
+      },
+      "scope_limits": "Volatile access is not a generic semantic replacement. A compiler feature gate does not alone establish a kernel opcode requirement.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4"
+      ],
+      "inventory_scope_notes": "Compiler selector/diagnostic and final instruction decoding use T2; advertising kernel acceptance or runtime semantics adds the corresponding T4 cell. Selected delivered tooling/adapters also add T5.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    },
+    {
+      "id": "H32",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "short_contract": "Mixed Rust/C debug-record transformations preserve valid final BTF/BTF.ext function and map information.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "sdd/p11scope/SYSTEM-PLAN/task-llvm23-{pipeline-debug-review,linker-repair-report,linker-repair-review}.md",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Fixture independently declares required function/map type identities and relocation structure; validate metadata after each transform and on the final consumer object, then separately test loader/verifier/callback behavior.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Strip expected metadata or replay through a metadata-dropping transformation while retaining nominal successful compile/link exit.",
+        "required_failure_layer": "metadata/final-object semantic checker rejection; later loader/verifier/live gates remain distinct"
+      },
+      "affected_capabilities_or_profiles": [
+        "mixed Rust C debug-record pipeline",
+        "final BTF BTF.ext retention"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Preserved linker-repair investigation donor."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate callback metadata and mixed-language loader consumer."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate final-object hygiene consumer."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Candidate object/ABI interchange corpus consumer."
+        }
+      ],
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G20",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C04",
+          "T01",
+          "T03",
+          "X03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H32"
+      },
+      "scope_limits": "The retained repair reference is documented in the matrix; this catalog does not invent a fix ref or claim its selected compiler/toolchain includes the repair.",
+      "family_evidence_tier_inventory": [
+        "T2",
+        "T4",
+        "T5"
+      ],
+      "inventory_scope_notes": "A metadata-only transformation/checker uses T2 plus delivery T5 and does not inherit T4. Advertising loader/verifier acceptance or callback/runtime behavior requires the corresponding separate T4 evidence.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
+    }
+  ],
+  "schema_semantics": {
+    "family_evidence_tier_inventory": "Reference inventory of tiers named for the whole H family in the research matrix. It is neither an unconditional gate for every subcase nor a complete release-gate list. The cross-cutting delivery gate may add T5 even when absent here.",
+    "subcase_tier_plan": "Every family starts UNRESOLVED_BEFORE_PORTING with required_subcase_tiers_and_cells=null. Null means no executable acceptance plan exists; it never means no tiers/cells are required. Before porting, split the selected claim into named subcases and fix each required tier, environment cell, oracle, control and cleanup obligation before environment discovery.",
+    "inventory_scope_notes": "Research guidance distinguishing narrower and stronger claims. These notes do not populate or approve the unresolved subcase plan.",
+    "schema_change_from_0_1_0": "Removed ambiguous required_evidence_tiers and conditional_evidence_tiers fields. Preserved their combined matrix tier inventories, with explicit family/subcase separation and a cross-cutting T5 delivery gate. No implementation or test execution occurred."
+  }
+}
