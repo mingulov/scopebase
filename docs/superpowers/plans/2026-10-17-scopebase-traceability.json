@@ -850,7 +850,7 @@
       "anchor": "task-cp04-insertion-frozen-provenance-and-survives-full-map-model",
       "lane": "capture",
       "milestone": "M4",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "CP02",
         "CP03"
@@ -861,7 +861,11 @@
         "CP-R15",
         "CP-R18"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "f2952ee8661e27e90e1f965550021d615a31f96a",
+        "evidence_record": "docs/reviews/2026-10-18-cp04-insertion.md"
+      }
     },
     {
       "id": "CP05",
