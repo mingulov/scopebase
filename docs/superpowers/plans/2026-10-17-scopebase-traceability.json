@@ -1191,7 +1191,7 @@
       "anchor": "lx05-strict-bounded-mapsmount-observations",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "LX02"
       ],
