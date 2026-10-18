@@ -112,6 +112,14 @@ The normative [TT02 cumulative retirement and immutable ledger contract](2026-10
 
 **Executor rule:** Follow the exact addendum rather than choosing a new API, reader/backend, error winner or weaker regression. Preserve actual P/O mechanism correspondence and the existing owner/control tests. Root binds immutable source admission and job inputs before implementation, then independently validates candidate-bound tests and selected-port receipt before accepting only this increment.
 
+### TT02-R2: own the cancellation observer independently
+
+**What:** The [exact amendment](2026-10-18-scopebase-tt02-cancellation.md) replaces the fixture-session poll with one owned `Box<dyn CancellationProbe + 'static>`, acquired under the entry clock before borrowed preparation and retained through completion. Vector sessions seal the selected AtomicBool source at acquisition. All checkpoints and six new focused controls remain required; wire slots/limits/IDs do not change.
+
+**Why:** `prepare(&mut self)` lends typed resources through execute, so polling the same session while that borrow lives is rejected by safe Rust. An independent owned observer preserves resource custody and cancellation without aliasing. Acquisition time counts toward the existing deadline; configuration sealing prevents stale observers.
+
+**Limit:** Custom metadata/probe/destructor behavior remains an honest-provider boundary; no hard interruption or native cleanup guarantee is added. Root ratified Astra amendment `f276eb47bad0b761712f3857b2f905fa382d14b4512ed98f0ce2f21dcf7c7a05`; task acceptance still needs actual engine tests and independent review.
+
 ## D09 — Test truth is independent and delivered to users
 
 **Status:** SETTLED. **Owners:** domain case owners and TT01–TT10.

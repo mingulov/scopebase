@@ -7691,6 +7691,35 @@
         "OV27",
         "H33"
       ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-tt02-cancellation.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "TT02",
+        "TT03"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "TT02-R2 exact independently owned static cancellation probe; immutable supplemental dispatch f276eb47bad0b761712f3857b2f905fa382d14b4512ed98f0ce2f21dcf7c7a05"
+      ],
+      "acceptance_boundary": "Preserve borrowed FixtureAccess through execution and every wire checkpoint; six additional focused controls cover acquisition timing, source sealing and no-effect prelude. No schema major, checkpoint slot, RunLimits or task/profile ID changes.",
+      "preserved_source_obligations": [
+        "F05",
+        "Q05",
+        "H23",
+        "T03",
+        "G12",
+        "G18",
+        "U03",
+        "U06",
+        "U07",
+        "OV27",
+        "H33"
+      ]
     }
   ]
 }
