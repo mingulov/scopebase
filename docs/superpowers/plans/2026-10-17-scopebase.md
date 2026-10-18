@@ -105,7 +105,7 @@ Interface changes require a short proposal naming downstream signatures/cases, c
 
 **Interfaces:** `dependency_probe` records package/version/features/host toolchain and contract-fit tests; `check_features --manifest PATH --matrix PATH` builds independent external workspaces. No production dependency may point into a donor checkout.
 
-**Decision ownership:** SB02 executes the [concrete dependency packet](2026-10-18-scopebase-plan-repair.md#first-dependencyworkspace-packet). The controller/expert records the selected implementation, feature set, actual public APIs and target license options from probe evidence. A failed comparator is not permission to raise MSRV, replace a parser/loader or rewrite a donor. Missing target policy gates only the affected BPF payload, not unrelated host components.
+**Decision ownership:** SB02 executes the [ratified dependency packet](2026-10-18-scopebase-sb02-packet.md), which expands the [repair amendment](2026-10-18-scopebase-plan-repair.md#first-dependencyworkspace-packet). The controller/expert records the selected implementation, feature set, actual public APIs and target license options from probe evidence. A failed comparator is not permission to raise MSRV, replace a parser/loader or rewrite a donor. Missing target policy gates only the affected BPF payload, not unrelated host components.
 
 **TC-R10/H33 facet:** actual source/target dependency options and notices, distinct from source headers. Follow D03–D04; other facets remain with their named owners.
 
