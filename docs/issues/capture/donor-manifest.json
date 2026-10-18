@@ -1,0 +1,1410 @@
+{
+  "schema_version": "1.0.0",
+  "task": "CP01",
+  "intake": {
+    "path": "docs/provenance/donors.json",
+    "sha256": "30b9bb6f25b029e9d63626c7f3aae2bb8ffd65f92816bb57766f00a9fcffb51c"
+  },
+  "selection_status": "REGISTERED_NOT_COPIED",
+  "sources": [
+    {
+      "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "b2a240db667f552ca09bdf0faaedf9cec87976d6f4d184d8f1a33e952e9cfa13",
+      "symbols": [
+        "IntegritySummary",
+        "saturating_add",
+        "rollup"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "shared_losses_map_to_integrity_only_shared_counters"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "rollup_sums_disjoint_counters_exactly_once"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "rollup_saturates_instead_of_wrapping"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "empty_rollup_is_zero"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "saturating_add_combines_disjoint_counters_exactly"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+          "symbol": "saturating_add_saturates_per_counter"
+        }
+      ],
+      "destinations": [
+        "CP03",
+        "CP06",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "7f1c3abd662c53ee7d12e21dfbf0d5c55e57f38c50950258a8eb87b148067126",
+      "symbols": [
+        "feed_shared_losses",
+        "session_integrity_checked"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP06",
+        "CP11"
+      ],
+      "disposition": "PRODUCT_LOCAL",
+      "adoption_ref": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "2c41f62825157ea583296e42b5e70b8270b32cbcba1f3d9dbd65ab79d9a13200",
+      "symbols": [
+        "identity_keys",
+        "qualify_join"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+          "symbol": "synthetic_hash_collision_stays_ambiguous_and_split"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+          "symbol": "unresolved_identity_has_no_keys"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+          "symbol": "empty_components_establish_no_key"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+          "symbol": "contradictory_cluster_sources_are_inconsistent"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/identity.rs",
+          "symbol": "empty_lifetime_normalizes_to_unobserved"
+        }
+      ],
+      "destinations": [
+        "CP02",
+        "CP05",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-core/src/workload/identity.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "776c702eccf3e165c58726f77697af50dae6810440ca537c746a642e9dceb19a",
+      "symbols": [
+        "ValidityInterval",
+        "monotonic",
+        "overlaps"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "verified_requires_method_source_and_interval"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "asserted_and_stale_intervals_must_be_ordered"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "metadata_assertion_cannot_claim_verified"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "verified_local_binding_is_accepted"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "metadata_assertion_cannot_self_promote_by_method_or_source"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+          "symbol": "workload_origin_cannot_verify_or_assert_in_m1"
+        }
+      ],
+      "destinations": [
+        "CP02",
+        "CP08",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-core/src/workload/evidence.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-core/src/workload/scope.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "e6fd9432232ff7a7e788fa944c1f38c3d177f0223b5b13cf610dd63c471acf94",
+      "symbols": [
+        "ScopePartition",
+        "from_counts"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/scope.rs",
+          "symbol": "partition_invariant_holds"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/scope.rs",
+          "symbol": "zero_population_is_valid"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/scope.rs",
+          "symbol": "deserialization_routes_through_checked_construction"
+        }
+      ],
+      "destinations": [
+        "CP02",
+        "CP10",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-core/src/workload/scope.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-core/src/workload/observation.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "d40f9fa9d19e9145ead989ae3f8a396372a366b0ae9ab3ae5a01afb30cb92ae5",
+      "symbols": [
+        "WorkloadObservation",
+        "validate"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/observation.rs",
+          "symbol": "asserted_observation_with_identity_validates"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/observation.rs",
+          "symbol": "unresolved_observation_without_identity_validates"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/observation.rs",
+          "symbol": "cgroup_zero_with_identity_refuses"
+        },
+        {
+          "source_id": "K:crates/kryprobe-core/src/workload/observation.rs",
+          "symbol": "identity_status_mismatch_refuses"
+        }
+      ],
+      "destinations": [
+        "CP05",
+        "CP11"
+      ],
+      "disposition": "PRODUCT_LOCAL",
+      "adoption_ref": "K:crates/kryprobe-core/src/workload/observation.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:scripts/kcrypto_perf/successorvalidity.py",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "2797f312eb9b610bf1491ff1e4e1be23cd10090ebc6ee8238ea396616d2434f2",
+      "symbols": [
+        "_no_duplicate_members",
+        "_loads_strict",
+        "_unsigned_counter"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP10",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:scripts/kcrypto_perf/successorvalidity.py",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:tests/kcrypto_perf/test_successor.py",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "30d6c73cd416b2598c20e7909e33f57c05ddb6eeab5bacadc719e5b39ad95a61",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_counter_refuses_old_bytes"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_duplicate_counter_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_snapshot_missing_ktot_gap_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_strict_loss_duplicate_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_strict_loss_cross_dim_duplicate_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_strict_loss_duplicate_member_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_line_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_duplicate_json_members_refuse"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_identical_duplicate_terminals_refuse"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_ctx_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_counter_key_refuses"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_misses_operand_invalid"
+        },
+        {
+          "source_id": "K:tests/kcrypto_perf/test_successor.py",
+          "symbol": "test_missing_ktot_gap_operand_invalid"
+        }
+      ],
+      "destinations": [
+        "CP10",
+        "CP11",
+        "CP13"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:tests/kcrypto_perf/test_successor.py",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "3d267feee7f8db4d403330f2c2cb7954205226340a932e5d54ac688332cb9f81",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "symbol": "alloc_pair_assigns_generation_with_provenance"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "symbol": "overlapping_destroy_second_return_goes_stale"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "symbol": "alloc_after_proved_retire_assigns_fresh_id"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "symbol": "alloc_for_live_base_forces_retire_as_ambiguous"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "symbol": "pending_table_bound_refuses"
+        }
+      ],
+      "destinations": [
+        "CP05",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "O:src/evidence.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "49c206bbc60389713903939e1dc9f4c4dc2e9463f596eb769ccb9afe40b7d6a9",
+      "symbols": [
+        "MatchBounds",
+        "match_bounds"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP02",
+        "CP07",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "O:src/evidence.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "O:tests/evidence_model.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "e1d7af0513904ce62e69e759de2e496acb54c73a823120bd7f6e9524bbcb49ea",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "CP07",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "O:tests/evidence_model.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:src/memveil/model/validate.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "234bf4efd0b9c31fa20873c2129b90e9891e43435b992630fb62739eb13d8a65",
+      "symbols": [
+        "checked_add",
+        "parse_u64",
+        "format_u64",
+        "check_opaque_id"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP02",
+        "CP10",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:src/memveil/model/validate.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:src/memveil/model/identity.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "4ec8b8051964a21289ebfd7989b1cc2fa168d3d8a66ca87229cc7d34bf9bf21d",
+      "symbols": [
+        "PairingKey",
+        "check_address_space",
+        "check_generation"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP02",
+        "CP05",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:src/memveil/model/identity.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:src/memveil/analysis/mappings.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "f31d57f33a692e2641def9765c9ffb8b400fde18efade34c2990d8b7b07ef242",
+      "symbols": [
+        "MappingTracker",
+        "_note_peak_order"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP05",
+        "CP06",
+        "CP08",
+        "CP11"
+      ],
+      "disposition": "PRODUCT_LOCAL",
+      "adoption_ref": "M:src/memveil/analysis/mappings.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/unit/test_reader.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "b8f9a4daf82000adc32498ec9feffb987d50f5417258cc2ff7e6ac907bdce40e",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "M:tests/unit/test_reader.mojo",
+          "symbol": "test_session_missing_synthetic"
+        },
+        {
+          "source_id": "M:tests/unit/test_reader.mojo",
+          "symbol": "test_multiple_unassigned_map_results"
+        },
+        {
+          "source_id": "M:tests/unit/test_reader.mojo",
+          "symbol": "test_reader_missing"
+        }
+      ],
+      "destinations": [
+        "CP10",
+        "CP11",
+        "CP13"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:tests/unit/test_reader.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/unit/test_mappings.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "8348f3d7aac12c184629dac32fc1a49bafea571d65568106e2ea23a3b026f3e1",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_producer_loss_invalidates_live_keeps_aggregates"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_overlapping_intervals_delivered_out_of_time_order"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_ordered_overlap_reports_peak"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_equal_timestamp_release_first_keeps_peak"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_equal_timestamp_map_first_withholds_peak"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_reversed_lifetime_withholds_peak"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_ordered_open_intervals_keep_peak"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_zero_timestamp_tie_withholds_spike"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_duplicate_result_refused"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_unpaired_copy_bytes_retained"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_unpaired_failure_counted"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_unpaired_copy_before_failure"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_mixed_paired_unpaired_copies"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_unpaired_copy_overflow_withheld"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_legacy_unpaired_copy_degrades_all_rows"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_split_unpaired_copy_preserves_mapping_coverage"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_split_unpaired_sync_scoped_to_sync_row"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_split_producer_copy_loss_scoped"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_split_producer_sync_loss_scoped"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_split_consumed_detail_gap_degrades_copy_and_sync"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_snapshot_replay_equivalence"
+        },
+        {
+          "source_id": "M:tests/unit/test_mappings.mojo",
+          "symbol": "test_mapped_bytes_overflow_withheld"
+        }
+      ],
+      "destinations": [
+        "CP05",
+        "CP06",
+        "CP08",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:tests/unit/test_mappings.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/unit/test_engine.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "d9b57bf2c93d2b4b6e20e2aa213ed09fb3f6323887cc4b6951e4fbb80887b4c4",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_partial_snapshot_preserves_later_facts"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_repeated_partial_snapshots_preserve_facts"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_consumed_detail_gap_stays_degraded"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_gap_between_snapshots_stays_degraded"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_post_gap_pool_run_survives_snapshots"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_split_producer_copy_loss_preserves_occupancy"
+        },
+        {
+          "source_id": "M:tests/unit/test_engine.mojo",
+          "symbol": "test_split_producer_mapping_loss_withholds_occupancy"
+        }
+      ],
+      "destinations": [
+        "CP06",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:tests/unit/test_engine.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/unit/test_identity.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "8cd865c3bfc9fdee992d3d066a232ad1252169e758fdb81685fc862d4ff82250",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_budgets_match_contract"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_operation_id_roundtrip"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_mapping_and_device_tokens"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_address_space"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_pairing_key_namespaces"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_pairing_key_rejects_raw"
+        },
+        {
+          "source_id": "M:tests/unit/test_identity.mojo",
+          "symbol": "test_generation_positive"
+        }
+      ],
+      "destinations": [
+        "CP02",
+        "CP05",
+        "CP11"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:tests/unit/test_identity.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/fixtures/attempts/gen_corpus.py",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "2924df092113568fe1b90e8178da6ed5aa3c4140bee01525796ce5688850554b",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "CP10",
+        "CP11",
+        "NX07"
+      ],
+      "disposition": "VECTORS_ONLY",
+      "adoption_ref": "M:tests/fixtures/attempts/gen_corpus.py",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/fixtures/attempts/corpus.txt",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "9f102cc50daa7b397efe13249eb3cd2e5bbe4cdd4f0973108cd2eed9a982a0be",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "CP10",
+        "CP11",
+        "NX07"
+      ],
+      "disposition": "VECTORS_ONLY",
+      "adoption_ref": "M:tests/fixtures/attempts/corpus.txt",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/native/test_attempt_decode.c",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "74626ac868d5b51a3d380d7f00237adf19445770d7e8228a296632e04e87b73e",
+      "symbols": [
+        "check_counter_vocab",
+        "parse_line"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP10",
+        "CP11",
+        "NX07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "M:tests/native/test_attempt_decode.c",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "a244c36b2aee95c8ad5439296aa27a5c6c8131c21bbf763c459a7fe407d43130",
+      "symbols": [
+        "try_fold_vwho",
+        "identity_present",
+        "kattrloss_fold",
+        "KATTRLOSS_CAP"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+          "symbol": "try_fold_vwho_sources_identity_from_unique_marked_lane"
+        },
+        {
+          "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+          "symbol": "try_fold_vwho_refuses_missing_and_conflicting_provenance"
+        },
+        {
+          "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+          "symbol": "try_fold_vwho_accepts_genuine_root_and_stack_zero"
+        },
+        {
+          "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+          "symbol": "try_fold_vwho_refuses_saturated_calls"
+        }
+      ],
+      "destinations": [
+        "CP03",
+        "CP04",
+        "CP11",
+        "BP02",
+        "BP07"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "f671271ae2a5348052d9f3bd97334ff8ae9d10fe0541c1158f95bc28fc032ea1",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_migration_initializes_secondary_lane"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_migration_under_change_keeps_insertion_identity"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_noexist_race_loser_never_marks"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_fold_ignores_unrelated_stack_id_zero"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_fold_accepts_genuine_root_and_stack_zero"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_fold_refuses_missing_and_conflicting_provenance"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_survives_full_identity_map"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_below_capacity_control"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_already_nonzero_control"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_repeated_failures_saturate_at_cap"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_saturated_lane_stays_capped"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_cross_cpu_failures_fold"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_cross_program_failures_fold"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_kerr_site_routes_to_flag"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_kparams_site_routes_to_flag"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_loss_kctx_refusal_stays_separate"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_single_cpu_control_keeps_identity"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+          "symbol": "who_row_render_scales_to_2048_rows"
+        }
+      ],
+      "destinations": [
+        "CP03",
+        "CP04",
+        "CP11",
+        "BP02",
+        "BP07"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/bpf-kcrypto/src/bin/kcrypto.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "56ec35925d6cfd04c7495a9b2f445a68d8d64efab86b3b86b4d024d69f070207",
+      "symbols": [
+        "KATTRLOSS"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "BP02",
+        "BP07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "K:crates/bpf-kcrypto/src/bin/kcrypto.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "7d36c61239668062e2e098c1bd37369d4645480c7aff5f159d51ba41fcdb7b13",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+          "symbol": "idle_close_is_immediately_quiescent"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+          "symbol": "deterministic_close_pending_when_writer_never_releases"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+          "symbol": "boundary_drain_is_pending_not_quiescent"
+        },
+        {
+          "source_id": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+          "symbol": "drain_waits_for_every_lane"
+        }
+      ],
+      "destinations": [
+        "CP09",
+        "BP07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "K:crates/kryprobe-privilege/src/kcrypto_fence.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "O:src/capture.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "711ab0956d62a50fb1b07792557d4030e521c209b9ea19778b8b650d164705ac",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "fence_matrix"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "adapt_accumulates_shared_site_sets"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "adapt_late_arrival_after_termination_is_unknown"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "adapt_late_attach_splits_fresh_loads"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "traversal_salvage_keeps_drained"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "h7_close_drain_error_salvages_without_sites"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "h7_drain_error_taints_coverage_unknown"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "h8_partition_conserves_fenced_pair"
+        },
+        {
+          "source_id": "O:src/capture.rs",
+          "symbol": "runtime_lost_drain_evaluates_without_sites"
+        }
+      ],
+      "destinations": [
+        "CP06",
+        "CP09",
+        "CP11",
+        "BP07"
+      ],
+      "disposition": "PRODUCT_LOCAL",
+      "adoption_ref": "O:src/capture.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "O:tests/count_deadline.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "25c24349ac0311606543cb27186d9ac96dd9407fd2aa5108cc93e9fe601c59f4",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "window_closed_until_open"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_t4_rejected_resolve_attaches_nothing_drains_empty"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_t3_pin_survives_path_deletion_until_session_drop"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_t1_mid_attach_swap_binds_pinned_inode_via_fd_path"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_unbound_cookie_hits_route_unattributed"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_stale_plan_misses_replaced_per_attempt"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "r04_exhaustion_stays_loss"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "h4_stale_retries_count_missed_once_each"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "close_quiesce_recovers_row_landing_mid_drain"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "close_delayed_hit_after_drain_is_uncounted_countermodel"
+        },
+        {
+          "source_id": "O:tests/count_deadline.rs",
+          "symbol": "kernel_deadline_excludes_late_calls"
+        }
+      ],
+      "destinations": [
+        "CP09",
+        "BP07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "O:tests/count_deadline.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "O:tests/capture_controller.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "c82558ef716c7e557d17c18e0602cc4e96ece09da7a4121ab0b0edea3b2cbaee",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "h2_t4_fenced_complete_revised_by_later_poll_taint"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "h3_t6_fenced_mixed_survives_retrospective_revision_intact"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "untracked_epoch_executions_are_unattributed_partial"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_exec_is_fence_tracked_not_ignored"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "owned_comm_late_settle_observed_through_observe"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "late_provider_operation_attaches_with_loss"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "deadline_during_busy_discovery"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "delayed_metadata_io_still_meets_deadline"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "slow_metadata_past_deadline_admits_no_tripwire"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "pid_kernel_deadline_measured_from_acquisition"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "loop_clamps_to_kernel_deadline"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "drain_shortfall_is_partial"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "positive_rule_on_unrelated_partial_coverage"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "finalize_requires_all_live_epochs_terminated"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "maps_fence_versions_generation"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "table_only_new_epoch_degrades_emitted_sites"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "terminated_sibling_cannot_overwrite_unfinished_epoch"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "untracked_epoch_candidate_does_not_inherit_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "retired_epoch_table_cannot_resurrect_closure"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "h1_t2_retired_epoch_duplicate_never_regains_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "h1_t3_untracked_epoch_duplicate_enters_validation"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_close_drain_folds_after_owned_exit"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_close_drain_loss_is_loud"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_empty_close_drain_preserves_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_missing_close_drain_withholds_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_truncated_close_drain_withholds_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_exec_fences_generation_and_conserves"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_exec_witness_fences_without_snapshot_change"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_close_drain_exec_withholds_complete"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "lifecycle_subpoll_object_replacement_fences_provenance"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "count_close_reap_precedes_drain_for_owned_exit"
+        },
+        {
+          "source_id": "O:tests/capture_controller.rs",
+          "symbol": "exec_witness_consumed_before_deadline_return_survives_to_close"
+        }
+      ],
+      "destinations": [
+        "CP06",
+        "CP09",
+        "CP11",
+        "BP07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "O:tests/capture_controller.rs",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:src/memveil/capture/stop.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "4db8fdc59a8ca418123bd13087a58391190997946ec46fd709166add97f16171",
+      "symbols": [
+        "StopEvidence",
+        "StopController"
+      ],
+      "original_regressions": [],
+      "destinations": [
+        "CP09",
+        "CP11",
+        "BP07"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "M:src/memveil/capture/stop.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:tests/unit/test_stop.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "c43e67c62064380e875d57e9b69fbaca4d613a3b76c28794b3046679f599525f",
+      "symbols": [],
+      "original_regressions": [
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_writer_between_admission_and_count_settles"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_stop_during_reserve_drains_late_submit"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_delayed_submit_past_drain_bound_partial"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_missing_writer_decrement_partial"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_quiet_ring_without_quiescence_never_complete"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_open_mappings_do_not_block_quiescence"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_barrier_submit_after_drain_partial"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_barrier_two_writers_staggered_complete"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_barrier_redrain_covers_late_submit"
+        },
+        {
+          "source_id": "M:tests/unit/test_stop.mojo",
+          "symbol": "test_barrier_redrain_invalidates_sample"
+        }
+      ],
+      "destinations": [
+        "CP09",
+        "CP11",
+        "BP07"
+      ],
+      "disposition": "ADAPT",
+      "adoption_ref": "M:tests/unit/test_stop.mojo",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "M:toolchain.lock.json",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "e3e16e2786fc0cf527708ad4aa5b61e44f4dee809631a0bac417ace7cf051976",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "CP11",
+        "NX02"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "M:toolchain.lock.json",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:tests/native/ring_conformance.c",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "08d30f51697f5eba46552c3b28d4322d995bf799997aa56081effdd1ed3ef4e1",
+      "symbols": [
+        "conservation_session",
+        "conservation_buffer"
+      ],
+      "original_regressions": [
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "short_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "short_buffer"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "mutation_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "mutation_buffer"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "conservation_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "conservation_buffer"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "error_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "error_buffer"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "fault_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "fault_buffer"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "ownership_session"
+        },
+        {
+          "source_id": "L:tests/native/ring_conformance.c",
+          "symbol": "ownership_buffer"
+        }
+      ],
+      "destinations": [
+        "CP02",
+        "CP11",
+        "BP06",
+        "NX03"
+      ],
+      "disposition": "VECTORS_ONLY",
+      "adoption_ref": "L:tests/native/ring_conformance.c",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:native/src/generic_ring.c",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "6da7630a2b3944df9abf4c0d4a57c9ffaf085fd67189b6f54932d636e5a7e5c2",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "BP06",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:native/src/generic_ring.c",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:native/src/ring.c",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "09e79e3c9aec987dbd32b0d79ee5587829ea8c827eed9ef35f5f6f8dfb0580a3",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "BP06",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:native/src/ring.c",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:native/src/ring_stage.h",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "93afa30ae54224e3fa7e3e73f118d271a17b8b278da865d751acdc77ab6c30f5",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "BP06",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:native/src/ring_stage.h",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:tests/native/generic_ring.c",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "8eca5aeb7f209f493c9f7570ace17a75c6090a631c550088b2fd7be1bc9948e3",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "BP06",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:tests/native/generic_ring.c",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:docs/ownership.md",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "167c9ec28052421ca134133533c76fcbb2d0b053636ac96256be5cef0cc058e2",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "NX02",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:docs/ownership.md",
+      "state": "NOT_COPIED"
+    },
+    {
+      "source_id": "L:docs/support.md",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "sha256": "6d0407a0ea1df91153026b4929f7db06c8774d51b09f0df51ccfb28ef6386b25",
+      "symbols": [],
+      "original_regressions": [],
+      "destinations": [
+        "NX02",
+        "NX03"
+      ],
+      "disposition": "REFERENCE_ONLY",
+      "adoption_ref": "L:docs/support.md",
+      "state": "NOT_COPIED"
+    }
+  ],
+  "deferred": [
+    {
+      "task": "CP02",
+      "reason": "Runtime types and adapted arithmetic/interval invariants are not part of CP01; source-specific adoption and controlled compile-negative binding belong to the successor packet.",
+      "owner": "controller/CP02",
+      "exit_criterion": "Reviewed exact source slices and runtime implementation with independent oracles and meaningful controls on both compilers."
+    },
+    {
+      "task": "CP10",
+      "reason": "Strict bounded replay remains unimplemented; optional JSON wiring does not validate replay.",
+      "owner": "CP10",
+      "exit_criterion": "Constructor-mediated duplicate-safe bounded replay preserves K/M neutral vectors and literal numeric/unsupported-version controls."
+    },
+    {
+      "task": "CP11",
+      "reason": "Imports establish wiring only; actual K/M/O-shaped independently useful consumers remain required.",
+      "owner": "CP11",
+      "exit_criterion": "Real distinct consumer semantics, independent workloads and retained product-local policy have exact candidate results."
+    },
+    {
+      "task": "CP12",
+      "reason": "P reservation successor source is not selected; a historical count limit or absent byte limit proves no retained-memory bound.",
+      "owner": "controller/CP12",
+      "exit_criterion": "Select frozen shared-ledger slices and evaluate independent consumers after CP06/CP11; record stable-export or product-local decision."
+    },
+    {
+      "task": "CP13",
+      "reason": "Installed exact-consumer conformance and source-free operator delivery remain open.",
+      "owner": "CP13/TT",
+      "exit_criterion": "Required installed/offline suites, fixtures, binding and controls execute for actual consumed library/version/features."
+    },
+    {
+      "task": "NX02",
+      "reason": "L and LJ bridge variants/support differ; MemVeil consumed 681096cb bundle is not L ff6ea508 current source.",
+      "owner": "NX02/BP06",
+      "exit_criterion": "Select exact bridge/backend/toolchain closure, preserve ownership/staging regressions and qualify actual consumed native bundle; no Rust capture dependency."
+    }
+  ]
+}

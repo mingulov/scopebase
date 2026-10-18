@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-capture"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+build = false
+readme = "README.md"
+include = ["Cargo.toml", "src/lib.rs", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "tests/package_boundary.rs", "tests/support/check_package_boundary.py"]
+
+[features]
+default = []
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
