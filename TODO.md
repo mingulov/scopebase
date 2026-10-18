@@ -1,6 +1,6 @@
 # ScopeBase TODO
 
-Status: plan repair under the user's latest direction; development coordination is accepted, while the SB01 intake candidate remains unaccepted. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
+Status: [plan hardening is independently reviewed](docs/superpowers/reviews/2026-10-18-scopebase-plan-hardening-verification.md); development coordination is accepted, while the SB01 intake candidate remains unaccepted. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
 
 Read the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md), master specification/plan and selected subsystem pair. [Traceability](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps **120 requirements and 86 tasks** to **81 research TODO items, 32 initial families plus H33, 23 public-contract gaps, 14 user-conformance cases and 28 overlap rows**: 179 source-obligation mappings. G items also occur in the research TODO; these are not disjoint bug counts.
 
@@ -32,7 +32,7 @@ The [execution setup plan](docs/superpowers/plans/2026-10-18-scopebase-execution
 
 ## Execution and parallelization
 
-1. Start SB01 source/provenance and interface intake; preserve donor WIP and refresh the selected bytes. SB02 establishes dependency/MSRV probes, then SB03 freezes compatibility/support rules.
+1. Repair and accept the existing SB01 candidate using the bounded repair packet; retain its source observations and preserve donor WIP. Refresh selected bytes before an actual port. SB02 establishes dependency/MSRV probes, then SB03 freezes compatibility/support rules.
 2. After SB02, Linux foundation, capture foundation and testkit registry can proceed on disjoint files. After SB03, start BPF/toolchain foundations and the SDK profile shell. These early SDK files do not establish SDK usability.
 3. Linux read/control/parser work uses agreed seams; LX04 must be complete before LX03 closes. Capture modules split after CP02. BP09 parsing and BP02 geometry can proceed alongside TC02 direct-tool execution. TC03 precedes TT05 guest orchestration; TC07 adds real whole-guest mixed builds after TT05.
 4. Run independent pure/model/source checks in isolated outputs. One integration owner serializes root Cargo/lock, exports, interface/schema changes and shared catalogs. Lease privileged filesystem/kernel guests and coordinate heavy Cargo/native builds. Never share mutable fixture/run roots or compiler outputs.

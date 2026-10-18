@@ -296,8 +296,10 @@ The table below covers all existing task IDs. It supplements each detailed task'
 
 ## Plan completion and handoff
 
-- [ ] Check all existing task IDs, dependencies, source obligations, public signatures and decision links against the six original plans. Attach newly found necessary work to its owner and exit criterion; preserve stable IDs.
-- [ ] Self-review for executor choices left implicit, source/license/kernel contradictions, unsupported placeholder exports and tests without intended trigger/oracle/control.
-- [ ] Obtain independent kernel/BPF and cross-plan review of the actual amended bytes. Fix material plan defects; keep speculative extensions outside the ready increments.
-- [ ] Run `python3 tools/check_planning_docs.py` and `git diff --check`; inspect untracked new documents as well. These checks establish structural consistency, not semantic or runtime correctness.
-- [ ] Save the current root handoff with exact candidate/worktree custody, accepted decisions, missing decisions and the next bounded task. Current request ends with reviewable improved plans; do not resume implementation in the same breath merely because this checklist is green.
+Completed planning checks are recorded in the [amendment verification](../reviews/2026-10-18-scopebase-plan-hardening-verification.md). The implementation checkboxes above remain open.
+
+- [x] Check all existing task IDs, dependencies, source obligations, public signatures and decision links against the six original plans. Attach newly found necessary work to its owner and exit criterion; preserve stable IDs.
+- [x] Self-review for executor choices left implicit, source/license/kernel contradictions, unsupported placeholder exports and tests without intended trigger/oracle/control.
+- [x] Obtain independent kernel/BPF and cross-plan review of the actual amended bytes. Fix material plan defects; keep speculative extensions outside the ready increments.
+- [x] Run `python3 tools/check_planning_docs.py` and `git diff --check`; inspect untracked new documents as well. These checks establish structural consistency, not semantic or runtime correctness.
+- [x] Save the current root handoff with exact candidate/worktree custody, accepted decisions, missing decisions and the next bounded task. Current request ends with reviewable improved plans; do not resume implementation in the same breath merely because this checklist is green.

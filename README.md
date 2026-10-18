@@ -2,6 +2,8 @@
 
 Start with the [decisions and reasons](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [amended execution plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md). They specify porting boundaries, task readiness, provisional Apache userspace/GPL BPF licensing and the decisions an executor must not invent.
 
+The [amendment verification](docs/superpowers/reviews/2026-10-18-scopebase-plan-hardening-verification.md) records independent review, resolved plan defects and the checks performed. Plan acceptance does not accept the existing SB01 implementation candidate or qualify a library.
+
 Development is coordinated through [DEVELOPMENT.md](DEVELOPMENT.md) and the single current [handoff](handoff.md). Local helpers prepare isolated jobs, immutable reviews and cooperative build locks; supplementary [Muse reviews](orchestration/MUSE-ORCHESTRATION.md) remain independent of task acceptance.
 
 The [accepted setup verification](docs/superpowers/reviews/2026-10-18-scopebase-execution-verification.md) records 70 development-tool tests and independent review. These establish the coordination helpers, while product tasks and capability qualification remain separately tracked.
