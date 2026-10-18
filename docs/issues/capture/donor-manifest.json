@@ -1761,5 +1761,228 @@
       "CP13 installed conformance"
     ],
     "retirement": "Only after named real consumer migration, exact version/features and original application/producer regression plus package conformance. No donor duplicate removed."
+  },
+  "cp04_increment": {
+    "task": "CP04",
+    "status": "IMPLEMENTED_CANDIDATE_UNREVIEWED",
+    "admission": "docs/provenance/admissions/2026-10-18-cp04-insertion.json",
+    "admission_sha256": "47d950c198328702c7b6aecb26370fe39a0ee49f4753a3ec7d82e0aa2c417151",
+    "receipt": "docs/provenance/ports/CP04-20261018-insertion.json",
+    "preservation": "docs/provenance/ports/CP04-preservation-20261018.md",
+    "sources": [
+      {
+        "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+        "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+        "file_sha256": "a244c36b2aee95c8ad5439296aa27a5c6c8131c21bbf763c459a7fe407d43130",
+        "slices": [
+          {
+            "lines": [
+              825,
+              837
+            ],
+            "sha256": "91724fd3e7abee1a4f866e3f9db2926c30940cda7b065005aec8d5f6f446eb39",
+            "symbols": [
+              "try_fold_vwho unique identity_present scan"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "src/provenance.rs::fold_insertion_identity"
+            ]
+          },
+          {
+            "lines": [
+              842,
+              846
+            ],
+            "sha256": "d5a7a5b48a598f65ef9c7e5eb62f2b087442898aa7c1bf9a11d7dd2c11a97127",
+            "symbols": [
+              "try_fold_vwho per-lane saturated refusal and checked addition"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "src/provenance.rs::fold_insertion_identity",
+              "tests/support/cp04_model.rs donor-shaped count conversion"
+            ]
+          },
+          {
+            "lines": [
+              857,
+              861
+            ],
+            "sha256": "55f9bd4043f94807db92dc05727862184c7ffbad0bb941fdc2bb8387cd7f53c4",
+            "symbols": [
+              "try_fold_vwho copy unique owner uid/cgroup/ppid/pcomm/stack"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "src/provenance.rs::fold_insertion_identity"
+            ]
+          },
+          {
+            "lines": [
+              1153,
+              1191
+            ],
+            "sha256": "17051c8a648212dce6ff8994426adac11fa221e29e8786a56bc192ac72ad5149",
+            "symbols": [
+              "who_lane",
+              "try_fold_vwho_sources_identity_from_unique_marked_lane"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/insertion_provenance.rs",
+              "tests/support/cp04_model.rs"
+            ]
+          },
+          {
+            "lines": [
+              1193,
+              1200
+            ],
+            "sha256": "3b9273ac652b69cf64aa5d9f786f32a295a0f6b8ee3a5b64a5213ac92d67052f",
+            "symbols": [
+              "try_fold_vwho_refuses_missing_and_conflicting_provenance missing/empty/equal-owner portion"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/insertion_provenance.rs::missing_owner_refuses",
+              "tests/insertion_provenance.rs::two_equal_owners_still_conflict"
+            ]
+          },
+          {
+            "lines": [
+              1208,
+              1240
+            ],
+            "sha256": "bbd2f2c66fd342337f79b84785ea74923417f042adeb087640f388c3595eb155",
+            "symbols": [
+              "try_fold_vwho_accepts_genuine_root_and_stack_zero",
+              "try_fold_vwho_refuses_saturated_calls"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/insertion_provenance.rs::zero_identity_is_known",
+              "tests/insertion_provenance.rs::explicit_saturation_and_exact_max_are_distinct"
+            ]
+          }
+        ]
+      },
+      {
+        "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+        "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+        "file_sha256": "f671271ae2a5348052d9f3bd97334ff8ae9d10fe0541c1158f95bc28fc032ea1",
+        "slices": [
+          {
+            "lines": [
+              448,
+              523
+            ],
+            "sha256": "801a567f75471a14303f0ee4b3765f8fdcf7260624083bd91fe47dce51d51724",
+            "symbols": [
+              "PcpuWho::{new,insert,race_insert,hit,fold}",
+              "who_init"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "tests/support/cp04_model.rs::{ProvenanceModel,insert,race_insert,hit,fold,identity_fixture}"
+            ]
+          },
+          {
+            "lines": [
+              531,
+              692
+            ],
+            "sha256": "9a205db7d91436f0c578afb286b832450886067fe87bc8d14a250f87f0b863c7",
+            "symbols": [
+              "who_migration_initializes_secondary_lane",
+              "who_single_cpu_control_keeps_identity",
+              "who_migration_under_change_keeps_insertion_identity",
+              "who_noexist_race_loser_never_marks",
+              "who_fold_ignores_unrelated_stack_id_zero",
+              "who_fold_accepts_genuine_root_and_stack_zero",
+              "who_fold_refuses_missing_and_conflicting_provenance"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/insertion_provenance.rs original seven host shapes"
+            ]
+          },
+          {
+            "lines": [
+              700,
+              702
+            ],
+            "sha256": "1f6dacc181284fa82aab90c27ce08717b9d1aadde541574099d67e906b6da282",
+            "symbols": [
+              "KIDN_CAP=256",
+              "KWHO_CAP=2048"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/full_map_loss_contract.rs historical capacities"
+            ]
+          },
+          {
+            "lines": [
+              704,
+              731
+            ],
+            "sha256": "980a074cd43655bf37dc0625f27977f44f1646b46e3682ad1283689bcd69748c",
+            "symbols": [
+              "SimKidn",
+              "SimKwho",
+              "SimKwho::insert_noexist"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "tests/support/cp04_model.rs::{IdentityGate,AttributionTable,insert_noexist}"
+            ]
+          },
+          {
+            "lines": [
+              738,
+              780
+            ],
+            "sha256": "56737a78f0efc46487e60859ce2396db788adbfb8b66b7430f5bcfe61b297997",
+            "symbols": [
+              "SimAttrLoss::{new,inc,read}",
+              "attribution_is_partial"
+            ],
+            "origin": "ADAPT",
+            "destination": [
+              "tests/support/cp04_model.rs::{DiagnosticSlots,new,inc,read,local_attribution_partial}"
+            ]
+          },
+          {
+            "lines": [
+              782,
+              859
+            ],
+            "sha256": "25613a083ce64257faaf21c711af2ea3902201ba39801efd7f1ac5f77a741000",
+            "symbols": [
+              "who_loss_survives_full_identity_map",
+              "who_loss_below_capacity_control"
+            ],
+            "origin": "VECTORS_ONLY",
+            "destination": [
+              "tests/full_map_loss_contract.rs::historical_full_identity_and_who_maps",
+              "tests/full_map_loss_contract.rs::historical_below_capacity_twin"
+            ]
+          }
+        ]
+      }
+    ],
+    "new_mechanisms": [
+      {
+        "mechanism": "generic wrappers/typed saturated constructor/SaturatedCount/ObservedIdentity vocabulary",
+        "reason": "The donor VWho has application fields, raw sentinel and undifferentiated Option refusal; it cannot express arbitrary I, Unit or valid generic exact MAX. P1/P2 freeze the adaptation without changing Count."
+      },
+      {
+        "mechanism": "independent u128/enumeration oracle, typed full-map bad control, JSON-to-Rust host-vector runner and two distinct API clients",
+        "reason": "Donor tests call their own fold and do not provide the delivered generic-package/actual-archive sensitivity and independence evidence required for this increment."
+      }
+    ],
+    "qualification": "T0/T1 host increment only; no live/ABI/profile/MG03 or CP11/CP13 acceptance",
+    "retirement": "Later actual version/features consumer adoption with original producer/ABI/product regressions; no donor duplicate retired."
   }
 }

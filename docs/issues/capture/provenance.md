@@ -142,3 +142,33 @@ Actual producer acquisition, full identity-map storage, persistent rollup,
 CP11 real applications and CP13 installed conformance remain separate open work.
 The worker supplies private source-to-final-destination receipt drafts; root owns
 canonical port receipts and independent acceptance.
+
+## CP04 selected host adaptation
+
+The immutable [CP04 admission](../../provenance/admissions/2026-10-18-cp04-insertion.json)
+selects twelve ranges across the existing K ABI/WHO rows at
+`d153f3aaf9a3931337b47c9e1b046c692da55083`. Both whole-file hashes and every
+selected slice match the private frozen copy. No live donor/Git/fetch/refresh or
+donor build was used. Historical GPL-3.0-or-later observations and the existing
+OWNER-2026-10-18 Apache-2.0 host/test/data authorization remain distinct. No
+third-party implementation, target/BPF/shared-source or kernel license grant is
+added. The package notice format and dependency grants stay unchanged.
+
+The [CP04 receipt](../../provenance/ports/CP04-20261018-insertion.json) binds the
+actual destination hashes and [per-slice preservation map](../../provenance/ports/CP04-preservation-20261018.md).
+ADAPT retains the unique-owner scan, ordered count errors and winning identity,
+plus PcpuWho/Sim* fixture mechanisms. VECTORS_ONLY retains all seven original
+host migration shapes and historical capacities/full/below populations. The
+unselected ABI who_lane implementation, raw marker decoding, timestamp/latest
+reducer, wire fields/strides and actual producer sites are not copied. Generic
+wrappers/typed saturation, independent oracle, runner and distinct API consumers
+are NEW for the frozen reasons in the exact contract. Earlier selected-port
+receipts remain immutable; CP02/CP03 production/tests/controls are unchanged.
+
+The authoritative delivered corpus has a generated exact root compatibility
+mirror. Source verification checks equality; archive verification needs only its
+own corpus and helper. CP04's optional explicit wrapper supports direct Cargo
+without repository/env/PATH wrapper discovery. This bounded development route
+is separate from CP13 installed operator/conformance delivery and does not repair
+the unchanged CP03 helper's later TT07/CP13 portability obligation. No
+live/ABI/profile/product-migration acceptance follows from this host increment.

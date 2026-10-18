@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "CP04-20261018-insertion",
+  "task_id": "CP04",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-cp04-insertion.json",
+    "sha256": "47d950c198328702c7b6aecb26370fe39a0ee49f4753a3ec7d82e0aa2c417151"
+  },
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          825,
+          837
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/provenance.rs",
+          "sha256": "38a3bd0c1dc2436f0addd6067c04d3e5aa708e58c7234151451b29e33f1845a7",
+          "symbols": [
+            "fold_insertion_identity"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          842,
+          846
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/provenance.rs",
+          "sha256": "38a3bd0c1dc2436f0addd6067c04d3e5aa708e58c7234151451b29e33f1845a7",
+          "symbols": [
+            "fold_insertion_identity"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp04_model.rs",
+          "sha256": "5bd7c3ea533ab85122fd70378722bb8ffb9da7e685ff05bf673ce258ce80f760",
+          "symbols": [
+            "raw_lane"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          857,
+          861
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/provenance.rs",
+          "sha256": "38a3bd0c1dc2436f0addd6067c04d3e5aa708e58c7234151451b29e33f1845a7",
+          "symbols": [
+            "fold_insertion_identity"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          1153,
+          1191
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/insertion_provenance.rs",
+          "sha256": "69602b40de2d6b997f563a1763e0a273909f0db9cf4773bfd520f7ed291a63ec",
+          "symbols": [
+            "migration_keeps_inserting_identity"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          1193,
+          1200
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/insertion_provenance.rs",
+          "sha256": "69602b40de2d6b997f563a1763e0a273909f0db9cf4773bfd520f7ed291a63ec",
+          "symbols": [
+            "missing_owner_refuses",
+            "two_equal_owners_still_conflict"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          1208,
+          1240
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/insertion_provenance.rs",
+          "sha256": "69602b40de2d6b997f563a1763e0a273909f0db9cf4773bfd520f7ed291a63ec",
+          "symbols": [
+            "zero_identity_is_known",
+            "explicit_saturation_and_exact_max_are_distinct"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          448,
+          523
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/cp04_model.rs",
+          "sha256": "5bd7c3ea533ab85122fd70378722bb8ffb9da7e685ff05bf673ce258ce80f760",
+          "symbols": [
+            "ProvenanceModel",
+            "RawLane",
+            "identity_fixture"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          531,
+          692
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/insertion_provenance.rs",
+          "sha256": "69602b40de2d6b997f563a1763e0a273909f0db9cf4773bfd520f7ed291a63ec",
+          "symbols": [
+            "migration_keeps_inserting_identity",
+            "single_cpu_control_keeps_identity",
+            "migration_under_change_keeps_insertion_identity",
+            "race_loser_never_marks",
+            "unrelated_secondary_zero_does_not_replace_identity",
+            "zero_identity_is_known",
+            "missing_owner_refuses",
+            "two_equal_owners_still_conflict"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          700,
+          702
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/full_map_loss_contract.rs",
+          "sha256": "a55af46add1793f938bdb10b152c197fc88af5426569206acb01f73a86918505",
+          "symbols": [
+            "historical_full_identity_and_who_maps",
+            "historical_below_capacity_twin"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          704,
+          731
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/cp04_model.rs",
+          "sha256": "5bd7c3ea533ab85122fd70378722bb8ffb9da7e685ff05bf673ce258ce80f760",
+          "symbols": [
+            "IdentityGate",
+            "AttributionTable",
+            "insert_noexist"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          738,
+          780
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/cp04_model.rs",
+          "sha256": "5bd7c3ea533ab85122fd70378722bb8ffb9da7e685ff05bf673ce258ce80f760",
+          "symbols": [
+            "DiagnosticSlots",
+            "local_attribution_partial"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          782,
+          859
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/full_map_loss_contract.rs",
+          "sha256": "a55af46add1793f938bdb10b152c197fc88af5426569206acb01f73a86918505",
+          "symbols": [
+            "historical_full_identity_and_who_maps",
+            "historical_below_capacity_twin"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/CP04-preservation-20261018.md",
+    "sha256": "c37f6f3e6100f615cb1b6b5cfcd4d486440acda97406b131a3d04a1eb5db0137"
+  },
+  "supersedes": null
+}

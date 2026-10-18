@@ -90,3 +90,18 @@ extracted bytes; their controller acceptance is separate from this candidate map
 Donor duplicates remain. Retirement requires a named real consumer bound to the
 ScopeBase version/features, the original producer/application regression and
 package conformance, retaining product policy and same or stronger behavior.
+
+## CP04 insertion and full-map host increment
+
+The [CP04 contract](../../superpowers/specs/2026-10-18-scopebase-cp04-insertion.md)
+and [preservation map](../../provenance/ports/CP04-preservation-20261018.md)
+select twelve frozen KryProbe ranges. The [issue](insertion-loss.md) explains the
+original defects and later producer/ABI owners. This candidate adds no profile
+or migration acceptance and does not change historical CP01/CP02/CP03 receipts.
+
+| Mechanism and defect | Delivered independent oracle | Sensitive control and limit |
+|---|---|---|
+| ADAPT unique-marker scan, ordered counts and owner selection; valid zero is never an absent marker. | `insertion_provenance`: all seven donor shapes, marker0/1/2-cardinality cross product, owner0/7 and count0/1/2 enumeration, literal u128/MAX twins. | First/last selection, zero-as-missing, equal-owner dedup, dropped secondary counts and arithmetic-order mutants. Numeric raw marker2 remains BP02; no generic enum fabrication. |
+| ADAPT PcpuWho winning insert, zero secondary lanes, losing insertion and hit-only update. | Separate zero-secondary preconditions, post-hit marker assertions, original tuple/parent/command/stack, local display/stamp assertions. | Model losing-mark and hit-refresh mutations; the independent post-hit assertion catches the loser mutation after its zero-lane premise succeeds. Scripted host interleavings do not prove scheduling. |
+| ADAPT bounded Sim* table/independent diagnostics and VECTORS_ONLY full256/2048 and below128 cases. | Immutable operation journal/literal failure IDs; aggregate5/2049 and signal4/1; cap254→255, existing-key and rejection atomicity twins. | Actual lazy diagnostic insertion into already-full gate, absent-as-zero read; both loss-presence assertions must fail. No exact omitted-event conversion or public completeness policy. |
+| NEW typed saturation/generic wrappers and strict packaged fixture delivery. | Exact MAX versus raw sentinel, zero Clone on errors/zero Eq calls, caller Clone panic/interior effects, redacted Debug and no Unit marker bounds; literal JSON-generated actual-package assertions. | Ignored saturation, exact-MAX refusal, saturation/wrapping totals, eager Clone and safe fixed-secret output disclosure. I:Debug is a separate compiler control. Source/archive/direct routes bind selected bytes, not runtime authority. |

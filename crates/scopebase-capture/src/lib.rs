@@ -17,6 +17,7 @@
 //! use scopebase_capture::quantity::{Count, Events, Records};
 //! let _ = Count::<Events>::new(2).checked_add(Count::<Records>::new(3));
 //! ```
+pub mod provenance;
 pub mod conservation;
 pub mod counter;
 pub mod loss;

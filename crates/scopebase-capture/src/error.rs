@@ -43,4 +43,6 @@ pub enum ContractError {
     IncompatibleVersion,
     /// Replay violates its contract.
     InvalidReplay,
+    /// An encountered count was explicitly nonexact due to saturation.
+    SaturatedCount,
 }

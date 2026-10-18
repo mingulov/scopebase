@@ -52,7 +52,7 @@ cargo test --offline --locked --no-default-features --release --test domain_quan
 ```
 
 Each full command runs `domain_quantity`, `time_domains`, `counter_deltas`,
-`loss_units`, `package_boundary` and
+`loss_units`, `insertion_provenance`, `full_map_loss_contract`, `package_boundary` and
 the successful/compile-fail doctests. Offline execution requires the exact locked
 dependency sources prepared by the caller. Boundary tests require **Python 3.11+**
 on PATH, with standard-library `tomllib`; Python is not a library runtime
@@ -78,7 +78,7 @@ Exact source/range mappings and broader original regressions remain in the
 repository's `docs/issues/capture/` register. These representation tests do not run
 the donors' reducers, validated wire decoding or native adapters.
 
-CP04–CP13 still own lifetime/reducer/replay behavior, real reference
+CP05–CP13 still own lifetime/reducer/replay behavior, real reference
 applications and the installed conformance route. This pure foundation does not
 qualify complete capture profiles, live/native behavior, product migration or
 publication. THIRD-PARTY-NOTICES.md retains the distinct optional dependency terms.
@@ -160,6 +160,94 @@ The K capped-fold and saturation vectors and O missing-baseline/source/unit
 semantics are preserved in this increment under the admitted owned-source
 Apache-2.0 destination grant, independently of their historical GPL labels.
 Full identity-map storage, producer baseline acquisition/order and live behavior
-remain CP04/BP07; persistent per-claim rollup remains CP06; replay remains CP10;
+have CP04 host models below and retain BP07 live obligations; persistent per-claim rollup remains CP06; replay remains CP10;
 real application consumers and installed operator conformance remain CP11/CP13.
 No capture-runtime profile, product migration or publication follows from CP03.
+
+CP04 supplies `provenance::{ObservedIdentity, IdentityUnknown, LaneIdentity,
+ProvenanceLane, InsertionFold, fold_insertion_identity}`. Exactly one explicit
+insertion owner supplies identity, including genuine numeric zero. Every exact
+lane contributes its count, including secondary lanes and a zero-count owner.
+`ProvenanceLane::new` admits exact `u64::MAX`; `saturated` records a nonexact
+count and refuses folding. A raw donor MAX must be converted explicitly to the
+latter by its adapter. Missing/conflicting ownership precedes arithmetic. With a
+unique owner, the first saturated lane or overflowing exact prefix in slice
+order wins. Result refusals return no partial fold.
+
+Constructors move payloads. Folding performs at most two passes, O(n) library
+work/O(1) auxiliary storage, then clones the unique identity once on success;
+it never calls payload Eq. Generic traits impose no additional Unit marker
+bounds, and Debug never formats identity payloads. The caller's Clone can
+allocate, block, mutate interior state or panic. ScopeBase does not mutate the
+borrowed slice, wrapper fields or count states, but cannot undo caller Clone
+effects. No payload immutability, retained-byte, elapsed-time, interruptibility,
+Send/Sync or extra unwind guarantee follows.
+
+```sh
+cargo test --offline --locked --no-default-features --test insertion_provenance --test full_map_loss_contract
+cargo run --offline --locked --no-default-features --example insertion_journal
+cargo run --offline --locked --no-default-features --example cache_attribution
+```
+
+These shipped host tests preserve all seven KryProbe migration/race/zero shapes,
+full gate256/attribution2048 plus a failed key, and below-capacity128 populations.
+An independent finite owner/u128 oracle supplements them. The bounded test-only
+models adapt selected KryProbe `d153f3aaf9a3931337b47c9e1b046c692da55083`
+PcpuWho/Sim* source; the production fold preserves its unique-owner scan,
+ordered count refusal and owner selection. Generic wrappers, typed saturation,
+oracles and runner are new mechanisms. Historical GPL-3.0-or-later labels remain
+separate from OWNER-2026-10-18's Apache-2.0 host/test/data authorization. No BPF
+source, layout or third-party grant is added; exact ranges and final bindings are
+in the repository's CP04 selected-port/preservation records.
+
+The authoritative `fixtures/insertion-v1.json` is a bounded schema1
+`cp04-host-vectors` corpus, separate from future replay. The delivered Python
+3.11+ helper reads at most65537 bytes and rejects input above65536 bytes,
+duplicate/unknown fields, incorrect scalar kinds/ranges, noncanonical integers,
+missing required populations and count limits before generating any Rust. It
+then compiles and executes literal corpus assertions against the actual selected
+package, plus semantic mutations/restored twins in disposable copies. Models
+admit at most4 CPUs,2 diagnostic slots and2048 table entries; fixed scripts have
+at most2049 operations. These cardinalities are not heap-byte bounds.
+
+Regenerate/check the source checkout's compatibility mirror from its sole
+package authority:
+
+```sh
+python3 crates/scopebase-capture/tests/support/check_cp04_controls.py sync-mirror --source-root "$PWD/crates/scopebase-capture" --root-mirror "$PWD/fixtures/capture/insertion-v1.json"
+python3 crates/scopebase-capture/tests/support/check_cp04_controls.py check-fixture --source-root "$PWD/crates/scopebase-capture" --root-mirror "$PWD/fixtures/capture/insertion-v1.json"
+```
+
+From an extracted package, run the source-free helper with explicitly prepared
+offline dependency inputs and pinned installed tools:
+
+```sh
+CARGO_HOME=/absolute/prepared/offline-home \
+python3 tests/support/check_cp04_controls.py run \
+  --source-root /absolute/path/to/scopebase-capture-0.1.0 \
+  --cargo /absolute/toolchain/bin/cargo --rustc /absolute/toolchain/bin/rustc \
+  --feature-set no-default --output-dir /new/private/output
+```
+
+`check-fixture` supplies parsing/custody evidence only; `run` executes tests.
+Repeat `run` with `default` and `json` for the other forms. The default route is
+direct Cargo: inherited `SCOPEBASE_BUILD_WRAPPER` is ignored. In a coordinated
+repository campaign, pass `--build-wrapper /absolute/path/to/bin/scopebase-build`
+explicitly for per-Cargo leases, without an enclosing lease. Standalone callers
+own their scheduling; the helper neither acquires nor verifies an outer lease.
+`CARGO_HOME/config.toml` must explicitly refer to already prepared offline
+sources. No dependencies or tools are installed; source trees/archives remain
+unchanged. Fresh outputs contain copies, targets, generated tests, locks, diffs,
+identity/config hashes, argv/environment and child-group retirement records.
+Timeouts (120 seconds per command), setup/compiler errors or incomplete cleanup
+(10 seconds retirement allowance) are INVALID_CONTROL, never semantic kills.
+
+The two examples are distinct actual but bounded consumers: tuple/Events
+insertion journal and String/Objects cache accounting. They do not complete CP11
+application reducers or CP13 installed conformance. Independent capped loss
+storage is required of a real producer; these full-table models cannot prove
+kernel insertion/migration, actual wire stride, writer partition/reentry, attach
+cleanup or live support. BP02/BP07, CP05/CP06/CP10/CP11/CP13 and MG03 retain those
+obligations; no runtime profile or product migration is qualified here. The
+preexisting CP03 helper's explicit-wrapper portability limitation remains later
+TT07/CP13 work; CP04 does not change that accepted helper or its receipts.

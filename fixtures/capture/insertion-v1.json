@@ -1,0 +1,420 @@
+{
+  "schema_version": 1,
+  "kind": "cp04-host-vectors",
+  "cases": [
+    {
+      "id": "empty",
+      "lanes": [],
+      "expected": {
+        "error": "MissingProvenance"
+      }
+    },
+    {
+      "id": "busy_missing",
+      "lanes": [
+        {
+          "identity": null,
+          "count": "3"
+        }
+      ],
+      "expected": {
+        "error": "MissingProvenance"
+      }
+    },
+    {
+      "id": "equal_owners",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "1"
+        },
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "2"
+        }
+      ],
+      "expected": {
+        "error": "ConflictingProvenance"
+      }
+    },
+    {
+      "id": "unequal_owners",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "1"
+        },
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "2"
+        }
+      ],
+      "expected": {
+        "error": "ConflictingProvenance"
+      }
+    },
+    {
+      "id": "zero_known",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "3"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "0",
+          "0",
+          "0"
+        ],
+        "total": "3"
+      }
+    },
+    {
+      "id": "secondary_sum",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "3"
+        },
+        {
+          "identity": null,
+          "count": "7"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "0",
+          "0",
+          "0"
+        ],
+        "total": "10"
+      }
+    },
+    {
+      "id": "exact_max",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551615"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "7",
+          "9",
+          "-3"
+        ],
+        "total": "18446744073709551615"
+      }
+    },
+    {
+      "id": "exact_max_zero",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551615"
+        },
+        {
+          "identity": null,
+          "count": "0"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "7",
+          "9",
+          "-3"
+        ],
+        "total": "18446744073709551615"
+      }
+    },
+    {
+      "id": "sum_equals_max",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551614"
+        },
+        {
+          "identity": null,
+          "count": "1"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "7",
+          "9",
+          "-3"
+        ],
+        "total": "18446744073709551615"
+      }
+    },
+    {
+      "id": "sum_overflow",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551614"
+        },
+        {
+          "identity": null,
+          "count": "2"
+        }
+      ],
+      "expected": {
+        "error": "ArithmeticOverflow"
+      }
+    },
+    {
+      "id": "saturated_owner",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "saturated"
+        }
+      ],
+      "expected": {
+        "error": "SaturatedCount"
+      }
+    },
+    {
+      "id": "saturated_secondary",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "1"
+        },
+        {
+          "identity": null,
+          "count": "saturated"
+        }
+      ],
+      "expected": {
+        "error": "SaturatedCount"
+      }
+    },
+    {
+      "id": "missing_beats_saturated",
+      "lanes": [
+        {
+          "identity": null,
+          "count": "saturated"
+        }
+      ],
+      "expected": {
+        "error": "MissingProvenance"
+      }
+    },
+    {
+      "id": "missing_beats_overflow",
+      "lanes": [
+        {
+          "identity": null,
+          "count": "18446744073709551615"
+        },
+        {
+          "identity": null,
+          "count": "1"
+        }
+      ],
+      "expected": {
+        "error": "MissingProvenance"
+      }
+    },
+    {
+      "id": "conflict_beats_saturated",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "saturated"
+        },
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "1"
+        }
+      ],
+      "expected": {
+        "error": "ConflictingProvenance"
+      }
+    },
+    {
+      "id": "conflict_beats_overflow",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "18446744073709551615"
+        },
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "1"
+        }
+      ],
+      "expected": {
+        "error": "ConflictingProvenance"
+      }
+    },
+    {
+      "id": "overflow_before_saturated",
+      "lanes": [
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551615"
+        },
+        {
+          "identity": null,
+          "count": "1"
+        },
+        {
+          "identity": null,
+          "count": "saturated"
+        }
+      ],
+      "expected": {
+        "error": "ArithmeticOverflow"
+      }
+    },
+    {
+      "id": "saturated_before_overflow",
+      "lanes": [
+        {
+          "identity": null,
+          "count": "saturated"
+        },
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "18446744073709551615"
+        },
+        {
+          "identity": null,
+          "count": "1"
+        }
+      ],
+      "expected": {
+        "error": "SaturatedCount"
+      }
+    },
+    {
+      "id": "zero_activity_owner",
+      "lanes": [
+        {
+          "identity": [
+            "0",
+            "0",
+            "0"
+          ],
+          "count": "0"
+        },
+        {
+          "identity": null,
+          "count": "0"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "0",
+          "0",
+          "0"
+        ],
+        "total": "0"
+      }
+    },
+    {
+      "id": "owner_last",
+      "lanes": [
+        {
+          "identity": null,
+          "count": "7"
+        },
+        {
+          "identity": [
+            "7",
+            "9",
+            "-3"
+          ],
+          "count": "3"
+        }
+      ],
+      "expected": {
+        "identity": [
+          "7",
+          "9",
+          "-3"
+        ],
+        "total": "10"
+      }
+    }
+  ]
+}

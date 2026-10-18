@@ -681,7 +681,17 @@
         "tests/ui/cp03_units_match.rs",
         "tests/support/check_cp03_controls.py",
         "examples/counter_windows.rs",
-        "examples/diagnostic_lanes.rs"
+        "examples/diagnostic_lanes.rs",
+        "src/provenance.rs",
+        "tests/insertion_provenance.rs",
+        "tests/full_map_loss_contract.rs",
+        "tests/support/cp04_model.rs",
+        "tests/support/check_cp04_controls.py",
+        "tests/ui/cp04_units_match.rs",
+        "tests/ui/provenance_units_do_not_mix.rs",
+        "fixtures/insertion-v1.json",
+        "examples/insertion_journal.rs",
+        "examples/cache_attribution.rs"
       ],
       "role": "product",
       "supported_unions": [
