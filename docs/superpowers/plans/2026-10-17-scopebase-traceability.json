@@ -2185,7 +2185,7 @@
       "anchor": "sb02-workspace-dependency-selection-and-independent-builds",
       "lane": "integration",
       "milestone": "M0",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB01"
       ],
@@ -2195,7 +2195,11 @@
         "SB-R12",
         "TC-R10"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "4bc7ae95c0cc46e084a81f5b7a24773514ac384d",
+        "evidence_record": "docs/reviews/2026-10-18-sb02-foundation.md"
+      }
     },
     {
       "id": "SB03",

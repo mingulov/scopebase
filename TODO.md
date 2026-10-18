@@ -1,6 +1,6 @@
 # ScopeBase TODO
 
-Status: [SB01 is accepted](docs/reviews/2026-10-18-sb01-foundation.md) at `f1280b010099100daeec9fd2233bbeacea5443e0`, following independent review and 54 passing intake tests. Development coordination and plan hardening are accepted; SB02 is in progress under its [frozen execution packet](docs/superpowers/plans/2026-10-18-scopebase-sb02-packet.md). **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
+Status: [SB01 is accepted](docs/reviews/2026-10-18-sb01-foundation.md) at `f1280b010099100daeec9fd2233bbeacea5443e0`, following independent review and 54 passing intake tests. Development coordination, plan hardening and [SB02](docs/reviews/2026-10-18-sb02-foundation.md) are accepted; SB02 integration subject is `4bc7ae95c0cc46e084a81f5b7a24773514ac384d`. The root Cargo workspace is empty; package-policy tooling and dependency API probes are implemented. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
 
 Read the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md), master specification/plan and selected subsystem pair. [Traceability](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps **120 requirements and 86 tasks** to **81 research TODO items, 32 initial families plus H33, 23 public-contract gaps, 14 user-conformance cases and 28 overlap rows**: 179 source-obligation mappings. G items also occur in the research TODO; these are not disjoint bug counts.
 
@@ -8,7 +8,9 @@ Read the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisio
 
 | Work / existing owner | Dependency | Exit criterion |
 |---|---|---|
-| Controller: frozen donor copies — in progress | User's 2026-10-18 direction | Private P/K/O/M source and history copies preserve refs, registered worktrees, staged/unstaged and untracked source/docs, with explicit omissions and no live Git pointers. Bind ports to these copies; no repeated live-head checks or wait for donor cleanliness |
+| Controller: frozen donor copies — complete | User's 2026-10-18 direction | All four private P/K/O/M source and history captures are complete and preserve refs, registered worktrees, staged/unstaged and untracked source/docs, with explicit omissions and no live Git pointers. Prune only private generated binaries/caches/VM images and bulk raw logs; retain source, history, WIP, small regression fixtures and defect summaries. Bind ports to these copies; no repeated live-head checks or wait for donor cleanliness |
+| LX01/controller first product policy | Accepted SB02; real product manifests and frozen root lock | Product-role notices, explicit empty fixture workspace, full offline locked product-root metadata, before/after lock preservation including failures, and isolated staging for an actual member without nested `[workspace]`; missing/stale lock and staging defect controls fail semantically, valid twins pass |
+| LX08 process source intake | Frozen P source copy and accepted SB01 schema | Add exact `src/pidns.rs` source/adoption/regression mapping before port; preserve the historical 124-file baseline and do not turn its cached PID namespace into universal library authority |
 | SB01 local verification — accepted | Reviewed subject in SB01 record | Partial-clone missing blob/tree stays incomplete; wrong available object type/tree stays invalid; no lazy fetch, transport or donor mutation; complete local twin verifies |
 | SB01 nested preservation integrity — accepted | Reviewed subject in SB01 record | Missing family/oracle/control or dangling donor/path/symbol/line/group/obligation fails; all original observations/regressions retained |
 | SB01 source/destination policy — accepted | User's provisional D03 choice | Schema distinguishes owner authorization, destination and original third-party terms/roles; original 14 automatic copying blocks removed; actual source slices still require decisions |
@@ -33,7 +35,7 @@ The [execution setup plan](docs/superpowers/plans/2026-10-18-scopebase-execution
 
 ## Execution and parallelization
 
-1. SB01 is accepted; retain its source observations and preserve donor WIP in private frozen copies. Bind selected copied bytes before an actual port; live development does not trigger repeated refreshes. SB02 establishes dependency/MSRV probes, then SB03 freezes compatibility/support rules.
+1. SB01 is accepted; retain its source observations and preserve donor WIP in private frozen copies. Bind selected copied bytes before an actual port; live development does not trigger repeated refreshes. SB02 established the selected dependency/compiler API probes and package-policy tools; SB03 now freezes compatibility/support rules.
 2. After SB02, Linux foundation, capture foundation and testkit registry can proceed on disjoint files. After SB03, start BPF/toolchain foundations and the SDK profile shell. These early SDK files do not establish SDK usability.
 3. Linux read/control/parser work uses agreed seams; LX04 must be complete before LX03 closes. Capture modules split after CP02. BP09 parsing and BP02 geometry can proceed alongside TC02 direct-tool execution. TC03 precedes TT05 guest orchestration; TC07 adds real whole-guest mixed builds after TT05.
 4. Run independent pure/model/source checks in isolated outputs. One integration owner serializes root Cargo/lock, exports, interface/schema changes and shared catalogs. Lease privileged filesystem/kernel guests and coordinate heavy Cargo/native builds. Never share mutable fixture/run roots or compiler outputs.
@@ -57,7 +59,7 @@ Each task link contains exact planned files, interfaces, test commands, acceptan
 ## M0: source and workspace foundations
 
 - [x] [SB01: Source intake, licensing and contract ledger](docs/superpowers/plans/2026-10-17-scopebase.md#sb01-source-intake-licensing-and-contract-ledger) — prerequisites: none.
-- [ ] [SB02: Workspace, dependency selection and independent builds](docs/superpowers/plans/2026-10-17-scopebase.md#sb02-workspace-dependency-selection-and-independent-builds) — prerequisites: SB01.
+- [x] [SB02: Workspace, dependency selection and independent builds](docs/superpowers/plans/2026-10-17-scopebase.md#sb02-workspace-dependency-selection-and-independent-builds) — prerequisites: SB01.
 - [ ] [SB03: Versioning, support and documentation contracts](docs/superpowers/plans/2026-10-17-scopebase.md#sb03-versioning-support-and-documentation-contracts) — prerequisites: SB01, SB02.
 
 ## M1/M2: Linux files, mappings, processes and bounds

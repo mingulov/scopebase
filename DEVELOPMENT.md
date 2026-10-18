@@ -4,7 +4,7 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) now govern every task. The plan repair and SB01 foundation are accepted; the active M0–M6 goal continues with SB02. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) now govern every task. The plan repair and SB01 foundation are accepted; SB02 is accepted and the active M0–M6 goal continues with component foundations and SB03. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
@@ -26,7 +26,7 @@ Freeze shared task inputs for each parallel wave. Finish the assigned candidates
 
 1. Read the active goal with the goal tool and refresh `handoff.md`; preserve the exact goal in `.scopebase/goal.md` for task preparation. This snapshot does not create or replace the tool's goal. No token budget is inferred.
 2. Run `bin/scopebase-job doctor --repo /absolute/repository`. It performs local checks only. Current product toolchains/environments must be admitted by their own tasks.
-3. Read the selected specification/task and applicable decisions, then inspect exact donor branches/worktrees/WIP read-only without lazy fetching. Fill the executor-contract table with source symbols/tests, destination API, origin, cross-donor differences, grants/target roles and independent oracle/control. The expert resolves choices before dispatch. Port the accepted mechanism/regression together; no fresh approximation or placeholder behavior. NEEDS_DECISION identifies the missing field and affected work.
+3. Read the selected specification/task and applicable decisions, then select exact source bytes from completed private donor captures. Use each manifest's explicit independent history/checkouts mapping; a gitless copied checkout is not itself a Git repository. Do not repeatedly inspect live donor heads. Fill the executor-contract table with source symbols/tests, destination API, origin, cross-donor differences, grants/target roles and independent oracle/control. The expert resolves choices before dispatch. Port the accepted mechanism/regression together; no fresh approximation or placeholder behavior. NEEDS_DECISION identifies the missing field and affected work.
 4. Select an allowed path set and prepare a job. Example for initial SB01, after a real goal file exists:
 
 ```sh
@@ -57,10 +57,11 @@ python3 -m unittest discover -s tests/orchestration -v
 python3 -m unittest discover -s tools/planning/tests -v
 python3 tools/planning/check_traceability.py docs/superpowers/plans/2026-10-17-scopebase-traceability.json
 python3 tools/check_planning_docs.py
+python3 -m unittest discover -s tests/package-policy -p 'test_*.py' -v
 git diff --check
 ```
 
-These test development tooling. Until actual Cargo packages and runtime suites exist, they are not library/BPF qualification. Component authors add real commands and support evidence as they implement tasks. A normal downstream Cargo test does not automatically run dependency tests.
+These commands test development tooling, including SB02 package build-policy checks and dependency/compiler/feature probes. The root Cargo virtual workspace is empty and has no product members; these tools do not qualify a library, BPF program, runtime suite, or kernel behavior. Component authors add real package commands and support evidence as they implement tasks. A normal downstream Cargo test does not automatically run dependency tests. See [dependency policy and probe results](docs/dependencies.md) for the recorded probe scope.
 
 ## Recovery and continuation
 

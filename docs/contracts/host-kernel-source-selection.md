@@ -1,0 +1,30 @@
+# Initial host-kernel source selection
+
+Date: 2026-10-18. Controller-selected source baseline accompanying SB02 acceptance and SB03 compatibility documentation. **Assessment: the proposed selection is contract-correct and sufficient to resolve the previously unselected current host source baseline.** It does not qualify an environment or satisfy SB02's other acceptance requirements.
+
+The controller consulted [kernel.org releases.json](https://www.kernel.org/releases.json) and [kernel.org](https://www.kernel.org/) on 2026-10-18 and reported latest stable 7.2.11 and the named longterm lines 6.12.113 and 5.15.223, all released 2026-10-15. The expected archive hashes below were supplied by the controller from the corresponding official `sha256sums.asc` listings. This preparation did not independently revisit those pages, fetch/verify signatures or download/hash archives. These are attributed source-selection inputs, not locally verified archive receipts.
+
+| Selected host cell | Upstream release | Source archive | Expected SHA256 reported from official listing |
+|---|---|---|---|
+| Named 5.15 host baseline | 5.15.223 | `v5.x/linux-5.15.223.tar.xz` | `c1faba89652ec4af585fb96131fdb70d99e891c2b368cbf6d9c1e5fb7f156c23` |
+| Named 6.12 host baseline | 6.12.113 | `v6.x/linux-6.12.113.tar.xz` | `e09b6727e5c521253f0d41694900b9c38fb7604db7d35238a8197aa9f7de2428` |
+| Current host control for this selection revision | 7.2.11 | `v7.x/linux-7.2.11.tar.xz` | `fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4` |
+
+The source listings are the [v5.x checksums](https://cdn.kernel.org/pub/linux/kernel/v5.x/sha256sums.asc), [v6.x checksums](https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc) and [v7.x checksums](https://cdn.kernel.org/pub/linux/kernel/v7.x/sha256sums.asc). Links identify the official listing routes; their bytes/signatures were not independently inspected by this preparer. Version plus archive path plus expected digest identifies the intended source bytes; no unobserved Git commit, package build or image digest is invented.
+
+## Decision and claim limits
+
+- Select these three upstream source releases for initial `x86_64-unknown-linux-gnu` host qualification before environment-availability discovery. In this selection revision, **current means exactly 7.2.11**, not a moving latest release or whichever kernel happens to be running. A later change is an explicit selection revision with affected-check analysis.
+- The existing named 5.15/6.12 families are narrowed to these patch levels for the initial host qualification cells. This does not promise support for every patch level, older unfixed member or distro backport of either line. Named filesystem-trigger cells may still require additional environments to demonstrate their actual trigger.
+- This decision preserves SB02's source-selection ownership. This is the controller-owned SB02 closure addendum; it does not expand the completed worker tasks into kernel builds or relabel their API probes as runtime qualification. SB03 consumes the selection only after its actual predecessor acceptance bindings exist.
+- TT04 still owns configuration/compiler/provisioner/image selection and immutable artifact records. Before qualification it must acquire and verify the selected source archive against the expected digest, record verification provenance, freeze the selected configuration and compiler/linker identities, build or admit the intended image, and record actual kernel build/boot identity, configuration/BTF identities as applicable, root-image/provisioner hashes and resource ownership. Those records must demonstrate that the executed environment matches this source choice. If verification or required provisioning fails, retain the failure and incomplete cell; do not silently substitute an available machine or another release.
+- Required behavior/cases and intended configuration features follow the existing profiles before environment discovery. Actual boot/image hashes are evidence produced during controlled provisioning, not values manufactured at source selection. Selecting sources now therefore does not require pretending configuration/image/runtime evidence already exists.
+- Applicable Linux and `bpf-host-v1` host qualification remains incomplete until its required real operations/filesystem triggers/consumer bindings/cleanup are demonstrated. Source selection, archive verification, provisioned environment and passing runtime assertions are separate stages.
+- Additional affected-old, distro/backport, ISA, verifier, workaround-removal and BPF runtime cells remain with TC01/TC07 and their BP/TT owners. These modern patch levels cannot replace an older bug reproducer merely because they belong to its major/minor line. In particular, historical affected 7.0/private-stack cells and exact old-verifier regressions remain distinct where selected.
+- No universal BPF minimum, whole-line support guarantee, archive authenticity claim, successful build, usable VM, profile qualification or release readiness follows. Source licensing and D03's provisional project/dependency policy are unchanged.
+
+## Explicit state and handoff
+
+`source_baseline_selection = SELECTED_PLANNED`; `archive_acquisition = NOT_RUN_BY_THIS_PREPARATION`; `archive_checksum_verification = NOT_RUN`; `signature_verification = NOT_RUN`; `config_compiler_image_binding = PENDING_TT04`; `runtime_qualification = NOT_RUN`. The official checksum attribution comes from the controller's source consultation above; local archive verification remains outstanding.
+
+This resolves `CURRENT_HOST_CONTROL_UNSELECTED` at the private decision level. The controller must bind this note's hash into its eventual SB02 closure/SB03 prerequisite handoff before treating it as accepted canonical input. No existing task graph or runtime gate is removed. SB03 remains NOT_DISPATCH_READY until SB02 acceptance; TT04 and capability qualification remain gated on their actual source/configuration/artifact/resource records.
