@@ -138,6 +138,18 @@ def run_case(ex,case,matrix_root,positive_states):
             continue
 
 
+def accept_refusal(result, lock, lock_sha, code, contains, source):
+    if result['cleanup']!='complete':
+        raise p.PolicyError('CLEANUP_UNRESOLVED','BLOCKED',result)
+    if result['reason_code'] is not None:
+        raise p.PolicyError(result['reason_code'],'BLOCKED',result)
+    if result['exit_code'] is None or result['exit_code'] < 0:
+        raise p.PolicyError('REFUSAL_INCOMPLETE','BLOCKED',result)
+    p.check_hash(lock,lock_sha,'LOCK_CHANGED')
+    if result['exit_code']==0 or not p.rust_refusal(p.stdout(result),code,contains,source):
+        raise p.PolicyError('WRONG_COMPILE_REFUSAL',detail=result)
+
+
 def run_refusal(ex,case,refusal,matrix_root,positive_states):
     # Use its own copied source and independent offline lock. Preserve public
     # positive build separately from the expected diagnostic result.
@@ -158,12 +170,11 @@ def run_refusal(ex,case,refusal,matrix_root,positive_states):
                 return data
             ex.step(ident+'-admit',setup)
             def check(r):
+                p.check_hash(source/'Cargo.lock',lock_sha,'LOCK_CHANGED')
                 argv=[Path(t['root'])/'bin/cargo','check','--offline','--locked','--all-targets','--message-format','json','--manifest-path',source/'Cargo.toml']
                 result=p.run(argv,source,p.clean_env(ex.output,t,target),ex.output/'logs'/r['id'])
                 ex.attach(r,result); r['input_sha256']=p.tree_digest(source); r['lock_sha256']=p.sha(source/'Cargo.lock')
-                if result['cleanup']!='complete': raise p.PolicyError('CLEANUP_UNRESOLVED','BLOCKED',result)
-                if result['exit_code']==0 or not p.rust_refusal(p.stdout(result),refusal['diagnostic_code'],refusal['diagnostic_contains'],source):
-                    raise p.PolicyError('WRONG_COMPILE_REFUSAL',detail=result)
+                accept_refusal(result,source/'Cargo.lock',lock_sha,refusal['diagnostic_code'],refusal['diagnostic_contains'],source)
                 r['expected']={'code':refusal['diagnostic_code'],'contains':refusal['diagnostic_contains'],'positive_case':refusal['positive_case']}
                 r['observed']={'intended_diagnostic':True,'positive_build':True}
             ex.step(ident+'-refusal',check,'GAP')
@@ -234,16 +245,20 @@ def main(argv=None):
         print(str(e)[:1024],file=sys.stderr); return 2
     except (p.PolicyError,OSError,tomllib.TOMLDecodeError) as e:
         if ex:
-            active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-            if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
+            # A failed step already records its owning row. Never copy that
+            # failure into an unreached stage merely to produce a report.
+            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
+                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
+                if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
             return ex.finish(args.report)
         print(str(e)[:1024],file=sys.stderr); return 3 if isinstance(e,p.PolicyError) and e.status=='BLOCKED' else 2
 
     except Exception as error:
         print('INTERNAL_ERROR: '+type(error).__name__,file=sys.stderr)
         if ex:
-            active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-            if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
+            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
+                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
+                if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
             return ex.finish(args.report)
         return 1
 

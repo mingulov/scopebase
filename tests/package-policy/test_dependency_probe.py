@@ -153,3 +153,63 @@ class BtfLockMappingTests(unittest.TestCase):
             for changed in mutants:
                 with self.subTest(changed=changed),self.assertRaisesRegex(policy.PolicyError,'ACQUISITION_LOCK_UNAVAILABLE'):
                     probe.acquisition_lock(changed,staging,entry)
+
+class FailureStageAttributionTests(unittest.TestCase):
+    def test_only_input_stage_owns_missing_or_changed_inventory_failure(self):
+        import subprocess
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); inputs=root/'inputs'; inputs.mkdir()
+            shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
+            probe=inputs/'probe'; (probe/'src').mkdir(parents=True)
+            (probe/'Cargo.toml').write_text('[package]\nname="synthetic"\nversion="0.1.0"\nedition="2021"\n[workspace]\n[dependencies]\nitoa={version="=1.0.18",default-features=false,features=[]}\n')
+            (probe/'src/lib.rs').write_text('#[test] fn literal() { assert_eq!(1,1); }')
+            original=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            for kind in ('features','probe'):
+                for mutation,exit_code,code,status in (('missing',3,'SOURCE_UNAVAILABLE','BLOCKED'),('changed',1,'INPUT_CHANGED','FAIL')):
+                    matrix=copy.deepcopy(original)
+                    if kind=='probe':
+                        del matrix['fixture_members']; del matrix['members']
+                        record=original['fixture_members'][0]['allowed_dependencies'][0]
+                        candidate={k:record[k] for k in ('name','version','source','sha256')}
+                        matrix['cases']=[dict(id='synthetic',required=True,manifest='probe/Cargo.toml',candidate=candidate,default_features=False,features=[],tier='host_semantic',assertions=['literal'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02'])]
+                    if mutation=='missing': matrix['cargo_inputs']['inventory']=str(root/'absent-inventory.json')
+                    else: matrix['cargo_inputs']['sha256']='0'*64
+                    path=inputs/(kind+'-'+mutation+'.json'); path.write_text(json.dumps(matrix))
+                    report=root/(kind+'-'+mutation+'-report.json')
+                    argv=[sys.executable,str(ROOT/'tools/build'/('check_features.py' if kind=='features' else 'dependency_probe.py')),'--matrix',str(path),'--output-dir',str(root/(kind+'-'+mutation+'-output')),'--report',str(report)]
+                    if kind=='features': argv.extend(['--manifest',str(ROOT/'Cargo.toml')])
+                    result=subprocess.run(argv,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,exit_code,result.stdout+result.stderr)
+                    rows=json.loads(report.read_text())['rows']
+                    active=[r for r in rows if r['status']!='NOT_RUN']
+                    self.assertEqual([(r['id'],r['status'],r['reason_code']) for r in active],[('inputs',status,code)])
+                    self.assertTrue(all(r['command'] is None and r['cleanup']=='not_started' for r in rows))
+
+
+class RefusalCompletionTests(unittest.TestCase):
+    def test_diagnostic_cannot_certify_timeout_log_bound_or_interruption(self):
+        import dependency_probe as probe
+        self.assertTrue(hasattr(probe,'accept_refusal'), 'refusal completion predicate is absent')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'src'; source.mkdir()
+            (source/'lib.rs').write_text('fn check() { btf.type_by_id(1); }\n')
+            lock=root/'Cargo.lock'; lock.write_text('frozen lock\n'); lock_sha=policy.sha(lock)
+            diagnostic=dict(reason='compiler-message',message=dict(code=dict(code='E0624'),message='method `type_by_id` is private',spans=[dict(file_name=str(source/'lib.rs'),line_start=1,is_primary=True)]))
+            log=root/'diagnostics'; log.write_text(json.dumps(diagnostic)+'\n')
+            # This is a report predicate unit, not a fabricated Rust/Cargo run.
+            result=dict(cleanup='complete',exit_code=101,reason_code=None,logs=dict(stdout=dict(path=str(log))))
+            probe.accept_refusal(result,lock,lock_sha,'E0624','type_by_id',root)
+            for reason in ('TIMEOUT','LOG_BOUND','INTERRUPTED'):
+                changed={**result,'reason_code':reason}
+                with self.subTest(reason=reason):
+                    with self.assertRaises(policy.PolicyError) as error:
+                        probe.accept_refusal(changed,lock,lock_sha,'E0624','type_by_id',root)
+                    self.assertEqual((error.exception.status,error.exception.code),('BLOCKED',reason))
+            with self.assertRaisesRegex(policy.PolicyError,'CLEANUP_UNRESOLVED'):
+                probe.accept_refusal({**result,'cleanup':'unresolved'},lock,lock_sha,'E0624','type_by_id',root)
+            with self.assertRaisesRegex(policy.PolicyError,'REFUSAL_INCOMPLETE'):
+                probe.accept_refusal({**result,'exit_code':None},lock,lock_sha,'E0624','type_by_id',root)
+            lock.write_text('changed lock\n')
+            with self.assertRaisesRegex(policy.PolicyError,'LOCK_CHANGED'):
+                probe.accept_refusal(result,lock,lock_sha,'E0624','type_by_id',root)

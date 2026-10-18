@@ -201,16 +201,20 @@ def main(argv=None):
         print(str(e)[:1024],file=sys.stderr); return 2
     except (p.PolicyError,OSError,tomllib.TOMLDecodeError) as e:
         if ex:
-            active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-            if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
+            # A failed step already records its owning row. Never copy that
+            # failure into an unreached stage merely to produce a report.
+            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
+                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
+                if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
             return ex.finish(args.report)
         print(str(e)[:1024],file=sys.stderr); return 3 if isinstance(e,p.PolicyError) and e.status=='BLOCKED' else 2
 
     except Exception as error:
         print('INTERNAL_ERROR: '+type(error).__name__,file=sys.stderr)
         if ex:
-            active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-            if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
+            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
+                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
+                if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
             return ex.finish(args.report)
         return 1
 
