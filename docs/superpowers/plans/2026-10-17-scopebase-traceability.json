@@ -1129,7 +1129,7 @@
       "anchor": "lx03-positional-full-reads-and-explicit-memorywork-accounting",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "LX02",
         "LX04"
@@ -1149,6 +1149,10 @@
         "model": "gpt-6.1-sol",
         "reasoning_effort": "xhigh",
         "qualification": "NOT_EVALUATED"
+      },
+      "acceptance": {
+        "subject_commit": "1f25798bfeeff1b7260937afae5d9d1f25e33ea8",
+        "evidence_record": "docs/reviews/2026-10-18-lx03-reads.md"
       }
     },
     {

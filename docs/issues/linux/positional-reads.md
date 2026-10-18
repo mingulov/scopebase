@@ -1,6 +1,6 @@
 # Positional bounded reads and retained file observations
 
-Status: implemented candidate `f11fed73c0fb86d49c8f40eccd4e8dc8b3c0cb66`, independently reviewed; controller integration acceptance remains separate. This issue records LX03, H06 and its LX-R reader/accounting obligations. Complete mapped-image, filesystem, installed-operator and migration gates remain open.
+Status: [LX03 accepted](../../reviews/2026-10-18-lx03-reads.md) at integrated subject `1f25798bfeeff1b7260937afae5d9d1f25e33ea8`, preserving independently reviewed candidate `f11fed73c0fb86d49c8f40eccd4e8dc8b3c0cb66`. This issue records LX03, H06 and its LX-R reader/accounting obligations. Complete mapped-image, filesystem, installed-operator and migration gates remain open.
 
 ## Defects and preserved mechanisms
 

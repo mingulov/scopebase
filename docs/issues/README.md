@@ -33,5 +33,5 @@ New necessary work is reported to the integration owner for root TODO and tracea
 
 ## Implemented mechanism records
 
-- [Positional bounded reads](linux/positional-reads.md): LX03 candidate, preserved P/O fixes, delivered assertions and independently wired clients; root acceptance and wider mapping/operator gates are separate.
+- [Positional bounded reads](linux/positional-reads.md): accepted LX03, preserved P/O fixes, delivered assertions and independently wired clients; wider mapping/operator gates remain open.
 - [Capture provenance](capture/provenance.md): CP01–CP03 source and independent-fact boundaries; follow each selected-port and acceptance record for exact implemented scope.
