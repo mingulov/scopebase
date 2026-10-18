@@ -826,7 +826,7 @@
       "anchor": "task-cp03-counter-protocol-loss-units-and-diagnostic-signals",
       "lane": "capture",
       "milestone": "M4",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "CP02"
       ],
@@ -838,13 +838,9 @@
         "CP-R18"
       ],
       "profile_gates": [],
-      "execution": {
-        "job_id": "cp03-counters-20261018",
-        "base_commit": "8403718b61f24d6ad345fa6df36e2cdf472acd5e",
-        "role": "implementer",
-        "model": "gpt-6.1-sol",
-        "reasoning_effort": "xhigh",
-        "qualification": "NOT_EVALUATED"
+      "acceptance": {
+        "subject_commit": "c145e28f1f8415da4172f9ab7b51e00f7e2c6391",
+        "evidence_record": "docs/reviews/2026-10-18-cp03-counters.md"
       }
     },
     {
