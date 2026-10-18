@@ -4,3 +4,7 @@
 /.superpowers/
 __pycache__/
 *.py[cod]
+# SB02 generated Cargo outputs; package/source inputs remain visible.
+/target/
+/tests/package-policy/fixtures/*/target/
+/tests/package-policy/probes/*/target/

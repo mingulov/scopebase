@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "sb02-feature-subject"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+description = "Unpublished SB02 checker fixture; no ScopeBase product API"
+publish = false
+include = ["Cargo.toml", "src/lib.rs", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
+
+[workspace]
+
+[features]
+default = []
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
