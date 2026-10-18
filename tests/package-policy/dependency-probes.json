@@ -286,7 +286,7 @@
       ],
       "obligation_refs": [
         "SB02",
-        "LX06"
+        "LX08"
       ]
     },
     {
@@ -402,7 +402,8 @@
       ],
       "obligation_refs": [
         "SB02",
-        "LX05"
+        "TC05",
+        "TC06"
       ]
     },
     {
@@ -499,7 +500,8 @@
       ],
       "obligation_refs": [
         "SB02",
-        "LX05"
+        "TC05",
+        "TC06"
       ]
     },
     {
@@ -586,7 +588,8 @@
       "obligation_refs": [
         "SB02",
         "LX04",
-        "LX05"
+        "LX05",
+        "LX08"
       ]
     },
     {
