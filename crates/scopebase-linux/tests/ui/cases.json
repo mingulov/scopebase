@@ -1,0 +1,138 @@
+{
+  "positive": "tests/ui/positive.rs",
+  "cases": [
+    {
+      "id": "held_private",
+      "source": "tests/ui/held_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "resolver_private",
+      "source": "tests/ui/resolver_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "key_private",
+      "source": "tests/ui/key_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "stat_private",
+      "source": "tests/ui/stat_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "error_private",
+      "source": "tests/ui/error_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "effect_private",
+      "source": "tests/ui/effect_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "charges_private",
+      "source": "tests/ui/charges_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "held_clone",
+      "source": "tests/ui/held_clone.rs",
+      "code": "E0277",
+      "contains": "Clone",
+      "line": 5
+    },
+    {
+      "id": "resolver_clone",
+      "source": "tests/ui/resolver_clone.rs",
+      "code": "E0277",
+      "contains": "Clone",
+      "line": 5
+    },
+    {
+      "id": "held_inner",
+      "source": "tests/ui/held_inner.rs",
+      "code": "E0599",
+      "contains": "no method named",
+      "line": 4
+    },
+    {
+      "id": "resolver_inner",
+      "source": "tests/ui/resolver_inner.rs",
+      "code": "E0599",
+      "contains": "no method named",
+      "line": 4
+    },
+    {
+      "id": "held_raw",
+      "source": "tests/ui/held_raw.rs",
+      "code": "E0599",
+      "contains": "no method named",
+      "line": 4
+    },
+    {
+      "id": "resolver_raw",
+      "source": "tests/ui/resolver_raw.rs",
+      "code": "E0599",
+      "contains": "no method named",
+      "line": 4
+    },
+    {
+      "id": "file_ref",
+      "source": "tests/ui/file_ref.rs",
+      "code": "E0308",
+      "contains": "mismatched types",
+      "line": 4
+    },
+    {
+      "id": "file_mut",
+      "source": "tests/ui/file_mut.rs",
+      "code": "E0308",
+      "contains": "mismatched types",
+      "line": 4
+    },
+    {
+      "id": "observation_owner",
+      "source": "tests/ui/observation_owner.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
+    },
+    {
+      "id": "key_owner",
+      "source": "tests/ui/key_owner.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
+    },
+    {
+      "id": "raw_owner",
+      "source": "tests/ui/raw_owner.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
+    },
+    {
+      "id": "borrow_after_drop",
+      "source": "tests/ui/borrow_after_drop.rs",
+      "code": "E0505",
+      "contains": "cannot move out",
+      "line": 6
+    }
+  ]
+}
