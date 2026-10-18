@@ -2,15 +2,15 @@
   "schema_version": 1,
   "host": "x86_64-unknown-linux-gnu",
   "cargo_inputs": {
-    "inventory": "/home/user/src/m/bpfscope/.scopebase/jobs/sb02-api-probes-20261018/evidence/acquisition-v1/source-inventory.json",
-    "sha256": "1efbb395838d941d68edc2e3d2dbeaa54878f4d8edafd0dab22159721d0a39e2"
+    "inventory": "/home/user/src/m/bpfscope/.scopebase/jobs/sb02-api-probes-20261018/evidence/acquisition-v2/source-inventory.json",
+    "sha256": "92e7804954e641f6a1071c05ea3cff03167453e7d63044b89fad9d5b4ea8bffe"
   },
   "approved_build_inputs": [
     {
       "name": "btf-rs-derive",
       "version": "2.0.0",
       "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
-      "sha256": "1adc4a783264615d9fe4c84dd71dfa207a1db99b5ee26180553541afc0f721c1",
+      "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9",
       "build_script": null,
       "reason": "Reviewed complete pinned derive src/lib.rs and manifest: cbtf_type/CBtfType generate Rust byte-reader tokens via exact syn 3.0, quote and proc-macro2. No host IO/process/network execution."
     },
@@ -597,7 +597,7 @@
         "name": "btf-rs",
         "version": "2.0.0",
         "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
-        "sha256": "1adc4a783264615d9fe4c84dd71dfa207a1db99b5ee26180553541afc0f721c1"
+        "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9"
       },
       "default_features": false,
       "features": [],
@@ -617,14 +617,14 @@
           "name": "btf-rs",
           "version": "2.0.0",
           "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
-          "sha256": "1adc4a783264615d9fe4c84dd71dfa207a1db99b5ee26180553541afc0f721c1",
+          "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9",
           "role": "host-rust"
         },
         {
           "name": "btf-rs-derive",
           "version": "2.0.0",
           "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
-          "sha256": "1adc4a783264615d9fe4c84dd71dfa207a1db99b5ee26180553541afc0f721c1",
+          "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9",
           "role": "host-proc-macro"
         },
         {
