@@ -205,12 +205,14 @@ class Checker:
             return
         target, _ = location
         relative = target.relative_to(self.root).as_posix()
-        if self.read(relative, missing='LINK') is None:
+        body = self.read(relative, missing='LINK')
+        if body is None:
             return
-        # The existing helper is side-effect-free; bytes were bounded and
-        # contained above. This checks its established heading-anchor grammar.
+        # Reuse the admitted bounded bytes with the existing anchor grammar.
+        # A second pathname read could observe growth beyond the byte bound.
         try:
-            valid = document_link(relative + ('#' + anchor if '#' in value else ''), self.root)
+            valid = document_link(relative + ('#' + anchor if '#' in value else ''), self.root,
+                                  body=body)
         except (OSError, UnicodeError):
             valid = False
         if not valid:

@@ -81,16 +81,22 @@ def positive_integer(value):
     return type(value) is int and value > 0
 
 
-def document_link(value, root):
+def document_link(value, root, *, body=None):
+    """Check a local reference using admitted text, or the legacy file read.
+
+    Supplying body reuses caller-selected bytes without reopening the pathname;
+    it does not establish current filesystem existence or object authority.
+    """
     if not isinstance(value, str):
         return False
     path, separator, anchor = value.partition('#')
     if not safe_relative(path) or (separator and not anchor):
         return False
-    try:
-        body = (root / path).read_text()
-    except OSError:
-        return False
+    if body is None:
+        try:
+            body = (root / path).read_text()
+        except OSError:
+            return False
     if not separator:
         return True
     headings = re.findall(r'^#{1,6}\s+(.+?)\s*#*$', body, re.M)

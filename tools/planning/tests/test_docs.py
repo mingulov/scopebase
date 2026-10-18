@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 CHECKER = Path(__file__).resolve().parents[1] / 'check_docs.py'
 FIXTURE = Path(__file__).parent / 'fixtures/docs/valid'
@@ -267,6 +268,35 @@ class DocumentationTests(unittest.TestCase):
             stream.write('\n[contract](../architecture.md#missing)\n')
         self.assert_code('LINK')
 
+    def test_growing_link_target_reuses_bounded_body_without_reopen(self):
+        from tools.planning.check_docs import Checker
+        checker = Checker(self.root)
+        relative = 'docs/architecture.md'
+        target = self.root / relative
+        # The positive anchor exists in the real bounded file. Cache it, then
+        # deterministically grow that same file beyond the document limit.
+        checker.link(relative + '#synthetic-architecture', POLICY)
+        self.assertEqual(checker.errors, [])
+        with target.open('ab') as stream:
+            stream.write(b'\n# Only after growth\n' + b' ' * (2 * 1024 * 1024 + 1))
+        self.assertGreater(target.stat().st_size, 2 * 1024 * 1024)
+        original_open = Path.open
+        opens = []
+
+        def observe_open(path, *args, **kwargs):
+            if path == target:
+                opens.append((args, kwargs))
+            return original_open(path, *args, **kwargs)
+
+        # This spy delegates every operation to the actual file; it supplies no
+        # canned bytes/verdict. The IO oracle is zero reopens of cached input.
+        with patch.object(Path, 'open', observe_open):
+            checker.link(relative + '#synthetic-architecture', POLICY)
+            self.assertEqual(checker.errors, [])
+            checker.link(relative + '#only-after-growth', POLICY)
+        self.assertEqual(opens, [], 'Cached bounded content must not reopen the grown target')
+        self.assertEqual([error['code'] for error in checker.errors], ['LINK'])
+
     def test_angle_link_with_spaces_is_checked(self):
         with (self.root / POLICY).open('a') as stream:
             stream.write('\n[contract](<../missing file.md>)\n')
@@ -347,6 +377,34 @@ class DocumentationTests(unittest.TestCase):
         self.assertEqual(result.stdout, 'VALID; qualification=not_evaluated\n')
         result = self.run_checker('--format', 'unknown')
         self.assertEqual(result.returncode, 64)
+
+
+class DocumentLinkCompatibilityTests(unittest.TestCase):
+    def test_document_link_legacy_and_supplied_body_preserve_anchor_grammar(self):
+        from tools.planning.check_traceability import document_link
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            body = '# Mixed case, punctuation!\n\n<span id="explicit-id"></span>\n'
+            target = root / 'contract.md'
+            target.write_text(body)
+            for reference, expected in (
+                ('contract.md', True),
+                ('contract.md#mixed-case-punctuation', True),
+                ('contract.md#explicit-id', True),
+                ('contract.md#missing', False),
+                ('contract.md#', False),
+                ('../contract.md', False),
+                (None, False),
+            ):
+                with self.subTest(reference=reference):
+                    self.assertEqual(document_link(reference, root), expected)
+                    self.assertEqual(document_link(reference, root, body=body), expected)
+            target.unlink()
+            self.assertFalse(document_link('contract.md', root))
+            # Supplied admitted text checks only its syntax/anchor, without a
+            # pathname read or an implied current-filesystem authority claim.
+            self.assertTrue(document_link('contract.md#explicit-id', root, body=body))
+            self.assertTrue(document_link('contract.md', root, body=''))
 
 
 if __name__ == '__main__':
