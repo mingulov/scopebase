@@ -97,6 +97,7 @@
       "source": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
       "selector": "linux-stage-prose",
       "categories": [
+        "ConfigureControl",
         "ResolveProc",
         "AcquirePath",
         "ValidateFile",

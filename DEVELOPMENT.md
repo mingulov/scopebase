@@ -4,7 +4,7 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair and SB01, SB02, SB03, LX01 and CP01 foundations are accepted within their recorded scopes. The active M0–M6 goal continues with package implementation: LX02 held-file behavior and CP02 pure value foundations are next, followed by TT01 registry work. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition and CP02 pure values are accepted within their recorded scopes. The active M0–M6 goal continues with TT01 registry review and the next BP01/LX04 implementation lanes. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
@@ -20,7 +20,7 @@ The machine-readable [policy](orchestration/policy.json) is local project policy
 
 Default to at most three independent implementation lanes and one heavy build slot. Actual capacity, overlapping interfaces and available reviewers may reduce this. One writer owns every worktree and shared file set. Reviewers use a pinned source checkout/package and remain read-only; the worker never creates its own approving reviewer.
 
-Freeze shared task inputs for each parallel wave. Finish the assigned candidates and their reviews before changing the registry, policy, shared specifications or AGENTS inputs bound into their manifests. Integrate the accepted wave and its progress metadata together. A necessary interface amendment explicitly invalidates affected assignments; record the amendment and prepare fresh bindings rather than bypassing a mismatch. Unrelated source changes outside the bound inputs do not justify repeating completed checks.
+Freeze shared task inputs for each assignment. New jobs use a clean immutable detached controller checkout as their origin, plus exact copied expert inputs, so unrelated integration can proceed without changing their bindings. Finish candidates and their reviews against those original inputs; integrate accepted progress and required canonical amendments together. A necessary interface amendment explicitly invalidates affected assignments; record the amendment and prepare fresh bindings rather than bypassing a mismatch. Unrelated source changes outside the bound inputs do not justify repeating completed checks.
 
 ## Starting from the user's goal
 
@@ -61,7 +61,7 @@ python3 -m unittest discover -s tests/package-policy -p 'test_*.py' -v
 git diff --check
 ```
 
-These commands test development tooling, including SB02 package build-policy checks and dependency/compiler/feature probes. The root Cargo workspace now contains `scopebase-linux` and `scopebase-capture`. The recorded combined package matrix reports 102 PASS rows (101 required) over 12 declared compiler/configuration cells; this establishes package foundations only. Neither package exports a runtime API, and no runtime/conformance profile or kernel behavior is qualified. A normal downstream Cargo test does not automatically run dependency tests. See [dependency policy and probe results](docs/dependencies.md) for the recorded probe scope.
+These commands test development tooling, including SB02 package build-policy checks and dependency/compiler/feature probes. The root Cargo workspace now contains `scopebase-linux` and `scopebase-capture`. The final combined package matrix at 365a312 reports 102 PASS rows (101 required) over 12 declared compiler/configuration cells. It covers held-file acquisition and pure capture values; complete runtime/conformance profiles and kernel behavior remain unqualified. A normal downstream Cargo test does not automatically run dependency tests. See [dependency policy and probe results](docs/dependencies.md) for the recorded probe scope.
 
 For a deliberate full package-matrix rerun, coordinate the shared build slot and assign `SCOPEBASE_RUN` a fresh run-specific path under the private job root outside this worktree. This is the current supported `check_features.py` invocation; it creates its output directory and writes its report at the supplied paths:
 
@@ -74,7 +74,7 @@ bin/scopebase-build -- python3 tools/build/check_features.py \
   --report "${SCOPEBASE_RUN}-report.json"
 ```
 
-The accepted 102-row receipt is recorded in the CP01 job evidence; this example is not a claim that the matrix was rerun on another candidate.
+The current 102-row receipt is recorded in the LX02/CP02 acceptance records and `.scopebase/controller/lx02-cp02-integration-20261018/`. This example is not evidence of another run.
 
 ## Recovery and continuation
 

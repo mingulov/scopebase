@@ -45,6 +45,8 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 
 **Interfaces:** Produce `CaseId::parse`, `ProfileId::parse`, `CaseCatalog::load(bytes, CatalogLimits) -> Result<CaseCatalog,CatalogError>`, `ProfilePlan::select(catalog, profile_id) -> Result<ProfilePlan,PlanError>`. Their immutable result contains required subcases/tiers/cells before any environment query. Preserve `UNIMPLEMENTED` entries separately from runnable cases.
 
+The complete TT01 increment implements both UNIMPLEMENTED and REGISTERED_EXECUTABLE metadata, strict bounded Rust admission and an independent Python checker, immutable getters/selection transport, schema, authoring documentation, shipped fixtures and two independently authored consumers of the same archive. All initial cases remain UNIMPLEMENTED and profiles DRAFT. `CaseCatalog::case(&self, id: &CaseId, version: u32) -> Option<&CaseSpec>` is an exact pair lookup. Preserve multiple historical revisions, reject duplicate pairs and active mixed revisions, validate inactive references and retain old profile predicates. Literal revision A/B fixtures include the full canonical 86-task/179-obligation/33-family/profile envelope; a small isolated catalog supplements this population. Registry validity and local artifact bytes never imply a runner result or qualified support.
+
 **Required frozen input/control:** Register new H33 as a planned source/build/kernel-license family, without changing H01–H32 meanings. Select its applicable T0/T2/T4/T5 subcases before environment discovery; source closure and intended runtime refusal are separate.
 
 **TC-R10/H33 facet:** H33 registration and applicable subcase/profile selection. Follow D03–D04; other facets remain with their named owners.

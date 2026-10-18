@@ -294,6 +294,7 @@
         "SB-R03",
         "BP-R01",
         "BP-R12",
+        "BP-R13",
         "TC-R10"
       ],
       "profile_gates": []
@@ -798,7 +799,7 @@
       "anchor": "task-cp02-domain-quantity-partition-and-interval-foundations",
       "lane": "capture",
       "milestone": "M4",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "CP01"
       ],
@@ -808,7 +809,11 @@
         "CP-R09",
         "CP-R18"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "365a312c5673fa68ffcad7132970f0aefc1ab812",
+        "evidence_record": "docs/reviews/2026-10-18-cp02-values.md"
+      }
     },
     {
       "id": "CP03",
@@ -1090,7 +1095,7 @@
       "anchor": "lx02-held-regular-file-authority-errors-and-encapsulation",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "LX01"
       ],
@@ -1103,7 +1108,11 @@
         "LX-R15",
         "LX-R21"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "365a312c5673fa68ffcad7132970f0aefc1ab812",
+        "evidence_record": "docs/reviews/2026-10-18-lx02-held-file.md"
+      }
     },
     {
       "id": "LX03",
@@ -1944,7 +1953,7 @@
       "anchor": "tt01-versioned-caseprofile-and-traceability-registry",
       "lane": "testing",
       "milestone": "cross-cutting",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "SB01",
         "SB02"
@@ -3834,6 +3843,7 @@
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
       "description": "Each advertised profile ships public developer cases, fixtures, a source-free installed operator path and at least two independent downstream package consumers of its actual APIs. Required old/current/affected kernel cells are selected before availability discovery. Product migrations are deferred.",
       "tasks": [
+        "BP01",
         "BP03",
         "BP11"
       ],

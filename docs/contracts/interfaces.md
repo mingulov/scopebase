@@ -74,6 +74,16 @@ Default LinuxError/AdoptFileError Display/Debug, including alternate/nested form
 
 Dependent read signatures remain ReadLimits/FileRead/ReadObservations/ReadCharges/OperationControl. LX02 qualifies acquisition; LX03/LX04 implement reads/controls independently. LX05–LX08 separately implement mapping/process domains and evidence. LX11/LX12 and their required cells/installed consumers gate profile readiness; a file acquisition increment cannot close held-file-v1 or mapped-image capability.
 
+## BPF host error and explicit budget configuration (BP01)
+
+**Status:** Proposed contract; the shared row does not establish implementation, a runner, or runtime qualification.
+
+**Owner:** BP01. **Next consumers:** BP02, BP03, BP04 and TC02.
+
+The std-only host foundation exports non-exhaustive `ErrorKind` and `Stage` enums with the existing ordered variants and `Debug + Clone + Copy + PartialEq + Eq`. `OperationError::new(kind: ErrorKind, stage: Stage, raw_errno: Option<i32>, source: Option<Box<dyn Error + Send + Sync>>) -> Self` stores these caller-supplied values independently and verbatim; `source` is implicitly `'static`. `Error::source` returns the original source by shared reference with the standard trait-object lifetime. Its accessors are `kind()`, `stage()`, `raw_os_error()`, `required_size()` and consuming `with_required_size(usize)`. Required size starts absent and can be replaced by any value, including zero and `usize::MAX`. It implements `Error`, bounded custom `Display`/`Debug` (at most 256 ASCII bytes, never formatting the source, including alternate/nested use), and `Send + Sync`; it is not `Copy`, `Clone`, `Default`, `Eq` or serializable. No `From<io::Error>` or errno-only classifier is provided. Explicit source access/downcasting may run caller code. Effectful operations retain their owner-bearing result types; this carrier creates no authority.
+
+`Limits` contains independent `input_bytes`, `retained_bytes`, `work_steps`, `sites`, `live_links` and `pending_retirements` caps. It is `Debug + Clone + Copy + PartialEq + Eq`; `validate(&self) -> Result<(), OperationError>` returns `Ok(())` for every representable combination, including zero, maximum and cross-field-inconsistent values, without allocation, derived operation arithmetic or permission. `Limits` has no `Default` or unlimited sentinel. Each real operation must deny positive work against a zero corresponding cap and use checked arithmetic before allocation/effects, even with maximum caps. BP02 owns geometry, BP04 split attempts, BP05 cumulative retirement, BP06 frame/staging, BP09 parser and TC02 executor checks. This is an API design until BP01 package acceptance; downstream `cargo test` does not run dependency tests.
+
 ## Testkit adapter and runner
 
 The exact seam is:
@@ -143,4 +153,8 @@ NX07 owns bounded binary preflight, count×stride arithmetic, discriminants and 
 
 ## Cross-owner change gate
 
+TT01's catalog key is `(CaseId, positive u32 revision)`, and `CaseCatalog::case(&self, id: &CaseId, version: u32) -> Option<&CaseSpec>` performs exact lookup without a latest alias. Every required case reference and selected/transported cell preserves that revision. Historic pairs coexist; active mixed revisions refuse. Private immutable plans survive catalog drop. `ArtifactRegistration` exposes id/entrypoint/path/sha256 as `&str` and revision as `u32`; those getters reveal metadata, not execution authority. Complete frozen definitions and registered artifact bytes remain distinct from test execution, task acceptance and runtime qualification.
+
 Changes to HeldFile invalidate dependent acquisition/read/mapping/attachment/native-owner checks as affected. Changes to the adapter invalidate binding/oracle/runner and all consuming adapters. Changes to neutral v1 semantics invalidate CP10, replay, SDK metadata and NX codec/client vectors. Keep case/profile/schema support revisions and exact consumer/object bindings visible. Root TODO/traceability changes belong to the integration owner; task authors report newly found obligations before dependent implementation proceeds.
+
+LX04 control implementation adds `control::{CancelToken,MonotonicDeadline,OperationControl}` with private fields. Token/control are Clone + Send + Sync; deadline is Copy + Clone + Send + Sync. Cancellation is shared by token clones, deadlines are copied unchanged, and invocation effects/terminal state stay with each operation owner. No public clock/checkpoint/raw-time constructor exists. ConfigureControl/InvalidInput records checked deadline-construction overflow with zero effects/charges; existing failed syscall errno remains primary over concurrent cancellation. Later production operation owners wire the private checkpoint/context seam and retain their actual resource custody.
