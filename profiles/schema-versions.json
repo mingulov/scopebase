@@ -1,0 +1,220 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "documentation_contract_registry",
+  "domains": [
+    {
+      "id": "rust-package",
+      "encoding": "semver",
+      "version": "0.1.0",
+      "state": "planned",
+      "owner_task": "SB02",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-design.md#platform-dependencies-and-compatibility-policy"
+    },
+    {
+      "id": "neutral-semantic",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "CP10",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md#canonical-neutral-validation-seam-for-selective-interoperability"
+    },
+    {
+      "id": "capture-replay",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "CP10",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md#strict-neutral-replay"
+    },
+    {
+      "id": "native-abi",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "NX07",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-sdk-native-design.md#scopebase-pure-c-abi-v1"
+    },
+    {
+      "id": "native-wire",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "NX07",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-sdk-native-design.md#scopebase-pure-c-abi-v1"
+    },
+    {
+      "id": "run-report",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "TT02",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md#result-and-verdict-contract"
+    },
+    {
+      "id": "case-catalog",
+      "encoding": "major",
+      "version": "1",
+      "state": "planned",
+      "owner_task": "TT01",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md#required-profiles-and-evidence-selection"
+    },
+    {
+      "id": "case-revision",
+      "encoding": "per_artifact",
+      "version": null,
+      "state": "planned",
+      "owner_task": "TT01",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md#required-profiles-and-evidence-selection"
+    },
+    {
+      "id": "fixture-revision",
+      "encoding": "per_artifact",
+      "version": null,
+      "state": "planned",
+      "owner_task": "TT01",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md#exact-public-adapter-seam"
+    },
+    {
+      "id": "support-profile",
+      "encoding": "per_artifact",
+      "version": null,
+      "state": "planned",
+      "owner_task": "TT01",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md#required-profiles-and-evidence-selection"
+    },
+    {
+      "id": "documentation-registry",
+      "encoding": "semver",
+      "version": "1.0.0",
+      "state": "implemented_tool_schema",
+      "owner_task": "SB03",
+      "source": "docs/contracts/compatibility.md#registry-and-checker-contract"
+    }
+  ],
+  "error_domains": [
+    {
+      "id": "linux.stage",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
+      "selector": "linux-stage-prose",
+      "categories": [
+        "ResolveProc",
+        "AcquirePath",
+        "ValidateFile",
+        "ReopenHeld",
+        "ReadFile",
+        "ReadProc",
+        "ParseMaps",
+        "ParseMounts",
+        "Calibrate",
+        "AssociateRange",
+        "AcquireProcess",
+        "SpawnChild",
+        "SignalChild",
+        "WaitChild",
+        "RetireMapping",
+        "Walk"
+      ]
+    },
+    {
+      "id": "linux.reason",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
+      "selector": "linux-reason-prose",
+      "categories": [
+        "InvalidInput",
+        "NonRegular",
+        "Unreadable",
+        "Denied",
+        "Unavailable",
+        "Disappeared",
+        "ChangedSource",
+        "WrongContext",
+        "Malformed",
+        "Inconclusive",
+        "LimitExceeded",
+        "Allocation",
+        "Cancelled",
+        "Deadline",
+        "AlreadyWaited",
+        "IntegrationConflict",
+        "CleanupUnresolved"
+      ]
+    },
+    {
+      "id": "bpf.kind",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
+      "selector": "rust-enum:ErrorKind",
+      "categories": [
+        "InvalidInput",
+        "Malformed",
+        "Incompatible",
+        "Unsupported",
+        "Denied",
+        "Disappeared",
+        "Changed",
+        "LimitExceeded",
+        "Overflow",
+        "Backend",
+        "Poisoned"
+      ]
+    },
+    {
+      "id": "bpf.stage",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
+      "selector": "rust-enum:Stage",
+      "categories": [
+        "Admission",
+        "Metadata",
+        "Allocate",
+        "Read",
+        "Attach",
+        "Drain",
+        "Retire",
+        "BtfQuery",
+        "Compile",
+        "Inspect",
+        "Execute"
+      ]
+    },
+    {
+      "id": "capture.contract",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
+      "selector": "rust-enum:ContractError",
+      "categories": [
+        "InvalidId",
+        "DomainMismatch",
+        "ArithmeticOverflow",
+        "ReversedBounds",
+        "ConservationMismatch",
+        "MissingProvenance",
+        "ConflictingProvenance",
+        "DuplicateKey",
+        "EpochExhausted",
+        "GenerationMismatch",
+        "CapacityExceeded",
+        "MissingFeed",
+        "DuplicateFeed",
+        "StaleRevision",
+        "InvalidInterval",
+        "InvalidSample",
+        "InvalidProfile",
+        "IncompatibleVersion",
+        "InvalidReplay"
+      ]
+    },
+    {
+      "id": "capture.replay",
+      "source": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
+      "selector": "rust-enum:ReplayErrorKind",
+      "categories": [
+        "Limit",
+        "DuplicateMember",
+        "InvalidNumber",
+        "InvalidSyntax",
+        "InvalidSemantics",
+        "VersionMismatch",
+        "MissingTerminal",
+        "DuplicateTerminal"
+      ]
+    }
+  ]
+}
