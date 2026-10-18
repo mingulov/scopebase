@@ -3,7 +3,7 @@
 CP01 registers source and original regressions; it ports no mechanism and runs no
 donor test. The [derived register](donor-manifest.json) preserves canonical
 [source IDs and hashes](../../provenance/donors.json), including 38 selected files
-and 181 original regression references. Those references are source evidence,
+and 185 original regression references. Those references are source evidence,
 not passing ScopeBase cases. Future owners must port each selected mechanism,
 its relevant call sites and discriminating tests together. The
 [provenance record](provenance.md) distinguishes frozen bytes, source grants and

@@ -60,9 +60,9 @@ for name, expected in expected_dependencies.items():
         refuse("DEPENDENCIES")
     if dependency.get("optional") is not True or dependency.get("default-features") is not False:
         refuse("DEPENDENCIES")
-if manifest.get("build-dependencies"):
+if manifest.get("build-dependencies") or manifest.get("build_dependencies"):
     refuse("BUILD_INPUT")
-if manifest.get("dev-dependencies"):
+if manifest.get("dev-dependencies") or manifest.get("dev_dependencies"):
     refuse("DEPENDENCIES")
 targets = manifest.get("target", {})
 if not isinstance(targets, dict):
@@ -70,7 +70,7 @@ if not isinstance(targets, dict):
 for target in targets.values():
     if not isinstance(target, dict):
         refuse("DEPENDENCIES")
-    if target.get("build-dependencies"):
+    if target.get("build-dependencies") or target.get("build_dependencies"):
         refuse("BUILD_INPUT")
-    if target.get("dependencies") or target.get("dev-dependencies"):
+    if target.get("dependencies") or target.get("dev-dependencies") or target.get("dev_dependencies"):
         refuse("DEPENDENCIES")

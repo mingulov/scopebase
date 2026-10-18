@@ -226,3 +226,47 @@ fn package_metadata_is_frozen() {
         "PACKAGE_METADATA",
     );
 }
+
+fn dependency_table_alias_is_refused(canonical: &str, alias: &str, reason: &str) {
+    let original = source_manifest();
+    // The same forbidden edge must refuse under both Cargo table spellings.
+    // These fixtures are parsed only; no dependency is resolved or compiled.
+    refused(&(original.clone() + canonical), reason);
+    refused(&(original + alias), reason);
+}
+
+#[test]
+fn top_level_build_dependency_alias_is_refused() {
+    dependency_table_alias_is_refused(
+        "\n[build-dependencies]\ncc = '1'\n",
+        "\n[build_dependencies]\ncc = '1'\n",
+        "BUILD_INPUT",
+    );
+}
+
+#[test]
+fn top_level_dev_dependency_alias_is_refused() {
+    dependency_table_alias_is_refused(
+        "\n[dev-dependencies]\nlibc = '0.2'\n",
+        "\n[dev_dependencies]\nlibc = '0.2'\n",
+        "DEPENDENCIES",
+    );
+}
+
+#[test]
+fn inactive_target_build_dependency_alias_is_refused() {
+    dependency_table_alias_is_refused(
+        "\n[target.'cfg(any())'.build-dependencies]\ncc = '1'\n",
+        "\n[target.'cfg(any())'.build_dependencies]\ncc = '1'\n",
+        "BUILD_INPUT",
+    );
+}
+
+#[test]
+fn inactive_target_dev_dependency_alias_is_refused() {
+    dependency_table_alias_is_refused(
+        "\n[target.'cfg(any())'.dev-dependencies]\nlibc = '0.2'\n",
+        "\n[target.'cfg(any())'.dev_dependencies]\nlibc = '0.2'\n",
+        "DEPENDENCIES",
+    );
+}

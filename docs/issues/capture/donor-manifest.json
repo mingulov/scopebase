@@ -360,7 +360,24 @@
       "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
       "sha256": "e1d7af0513904ce62e69e759de2e496acb54c73a823120bd7f6e9524bbcb49ea",
       "symbols": [],
-      "original_regressions": [],
+      "original_regressions": [
+        {
+          "source_id": "O:tests/evidence_model.rs",
+          "symbol": "shared_site_conserves_calls"
+        },
+        {
+          "source_id": "O:tests/evidence_model.rs",
+          "symbol": "ambiguous_require_is_unproven"
+        },
+        {
+          "source_id": "O:tests/evidence_model.rs",
+          "symbol": "zero_call_unknown_candidates_bound_known_zero"
+        },
+        {
+          "source_id": "O:tests/evidence_model.rs",
+          "symbol": "loss_vs_activity_counters"
+        }
+      ],
       "destinations": [
         "CP07",
         "CP11"
