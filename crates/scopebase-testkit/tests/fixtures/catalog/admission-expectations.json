@@ -1,0 +1,246 @@
+[
+  {
+    "file": "registered.json",
+    "expected": "accept"
+  },
+  {
+    "file": "literal-revision-b.json",
+    "expected": "accept"
+  },
+  {
+    "file": "all-objects.json",
+    "expected": "accept"
+  },
+  {
+    "file": "duplicate-field-0.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-0.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-1.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-1.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-2.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-2.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-3.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-3.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-4.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-4.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-5.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-5.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-6.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-6.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-7.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-7.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-8.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-8.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-9.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-9.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-10.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-10.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "duplicate-field-11.json",
+    "expected": "DuplicateField"
+  },
+  {
+    "file": "unknown-field-11.json",
+    "expected": "UnknownField"
+  },
+  {
+    "file": "registration-null.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "registration-status.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "oracle-self-copy.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "control-self-copy.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "path-escape.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "path-absolute.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "digest-uppercase.json",
+    "expected": "InvalidRegistration"
+  },
+  {
+    "file": "missing-owner.json",
+    "expected": "UnknownReference"
+  },
+  {
+    "file": "duplicate-case-pair.json",
+    "expected": "DuplicateId"
+  },
+  {
+    "file": "unknown-case-version.json",
+    "expected": "UnknownReference"
+  },
+  {
+    "file": "zero-case-version.json",
+    "expected": "InvalidVersion"
+  },
+  {
+    "file": "bool-case-version.json",
+    "expected": "InvalidVersion"
+  },
+  {
+    "file": "float-case-version.json",
+    "expected": "InvalidVersion"
+  },
+  {
+    "file": "overflow-case-version.json",
+    "expected": "InvalidVersion"
+  },
+  {
+    "file": "unknown-inactive-case.json",
+    "expected": "UnknownReference"
+  },
+  {
+    "file": "inactive-reference-cycle-free.json",
+    "expected": "accept"
+  },
+  {
+    "file": "direct-cycle.json",
+    "expected": "Cycle"
+  },
+  {
+    "file": "extension-cycle.json",
+    "expected": "Cycle"
+  },
+  {
+    "file": "invalid-profile-suffix.json",
+    "expected": "InvalidVersion"
+  },
+  {
+    "file": "empty-frozen.json",
+    "expected": "InvalidDefinition"
+  },
+  {
+    "file": "invalid-utf8.json",
+    "expected": "InvalidJson"
+  },
+  {
+    "file": "bom.json",
+    "expected": "InvalidJson"
+  },
+  {
+    "file": "unpaired-surrogate.json",
+    "expected": "InvalidJson"
+  },
+  {
+    "file": "trailing-input.json",
+    "expected": "InvalidJson"
+  },
+  {
+    "file": "deep-extra.json",
+    "expected": "LimitExceeded"
+  },
+  {
+    "file": "conditional-revisions.json",
+    "expected": "accept"
+  },
+  {
+    "file": "conditional-active-conflict.json",
+    "expected": "VersionConflict"
+  },
+  {
+    "file": "inactive-unknown-revision.json",
+    "expected": "UnknownReference"
+  },
+  {
+    "file": "extension-derived-case-conflict.json",
+    "expected": "VersionConflict"
+  },
+  {
+    "file": "extension-stem-conflict.json",
+    "expected": "VersionConflict"
+  },
+  {
+    "file": "mixed-stems-valid.json",
+    "expected": "accept"
+  },
+  {
+    "file": "mixed-stems-conflict.json",
+    "expected": "VersionConflict"
+  },
+  {
+    "file": "indirect-cycle.json",
+    "expected": "Cycle"
+  },
+  {
+    "file": "empty-lexical-suffix.json",
+    "expected": "accept"
+  }
+]

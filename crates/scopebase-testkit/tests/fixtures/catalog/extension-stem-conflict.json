@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 2,
+  "tasks": [
+    "TT01"
+  ],
+  "obligations": [
+    {
+      "kind": "regression_family",
+      "id": "H04",
+      "description": "Held fixture",
+      "owners": [
+        "TT01"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "H04",
+      "short_contract": "Held fixture",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        }
+      ]
+    }
+  ],
+  "cells": [
+    {
+      "id": "revision-before",
+      "tier": "T0",
+      "description": "Revision fixture before observation",
+      "binding": "LOGICAL_ONLY"
+    },
+    {
+      "id": "revision-after",
+      "tier": "T0",
+      "description": "Revision fixture after observation",
+      "binding": "LOGICAL_ONLY"
+    }
+  ],
+  "cases": [
+    {
+      "id": "H04.revision-fixture",
+      "family": "H04",
+      "version": 1,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "TT01"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        }
+      ],
+      "required_cells": [
+        "revision-before"
+      ],
+      "registration": null
+    },
+    {
+      "id": "H04.revision-fixture",
+      "family": "H04",
+      "version": 2,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "TT01"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        }
+      ],
+      "required_cells": [
+        "revision-before",
+        "revision-after"
+      ],
+      "registration": null
+    }
+  ],
+  "profiles": [
+    {
+      "id": "revision-fixture-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [
+        "extra-v1",
+        "extra-v2"
+      ],
+      "required_cases": [
+        {
+          "case_id": "H04.revision-fixture",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H04.revision-fixture",
+          "case_version": 2,
+          "when_extensions": [
+            "extra-v1"
+          ]
+        }
+      ],
+      "open_owners": [
+        "TT01"
+      ]
+    },
+    {
+      "id": "revision-fixture-v2",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H04.revision-fixture",
+          "case_version": 2,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "TT01"
+      ]
+    },
+    {
+      "id": "base-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "TT01"
+      ]
+    }
+  ],
+  "extensions": [
+    {
+      "id": "extra-v1",
+      "profile": "base-v1",
+      "requires_profiles": [],
+      "requires_tasks": [
+        "TT01"
+      ],
+      "required_cases": []
+    },
+    {
+      "id": "extra-v2",
+      "profile": "base-v1",
+      "requires_profiles": [],
+      "requires_tasks": [
+        "TT01"
+      ],
+      "required_cases": []
+    }
+  ]
+}

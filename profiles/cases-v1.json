@@ -1,0 +1,4352 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 1,
+  "tasks": [
+    "BP01",
+    "BP02",
+    "BP03",
+    "BP04",
+    "BP05",
+    "BP06",
+    "BP07",
+    "BP08",
+    "BP09",
+    "BP10",
+    "BP11",
+    "TC01",
+    "TC02",
+    "TC03",
+    "TC04",
+    "TC05",
+    "TC06",
+    "TC07",
+    "TC08",
+    "CP01",
+    "CP02",
+    "CP03",
+    "CP04",
+    "CP05",
+    "CP06",
+    "CP07",
+    "CP08",
+    "CP09",
+    "CP10",
+    "CP11",
+    "CP12",
+    "CP13",
+    "LX01",
+    "LX02",
+    "LX03",
+    "LX04",
+    "LX05",
+    "LX06",
+    "LX07",
+    "LX08",
+    "LX09",
+    "LX10",
+    "LX11",
+    "LX12",
+    "LX13",
+    "SDK01",
+    "SDK02",
+    "SDK03",
+    "SDK04",
+    "SDK05",
+    "SDK06",
+    "SDK07",
+    "SDK08",
+    "SDK09",
+    "NX01",
+    "NX02",
+    "NX03",
+    "NX04",
+    "NX05",
+    "NX06",
+    "NX07",
+    "NX08",
+    "NX09",
+    "NX10",
+    "TT01",
+    "TT02",
+    "TT03",
+    "TT04",
+    "TT05",
+    "TT06",
+    "TT07",
+    "TT08",
+    "TT09",
+    "TT10",
+    "SB01",
+    "SB02",
+    "SB03",
+    "RL01",
+    "RL02",
+    "RL03",
+    "RL04",
+    "MG01",
+    "MG02",
+    "MG03",
+    "MG04",
+    "MG05"
+  ],
+  "obligations": [
+    {
+      "kind": "research_todo",
+      "id": "F01",
+      "description": "**Choose the first boundary:** retained regular-file capability + bounded reads, p11scope and OSSLscope as design donors, with two real standalone reference clients for initial acceptance. Architecture owner.",
+      "owners": [
+        "SB01",
+        "LX01",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F02",
+      "description": "**Refresh selected donor state**, including applicable WIP. Integration owner.",
+      "owners": [
+        "SB01",
+        "LX01",
+        "BP01",
+        "CP01",
+        "TC01",
+        "NX02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F03",
+      "description": "**Set package license, dependency and compiler policy.** Maintainer.",
+      "owners": [
+        "SB01",
+        "SB02",
+        "SB03",
+        "RL02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F04",
+      "description": "**Create `docs/issues/` and an operational regression index.** Test/documentation owner.",
+      "owners": [
+        "SB01",
+        "SB03",
+        "TT01",
+        "TC01",
+        "CP01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F05",
+      "description": "**Define evidence labels for tests and support.** Test owner.",
+      "owners": [
+        "SB03",
+        "TT02",
+        "TT10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F06",
+      "description": "**Select names after review.** Maintainer.",
+      "owners": [
+        "SB02",
+        "SB03",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L01",
+      "description": "**Evaluate dependencies before extracting parsers:** procfs + rustix/nix; object/goblin; optional pathrs/blazesym and cap-std/cap-tempfile for held directory/fixture operations. Linux-library owner.",
+      "owners": [
+        "SB02",
+        "LX01",
+        "BP09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L02",
+      "description": "**Define the selected authority/identity types.** First slice: held regular-file capability and stat/read evidence; narrow process-observation authority only if acquisition needs it. Record separate future contracts for control handles, exec generation, mapped-device identity and stronger content/image evidence.",
+      "owners": [
+        "LX02",
+        "LX05",
+        "LX06",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L03",
+      "description": "**Carry retained-file and bounded-read regressions.** Library + both consumer owners.",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L04",
+      "description": "**Deliver filesystem-domain behavior and independent fixtures for the ready maps-proof adapter.** Library/test owners.",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L05",
+      "description": "**Separate observer and owned-child authority.** Linux-library owner.",
+      "owners": [
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L06",
+      "description": "**Audit process-global integration hazards before adding helper supervision.** Linux-library owner.",
+      "owners": [
+        "LX09",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L07",
+      "description": "**Later MG01/MG02: migrate first two products and retire their old implementation.** p11scope/OSSLscope owners.",
+      "owners": [
+        "LX13",
+        "MG01",
+        "MG02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L08",
+      "description": "**Generalize discovery budgets after the qualified identity slice.** Library owner.",
+      "owners": [
+        "LX04",
+        "LX10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L09",
+      "description": "**Specify restart behavior.** Architecture owner.",
+      "owners": [
+        "LX08",
+        "LX10",
+        "CP02",
+        "CP03",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B01",
+      "description": "**Consolidate exact per-CPU map geometry.** BPF-library owner.",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B02",
+      "description": "**Separate attachment planning from loading.** BPF-library + two uprobe consumers.",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10",
+        "BP11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B03",
+      "description": "**Share feature/hazard result types.** BPF-library owner.",
+      "owners": [
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B04",
+      "description": "**Trial an existing BTF parser against donor corpus.** BTF owner.",
+      "owners": [
+        "BP09",
+        "TC05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B05",
+      "description": "**Create one upstream-patch register and reproducible patch application path.** Dependency owner.",
+      "owners": [
+        "BP01",
+        "TC01",
+        "TC08",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B06",
+      "description": "**Re-evaluate Aya/local-map relocation against a chosen upstream release.** Dependency owner.",
+      "owners": [
+        "TC05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B07",
+      "description": "**Define bounded ring consumption without overstating settlement.** Transport owner.",
+      "owners": [
+        "BP06",
+        "BP10",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B08",
+      "description": "**Document writer ownership per hook/program/CPU and architecture.** Producer owner.",
+      "owners": [
+        "BP07",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B09",
+      "description": "**Evaluate shared task/exec identity protocol as a separate design.** Identity owner.",
+      "owners": [
+        "BP08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B10",
+      "description": "**Select an initial kernel/architecture support matrix.** Maintainers.",
+      "owners": [
+        "BP03",
+        "BP11",
+        "TC03",
+        "TC07",
+        "TT05",
+        "RL04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C01",
+      "description": "**Recover the LLVM/BPF instruction and atomic regression cases.** Compiler/test owner.",
+      "owners": [
+        "TC01",
+        "TC04",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C02",
+      "description": "**Replace a bare CPU-preset assumption with an explicit instruction contract.** Compiler owner.",
+      "owners": [
+        "TC03",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C03",
+      "description": "**Track upstream atomic fix through consumer toolchains.** Dependency owner.",
+      "owners": [
+        "TC04",
+        "TC07",
+        "TC08",
+        "RL04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C04",
+      "description": "**Preserve actual-object checks for verifier-sensitive changes.** Compiler/test owner.",
+      "owners": [
+        "TC05",
+        "TC06",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C05",
+      "description": "**Extract safe nested-build helpers if needed.** Build owner.",
+      "owners": [
+        "TC02",
+        "TC07",
+        "TC08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C06",
+      "description": "**Create a compatibility cookbook with workaround expiration rules.** Documentation/compiler owner.",
+      "owners": [
+        "TC01",
+        "TC08",
+        "SB03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q01",
+      "description": "**Design loss/provenance types and units.** Capture-library owner.",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP04",
+        "CP06",
+        "CP07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q02",
+      "description": "**Preserve report-view isolation.** Capture-library owner.",
+      "owners": [
+        "CP06",
+        "CP08",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q03",
+      "description": "**Specify closure strength and late evidence.** Capture/producer owners.",
+      "owners": [
+        "CP09",
+        "BP06",
+        "BP07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q04",
+      "description": "**Conformance tests for two independent real reference consumers before freezing types.** Capture/test owners; OSSLscope/KryProbe/MemVeil provide contract cases.",
+      "owners": [
+        "CP11",
+        "CP13",
+        "MG02",
+        "MG03",
+        "MG04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q05",
+      "description": "**Strict replay/schema checks.** Capture/test owner.",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q06",
+      "description": "**Evaluate cross-stage resource reservations after selecting accepted donor code.** General Rust/capture owner.",
+      "owners": [
+        "CP12",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T01",
+      "description": "**Maintain the 32-family regression inventory and port selected cases.** Test owner.",
+      "owners": [
+        "TT01",
+        "SB01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T02",
+      "description": "**Add property/model tests where they detect distinct bugs.** Library/test owners.",
+      "owners": [
+        "TT06",
+        "LX04",
+        "BP04",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T03",
+      "description": "**Add oracle sensitivity, non-vacuity and harness controls.** Test owner.",
+      "owners": [
+        "TT02",
+        "TT03",
+        "TT04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T04",
+      "description": "**Exercise cancellation/resource exhaustion and concurrent consumers.** Integration owner.",
+      "owners": [
+        "TT06",
+        "TT09",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T05",
+      "description": "**Wire dependency-aware CI.** Build/test owner.",
+      "owners": [
+        "TT08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T06",
+      "description": "**Verify standalone consumers and performance budgets.** Integration owner.",
+      "owners": [
+        "LX11",
+        "BP11",
+        "CP11",
+        "CP13",
+        "TT07",
+        "TT09",
+        "RL02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T07",
+      "description": "**Check documentation/API claims for drift.** Documentation owner.",
+      "owners": [
+        "SB03",
+        "TT07",
+        "TT10",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G01",
+      "description": "Choose positional full-file versus explicit stream/range semantics. **P0 pilot/public file.**",
+      "owners": [
+        "LX03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G02",
+      "description": "Declare proc-fd dependency; typed refusal, no path reopen fallback. **P0 affected file/attach.**",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G03",
+      "description": "Structured stage/source/effect errors and caller retry policy. **P0 public operations.**",
+      "owners": [
+        "SB03",
+        "LX04",
+        "LX09",
+        "BP03",
+        "BP05",
+        "TC02",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G04",
+      "description": "Separate byte/work/wait/cleanup bounds. **P0 byte/time claims.**",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX06",
+        "LX09",
+        "TC02",
+        "TT09",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G05",
+      "description": "Define peak/retained/working memory and allocation-failure policy. **P0 memory-bound claims.**",
+      "owners": [
+        "LX03",
+        "LX04",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G06",
+      "description": "Encapsulate evidence/FD; define borrow, clone, escape and CLOEXEC. **P0 public file.**",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G07",
+      "description": "Define cancellation commit/result/custody semantics. **P1 async/deadline.**",
+      "owners": [
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12",
+        "TC02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G08",
+      "description": "Explicit close receipt, Drop policy, bounded quarantine admission. **P1 retirement.**",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "TC02",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G09",
+      "description": "Specify panic/poison behavior without promising abort recovery. **P0 public callbacks, P1 later adapters.**",
+      "owners": [
+        "LX02",
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G10",
+      "description": "Declare auto-traits, same-owner concurrency and reentrancy. **P0 public owners.**",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX09",
+        "BP06",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G11",
+      "description": "Separate caller fork/exec from observed target lifecycle. **P0 FD inheritance, P1 worker fork.**",
+      "owners": [
+        "LX02",
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G12",
+      "description": "Scope receipts and cache invalidation to object/context/operation. **P0 exported cached evidence, P1 added BPF profile.**",
+      "owners": [
+        "LX06",
+        "LX08",
+        "BP03",
+        "BP08",
+        "CP09",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G13",
+      "description": "Document permissions and parent-state effects; no implicit privilege policy. **P1 process/BPF/helper.**",
+      "owners": [
+        "LX09",
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G14",
+      "description": "Negotiate minimum semantics before admission/effects. **P1 fallback profiles.**",
+      "owners": [
+        "BP03",
+        "CP09",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G15",
+      "description": "Define imported/shared map/link/cursor ownership. **P1 advertised coexistence.**",
+      "owners": [
+        "BP02",
+        "BP05",
+        "BP06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G16",
+      "description": "Define sample epoch, reset, wrap and non-atomicity. **P1 sampled capture counters.**",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G17",
+      "description": "Type clock domains, conversion, failure and suspend behavior. **P1 timestamps/deadlines.**",
+      "owners": [
+        "LX04",
+        "LX10",
+        "CP02",
+        "CP08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G18",
+      "description": "Write checked safe-backend pre/postconditions and trust boundaries. **P0 public reader/budget, P1 backends.**",
+      "owners": [
+        "LX02",
+        "LX03",
+        "BP02",
+        "BP10",
+        "CP10",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G19",
+      "description": "Define additive features/public dependency types. **P0 Rust package composition.**",
+      "owners": [
+        "SB02",
+        "LX11",
+        "BP11",
+        "TT07",
+        "TT08",
+        "SDK07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G20",
+      "description": "Set Rust/error/receipt/vector/MSRV compatibility policy. **P0 public API evolution.**",
+      "owners": [
+        "SB03",
+        "CP10",
+        "NX07",
+        "NX09",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G21",
+      "description": "Separate host tools, generated target and runtime profile/environment. **P2 build/object profiles.**",
+      "owners": [
+        "TC02",
+        "TC03",
+        "TC07",
+        "TT08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G22",
+      "description": "Opt-in bounded sink, safe display, structured sensitive fields. **P0 public diagnostics.**",
+      "owners": [
+        "SB03",
+        "LX11",
+        "CP10",
+        "SDK02",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G23",
+      "description": "Stage baseline/config/links/readiness/admission explicitly. **P1 capture startup.**",
+      "owners": [
+        "BP04",
+        "BP07",
+        "CP03",
+        "CP09",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U01",
+      "description": "**Define the ready mapped-image contract and support profiles.**",
+      "owners": [
+        "LX06",
+        "LX07",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U02",
+      "description": "**Implement explicit mapping evidence and validity rules.**",
+      "owners": [
+        "LX02",
+        "LX05",
+        "LX06",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U03",
+      "description": "**Ship the embeddable conformance API and immutable case/fixture versions.**",
+      "owners": [
+        "TT01",
+        "TT02",
+        "TT07",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U04",
+      "description": "**Ship a runnable operator route and complete offline fixture closure.**",
+      "owners": [
+        "TT07",
+        "LX11",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U05",
+      "description": "**Provide real filesystem/namespace fixtures and provisioning recipes.**",
+      "owners": [
+        "TT03",
+        "TT04",
+        "LX07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U06",
+      "description": "**Qualify effects, interference, cleanup and harness sensitivity.**",
+      "owners": [
+        "TT02",
+        "TT03",
+        "TT04",
+        "TT06",
+        "LX07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U07",
+      "description": "**Version result schema and enforce complete-profile verdicts.**",
+      "owners": [
+        "TT02",
+        "TT07",
+        "TT10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U08",
+      "description": "**Maintain qualified cells and usable end-user documentation.**",
+      "owners": [
+        "LX12",
+        "TT07",
+        "TT08",
+        "TT10",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "S01",
+      "description": "Compose a thin `scopebase-sdk`, a non-crypto host observer and an opt-in real BPF observer.",
+      "owners": [
+        "SDK01",
+        "SDK02",
+        "SDK03",
+        "SDK04",
+        "SDK05",
+        "SDK06",
+        "SDK07",
+        "SDK08",
+        "SDK09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "S02",
+      "description": "Evaluate general shared CLI/build/report integration only where demonstrated.",
+      "owners": [
+        "SDK01",
+        "SDK05",
+        "SDK07",
+        "SDK09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X01",
+      "description": "Define neutral scenario/schema fragments for Rust/C/Mojo.",
+      "owners": [
+        "NX01",
+        "NX02",
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X02",
+      "description": "Evaluate existing libbpf-mojo before any new native bridge.",
+      "owners": [
+        "NX07",
+        "NX08",
+        "NX09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X03",
+      "description": "Coordinate future MojoBPF object/ABI conformance.",
+      "owners": [
+        "NX02",
+        "NX06",
+        "TC05",
+        "TC07",
+        "MG05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X04",
+      "description": "Add a C ABI only for a demonstrated second-language need.",
+      "owners": [
+        "NX01",
+        "NX08",
+        "NX09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H01",
+      "description": "Successful exec advances image lineage; fork and thread creation have distinct identity effects.",
+      "owners": [
+        "LX08",
+        "BP08",
+        "TT03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H02",
+      "description": "Acquisition races and denied pidfd never retarget authority or promote weak observation to signaling rights.",
+      "owners": [
+        "LX05",
+        "LX08",
+        "LX09",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H03",
+      "description": "Session/map domains and generations reject foreign/stale/exhausted tokens while preserving field-specific valid zero.",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP03",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H04",
+      "description": "Replacement, unlink and aliases do not retarget a held file; attachment retains its original file through retirement.",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05",
+        "BP10",
+        "TT03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H05",
+      "description": "Stat, mount, namespace and maps identities remain tagged; mappings require justified match, mismatch or inconclusive evidence.",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H06",
+      "description": "Reads reject oversize before expensive allocation and expose promised growth, truncation, identity and budget failures.",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "LX05",
+        "LX10",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H07",
+      "description": "Local section-symbol relocation resolves each exact map definition and rejects interior, missing or ambiguous offsets.",
+      "owners": [
+        "TC03",
+        "TC05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H08",
+      "description": "Task-storage metadata, guarded CO-RE shapes and initialized padding admit only safe compiled paths.",
+      "owners": [
+        "BP08",
+        "BP09",
+        "TC05",
+        "TC06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H09",
+      "description": "Concurrent uprobes never observe another task START key; workaround removal is qualified per kernel cell.",
+      "owners": [
+        "TC06",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H10",
+      "description": "Object graph transformations preserve valid calls, callback metadata and exact intended callback execution.",
+      "owners": [
+        "BP09",
+        "TC05",
+        "TC06",
+        "TC07",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H11",
+      "description": "Bounded BTF queries resolve exact base/split type identities and reject cycles, escapes and wrong prototypes/linkage.",
+      "owners": [
+        "BP09",
+        "TC05",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H12",
+      "description": "Bounded ring consumption handles busy/discard/wrap and fixed boundaries without claiming premature completion.",
+      "owners": [
+        "BP06",
+        "BP10",
+        "TT06"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H13",
+      "description": "Held ring bytes survive short retry/source mutation and are delivered once with disjoint transport accounting.",
+      "owners": [
+        "BP06",
+        "BP10",
+        "CP06",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H14",
+      "description": "Writer slots protect same-CPU cross-program and guarded same-program updates; refusals have independent miss accounting.",
+      "owners": [
+        "BP07",
+        "TT05",
+        "TT06"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H15",
+      "description": "Insertion identity stays frozen across CPU migration and every per-CPU ABI lane is consumed at the correct stride.",
+      "owners": [
+        "BP02",
+        "BP07",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H16",
+      "description": "Per-CPU buffers use checked aligned value stride times possible CPUs, preserving offline lanes or refusing malformed topology.",
+      "owners": [
+        "BP02",
+        "BP07",
+        "NX05",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H17",
+      "description": "Loss signaling survives full identity maps and caps degrade exactness without fabricating omitted counts.",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H18",
+      "description": "Final settlement requires declared admission, writer, drain and post-drain sample predicates; late work invalidates early closure.",
+      "owners": [
+        "BP06",
+        "BP07",
+        "CP09",
+        "SDK06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H19",
+      "description": "Pending/failed retirement keeps original owner/file; foreign tickets and failed transfers cannot settle it.",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "BP10",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H20",
+      "description": "Stalled setup and late publishers have bounded caller cancellation while preserving successor output and foreign-process authority.",
+      "owners": [
+        "LX09",
+        "LX10",
+        "TT03",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H21",
+      "description": "Attach isolation is bounded by 2n-1 attempts and permission/exhaustion policy preserves explicit partial-effect rollback.",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H22",
+      "description": "Capability evidence requires independently executed admitted positives and active excluded negatives.",
+      "owners": [
+        "BP03",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H23",
+      "description": "Strict receipt parsing rejects malformed, ambiguous or contradictory records before evidence promotion.",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H24",
+      "description": "Checked construction and replay enforce the same identity, scope arithmetic, interval and synthetic-provenance invariants.",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP07",
+        "CP08",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H25",
+      "description": "Unknown identities do not collide and old-generation completions cannot retire reused successor objects.",
+      "owners": [
+        "CP05",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H26",
+      "description": "Independent facts survive missing relationships; alternate totals never double-count the same work.",
+      "owners": [
+        "CP03",
+        "CP06",
+        "CP07",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H27",
+      "description": "Snapshots are non-destructive; ordered metrics require their proof and late corrections reach every holder.",
+      "owners": [
+        "CP06",
+        "CP08",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H28",
+      "description": "Native retained views, buffers and loader lifetimes enforce generation, map-kind, output and exactly-once destruction rules.",
+      "owners": [
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06",
+        "NX09",
+        "BP02",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H29",
+      "description": "Used-result atomic RMW returns the independently expected old value and stores the expected new value through the final consumer build.",
+      "owners": [
+        "TC04",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H30",
+      "description": "Compiler upgrades cannot emit instructions outside an explicitly selected advertised profile even when CPU preset names are unchanged.",
+      "owners": [
+        "TC03",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H31",
+      "description": "AtomicLoad instruction selection compiles or refuses under its declared CPU/features without being mislabeled as a kernel failure.",
+      "owners": [
+        "TC03",
+        "TC04",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H32",
+      "description": "Mixed Rust/C debug-record transformations preserve valid final BTF/BTF.ext function and map information.",
+      "owners": [
+        "TC05",
+        "TC07",
+        "NX06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC01",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "TT03",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC02",
+      "description": "",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC03",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC04",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC05",
+      "description": "",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX08",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC06",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC07",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC08",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX06",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC09",
+      "description": "",
+      "owners": [
+        "LX03",
+        "LX06",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC10",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX06",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC11",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX06",
+        "LX08",
+        "BP05",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC12",
+      "description": "",
+      "owners": [
+        "BP05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC13",
+      "description": "",
+      "owners": [
+        "LX03",
+        "LX06",
+        "LX09",
+        "BP05",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC14",
+      "description": "",
+      "owners": [
+        "TT07",
+        "TT10",
+        "LX12",
+        "BP11",
+        "TC08",
+        "CP13",
+        "SDK09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G01",
+      "description": "",
+      "owners": [
+        "LX03"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G02",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G03",
+      "description": "",
+      "owners": [
+        "SB03",
+        "LX04",
+        "LX09",
+        "BP03",
+        "BP05",
+        "TC02",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G04",
+      "description": "",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX06",
+        "LX09",
+        "TC02",
+        "TT09",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G05",
+      "description": "",
+      "owners": [
+        "LX03",
+        "LX04",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G06",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G07",
+      "description": "",
+      "owners": [
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12",
+        "TC02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G08",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "TC02",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G09",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G10",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX09",
+        "BP06",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G11",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G12",
+      "description": "",
+      "owners": [
+        "LX06",
+        "LX08",
+        "BP03",
+        "BP08",
+        "CP09",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G13",
+      "description": "",
+      "owners": [
+        "LX09",
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G14",
+      "description": "",
+      "owners": [
+        "BP03",
+        "CP09",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G15",
+      "description": "",
+      "owners": [
+        "BP02",
+        "BP05",
+        "BP06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G16",
+      "description": "",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G17",
+      "description": "",
+      "owners": [
+        "LX04",
+        "LX10",
+        "CP02",
+        "CP08"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G18",
+      "description": "",
+      "owners": [
+        "LX02",
+        "LX03",
+        "BP02",
+        "BP10",
+        "CP10",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G19",
+      "description": "",
+      "owners": [
+        "SB02",
+        "LX11",
+        "BP11",
+        "TT07",
+        "TT08",
+        "SDK07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G20",
+      "description": "",
+      "owners": [
+        "SB03",
+        "CP10",
+        "NX07",
+        "NX09",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G21",
+      "description": "",
+      "owners": [
+        "TC02",
+        "TC03",
+        "TC07",
+        "TT08"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G22",
+      "description": "",
+      "owners": [
+        "SB03",
+        "LX11",
+        "CP10",
+        "SDK02",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G23",
+      "description": "",
+      "owners": [
+        "BP04",
+        "BP07",
+        "CP03",
+        "CP09",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV01",
+      "description": "Process handle vs signaling authority",
+      "owners": [
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV02",
+      "description": "Producer task birth and exec image identity",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV03",
+      "description": "Held image/file and attach lifetime",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV04",
+      "description": "Stat-device vs maps-device identity",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV05",
+      "description": "Bounded file/proc parsing and reads",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX05",
+        "LX10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV06",
+      "description": "BTF required layout/prototype admission",
+      "owners": [
+        "BP09",
+        "TC05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV07",
+      "description": "Possible-CPU count and checked map buffer extent",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV08",
+      "description": "Map-kind-sensitive output semantics",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV09",
+      "description": "Multi-uprobes and bounded failure isolation",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV10",
+      "description": "Functional kernel feature/hazard diagnosis",
+      "owners": [
+        "BP03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV11",
+      "description": "Bounded ring cursor/frame consumption",
+      "owners": [
+        "BP06",
+        "BP10",
+        "CP06",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV12",
+      "description": "Admission → writer quiescence → final sample",
+      "owners": [
+        "BP07",
+        "CP09",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV13",
+      "description": "Cross-program same-CPU writer isolation",
+      "owners": [
+        "BP07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV14",
+      "description": "Loss indication survives full producer maps",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV15",
+      "description": "Loss/counters retain units, scope and ownership",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP04",
+        "CP06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV16",
+      "description": "Explicit unknown vs valid numeric zero",
+      "owners": [
+        "CP02",
+        "CP04",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV17",
+      "description": "Generations, reuse and late completion",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP05",
+        "CP06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV18",
+      "description": "Causal origin distinct from execution context",
+      "owners": [
+        "CP04",
+        "CP05",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV19",
+      "description": "Nonduplicating ambiguity and alternative views",
+      "owners": [
+        "CP07"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV20",
+      "description": "Query-local partial vs persistent degradation",
+      "owners": [
+        "CP06",
+        "CP11",
+        "SDK03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV21",
+      "description": "Ordered interval peak/occupancy proof",
+      "owners": [
+        "CP08",
+        "SDK03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV22",
+      "description": "Scope partition/live-replay invariants",
+      "owners": [
+        "CP03",
+        "CP10",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV23",
+      "description": "Batch versus live session conformance",
+      "owners": [
+        "CP11",
+        "SDK04",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV24",
+      "description": "Finite child cleanup and output custody",
+      "owners": [
+        "LX09",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV25",
+      "description": "Toolchain pairing and build-output isolation",
+      "owners": [
+        "TC02",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV26",
+      "description": "Actual-object/verifier/relocation regressions",
+      "owners": [
+        "TC03",
+        "TC04",
+        "TC05",
+        "TC06",
+        "TC07",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV27",
+      "description": "Strict numeric/schema/receipt validation",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01",
+        "NX07"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV28",
+      "description": "Reusable cross-language ownership ABI",
+      "owners": [
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06",
+        "NX07",
+        "NX08",
+        "NX09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H33",
+      "description": "Keep author-authorized source/destination grants and target input options separate from final object/runtime license bytes and intended-reason kernel admission.",
+      "owners": [
+        "SB01",
+        "SB02",
+        "BP01",
+        "BP03",
+        "TC01",
+        "TC03",
+        "TC07",
+        "TC08",
+        "TT01",
+        "TT02",
+        "TT05",
+        "TT07",
+        "NX02",
+        "RL02"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "H01",
+      "short_contract": "Successful exec advances image lineage; fork and thread creation have distinct identity effects.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H01"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H02",
+      "short_contract": "Acquisition races and denied pidfd never retarget authority or promote weak observation to signaling rights.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H02"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC05"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G13"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T04"
+        }
+      ]
+    },
+    {
+      "id": "H03",
+      "short_contract": "Session/map domains and generations reject foreign/stale/exhausted tokens while preserving field-specific valid zero.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H03"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        }
+      ]
+    },
+    {
+      "id": "H04",
+      "short_contract": "Replacement, unlink and aliases do not retarget a held file; attachment retains its original file through retirement.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC08"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC11"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G02"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U06"
+        }
+      ]
+    },
+    {
+      "id": "H05",
+      "short_contract": "Stat, mount, namespace and maps identities remain tagged; mappings require justified match, mismatch or inconclusive evidence.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H05"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC02"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC03"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC04"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC05"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC06"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC07"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC10"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC11"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G02"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H06",
+      "short_contract": "Reads reject oversize before expensive allocation and expose promised growth, truncation, identity and budget failures.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H06"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC01"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC04"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC09"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC10"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G01"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G04"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G05"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U03"
+        }
+      ]
+    },
+    {
+      "id": "H07",
+      "short_contract": "Local section-symbol relocation resolves each exact map definition and rejects interior, missing or ambiguous offsets.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H07"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H08",
+      "short_contract": "Task-storage metadata, guarded CO-RE shapes and initialized padding admit only safe compiled paths.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H09",
+      "short_contract": "Concurrent uprobes never observe another task START key; workaround removal is qualified per kernel cell.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H09"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G15"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H10",
+      "short_contract": "Object graph transformations preserve valid calls, callback metadata and exact intended callback execution.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H11",
+      "short_contract": "Bounded BTF queries resolve exact base/split type identities and reject cycles, escapes and wrong prototypes/linkage.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X03"
+        }
+      ]
+    },
+    {
+      "id": "H12",
+      "short_contract": "Bounded ring consumption handles busy/discard/wrap and fixed boundaries without claiming premature completion.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G15"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H13",
+      "short_contract": "Held ring bytes survive short retry/source mutation and are delivered once with disjoint transport accounting.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X02"
+        }
+      ]
+    },
+    {
+      "id": "H14",
+      "short_contract": "Writer slots protect same-CPU cross-program and guarded same-program updates; refusals have independent miss accounting.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G15"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H15",
+      "short_contract": "Insertion identity stays frozen across CPU migration and every per-CPU ABI lane is consumed at the correct stride.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H15"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H16",
+      "short_contract": "Per-CPU buffers use checked aligned value stride times possible CPUs, preserving offline lanes or refusing malformed topology.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G15"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H17",
+      "short_contract": "Loss signaling survives full identity maps and caps degrade exactness without fabricating omitted counts.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H17"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G23"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H18",
+      "short_contract": "Final settlement requires declared admission, writer, drain and post-drain sample predicates; late work invalidates early closure.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H18"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G07"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G17"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G23"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B08"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H19",
+      "short_contract": "Pending/failed retirement keeps original owner/file; foreign tickets and failed transfers cannot settle it.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H19"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC08"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC11"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G07"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G09"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U06"
+        }
+      ]
+    },
+    {
+      "id": "H20",
+      "short_contract": "Stalled setup and late publishers have bounded caller cancellation while preserving successor output and foreign-process authority.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H20"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G04"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G07"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G09"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G13"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T04"
+        }
+      ]
+    },
+    {
+      "id": "H21",
+      "short_contract": "Attach isolation is bounded by 2n-1 attempts and permission/exhaustion policy preserves explicit partial-effect rollback.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H21"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G08"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G23"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T04"
+        }
+      ]
+    },
+    {
+      "id": "H22",
+      "short_contract": "Capability evidence requires independently executed admitted positives and active excluded negatives.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H22"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC10"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G13"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H23",
+      "short_contract": "Strict receipt parsing rejects malformed, ambiguous or contradictory records before evidence promotion.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H23"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "U07"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        }
+      ]
+    },
+    {
+      "id": "H24",
+      "short_contract": "Checked construction and replay enforce the same identity, scope arithmetic, interval and synthetic-provenance invariants.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H24"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G17"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q05"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        }
+      ]
+    },
+    {
+      "id": "H25",
+      "short_contract": "Unknown identities do not collide and old-generation completions cannot retire reused successor objects.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H25"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC11"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "research_todo",
+          "id": "L09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B09"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        }
+      ]
+    },
+    {
+      "id": "H26",
+      "short_contract": "Independent facts survive missing relationships; alternate totals never double-count the same work.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H26"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G16"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        }
+      ]
+    },
+    {
+      "id": "H27",
+      "short_contract": "Snapshots are non-destructive; ordered metrics require their proof and late corrections reach every holder.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H27"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G09"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G17"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "Q04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "S01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        }
+      ]
+    },
+    {
+      "id": "H28",
+      "short_contract": "Native retained views, buffers and loader lifetimes enforce generation, map-kind, output and exactly-once destruction rules.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H28"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G06"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G09"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G10"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X04"
+        }
+      ]
+    },
+    {
+      "id": "H29",
+      "short_contract": "Used-result atomic RMW returns the independently expected old value and stores the expected new value through the final consumer build.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H29"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H30",
+      "short_contract": "Compiler upgrades cannot emit instructions outside an explicitly selected advertised profile even when CPU preset names are unchanged.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H30"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G12"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B10"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H31",
+      "short_contract": "AtomicLoad instruction selection compiles or refuses under its declared CPU/features without being mislabeled as a kernel failure.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H31"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G03"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C06"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    },
+    {
+      "id": "H32",
+      "short_contract": "Mixed Rust/C debug-record transformations preserve valid final BTF/BTF.ext function and map information.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H32"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G21"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "C04"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "X03"
+        }
+      ]
+    },
+    {
+      "id": "H33",
+      "short_contract": "Keep author-authorized source/destination grants and target input options separate from final object/runtime license bytes and intended-reason kernel admission.",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H33"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ]
+    }
+  ],
+  "cells": [
+    {
+      "id": "h33-source-closure",
+      "tier": "T0",
+      "description": "Author authorization, input roles/options and retained notices are separate from runtime bytes",
+      "binding": "LOGICAL_ONLY"
+    },
+    {
+      "id": "h33-final-object-license",
+      "tier": "T2",
+      "description": "Inspect actual final ELF declaration and manifest binding",
+      "binding": "LOGICAL_ONLY"
+    },
+    {
+      "id": "h33-license-admission",
+      "tier": "T4",
+      "description": "Valid GPL positive with nonempty independent workload; otherwise-valid non-GPL intended-reason refusal; helper-free control where supported; same-errno permission/verifier negatives remain distinct",
+      "binding": "LOGICAL_ONLY"
+    },
+    {
+      "id": "h33-installed-notices",
+      "tier": "T5",
+      "description": "Installed offline source/object/license notice closure and actual consumer binding",
+      "binding": "LOGICAL_ONLY"
+    }
+  ],
+  "cases": [
+    {
+      "id": "H33.source-closure",
+      "family": "H33",
+      "version": 1,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "SB01",
+        "SB02",
+        "BP01"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H33"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ],
+      "required_cells": [
+        "h33-source-closure"
+      ],
+      "registration": null
+    },
+    {
+      "id": "H33.final-object-license",
+      "family": "H33",
+      "version": 1,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "TC03",
+        "TC06"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H33"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ],
+      "required_cells": [
+        "h33-final-object-license"
+      ],
+      "registration": null
+    },
+    {
+      "id": "H33.license-admission",
+      "family": "H33",
+      "version": 1,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "BP03",
+        "TT02",
+        "TT05",
+        "TC07"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H33"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ],
+      "required_cells": [
+        "h33-license-admission"
+      ],
+      "registration": null
+    },
+    {
+      "id": "H33.installed-notices",
+      "family": "H33",
+      "version": 1,
+      "implementation_status": "UNIMPLEMENTED",
+      "owners": [
+        "TT07",
+        "TC08",
+        "RL02"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H33"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC12"
+        },
+        {
+          "kind": "user_conformance",
+          "id": "UC14"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G18"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G19"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G20"
+        },
+        {
+          "kind": "public_contract_gap",
+          "id": "G22"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "F02"
+        },
+        {
+          "kind": "research_todo",
+          "id": "B03"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T01"
+        },
+        {
+          "kind": "research_todo",
+          "id": "T03"
+        }
+      ],
+      "required_cells": [
+        "h33-installed-notices"
+      ],
+      "registration": null
+    }
+  ],
+  "profiles": [
+    {
+      "id": "held-file-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "LX12"
+      ]
+    },
+    {
+      "id": "mapped-image-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "held-file-v1",
+        "process-observation-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "LX12"
+      ]
+    },
+    {
+      "id": "process-observation-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "LX12"
+      ]
+    },
+    {
+      "id": "owned-child-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "process-observation-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "LX12"
+      ]
+    },
+    {
+      "id": "bounded-walk-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "held-file-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "LX12"
+      ]
+    },
+    {
+      "id": "bpf-host-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "BP11"
+      ]
+    },
+    {
+      "id": "bpf-aya-uprobe-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "held-file-v1",
+        "compiler-object-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H33.license-admission",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H33.installed-notices",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "BP11",
+        "TC08"
+      ]
+    },
+    {
+      "id": "bpf-libbpf-uprobe-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "held-file-v1",
+        "compiler-object-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H33.license-admission",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H33.installed-notices",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "BP11",
+        "TC08"
+      ]
+    },
+    {
+      "id": "btf-shape-le-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H33.license-admission",
+          "case_version": 1,
+          "when_extensions": [
+            "btf-runtime-linkage-v1"
+          ]
+        }
+      ],
+      "open_owners": [
+        "BP11",
+        "TC08"
+      ]
+    },
+    {
+      "id": "producer-task-exec-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "compiler-object-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "BP11",
+        "TC08"
+      ]
+    },
+    {
+      "id": "aggregate-writer-x86-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "compiler-object-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "BP11",
+        "TC08"
+      ]
+    },
+    {
+      "id": "compiler-object-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H33.source-closure",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H33.final-object-license",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "TC08"
+      ]
+    },
+    {
+      "id": "compiler-runtime-x86-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "compiler-object-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H33.license-admission",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H33.installed-notices",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "TC08"
+      ]
+    },
+    {
+      "id": "capture-core-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "CP13"
+      ]
+    },
+    {
+      "id": "capture-json-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "capture-core-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "CP13"
+      ]
+    },
+    {
+      "id": "sdk-host-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "held-file-v1",
+        "capture-core-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "SDK05"
+      ]
+    },
+    {
+      "id": "sdk-live-aya-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "sdk-host-v1",
+        "bpf-aya-uprobe-v1",
+        "owned-child-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "SDK09"
+      ]
+    },
+    {
+      "id": "native-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "capture-core-v1",
+        "mojo-elf-v1"
+      ],
+      "requires_extensions": [],
+      "required_cases": [],
+      "open_owners": [
+        "NX10"
+      ]
+    },
+    {
+      "id": "mojo-elf-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [
+        "compiler-object-v1",
+        "bpf-host-v1",
+        "btf-shape-le-v1"
+      ],
+      "requires_extensions": [
+        "btf-runtime-linkage-v1"
+      ],
+      "required_cases": [
+        {
+          "case_id": "H33.installed-notices",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "NX10",
+        "TC08"
+      ]
+    }
+  ],
+  "extensions": [
+    {
+      "id": "btf-runtime-linkage-v1",
+      "profile": "btf-shape-le-v1",
+      "requires_profiles": [
+        "compiler-object-v1"
+      ],
+      "requires_tasks": [
+        "TT05",
+        "TC07"
+      ],
+      "required_cases": []
+    }
+  ]
+}
