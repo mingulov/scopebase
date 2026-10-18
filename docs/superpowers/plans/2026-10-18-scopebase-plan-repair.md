@@ -45,16 +45,102 @@ The separate progress-check candidate `ca9169a7a8da866e2a00503e93a81087d04a782e`
 **Required changes and tests:**
 
 - [ ] Add `test_promised_blob_is_incomplete_without_fetch`: create an owned filtered `file://` clone with commit/tree present and the selected blob promised but absent; capture its object-store inventory and a transport sentinel. Run explicit local verification. Assert exit2, no transport invocation, identical object inventory and no donor checkout change. A complete local twin returns verified. A path genuinely absent from the selected tree remains invalid, not a missing-object excuse.
-- [ ] Prevent lazy fetching for **every** Git command in `verify_local_sources`, using a supported explicit Git no-lazy-fetch facility. Refuse incomplete if that guarantee cannot be established. Do not repair missing objects, configure donors or fetch them. Retain replace-ref and optional-lock controls.
+- [ ] Prevent lazy fetching for **every** Git command in `verify_local_sources` with Git's global `--no-lazy-fetch` option, retaining replace-ref and optional-lock controls. Git2.53.0 in this workspace accepts that option; a Git lacking it returns incomplete before source inspection. Distinguish an existing selected tree entry whose blob is locally missing (exit2) from a genuinely absent selected path (exit3); use literal path matching. Do not repair missing objects, configure donors or fetch them.
 - [ ] Add `test_case_family_and_regression_references_are_total`: delete H04, introduce G99/UC99/nonexistent TODO refs, point a selected regression at `MISSING:absent.rs`, remove its recorded symbol candidate, change its line and remove group membership. Each must fail its intended reference assertion. Keep documentation files with genuinely zero symbols valid.
 - [ ] Validate every canonical case-family input, nested reference, independent oracle/control description and selected regression against its donor, selected file, group and observed symbol/line. Require the preservation collections; a valid top-level owner list does not compensate for a lost nested test.
 - [ ] Replace “destination license equals historical SPDX” with the D03 authorization model below. Add authorized-owner, ungranted-third-party and host/BPF/shared role controls. Preserve original raw observations and hashes exactly.
 - [ ] Run `python3 -m unittest discover -s tools/planning/tests -v`, the default structural checker, the relevant planning/progress checks and `git diff --check`. The partial-clone control uses only owned temporary repositories. No actual private source re-scan is needed for unchanged observations.
 - [ ] Submit one focused candidate and its preserved RED/GREEN/control evidence for independent review. Accept SB01 only after the real findings and destination policy are resolved. Do not repeatedly rebuild the unchanged 124-file inventory.
 
-**Destination-license model:** keep `license.spdx` as the source observation; add explicit `ownership_basis`, `artifact_role`, `destination_license`, `authorization_ref` and `third_party_terms` to adoption records. `artifact_role` is `host`, `bpf-target`, `shared-target-source`, `host-build-tool` or `data-document`. User authorization applies to their own contributions; it does not change upstream portions. `NOASSERTION` remains an observation, not an automatic copy ban when an applicable owner grant exists. A concrete ungranted third-party fragment remains unresolved. No arbitrary metadata record proves legal ownership or kernel runtime compatibility.
+**Destination-license model:** implement the frozen record contract below. Keep `license.spdx` as the source observation; it is not the destination grant. User authorization applies to their own contributions and does not change upstream portions. `NOASSERTION` alone does not prohibit an authorized owner's port. No metadata record proves legal ownership or kernel runtime compatibility.
 
 **Done:** unchanged observations remain intact; nested preserved knowledge is validated; local inspection has no fetch side effect; the approved destination policy is representable without rewriting history. No Rust capability is qualified by this foundation acceptance.
+
+### SB01 adoption record contract
+
+This is the next validator's input contract, not a general SPDX compatibility engine or the later final-object dependency manifest. Bump the intake `schema_version` from `1.0.0` to `2.0.0`. Keep `validate(...)` returning its existing error list and keep the CLI/result/exit contracts. A well-formed unresolved record can pass structural intake validation; it cannot admit a source copy. The controller checks that every selected port slice is `READY_FOR_SELECTED_SCOPE` before dispatch. SB01 acceptance permits unresolved, unselected future inputs.
+
+Add top-level `authorizations`, an array containing exactly the one canonical owner grant below for this version. Its ID must be unique; the decision link resolves against the repository and is checked as a path plus anchor:
+
+```json
+{
+  "id": "OWNER-2026-10-18",
+  "authority": "USER_DECLARED_AUTHOR",
+  "status": "PROVISIONAL",
+  "scope": "USER_CONTRIBUTIONS_IN_SELECTED_FILES",
+  "decision_ref": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md#d03--license-by-code-ownership-and-actual-build-destination",
+  "allowed_destinations": {
+    "host": "Apache-2.0",
+    "bpf-target": "GPL-2.0-only",
+    "shared-target-source": "Apache-2.0 OR GPL-2.0-only",
+    "host-build-tool": "Apache-2.0",
+    "data-document": "Apache-2.0"
+  }
+}
+```
+
+This records the user's existing authorship statement and provisional grant; it does not require asking for permission again or proving authorship line by line. It covers only their contributions in a selected file/slice bound by the existing file ID, commit and observed SHA-256. It cannot authorize an upstream portion. An unknown authorization ID, duplicate ID, changed grant, dangling decision link or grant applied outside that scope is invalid. A new grant needs an expert/controller amendment of this contract; the executor cannot mint one.
+
+Every file's `adoption` object has all the following fields. Reject missing required fields, wrong types, unknown enum values and unknown adoption/authorization/third-party-record keys; `null` means explicitly unselected or unknown, never an empty string or an absent field.
+
+| Field | Frozen type and meaning |
+|---|---|
+| `disposition` | Retain existing enum: PORT_SOURCE, DEPENDENCY_ADAPTER, INDEPENDENT_CONTRACT, VECTORS_ONLY, PRODUCT_LOCAL, REFERENCE_ONLY |
+| `copy_status` | Existing NOT_COPIED or BLOCKED; SB01 records no actual copies |
+| `decision_status` | READY_FOR_SELECTED_SCOPE, NEEDS_DECISION or REFERENCE_ONLY; these describe adoption metadata, never runtime/package readiness |
+| `source_scope` | `null`, literal `FILE`, or a nonempty array of `[first_line,last_line]` pairs: positive JSON integers, excluding booleans, inclusive, sorted, nonoverlapping; file ID/hash come from the parent record |
+| `ownership_basis` | USER_OWNED, THIRD_PARTY, MIXED or UNRESOLVED; user declaration applies to owned contributions; only concrete upstream portions need separate terms |
+| `artifact_role` | `null` or host, bpf-target, shared-target-source, host-build-tool, data-document; one proposed use/scope, with shared host/target source using the shared role |
+| `destination_license` | `null` or the exact selected SPDX expression; the owner's contribution uses D03's role grant, while THIRD_PARTY retains its selected original option |
+| `authorization_ref` | `null` or the exact owner-grant ID above, resolved through `authorizations`; required for ready USER_OWNED/MIXED and `null` for THIRD_PARTY/UNRESOLVED |
+| `third_party_terms` | `null` means not yet classified; `[]` records no third-party portion in the selected scope; otherwise a nonempty array of the fragment records below |
+| `blocked_reason` | `null` only for READY_FOR_SELECTED_SCOPE; otherwise a nonempty concrete reason naming the missing decision or reference-only boundary |
+
+A third-party fragment record has exactly `source_scope`, `offered_spdx`, `selected_option`, `license_evidence` and `notice_evidence`. Scope uses the same FILE/range form, is non-null and must lie within the parent selection; multiple fragments cannot overlap. Its source pin/hash is the parent file's pin/hash. `offered_spdx` is an observed expression or NOASSERTION; `selected_option` is a supported offered option or `null` when undecided. Both evidence fields are arrays of existing license-evidence-shaped `{path,sha256}` records: safe repository-relative source path and full SHA-256. `license_evidence` must be nonempty for a selected option; `notice_evidence` may be empty only when no separate notice is required. These are source observations; actual notice delivery is checked by later packaging tasks. Range containment is structural; correspondence to source text is inspected by the expert and, when requested, against locally available selected bytes. Structural validity alone does not establish that the declared list contains every upstream fragment.
+
+Supported option selection is deliberately finite: a single observed Apache-2.0, GPL-2.0-only, GPL-3.0-or-later or Apache-2.0 WITH LLVM-exception retains that exact expression; GPL-2.0-or-later permits GPL-2.0-only or GPL-2.0-or-later; MIT OR Apache-2.0 permits either offered branch. NOASSERTION supplies no third-party grant. Do not infer an LLVM exception or parse an unfamiliar expression into a new policy. Unlisted expressions remain observed but NEEDS_DECISION until the expert amends the supported set.
+
+**Admission rules:**
+
+1. READY_FOR_SELECTED_SCOPE requires non-null scope/role/destination, NOT_COPIED, no blocked reason, a disposition other than REFERENCE_ONLY/PRODUCT_LOCAL and resolved ownership. USER_OWNED requires the owner reference and `third_party_terms: []`; MIXED requires that reference and nonempty third-party records; THIRD_PARTY requires no owner reference and nonempty third-party records covering the full selected scope. Every third-party fragment must have its offered option resolved. The validator checks these declarations; independent review checks that the selected scope actually matches them.
+2. For USER_OWNED/MIXED, the destination must equal the owner grant for that role. For THIRD_PARTY, the destination must equal the retained selected option of every fragment; differing retained options require NEEDS_DECISION and a narrower selection. Do not replace upstream terms with the owner grant.
+3. For ready host/build-tool/data-document inputs, supported retained upstream options are Apache-2.0 and Apache-2.0 WITH LLVM-exception. For a ready GPLv2 BPF input, GPL-2.0-only and GPL-2.0-or-later are supported retained options. Shared host/BPF source can be ready under the owner's dual grant with no upstream portion; any shared upstream portion remains NEEDS_DECISION in this version. A GPL-only upstream portion cannot supply the Apache branch. These rules are a small conservative supported set, not a claim that every other combination is legally impossible.
+4. An upstream MIT branch or a BPF/shared use of Apache-2.0 WITH LLVM-exception remains NEEDS_DECISION in this version. The first needs the unresolved dependency-policy choice; the second needs review of the actual supplied exception and fragments. Bare Apache-2.0 target inputs, GPLv3-only inputs claimed as an Apache library, or incompatible shared grants cannot be marked ready. Do not select an upstream MIT branch automatically or treat this gate as a ban on all third-party MIT use.
+5. NEEDS_DECISION requires NOT_COPIED and a reason. Missing scope/role/destination/grant/terms may be explicit `null`; a non-null reference must still resolve and any non-null field must satisfy its type, selection and source-binding rules. It admits preservation of knowledge, not copying. REFERENCE_ONLY requires BLOCKED, disposition REFERENCE_ONLY or PRODUCT_LOCAL, a reason, and null destination; it does not imply the user's ownership grant was unavailable. Neither state blocks unrelated ready host work or foundation acceptance.
+6. Changing role, source hash or selected scope requires rechecking the record against that use. A primary-use intake record is not a final build-closure claim. The later payload manifest enumerates every actual source/generated input and role; do not invent that manifest during this metadata repair.
+
+For example, this adoption object is structurally ready for a **synthetic user-owned host fixture** whose source observation is GPL-3.0-or-later or NOASSERTION. It does not classify a real donor file without inspection:
+
+```json
+{
+  "disposition": "PORT_SOURCE",
+  "copy_status": "NOT_COPIED",
+  "decision_status": "READY_FOR_SELECTED_SCOPE",
+  "source_scope": "FILE",
+  "ownership_basis": "USER_OWNED",
+  "artifact_role": "host",
+  "destination_license": "Apache-2.0",
+  "authorization_ref": "OWNER-2026-10-18",
+  "third_party_terms": [],
+  "blocked_reason": null
+}
+```
+
+**Required sensitive fixture pairs:** retain the source observation/hash in each pair and fail the named metadata assertion, not fixture setup.
+
+| Valid or unresolved control | Invalid twin / expected assertion |
+|---|---|
+| Owner fixture above, including NOASSERTION source | Missing/dangling owner reference or substituted grant: authorization resolution fails |
+| Same owner fixture with shared role and Apache-2.0 OR GPL-2.0-only | Shared/BPF role with bare Apache destination: role/grant mismatch fails |
+| Pure upstream Apache fixture, no owner ref, full-scope original terms/evidence | Upstream GPLv3 fixture relabeled Apache or owner reference used for it: ungranted third-party/role assertion fails |
+| Mixed owner/Apache upstream fixture with retained fragment pin/scope/evidence | Delete that portion's terms, extend outside selection, change source binding or claim USER_OWNED with remaining upstream records: fragment assertion fails |
+| NEEDS_DECISION fixture with null third-party classification | Mark ready while keeping null terms: completeness assertion fails; `[]` is a distinct explicit declaration, not evidence that classification occurred |
+| Unselected Aya target option preserved as NEEDS_DECISION | Mark ready with MIT automatically selected, or bare Apache for GPLv2 target: unresolved policy/target-compatibility assertion fails |
+| LLVM exception preserved in host fragment, original evidence retained | Drop the supplied exception, invent it for bare Apache, or mark unreviewed BPF use ready: offered-option/role assertion fails |
+
+**Migration:** preserve every `license`, raw observation, source pin/hash, source-evidence record, regression and original source-obligation value. Add the new metadata without rescanning unchanged donors. Default unclassified or not-yet-selected scopes to NEEDS_DECISION with explicit nulls/reason; do not infer ownership from GPL/NOASSERTION and do not carry the old automatic 14-file block forward as policy. Existing reference-only technical choices may remain with a concrete reason. Populate READY only for the expert-selected fixture/source scopes actually classified under this contract. Update obsolete tests that asserted compulsory historical-license equality and explain their supersession. These changes do not qualify any of the 124 donor files as executed ScopeBase behavior.
+
+The repair uses the accepted plan amendment as its planning baseline: 120 requirements, 179 mappings and H01–H33. Preserve the original 178 observation/obligation values and H01–H32 inputs; append H33 as the explicit new ScopeBase planning obligation with no invented historical donor failure. The controller integrates these plan inputs into the isolated repair checkout before dispatch and records the exact resulting product base; this does not merge or accept the uncorrected M0 candidate.
 
 ## Freeze source slices and missing design inputs
 
