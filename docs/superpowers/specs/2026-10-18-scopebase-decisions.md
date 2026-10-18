@@ -120,6 +120,14 @@ The normative [TT02 cumulative retirement and immutable ledger contract](2026-10
 
 **Limit:** Custom metadata/probe/destructor behavior remains an honest-provider boundary; no hard interruption or native cleanup guarantee is added. Root ratified Astra amendment `f276eb47bad0b761712f3857b2f905fa382d14b4512ed98f0ce2f21dcf7c7a05`; task acceptance still needs actual engine tests and independent review.
 
+### TT02-R3: retain typed fixture failures and one chronological effects list
+
+**What:** The [exact fixture failure amendment](2026-10-18-scopebase-tt02-fixture-errors.md) adds required nullable fixture_failure to every case, retains actual prepare/collect category/progress/effects, and validates the existing chronological effect batches against their nested mirrors before folding them once. Collect failure preserves the preceding adapter outcome. Seven focused controls cover stops, refusal separation, partial tails and effects.
+
+**Why:** Diagnostic text cannot reconstruct a provider-reported stop or preserve its provenance. Treating a setup denial as an operation refusal could incorrectly qualify a broken fixture; folding a nested effect twice could corrupt resource custody. Exact typed evidence makes both run and import use the same decisions.
+
+**Limit:** Provider TimedOut is not proof of a reached runner deadline or interrupted syscall. Import checks consistency, not transcript authenticity. Existing bounds, checkpoints and retirement slots stay fixed. Root ratified Astra supplement `d38b4e3ac616b949a6369a32c853e49bf687766aa24fdbc030b0b6a0d19d718e`; actual engine acceptance remains open.
+
 ## D09 — Test truth is independent and delivered to users
 
 **Status:** SETTLED. **Owners:** domain case owners and TT01–TT10.
@@ -131,6 +139,14 @@ The normative [TT02 cumulative retirement and immutable ledger contract](2026-10
 **Executor rule:** Fix required cases before environment discovery. No denominator shrinkage, expected-output copy from the implementation, empty positive population, missing fixture, skip-to-pass, same-engine roundtrip-only oracle or second-library-copy certification. The bad control fails the intended semantic assertion after valid setup.
 
 The normative [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md) fixes the four-argument session seam, external expected bindings, working vector provider and package-delivered wrong-value corpus. It preserves full TT02 ownership; TT03 later supplies Linux truth and TT07 supplies installed operator delivery. Per-assertion prerequisites retain an independently valid Fail even when another assertion lacks a twin. Contract ratification and engine acceptance are separate controller actions; no domain profile becomes qualified.
+
+### TT02-R4: preserve the complete actual oracle return
+
+**What:** The [exact oracle amendment](2026-10-18-scopebase-tt02-oracle-verdict.md) replaces flattened oracle_checks with required nullable oracle_verdict. It preserves the complete actual AssertionVerdict while deriving effective checks and capability separately. No response, valid returned judgment, typed harness Invalid and malformed response remain distinct. Four focused controls cover these boundaries.
+
+**Why:** A checks-only record loses the independent harness verdict and original capability evidence. A zero-or-one vector would add cardinality rules to an inherently optional return. Retaining the complete response gives imports the evidence needed to reconstruct Invalid and prevents a copied Pass summary from masking it.
+
+**Limit:** Import does not rerun or authenticate a custom oracle. Missing fields and the superseded alias reject in the unreleased major-1 schema; partial mode does not rehabilitate malformed returned records. Root ratified Astra supplement `c63b83bcaa0f08320189be41814ecc426a7dd7ac335d9ec9df508922c4febc70`; task/profile status is unchanged.
 
 ## D10 — Generic types do not erase application policy
 

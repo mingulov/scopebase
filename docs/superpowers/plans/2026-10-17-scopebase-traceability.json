@@ -7716,6 +7716,62 @@
         "OV27",
         "H33"
       ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-tt02-fixture-errors.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "TT02"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "TT02-R3 typed fixture failure; immutable supplemental dispatch d38b4e3ac616b949a6369a32c853e49bf687766aa24fdbc030b0b6a0d19d718e"
+      ],
+      "acceptance_boundary": "Preserve typed prepare/collect stops, preceding outcomes and chronological effect mirrors; seven new focused controls. No checkpoint, cleanup-slot, limit or task/profile changes.",
+      "preserved_source_obligations": [
+        "F05",
+        "Q05",
+        "H23",
+        "T03",
+        "G12",
+        "G18",
+        "U03",
+        "U06",
+        "U07",
+        "OV27",
+        "H33"
+      ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-tt02-oracle-verdict.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "TT02"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "TT02-R4 complete oracle response; immutable supplemental dispatch c63b83bcaa0f08320189be41814ecc426a7dd7ac335d9ec9df508922c4febc70"
+      ],
+      "acceptance_boundary": "Preserve the complete actual oracle harness/checks/capability; derive and check effective summaries, including unjudged/partial/Invalid paths; four new focused controls. Superseded alias rejects in unreleased schema 1.",
+      "preserved_source_obligations": [
+        "F05",
+        "Q05",
+        "H23",
+        "T03",
+        "G12",
+        "G18",
+        "U03",
+        "U06",
+        "U07",
+        "OV27",
+        "H33"
+      ]
     }
   ]
 }
