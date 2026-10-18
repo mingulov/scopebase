@@ -1,0 +1,6 @@
+# Local worker checkouts and execution records contain mutable/private state.
+/.worktrees/
+/.scopebase/
+/.superpowers/
+__pycache__/
+*.py[cod]
