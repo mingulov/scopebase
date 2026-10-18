@@ -819,7 +819,7 @@ class ExactRustRefusalTests(unittest.TestCase):
         outside.write_text(self.file.read_text()); self.addCleanup(outside.unlink)
         (self.root / 'src/escape.rs').symlink_to(outside)
         for expected in ((str(self.file),2), ('../main.rs',2), ('src/escape.rs',2),
-                         ('src/absent.rs',2), ('src/main.rs',0), ('src/main.rs',-1),
+                         ('src/absent.rs',2), ('src/invalid\x00.rs',2), ('src/main.rs',0), ('src/main.rs',-1),
                          ('src/main.rs',True), ('src/main.rs',2.0), ('src/main.rs',4),
                          ('src/main.rs',), ('src/main.rs',2,3), 'src/main.rs'):
             with self.subTest(expected=expected):

@@ -493,7 +493,7 @@ def rust_refusal(output, code, contains, source_root=None, *, expected_primary=N
         if not isinstance(name, str) or type(expected_line) is not int or expected_line <= 0:
             return False
         path = Path(name)
-        if path.is_absolute() or not name or '..' in path.parts:
+        if path.is_absolute() or not name or '\x00' in name or '..' in path.parts:
             return False
         expected_file = (root / path).resolve()
         if not expected_file.is_relative_to(root) or not expected_file.is_file():
