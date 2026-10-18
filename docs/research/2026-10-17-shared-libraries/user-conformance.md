@@ -45,18 +45,16 @@ Use shared case IDs and protocols, with independent oracle implementations kept 
 
 An installed executable tests its own linked library. It does **not** certify whichever copy a separate application uses. For a product support receipt, require a product-built conformance adapter linked to the product's resolved library/features, or a documented in-product diagnostic entry point using that same code. A static CLI with the same semver is not sufficient. Do not add a C ABI or dynamic plugin system solely to solve this distinction.
 
-Proposed public development integration shape, to design before implementation:
+The [TT02 engine addendum](../../superpowers/specs/2026-10-18-scopebase-tt02-engine.md#exact-public-seam-and-type-rules) defines the exact developer seam; it replaces the earlier illustrative acquire/read/mapping method list:
 
-```text
-ConformanceAdapter:
-  build_identity() -> exact artifact/library/feature identity
-  acquire_regular(owned fixture locator, limits) -> held object + stat evidence
-  read_bounded(held object, limits) -> retained bytes + read evidence
-  mapping_evidence(held object, retained view, mapping policy) -> scoped result
-  retire(attachment owner, deadline) -> settled | pending | refused
-
-run_case(adapter, case_id, fixture_session) -> case record + cleanup record
+```rust
+run_profile(plan, adapter, fixtures, oracle) -> Result<RunReport, HarnessError>
+// adapter: &mut dyn ConformanceAdapter
+// fixtures: &mut dyn FixtureSession
+// oracle: &dyn CaseOracle
 ```
+
+TT02 delivers the complete runner and real bounded vector-file provider with disjoint input and expected/ledger stores, checked external bindings and explicit retirement. Domain adapters implement the production calls advertised by their actual case scripts. TT03 later supplies real Linux/worker/FD/namespace truth; TT07 supplies installed operator delivery. A vector model run and two engine archive clients cannot close UC filesystem/installed requirements.
 
 Only implement methods for advertised features. Production file APIs must remain independent of a test framework and BPF dependencies. Deterministic fault injection is a separate development adapter seam, unavailable by accident in normal production behavior.
 
@@ -94,6 +92,8 @@ Ship that audit helper for admitted architectures, with a separately declared tr
 ## Fixture provisioning, independent truth and safe ownership
 
 Default fixtures require only a writable directory. Create a fresh unpredictable run directory through a retained parent directory FD, restricted to the user, and bind fixture operations to owned FDs. Refuse ambiguous existing manifests, symlink redirection and unowned entries. Use distinct A/B byte patterns, file identities, hardlinks and mapped ranges with an explicit worker protocol. Do not copy an arbitrary system executable as the only fixture; ship a small licensed native fixture with stable operation IDs and a recorded build hash.
+
+The TT02 vector provider consumes caller-opened, positionally read and independently bound files; its authored T0 ledger cannot establish Linux activity or native authority. The later TT03 owned worker follows the same session/access/error/effect/retirement contract with a separately frozen live protocol.
 
 The fixture worker acquires and retains its own A/B FDs, maps the exact FD/range, and announces phase/operation IDs over an owned IPC channel. Its ledger records intended bytes and completed operations before the library result is assessed. A deliberately separate minimal oracle reads raw fstat/fdinfo/mountinfo/maps evidence. The library's parsed mapping device or reported digest must never supply its own expected answer. Timestamps may order logs; they do not prove object identity or join operations.
 
@@ -153,6 +153,8 @@ Package a conformance manifest binding case-suite/schema versions, library versi
 
 Fail closed for qualification on a missing/inconsistent manifest, modified fixture or incompatible suite. A rebuild can be tested, but it receives its own build identity and receipt. Dynamic linkage, if used, records the resolved loaded library identity. Receipt verification checks artifact agreement and result semantics, not merely a signature/checksum over self-reported “PASS.”
 
+The [TT02 binding/import contract](../../superpowers/specs/2026-10-18-scopebase-tt02-engine.md#result-schema-actual-contract-matching-and-import-boundary) requires exact external catalog/selection/operation/script/schema/tier/source registrations and actual consumer binding. Imported receipts recompute gates and the immutable ledger; they do not re-run arbitrary oracles, authenticate host claims or become ExecutedHere. PositiveSupport, cause-specific ExpectedRefusal and AssertionOnly have a closed matrix; unknown cause or missing assertion-specific coverage/twin prerequisites remains incomplete while an independent valid Fail remains visible. TT06 campaigns, TT07 installed UX and TT10 release admission remain later.
+
 Each result records:
 
 - Requested profile, declared claim, required case/subcase set, mapping policy and all opt-in provisioning/effects.
@@ -162,7 +164,7 @@ Each result records:
 - Nonempty positive population, active excluded controls, operation/phase IDs, completed trigger counts, injection/mutation controls, byte/FD/worker/mapping peaks, all limits and unresolved ownership.
 - Cleanup verdict, resource ledger, failure reasons, evidence paths and hashes. Raw paths, addresses and process data stay in an explicitly selected local evidence bundle; the default shareable summary uses run-local labels. No upload is automatic.
 
-An expected permission-refusal assertion can PASS while its capability is DENIED. An expected “inconclusive without new mapping” assertion can PASS while identity remains UNKNOWN. Neither establishes working mapping support. A required unsupported/denied/unexercised cell makes qualification incomplete; it cannot disappear from the denominator or make a green summary. A case that triggered a harness error cannot count as a successful negative control.
+An expected permission-refusal assertion can PASS while its capability is DENIED. An expected “inconclusive without new mapping” assertion can PASS while identity remains UNKNOWN. Neither establishes working mapping support. A required positive-support cell that is unsupported/denied/unexercised makes qualification incomplete; an explicit cause-specific refusal claim can qualify its assertion only under the closed matrix and functional support-twin requirements, while preserving denied/incompatible/unsupported capability; it cannot disappear from the denominator or make a green summary. A case that triggered a harness error cannot count as a successful negative control.
 
 Proposed command exit semantics: `0` only when every required case/subcase for the requested claim passed with acceptable cleanup; `1` for a behavioral failure; `2` for incomplete qualification such as blocked/skipped/missing cells; separate nonzero usage/harness errors. Machine results retain all distinct states. Optional unrequested features do not block a genuinely held-file-only claim; a mapping profile cannot silently downgrade itself to held-file-only success.
 
@@ -191,7 +193,7 @@ A user receipt supports only its named artifact, scope, filesystem/namespace and
 
 Keep an explicit per-run ownership ledger for resource transfers. Ordinary file/worker tests can use live owned handles plus a minimal run/fixture manifest; they do not need a transactional durable log before every handoff. Profiles creating persistent resources or promising crash reconciliation additionally need a durable ownership record before those effects. Track the applicable directory/file identities, child authority, namespace/mount identities, mapping ranges and attachment handles. A successful before/after count is insufficient: assert identity and maximum occupancy during transfers. Close/unmap/reap only resources acquired by that run and still proven owned. Never kill a PID from a stale text ledger or recursively delete a path that was replaced by a foreign inode.
 
-On orderly cancellation, stop new work, retain pending owners, finish bounded cleanup, then write a terminal receipt with settled or unresolved disposition. Test failed result publication separately from successful resource retirement. On abrupt death, kernel-owned FDs/private mappings usually have process-lifetime cleanup, while filesystem fixtures, external namespaces/mounts or explicitly persistent BPF resources need separately proven reconciliation; do not rely on this expectation as a complete crash-cleanup claim. Default profiles should avoid persistent pinned BPF resources entirely.
+On orderly cancellation, stop new work, retain pending owners and account for every scheduled cleanup slot before a terminal receipt. The [TT02 retirement protocol](../../superpowers/specs/2026-10-18-scopebase-tt02-engine.md#exact-cumulative-retirement-schedule) has one cumulative allowance, fixed adapter-then-fixture order and explicit uncalled/unresolved participation; a cooperative deadline cannot force a hung hook to return. Later process supervision remains TT03/TT05/TT07 work. Unknown inventory cannot be cleared by an empty response, Drop or zero exit. Test failed result publication separately from successful resource retirement. On abrupt death, kernel-owned FDs/private mappings usually have process-lifetime cleanup, while filesystem fixtures, external namespaces/mounts or explicitly persistent BPF resources need separately proven reconciliation; do not rely on this expectation as a complete crash-cleanup claim. Default profiles should avoid persistent pinned BPF resources entirely.
 
 A cleanup retry consumes only the named ledger and verifies authority again. Unresolved identity or teardown is reported and preserved with exact operator instructions; timeout never proves settlement or authorizes destructive guessing. A clean pass requires the applicable cleanup obligations to succeed. Users should be able to attach the local summary and selected sanitized evidence to a support request; shipping a conformance runner must not depend on maintainers having access to private workspaces or the user's live system.
 

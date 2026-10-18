@@ -74,6 +74,8 @@ Date: 2026-10-18. This register records what an executor must preserve, why the 
 
 **Executor rule:** Do not classify BPF_PROG_LOAD from errno alone. Add same-errno/different-cause controls, preserve original diagnostics, and avoid falling back or splitting on a misclassified failure. A textual message from an untrusted backend is still a backend assertion.
 
+The normative [TT02 intent/cause matrix](2026-10-18-scopebase-tt02-engine.md#intent-cause-and-capability-matrix) makes this concrete: exact operation/step/stage and independent cause witness plus a functional positive twin gate cause-specific refusals. H33 model evidence remains separate from BP03/TT05 actual inference and activity.
+
 ## D07 — Authority cannot be reconstructed from reports
 
 **Status:** SETTLED. **Owners:** LX02/LX06/LX08, BP02/BP05 and TT02.
@@ -84,6 +86,8 @@ Date: 2026-10-18. This register records what an executor must preserve, why the 
 
 **Executor rule:** No path fallback after held acquisition, foreign proof reuse, guessed CPU geometry, test receipt promoted to native authority, or calibration result promoted to universal identity. Process observation is not signaling authority; pidfd retention is not an exec snapshot.
 
+The normative [TT02 actual-contract import boundary](2026-10-18-scopebase-tt02-engine.md#result-schema-actual-contract-matching-and-import-boundary) recomputes descriptive verdicts while preserving Imported origin; it retains fixed actual entry/final metadata and raw elapsed/cancellation/completion observations for pure gate reconstruction, but cannot re-execute arbitrary oracle logic or authenticate a coherent forged host claim.
+
 ## D08 — Cleanup and bounded work are observable contracts
 
 **Status:** SETTLED. **Owners:** LX04/LX06/LX09, BP05/BP06, TC02/TC07 and NX03–NX06.
@@ -93,6 +97,8 @@ Date: 2026-10-18. This register records what an executor must preserve, why the 
 **Why:** The same hidden work can survive a timeout, a failed detach, a new client instance or a parent process exit. Losing its owner creates repeated resource leaks and unsafe reuse.
 
 **Executor rule:** No destructor-only success claim, ownerless partial effect, close-as-release substitution or process-wide handler/policy change. Preserve active identity/owner assertions; final resource counts alone can hide replacement.
+
+The normative [TT02 cumulative retirement and immutable ledger contract](2026-10-18-scopebase-tt02-engine.md#effect-ledger-and-retirement-reconciliation) fixes adapter-then-fixture order, explicit uncalled participation outcomes and one cumulative allowance. Unknown inventory stays sticky; exact known resources may settle at run scope without rewriting their case-end state. The [32-field limits](2026-10-18-scopebase-tt02-engine.md#exact-limits-and-bounded-artifact-measurement) separate parser retention from streamed byte work and cooperative elapsed bounds. This supplies a precise engine realization of D08 without claiming hard interruption or cleanup.
 
 ### LX03-R1 clarification under D08
 
@@ -115,6 +121,8 @@ Date: 2026-10-18. This register records what an executor must preserve, why the 
 **Why:** Source inspection, model execution, object inspection, Linux integration, live BPF and installed clients answer different questions. An old green donor run or dependency test suite does not run automatically in a user's build.
 
 **Executor rule:** Fix required cases before environment discovery. No denominator shrinkage, expected-output copy from the implementation, empty positive population, missing fixture, skip-to-pass, same-engine roundtrip-only oracle or second-library-copy certification. The bad control fails the intended semantic assertion after valid setup.
+
+The normative [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md) fixes the four-argument session seam, external expected bindings, working vector provider and package-delivered wrong-value corpus. It preserves full TT02 ownership; TT03 later supplies Linux truth and TT07 supplies installed operator delivery. Per-assertion prerequisites retain an independently valid Fail even when another assertion lacks a twin. Contract ratification and engine acceptance are separate controller actions; no domain profile becomes qualified.
 
 ## D10 — Generic types do not erase application policy
 

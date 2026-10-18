@@ -1,7 +1,7 @@
 # ScopeBase testing and conformance specification
 
 Normative 2026-10-18 amendment: [decisions and reasons](2026-10-18-scopebase-decisions.md), [executor contract](2026-10-18-scopebase-executor-contract.md), and [task-origin / repair plan](../plans/2026-10-18-scopebase-plan-repair.md). Porting and task readiness follow these amendments; no new implementation or support claim follows.
-Date: 2026-10-17. Status: proposed implementation contract. No runner, fixture, crate or passing ScopeBase runtime result exists yet. The [project specification](2026-10-17-scopebase-design.md) defines scope and completion levels. The [testing plan](../plans/2026-10-17-scopebase-testing.md) implements this document.
+Date: 2026-10-17. Status: proposed implementation contract. TT01 registry/package evidence is recorded separately; the TT02 engine and complete runtime/conformance profiles remain unqualified. The [project specification](2026-10-17-scopebase-design.md) defines scope and completion levels. The [testing plan](../plans/2026-10-17-scopebase-testing.md) implements this document.
 
 ## Required outcome
 
@@ -30,41 +30,32 @@ Product migration is later. Package qualification uses real independently built 
 
 ## Package and file structure
 
-`crates/scopebase-testkit/src/` owns `ids.rs`, `adapter.rs`, `catalog.rs`, `profile.rs`, `observation.rs`, `oracle.rs`, `result.rs`, `runner.rs`, `fixture.rs`, and `artifact.rs`. The default crate supports pure contracts; optional `linux-fixtures` enables owned host fixtures. Case semantics live in focused `cases/linux.rs`, `cases/bpf.rs`, `cases/capture.rs` modules, with schema decoders beside their cases. They must not contain a second production resolver/reducer.
+`crates/scopebase-testkit/src/` owns `ids.rs`, `adapter.rs`, `catalog.rs`, `profile.rs`, `observation.rs`, `oracle.rs`, `result.rs`, `runner.rs`, `fixture.rs`, and `artifact.rs`. The default crate supports pure contracts and TT02’s bounded vector-file session; optional `linux-fixtures` later enables TT03-owned host fixtures in a separate Linux module. TT02 owns the `FixtureSession` trait and `fixture.rs`; TT03 implements that existing seam rather than replacing it. The [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md#delivery-and-ownership) fixes its delivered corpus and exact file ownership. Case semantics live in focused `cases/linux.rs`, `cases/bpf.rs`, `cases/capture.rs` modules, with schema decoders beside their cases. They must not contain a second production resolver/reducer.
 
 `crates/scopebase-conformance/` owns the operator command. `fixtures/{vectors,linux,bpf,native}/` owns independently authored data/workers; `profiles/` owns immutable-version required-case and environment manifests; `tests/downstream/` owns independent consumer workspaces. `tools/qualification/` owns provisioner/admission/cleanup scripts and CI selection, while `tools/bpf-compat/` and BPF producers belong to the TC/BP plan. Production packages have dev-dependencies or external adapters only; they never depend on testkit at runtime.
 
 ## Exact public adapter seam
 
-The following names/signatures are the shared contract. Fields below are semantic requirements; their constructors validate bounds before use.
+The shared session seam has four arguments. The [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md#exact-public-seam-and-type-rules) defines the exact traits, immutable checked values, schemas and constructors. It replaces earlier concrete-session/oracle-observation-only forms.
 
 ```rust
-pub trait ConformanceAdapter {
-    fn subject(&self) -> SubjectBinding;
-    fn execute(
-        &mut self,
-        invocation: &CaseInvocation,
-        fixture: &FixtureAccess,
-    ) -> Result<Observation, CaseError>;
-}
-
 pub fn run_profile(
     plan: &ProfilePlan,
     adapter: &mut dyn ConformanceAdapter,
-    fixtures: &mut FixtureSession,
+    fixtures: &mut dyn FixtureSession,
     oracle: &dyn CaseOracle,
 ) -> Result<RunReport, HarnessError>;
 ```
 
-- `CaseId::parse(&str) -> Result<CaseId, IdError>` accepts 1–96 ASCII letters/digits/`.`/`_`/`-`, first character alphanumeric. `ProfileId` uses the same grammar and a 64-byte cap. No trim, normalization, newline acceptance or silent aliasing. A family identifier such as H04 is distinct from a runnable subcase such as `H04.path_swap`. Case records use exact `(CaseId, positive u32 revision)` identity; historical revisions coexist, every revision consumes limits, and lookup always supplies the revision. An absent revision or zero lookup returns None, never a guessed latest. JSON admission refuses zero revisions. Lexical membership does not impose an extra nonempty suffix after the family dot.
-- `SubjectBinding` contains package name/version, source/build SHA-256 identities, sorted exact features, selected backend/version, host/target tuple and the compiled consumer identity. Build metadata is generated from selected inputs, not copied from an expected fixture. Custom declarations remain explicitly self-reported provenance.
-- `CaseInvocation` contains case/schema/fixture versions, the preselected operation script, declared limits and the run/operation identifiers. Scripts are bounded data, never arbitrary shell commands. Family schemas define their legal operations and expected response shape.
-- `FixtureAccess` grants only the owned handles/paths and synchronization endpoints required by the selected case. It cannot grant authority over unrelated targets. `FixtureSession` owns teardown and the separate fixture/workload ledger.
-- `Observation` contains a `SchemaId` and bounded bytes; the case-specific decoder validates its representation and semantics. It contains actual observations only. Each public family helper supplies typed convenience methods without importing a separately resolved production implementation.
-- `CaseOracle::evaluate(&self, case: &CaseSpec, expected: &ExpectedEvidence, observed: &Observation) -> AssertionVerdict` compares against independent evidence. `ExpectedEvidence` is produced by the fixture/reference model, never by the production adapter. Custom oracle provenance is recorded; it cannot mint trusted Linux authority.
-- `CaseError` describes the observed operation stage, source code/category and partial effects. `HarnessError` means the harness cannot judge. Neither is implicitly an expected mismatch.
+`ConformanceAdapter` provides `subject`, `execute` and explicit `retire`. `FixtureSession` provides `contract`, `cancellation_requested`, `prepare`, `collect` and explicit `retire`; successful prepare/collect report newly created effects. `FixtureAccess<'_>` lends only that invocation's admitted inputs/resources, is neither Clone nor serializable, and is dropped before collect. `CaseOracle` provides `identity` and evaluates independent `ExpectedEvidence` against `CaseOutcome::Observed` or `CaseOutcome::OperationError`; a prepare failure cannot be an operation-under-test refusal. Partial operation progress and effects remain visible.
 
-Test-run input defaults: maximum 8 MiB per observation/vector/receipt input, maximum 4,096 case records per run, maximum 64 KiB per diagnostic string. These are parser/harness admission limits, not production package read limits. Profiles can lower them. An explicit documented larger profile changes its version and tests; parsers never allocate from unchecked claimed sizes.
+The external `RunContract` freezes exact catalog/selection, subject/build/artifacts, oracle, scripts, assertion prerequisites, attempts and limits. The additive read-only `CaseCatalog::source_sha256() -> Digest256` hashes the exact successfully admitted catalog bytes without changing TT01 lookup, wire or selection semantics. Four registered source roles and the separately measured consumer executable/final-object roles cannot substitute for one another. The [post-build binding recipe](2026-10-18-scopebase-tt02-engine.md#frozen-subjectbuild-recipe-and-actual-byte-checks) uses independently chosen expected inputs and measured actual completed consumer bytes, without a self-hashing executable cycle.
+
+The [honest metadata prelude](2026-10-18-scopebase-tt02-engine.md#runner-binding-and-execution-state-machine) calls custom contract/subject/oracle code before preparation, with a no-effects/no-discovery obligation; it is neither a sandbox nor a hard timeout. Borrowed resources and descriptive provenance never reconstruct runtime authority. Independent truth and wrong-value controls remain mandatory.
+
+`CaseId::parse` retains its 1–96 byte ASCII grammar; `ProfileId` retains its 64-byte cap. Exact `(CaseId, positive u32 revision)` lookup never selects latest. The addendum preserves TT01 admission semantics and separately bounds execution; it does not impose its Label grammar on existing cell strings.
+
+The [32-field RunLimits contract](2026-10-18-scopebase-tt02-engine.md#exact-limits-and-bounded-artifact-measurement) retains 8 MiB parser/vector/observation/receipt limits, 4,096 planned attempts and 64 KiB diagnostics. Streamed executable/object measurement has separate finite file/work/read budgets and one 65,536-byte buffer. `new` explicitly chooses valid values up to hard maxima; `lowered` can only reduce its receiver, and external contract admission uses an explicit caller ceiling. No silent clamp, selection filtering or arbitrary larger parser profile is permitted.
 
 TT01 admits all exact references, including inactive conditional requirements. Every declared root must reject an active closure requesting two revisions of the same CaseId, even with disjoint cells or different profile stems. Requirements merge only for the same case/revision/cell, retaining sorted declaring `required_by` identities. A condition mentioning an extension neither selects it nor creates a dependency edge; H33 runtime linkage is conditional on the base BTF shape profile. Selection transport compares exact revisions as well as every required-cell field.
 
@@ -76,23 +67,23 @@ Registry `definition_complete` describes a nonempty frozen definition, not execu
 
 ## Result and verdict contract
 
-Every case result has separate fields:
+The [closed intent/cause/capability matrix](2026-10-18-scopebase-tt02-engine.md#intent-cause-and-capability-matrix) and [strict contract-bound receipt rules](2026-10-18-scopebase-tt02-engine.md#result-schema-actual-contract-matching-and-import-boundary) govern the engine. Every case result preserves separate fields:
 
 | Field | Values / rule |
 |---|---|
 | `execution` | `completed`, `blocked`, `not_run`, `skipped`, `harness_error`; skipped cases retain their required/optional selection status |
-| `assertion` | `pass`, `fail`, `not_judged`; setup failure never becomes pass unless the case specifically tests that setup/refusal stage |
+| `assertion` | `pass`, `fail`, `not_judged`; setup failure is not an operation-under-test semantic negative; assertion-specific missing coverage/twin prerequisites yield not_judged |
 | `capability` | `supported`, `unsupported`, `denied`, `unknown`, `incompatible`, `not_applicable`, with method/context |
 | `coverage` | Required branches/triggers/populations and achieved counts, including missing obligations |
 | `harness` | Artifact/fixture/oracle/selection validation and handshake results |
 | `cleanup` | `complete`, `unresolved`, `not_required`, with only owned pending resources and recovery information |
 | `qualification` | `qualified`, `failed`, `incomplete`, `invalid`; computed from the frozen profile, not supplied by the adapter |
 
-Qualification precedence: invalid bindings/harness give `invalid`; judged semantic failure gives `failed`; absent required evidence or unresolved required cleanup gives `incomplete`; only all required assertions, positive-support branches, valid bindings and acceptable cleanup give `qualified`. Preserve every underlying result even if a summary has one precedence value.
+Qualification precedence is `Invalid > Failed > Incomplete > Qualified` across every frozen required attempt. Gate each assertion only on its declared coverage/positive-twin prerequisites: a missing twin does not hide an independently valid wrong-byte Fail. PositiveSupport requires Supported; cause-specific ExpectedRefusal requires its exact operation/step/stage/cause, functional positive twin and the matching Denied/Incompatible/Unsupported state. AssertionOnly may qualify only with Unknown/NotApplicable and makes no positive support claim. Preserve all underlying results, explicit entered stages, bindings and unresolved custody. A later passing attempt cannot erase a prior failure.
 
 Operator exit codes are 0 qualified requested profile, 1 semantic failure, 2 incomplete coverage/cleanup, 3 invalid input/harness, and 64 command usage. Successful `describe`, `plan` and structural receipt verification use exit 0 with `qualification: not_evaluated`; they do not claim behavioral support. A syntactically valid receipt containing a failed result remains failed when its profile verdict is verified. Signal termination preserves a partial run if possible and never fabricates a terminal success.
 
-The result schema starts at major version 1. Reject duplicate JSON members, duplicate case/terminal IDs, trailing data, non-finite numbers, booleans as counts, invalid decimal-u64 text, overflows and contradictory summary fields. Required schema fields are not defaulted from absence to zero. A local digest binds bytes but is not authenticity or a trusted-host claim. No evidence-signing service is needed.
+The result schema starts at major version 1. `RunReport::from_json` binds to the separately supplied actual RunContract and recomputes selection, assertion gates, intent matrix and effect ledger; imported origin is always Imported. It neither reruns an arbitrary oracle nor authenticates coherent claims or produces live capabilities. The required runner observations retain actual entry/final subject/oracle values and fixed raw elapsed/cancellation checkpoints, including completion, so missing final checks or a late stop survives successful cases and import. Deterministic case/run terminal-after-cleanup references and exact operation/script/schema/tier/registration matches are required. Reject duplicate JSON members, duplicate case/terminal IDs, trailing data, non-finite numbers, booleans as counts, invalid decimal-u64 text, overflows and contradictory summary fields. Required schema fields are not defaulted from absence to zero. A local digest binds bytes but is not authenticity or a trusted-host claim. No evidence-signing service is needed.
 
 ## Required profiles and evidence selection
 
@@ -170,6 +161,8 @@ CI has fast contract/API/package checks, selected object builds, owned host fixt
 Execution lanes have unique build/output/run roots and explicit ownership. One writer owns shared Cargo/workspace/ABI manifests. Privileged guests/host resources and heavy builds are leased; never run parallel live tests against the same mutable fixture or object path. A failed fixture or escaped owner stops dependent execution but need not stop independent pure work.
 
 ## Cleanup, evidence and performance
+
+TT02 uses the [immutable effect ledger and cumulative retirement schedule](2026-10-18-scopebase-tt02-engine.md#effect-ledger-and-retirement-reconciliation): fixed adapter-then-fixture slots at case and run scopes, one cumulative allowance, no zero-budget callback, explicit uncalled participation outcomes, and sticky unknown inventory. Only an explicit exact-owner/origin Pending→Retired transition may settle known custody; a later run-scope transition retains the earlier case-end state. Drop, empty snapshots, zero exit and timeout cannot certify retirement. Byte/work/retention/cardinality bounds and cooperative timing have distinct proof limits. Stronger Linux/process supervision belongs to TT03/TT05/TT07.
 
 Ordinary in-process tests use owned handles and a bounded run marker. Persistent mounts/pins or crash-recovery profiles record identity-checked durable custody before handoff. A durable text record cannot recreate a lost live capability. Abrupt death means reconciliation, not proof that Drop ran. Explicit cleanup errors remain visible; repeated unresolved resources exhaust admission rather than accumulating without a bound.
 

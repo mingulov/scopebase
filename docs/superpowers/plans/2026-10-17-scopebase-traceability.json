@@ -1133,7 +1133,7 @@
       "anchor": "lx03-positional-full-reads-and-explicit-memorywork-accounting",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "LX02",
         "LX04"
@@ -1145,7 +1145,15 @@
         "LX-R11",
         "LX-R15"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "execution": {
+        "job_id": "lx03-reads-20261018",
+        "base_commit": "9a09edbd5aea679bd5ccd2f9338d161244531dc8",
+        "role": "implementer",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "xhigh",
+        "qualification": "NOT_EVALUATED"
+      }
     },
     {
       "id": "LX04",
@@ -7643,6 +7651,38 @@
       "added_case_family": "H33",
       "existing_task_ids_unchanged": true,
       "implementation_or_qualification_claim": false
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-tt02-engine.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "TT02",
+        "TT03"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "Accepted TT01 exact admission/selection and archive inputs",
+        "Accepted bounded HASH-INPUT admission and exact member fragments; root integrates the checked actual member delta before task acceptance",
+        "Controller-ratified complete TT02 engine contract and additive catalog-input digest getter",
+        "Full immutable dispatch SHA containing selected prerequisites and canonical amendments"
+      ],
+      "acceptance_boundary": "Later scoped TT02 engine acceptance requires all staged controls, two actual archive clients and independent review; no current implementation/status promotion or domain/operator/release qualification. TT03 consumes TT02; TT02 does not depend on TT03.",
+      "preserved_source_obligations": [
+        "F05",
+        "Q05",
+        "H23",
+        "T03",
+        "G12",
+        "G18",
+        "U03",
+        "U06",
+        "U07",
+        "OV27",
+        "H33"
+      ]
     }
   ]
 }
