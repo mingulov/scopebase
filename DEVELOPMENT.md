@@ -4,7 +4,7 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) now govern every task. Current user steering is plan repair before more implementation. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) now govern every task. The plan repair and SB01 foundation are accepted; the active M0–M6 goal continues with SB02. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
@@ -50,10 +50,12 @@ The user explicitly permits appropriate CI/CD and privileged local tests. For BP
 
 Wrap cooperative heavy work with `bin/scopebase-build -- COMMAND ARG...`. All participating ScopeBase jobs must use the same host/user lock root and resource. The initial single build slot avoids simultaneous heavy Cargo/native builds. Distinct Cargo output roots remain necessary. Acquisition timeout does not kill the running build or prove descendant retirement; TC02/TC07 define those stronger product contracts.
 
-Current setup verification commands:
+Current foundation/tooling verification commands:
 
 ```sh
 python3 -m unittest discover -s tests/orchestration -v
+python3 -m unittest discover -s tools/planning/tests -v
+python3 tools/planning/check_traceability.py docs/superpowers/plans/2026-10-17-scopebase-traceability.json
 python3 tools/check_planning_docs.py
 git diff --check
 ```
@@ -62,6 +64,6 @@ These test development tooling. Until actual Cargo packages and runtime suites e
 
 ## Recovery and continuation
 
-Root TODO records accepted product progress. The active preparation ledger lives under the setup worktree's `.scopebase/preparation-20261018/`; later job manifests/reports live in the canonical Git-common repository root's `.scopebase/jobs/`. `handoff.md` is the single current restart route. Review actual Git refs/status, ledger, pending owners and goal before dispatching again. A quiet log, absent PID, old green CI or stale DONE cannot release custody or certify a new candidate.
+Root TODO records accepted product progress. The active product ledger lives in `.worktrees/m0-integration/.superpowers/sdd/2026-10-17-scopebase/progress.md`; preserved setup/source evidence lives under the setup worktree's `.scopebase/preparation-20261018/`. Prepared job manifests/reports live in the canonical Git-common repository root's `.scopebase/jobs/`. `handoff.md` is the single current restart route. Review actual Git refs/status, ledger, pending owners and goal before dispatching again. A quiet log, absent PID, old green CI or stale DONE cannot release custody or certify a new candidate.
 
 Preserve attempts rather than overwriting them. On service failure, inspect existing commits and report before a fresh attempt. Do not automatically retry an ambiguous side effect, re-dispatch completed work, delete worktrees, or remove evidence to make status look clean. Record unresolved resources and who owns them. Automation remains cooperative coordination; administrative records and local reports do not create runtime authority.

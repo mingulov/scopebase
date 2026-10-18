@@ -1,23 +1,23 @@
 # ScopeBase TODO
 
-Status: [plan hardening is independently reviewed](docs/superpowers/reviews/2026-10-18-scopebase-plan-hardening-verification.md); development coordination is accepted, while the SB01 intake candidate remains unaccepted. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
+Status: [SB01 is accepted](docs/reviews/2026-10-18-sb01-foundation.md) at `f1280b010099100daeec9fd2233bbeacea5443e0`, following independent review and 54 passing intake tests. Development coordination and plan hardening are accepted; SB02 is next. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
 
 Read the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md), master specification/plan and selected subsystem pair. [Traceability](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps **120 requirements and 86 tasks** to **81 research TODO items, 32 initial families plus H33, 23 public-contract gaps, 14 user-conformance cases and 28 overlap rows**: 179 source-obligation mappings. G items also occur in the research TODO; these are not disjoint bug counts.
 
-## Required corrections before dependent execution
+## Corrections and remaining dependent work
 
 | Work / existing owner | Dependency | Exit criterion |
 |---|---|---|
-| SB01 local verification | Existing candidate and independent R1 finding | Partial-clone missing blob stays incomplete; no lazy fetch, remote transport or object-store mutation; complete local twin verifies |
-| SB01 nested preservation integrity | Existing candidate and independent R2 finding | Missing family/oracle/control or dangling donor/path/symbol/line/group/obligation fails; all original observations/regressions retained |
-| SB01 source/destination policy | User's provisional D03 choice | Author-authorized destination can differ from historical SPDX; real upstream terms/roles remain distinct; original 14 automatic copying blocks are not carried forward as policy |
+| SB01 local verification — accepted | Reviewed subject in SB01 record | Partial-clone missing blob/tree stays incomplete; wrong available object type/tree stays invalid; no lazy fetch, transport or donor mutation; complete local twin verifies |
+| SB01 nested preservation integrity — accepted | Reviewed subject in SB01 record | Missing family/oracle/control or dangling donor/path/symbol/line/group/obligation fails; all original observations/regressions retained |
+| SB01 source/destination policy — accepted | User's provisional D03 choice | Schema distinguishes owner authorization, destination and original third-party terms/roles; original 14 automatic copying blocks removed; actual source slices still require decisions |
 | SB01/LX01/LX08 and CP01/CP03/CP04 source slices | Reviewed donor inventory | Correct process/pin and KryProbe insertion/loss inputs; exact source-to-destination/test map before dispatch |
 | CP12 successor selection | CP06/CP11 and actual refreshed successor | Evidence-based extraction/internal/product-local evaluation; no invented stable replacement |
 | SB02/BP01/TC01 upstream target option | Actual selected target closure and D03 scope | Explicit compatible option/notices for Aya target inputs; no automatic Apache-only GPLv2 output or silent third-party MIT choice; unrelated host work proceeds |
 | BP03/TC03/TC06/TC07 and TT owners, H33 | Frozen actual source/object/kernel fixture | Source/runtime boundaries, final declaration, same-errno causes, GPL-only intended refusal and active valid/helper-free twins on applicable cells |
 | TT02/TT03/TT04 and LX09 design inputs | Accepted foundation/component contracts | Frozen consumer identity recipe, worker/FD protocol, ownership transitions and real filesystem/audit recipes; ordinary executor receives specified choices |
 
-These are open implementation/design obligations in existing tasks, not work completed by this plan revision. See the repair plan for exact candidate custody, tests, source facts and all 86 origin/decision routes.
+The three SB01 corrections are accepted in the linked foundation record. Remaining rows are open obligations in their existing tasks. See the repair plan for original candidate custody, tests, source facts and all 86 origin/decision routes.
 
 Package-ready, SDK/native-ready and product-migrated are separate statuses. Migrations MG01–MG05 stay open until selected later. A small held-file pilot is M1; the requested ready mapped-image library requires M2. The full SDK requires both host and actual live BPF applications. The native phase requires actual C and Mojo clients.
 
@@ -32,7 +32,7 @@ The [execution setup plan](docs/superpowers/plans/2026-10-18-scopebase-execution
 
 ## Execution and parallelization
 
-1. Repair and accept the existing SB01 candidate using the bounded repair packet; retain its source observations and preserve donor WIP. Refresh selected bytes before an actual port. SB02 establishes dependency/MSRV probes, then SB03 freezes compatibility/support rules.
+1. SB01 is accepted; retain its source observations and preserve donor WIP. Refresh selected bytes before an actual port. SB02 establishes dependency/MSRV probes, then SB03 freezes compatibility/support rules.
 2. After SB02, Linux foundation, capture foundation and testkit registry can proceed on disjoint files. After SB03, start BPF/toolchain foundations and the SDK profile shell. These early SDK files do not establish SDK usability.
 3. Linux read/control/parser work uses agreed seams; LX04 must be complete before LX03 closes. Capture modules split after CP02. BP09 parsing and BP02 geometry can proceed alongside TC02 direct-tool execution. TC03 precedes TT05 guest orchestration; TC07 adds real whole-guest mixed builds after TT05.
 4. Run independent pure/model/source checks in isolated outputs. One integration owner serializes root Cargo/lock, exports, interface/schema changes and shared catalogs. Lease privileged filesystem/kernel guests and coordinate heavy Cargo/native builds. Never share mutable fixture/run roots or compiler outputs.
@@ -55,7 +55,7 @@ Each task link contains exact planned files, interfaces, test commands, acceptan
 
 ## M0: source and workspace foundations
 
-- [ ] [SB01: Source intake, licensing and contract ledger](docs/superpowers/plans/2026-10-17-scopebase.md#sb01-source-intake-licensing-and-contract-ledger) — prerequisites: none.
+- [x] [SB01: Source intake, licensing and contract ledger](docs/superpowers/plans/2026-10-17-scopebase.md#sb01-source-intake-licensing-and-contract-ledger) — prerequisites: none.
 - [ ] [SB02: Workspace, dependency selection and independent builds](docs/superpowers/plans/2026-10-17-scopebase.md#sb02-workspace-dependency-selection-and-independent-builds) — prerequisites: SB01.
 - [ ] [SB03: Versioning, support and documentation contracts](docs/superpowers/plans/2026-10-17-scopebase.md#sb03-versioning-support-and-documentation-contracts) — prerequisites: SB01, SB02.
 

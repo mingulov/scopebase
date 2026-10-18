@@ -2,8 +2,8 @@
   "schema_version": "1.0.0",
   "kind": "SCOPEBASE_PLANNING_TRACEABILITY",
   "created": "2026-10-17",
-  "status": "DESIGN_ONLY",
-  "implementation_status": "NOT_IMPLEMENTED",
+  "status": "DEVELOPMENT",
+  "implementation_status": "IN_PROGRESS",
   "qualification_status": "NOT_RUN",
   "runnable": false,
   "semantics": {
@@ -2161,7 +2161,7 @@
       "anchor": "sb01-source-intake-licensing-and-contract-ledger",
       "lane": "integration",
       "milestone": "M0",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [],
       "requirements": [
         "SB-R01",
@@ -2172,7 +2172,11 @@
         "SB-R17",
         "TC-R10"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "f1280b010099100daeec9fd2233bbeacea5443e0",
+        "evidence_record": "docs/reviews/2026-10-18-sb01-foundation.md"
+      }
     },
     {
       "id": "SB02",

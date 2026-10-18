@@ -2,7 +2,7 @@
 
 Start with the [decisions and reasons](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [amended execution plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md). They specify porting boundaries, task readiness, provisional Apache userspace/GPL BPF licensing and the decisions an executor must not invent.
 
-The [amendment verification](docs/superpowers/reviews/2026-10-18-scopebase-plan-hardening-verification.md) records independent review, resolved plan defects and the checks performed. Plan acceptance does not accept the existing SB01 implementation candidate or qualify a library.
+The [amendment verification](docs/superpowers/reviews/2026-10-18-scopebase-plan-hardening-verification.md) records independent review, resolved plan defects and the checks performed. Plan acceptance is separate from implementation acceptance. The [SB01 foundation record](docs/reviews/2026-10-18-sb01-foundation.md) now accepts the repaired source-intake/contract ledger and its 54-test validator; library and runtime qualification remain open.
 
 Development is coordinated through [DEVELOPMENT.md](DEVELOPMENT.md) and the single current [handoff](handoff.md). Local helpers prepare isolated jobs, immutable reviews and cooperative build locks; supplementary [Muse reviews](orchestration/MUSE-ORCHESTRATION.md) remain independent of task acceptance.
 
@@ -20,4 +20,4 @@ The study covers p11scope, KryProbe, OSSLscope, MemVeil/libbpf-mojo, and limited
 
 The [testing delivery plan](docs/research/2026-10-17-shared-libraries/testing-delivery-plan.md) follows an issue from reproducer through consumer migration and installed checks. Its [regression catalog](docs/research/2026-10-17-shared-libraries/regression-catalog.json) preserves the original 32 families and appends H33; these are planned obligations, not executed results. Repository working instructions are in [AGENTS.md](AGENTS.md).
 
-This repository contains research, specifications and development coordination tools. No shared library has been implemented or qualified by the planning/setup work. The source workspaces were inspected without modification.
+This repository contains research, specifications, accepted source-intake validation and development coordination tools. No shared Rust library or runtime profile has been implemented or qualified. The source workspaces were inspected without modification.

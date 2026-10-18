@@ -6,7 +6,7 @@ Date: 2026-10-18. This is a normative amendment to the [project specification](2
 
 An executor should implement a reviewed port without reconstructing the architecture or rediscovering historical defects. The controller must give the executor enough exact information to choose one reasonable implementation. The absence of information is a missing decision, not a license to guess.
 
-The current task is to repair the plans. Product implementation does not resume merely because a planning check passes. Existing product requirements and task IDs stay stable. All source workspaces, WIP and evidence remain in custody.
+The plan repair is accepted and the active M0–M6 goal has resumed with the bounded SB01 repair, now accepted in its [foundation record](../../reviews/2026-10-18-sb01-foundation.md). A planning check alone does not accept an implementation. Existing product requirements and task IDs stay stable. All source workspaces, WIP and evidence remain in custody.
 
 ## Task packet required before execution
 
