@@ -157,7 +157,8 @@
       "LJ current e55ecbef succeeds research 54bcebd5 and diverges from L main. Selected native map/ring implementation/header bytes match L main; selected support docs, integration test and toolchain lock differ from L main. Since research 54bcebd5, observed changes concern CI/package/provenance/toolchain tooling. No runtime qualification asserted.",
       "J catalog source CR09-M1 remains f520a529 but has 63 tracked modifications and 11 untracked entries at observation. tests/kernel/test_map_roundtrip.py and compiler/lib/MapMetadata.cpp are selected dirty inputs with current SHA256 recorded. Current dev and D2/checkouts remain separate; D2 test_map_btf.py has distinct dirty bytes recorded in worktree metadata.",
       "MemVeil consumes libbpf-mojo 681096cb588379307d0c8e94e1d77e53de4be22f per toolchain.lock.json; neither L nor LJ is automatically its consumed runtime.",
-      "BP02 adds the exact frozen K snapshot_who consumer row and admits 23 ADAPT scopes across seven K/L rows; nine selected comparison scopes remain reference-only. Prior narrower admissions and current CP04 authorizations are preserved. This is source admission, not copying or runtime qualification."
+      "BP02 adds the exact frozen K snapshot_who consumer row and admits 23 ADAPT scopes across seven K/L rows; nine selected comparison scopes remain reference-only. Prior narrower admissions and current CP04 authorizations are preserved. This is source admission, not copying or runtime qualification.",
+      "LX05 admits exactly 15 selected P source ranges across P:crates/manifest/src/maps.rs and P:crates/manifest/src/identity.rs under OWNER-2026-10-18 for host Apache-2.0 destinations; all 16 selected comparison/reference scopes remain ungranted. This is immutable pre-copy admission, not copying, implementation or qualification."
     ]
   },
   "donors": [
@@ -710,6 +711,10 @@
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
+            139,
+            158
+          ],
+          [
             177,
             194
           ],
@@ -718,8 +723,20 @@
             315
           ],
           [
+            607,
+            631
+          ],
+          [
+            674,
+            697
+          ],
+          [
             720,
             741
+          ],
+          [
+            991,
+            1056
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -950,14 +967,59 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/manifest/src/maps.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            9,
+            54
+          ],
+          [
+            56,
+            67
+          ],
+          [
+            85,
+            162
+          ],
+          [
+            213,
+            261
+          ],
+          [
+            268,
+            287
+          ],
+          [
+            294,
+            297
+          ],
+          [
+            320,
+            420
+          ],
+          [
+            429,
+            499
+          ],
+          [
+            502,
+            546
+          ],
+          [
+            549,
+            576
+          ],
+          [
+            579,
+            606
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,

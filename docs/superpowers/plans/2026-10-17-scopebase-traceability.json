@@ -7860,6 +7860,36 @@
         "H16",
         "H28"
       ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-lx05-proc-contract.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "LX05"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "LX02 accepted; actual current consumed interfaces bound at dispatch",
+        "Reviewed LX05 design with root-directed A1-A3; exact 15 P source ranges admitted under OWNER-2026-10-18; immutable job overlay remains separate",
+        "LX05-FUZZ-TOOLS full tool/native admission outstanding; both actual 10000-run campaigns gate acceptance"
+      ],
+      "acceptance_boundary": "Pure bounded proc observations only;13 originals,10 deferred originals,11 new groups, exact A1-A3 controls, six affected Linux package cells and 24 source/archive client executions, source receipts and two actual 10000-run libFuzzer campaigns. Runtime authority, live filesystem/process profiles and migrations remain later.",
+      "preserved_source_obligations": [
+        "L01",
+        "L02",
+        "L04",
+        "G04",
+        "G12",
+        "G18",
+        "H02",
+        "H05",
+        "H06",
+        "UC02",
+        "UC05"
+      ]
     }
   ]
 }

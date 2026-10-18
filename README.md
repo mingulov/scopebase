@@ -6,6 +6,8 @@ The [amendment verification](docs/superpowers/reviews/2026-10-18-scopebase-plan-
 
 Development is coordinated through [DEVELOPMENT.md](DEVELOPMENT.md) and the single current [handoff](handoff.md). Local helpers prepare isolated jobs, immutable reviews and cooperative build locks; supplementary [Muse reviews](orchestration/MUSE-ORCHESTRATION.md) remain independent of task acceptance.
 
+LX05 uses the [strict parser contract](docs/superpowers/specs/2026-10-18-scopebase-lx05-proc-contract.md) and [exact verification plan](docs/superpowers/plans/2026-10-18-scopebase-lx05-verification.md); canonical design does not implement or accept the parsers, runtime identity or conformance profiles.
+
 The [accepted setup verification](docs/superpowers/reviews/2026-10-18-scopebase-execution-verification.md) records 70 development-tool tests and independent review. These establish the coordination helpers, while product tasks and capability qualification remain separately tracked.
 
 Start with the [project specification](docs/superpowers/specs/2026-10-17-scopebase-design.md), [complete implementation plan](docs/superpowers/plans/2026-10-17-scopebase.md), and [TODO](TODO.md). The master documents link all subsystem specifications and detailed plans. The [traceability registry](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps source requirements, tests, tasks and dependencies.

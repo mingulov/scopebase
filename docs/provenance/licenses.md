@@ -1,6 +1,8 @@
 # ScopeBase source-license intake
 
-Revision 5, 2026-10-18. Owner: SB01; consuming owners: SB02, LX01, BP01, CP01, TC02 and NX02. The authoritative per-file record is [donors.json](donors.json); [adoption decisions](adoption-decisions.md) explain reuse choices. This metadata separates historical source observations from proposed destination grants. No source is copied or qualified by this intake.
+Revision 6, 2026-10-18. Owner: SB01; consuming owners: SB02, LX01, BP01, CP01, TC02 and NX02. The authoritative per-file record is [donors.json](donors.json); [adoption decisions](adoption-decisions.md) explain reuse choices. This metadata separates historical source observations from proposed destination grants. No source is copied or qualified by this intake.
+
+The [LX05 source admission](admissions/2026-10-18-lx05-proc.json) adds only fifteen selected user-owned P host ranges under the existing Apache-2.0 destination authorization. Both files retain their historical GPL-3.0-or-later observations; all sixteen comparison ranges remain ungranted. No runtime dependency, BPF-target or upstream license election is changed by this source admission.
 
 ## Provisional destination policy
 
