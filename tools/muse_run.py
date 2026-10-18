@@ -20,6 +20,10 @@ import subprocess
 import sys
 
 
+MAX_PROMPT_BYTES = 65536
+MAX_TOOL_OUTPUT_BYTES = 65536
+
+
 class UsageError(Exception):
     pass
 
@@ -52,6 +56,19 @@ def head(worktree):
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value):
         raise UsageError("Git did not return a full commit object ID")
     return value
+
+
+def source_status(worktree):
+    """Observe tracked/untracked source without running fsmonitor/hooks.
+
+    Ignored private review inputs/outputs stay outside this cleanliness check.
+    Optional Git index refresh writes are disabled for this read-only check.
+    """
+    result = subprocess.run(
+        ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+         "-C", str(worktree), "status", "--porcelain=v1", "-z", "--untracked-files=all",
+         "--ignore-submodules=none"], capture_output=True, check=True)
+    return result.stdout
 
 
 def json_object(pairs):
@@ -195,7 +212,9 @@ def main(argv=None):
             with os.fdopen(prompt_fd, "rb") as prompt:
                 if not stat.S_ISREG(os.fstat(prompt.fileno()).st_mode):
                     raise UsageError("prompt must be a regular file")
-                prompt_bytes = prompt.read()
+                prompt_bytes = prompt.read(MAX_PROMPT_BYTES + 1)
+                if len(prompt_bytes) > MAX_PROMPT_BYTES:
+                    raise UsageError("prompt exceeds the 65536-byte UTF-8 limit")
                 if not prompt_bytes.decode("utf-8").strip():
                     raise UsageError("prompt must be nonempty UTF-8 text")
         finally:
@@ -205,6 +224,8 @@ def main(argv=None):
                              text=True, capture_output=True, check=True).stdout.strip()
         if top != str(args.worktree):
             raise UsageError("WORKTREE must be the Git worktree root")
+        if source_status(args.worktree):
+            raise UsageError("WORKTREE must have clean tracked and nonignored untracked source")
         executable = shutil.which("muse")
         if executable is None:
             raise UsageError("Muse CLI is not on PATH")
@@ -213,18 +234,21 @@ def main(argv=None):
                    "--reasoning-effort", "max", "--contributor-mode", "on", "--workspace", str(args.worktree),
                    "--worktree", "off", "--disable-write", "--disable-shell", "--disable-web-tools",
                    "--disable-reminders", "--disable-request-user-input", "--approval-mode", "never",
-                   "--trust-workspace", "--max-model-steps", str(args.max_steps), "--prompt-file", str(args.promptfile)]
+                   "--trust-workspace", "--max-model-steps", str(args.max_steps),
+                   "--max-tool-output-bytes", str(MAX_TOOL_OUTPUT_BYTES), "--prompt-file", str(args.promptfile)]
         artifacts = Artifacts(args.outprefix)
         record = {
             "schema_version": 1, "execution_state": "DRY_RUN" if args.dry_run else "RUNNING",
             "acceptance": "NOT_DECIDED", "argv": command, "cli_version": version,
             "requested": {"provider": "meta", "model": "muse-spark-1.3", "reasoning_effort": "max",
-                          "contributor_mode": "on", "max_model_steps": args.max_steps},
+                          "contributor_mode": "on", "max_model_steps": args.max_steps,
+                          "max_tool_output_bytes": MAX_TOOL_OUTPUT_BYTES},
             "effective_provider_tier": {"status": "unverified", "value": None,
                                         "reason": "No matching successful provider-runtime evidence verified"},
             "worktree": str(args.worktree), "promptfile": str(args.promptfile),
             "prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
             "tmpdir": artifacts.tmp, "before_head": before, "after_head": before,
+            "source_clean_before": True, "source_clean_after": None,
             "raw_exit_status": None, "returned_exit_status": 0, "terminal": None,
             "report": None, "evidence_errors": [],
         }
@@ -243,6 +267,12 @@ def main(argv=None):
             except (OSError, subprocess.CalledProcessError, UsageError) as error:
                 record["after_head"] = None
                 record["evidence_errors"].append("Cannot read final HEAD: " + str(error))
+            try:
+                record["source_clean_after"] = not source_status(args.worktree)
+                if not record["source_clean_after"]:
+                    record["evidence_errors"].append("Tracked or nonignored untracked source changed during review")
+            except (OSError, subprocess.CalledProcessError) as error:
+                record["evidence_errors"].append("Cannot read final source status: " + str(error))
             try:
                 terminal, report, final_text, errors = evidence(artifacts.files[".jsonl"], before)
             except UnicodeError as error:

@@ -49,6 +49,8 @@ pathlib.Path(os.environ['FAKE_LAUNCH']).write_text(json.dumps({
     'argv': sys.argv[1:], 'cwd': os.getcwd(), 'tmpdir': os.environ.get('TMPDIR')}))
 if os.environ.get('FAKE_CHANGE_HEAD'):
     subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'moved during review'], check=True)
+if os.environ.get('FAKE_WRITE_PATH'):
+    pathlib.Path(os.environ['FAKE_WRITE_PATH']).write_text('changed during review\\n')
 sys.stdout.buffer.write(pathlib.Path(os.environ['FAKE_EVENTS']).read_bytes())
 sys.stdout.buffer.flush()
 if os.environ.get('FAKE_SIGNAL'):
@@ -86,6 +88,11 @@ raise SystemExit(int(os.environ.get('FAKE_EXIT', '0')))
     def metadata(self):
         return json.loads(Path(str(self.prefix) + ".execution.json").read_text())
 
+    def assert_not_launched_or_reserved(self):
+        self.assertFalse(self.launch.exists())
+        for suffix in (".jsonl", ".err", ".final.txt", ".execution.json", ".tmp"):
+            self.assertFalse(Path(str(self.prefix) + suffix).exists())
+
     def test_valid_review_keeps_findings_separate_from_acceptance(self):
         result = self.run_wrapper()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -115,10 +122,12 @@ raise SystemExit(int(os.environ.get('FAKE_EXIT', '0')))
         launched = json.loads(self.launch.read_text())
         argv = launched["argv"]
         self.assertEqual(argv[0], "exec")
+        self.assertIn("--max-tool-output-bytes", argv)
         for flag, value in {"--provider": "meta", "--model": "muse-spark-1.3",
                             "--reasoning-effort": "max", "--contributor-mode": "on",
                             "--workspace": str(self.repo), "--worktree": "off",
                             "--approval-mode": "never", "--max-model-steps": "7",
+                            "--max-tool-output-bytes": "65536",
                             "--prompt-file": str(self.prompt)}.items():
             self.assertEqual(argv[argv.index(flag) + 1], value)
         for flag in ("--json", "--disable-write", "--disable-shell", "--disable-web-tools",
@@ -223,6 +232,96 @@ raise SystemExit(int(os.environ.get('FAKE_EXIT', '0')))
         result = self.run_wrapper()
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertNotEqual(self.metadata()["before_head"], self.metadata()["after_head"])
+
+    def test_dirty_tracked_source_refuses_before_launch_or_artifacts(self):
+        for staged in (False, True):
+            with self.subTest(staged=staged):
+                self.prefix = self.base / ("dirty source " + str(staged))
+                (self.repo / "source.txt").write_text("changed before review\n")
+                if staged:
+                    self.git("add", "source.txt")
+                result = self.run_wrapper()
+                self.assertEqual(result.returncode, 64, result.stderr)
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.head)
+                self.assert_not_launched_or_reserved()
+                (self.repo / "source.txt").write_text("candidate\n")
+                self.git("add", "source.txt")
+
+    def test_untracked_source_refuses_before_launch_or_artifacts(self):
+        (self.repo / "new source.txt").write_text("untracked source\n")
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.head)
+        self.assert_not_launched_or_reserved()
+
+    def test_source_mutation_with_unchanged_head_invalidates_review(self):
+        for name in ("source.txt", "new source.txt"):
+            with self.subTest(name=name):
+                self.prefix = self.base / ("postrun " + name)
+                self.env["FAKE_WRITE_PATH"] = name
+                result = self.run_wrapper()
+                self.assertEqual(result.returncode, 3, result.stderr)
+                record = self.metadata()
+                self.assertEqual(record["before_head"], self.head)
+                self.assertEqual(record["after_head"], self.head)
+                self.assertEqual(record["execution_state"], "INVALID_EVIDENCE")
+                self.assertEqual(record["report"], self.report)
+                self.assertTrue(record["evidence_errors"])
+                self.assertTrue(Path(str(self.prefix) + ".jsonl").read_text())
+                if name == "source.txt":
+                    (self.repo / name).write_text("candidate\n")
+                else:
+                    (self.repo / name).unlink()
+
+    def test_dirty_completion_preserves_failed_child_status(self):
+        self.env.update(FAKE_WRITE_PATH="source.txt", FAKE_EXIT="75")
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 75, result.stderr)
+        self.assertEqual(self.metadata()["raw_exit_status"], 75)
+        self.assertTrue(self.metadata()["evidence_errors"])
+
+    def test_ignored_private_inputs_and_outputs_remain_allowed(self):
+        (self.repo / ".gitignore").write_text("/.scopebase/\n")
+        self.git("add", ".gitignore")
+        self.git("commit", "-qm", "ignore private review state")
+        self.head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.report["reviewed_commit"] = self.head
+        self.set_events([self.terminal()])
+        private = self.repo / ".scopebase"
+        private.mkdir(mode=0o700)
+        self.prompt = private / "prompt.txt"
+        self.prompt.write_text("Review the immutable candidate.\n")
+        self.prefix = private / "review"
+        self.env["FAKE_WRITE_PATH"] = ".scopebase/private-note.txt"
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.metadata()["execution_state"], "REVIEW_DELIVERED")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all").stdout, "")
+
+    def test_source_check_does_not_execute_configured_fsmonitor(self):
+        marker = self.base / "fsmonitor executed"
+        hook = self.base / "fsmonitor hook"
+        hook.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\nPath(" +
+                        repr(str(marker)) + ").touch()\n")
+        hook.chmod(0o700)
+        self.git("config", "core.fsmonitor", str(hook))
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_prompt_limit_uses_utf8_bytes_at_n_and_n_plus_one(self):
+        cases = ((b"a" * 65536, 0), (b"a" * 65537, 64),
+                 (("é" * 32768).encode("utf-8"), 0),
+                 (("é" * 32768 + "a").encode("utf-8"), 64))
+        for index, (content, expected) in enumerate(cases):
+            with self.subTest(index=index, byte_count=len(content)):
+                self.prefix = self.base / ("prompt boundary " + str(index))
+                self.prompt.write_bytes(content)
+                self.launch.unlink(missing_ok=True)
+                result = self.run_wrapper()
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected == 64:
+                    self.assert_not_launched_or_reserved()
 
     def test_unrelated_runtime_events_do_not_count_as_terminals_or_confirm_tier(self):
         event = {"payload_type": "runtime.session", "payload": {"event": {"details": {
