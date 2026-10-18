@@ -1,0 +1,40 @@
+{
+  "tasks": [
+    {
+      "id": "SB02"
+    },
+    {
+      "id": "SB03"
+    },
+    {
+      "id": "CP10"
+    },
+    {
+      "id": "NX07"
+    },
+    {
+      "id": "TT01"
+    },
+    {
+      "id": "TT02"
+    }
+  ],
+  "requirements": [
+    {
+      "id": "SB-R06"
+    },
+    {
+      "id": "SB-R13"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "held-file-v1"
+    }
+  ],
+  "profile_extensions": [
+    {
+      "id": "btf-runtime-linkage-v1"
+    }
+  ]
+}
