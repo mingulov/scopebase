@@ -16,19 +16,27 @@ use std::{
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
+    fn create_at_with(
+        path: PathBuf,
+        write: impl FnOnce(&mut File) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?;
+        let owner = Self(path);
+        write(&mut file)?;
+        Ok(owner)
+    }
     fn new(bytes: &[u8]) -> Self {
-        let base = std::env::temp_dir();
         loop {
-            let path = base.join(format!(
+            let path = std::env::temp_dir().join(format!(
                 "lx03-public-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
-            match OpenOptions::new().create_new(true).write(true).open(&path) {
-                Ok(mut f) => {
-                    f.write_all(bytes).unwrap();
-                    return Self(path);
-                }
+            match Self::create_at_with(path, |file| file.write_all(bytes)) {
+                Ok(owner) => return owner,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => panic!("fixture creation: {e}"),
             }
@@ -42,6 +50,88 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
+}
+// Exclusive directory ownership covers every rename/setup failure and both names.
+struct Directory(PathBuf);
+impl Directory {
+    fn new() -> Self {
+        loop {
+            let path = std::env::temp_dir().join(format!(
+                "lx03-dir-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("directory fixture: {e}"),
+            }
+        }
+    }
+    fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.0.join(name);
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        path
+    }
+    fn replace_input_with(
+        &self,
+        bytes: &[u8],
+        write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+    ) -> std::io::Result<PathBuf> {
+        let source = self.0.join("input");
+        let old = self.0.join("old");
+        // Reserve the destination exclusively before rename may overwrite it.
+        drop(OpenOptions::new().create_new(true).write(true).open(&old)?);
+        fs::rename(&source, &old)?;
+        let mut replacement = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(source)?;
+        write(&mut replacement, bytes)?;
+        Ok(old)
+    }
+}
+impl Drop for Directory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+fn with_public_readers(
+    held: &Arc<HeldFile>,
+    fail_first: bool,
+    finished: Arc<std::sync::atomic::AtomicBool>,
+    before_join: impl FnOnce(),
+) -> Vec<scopebase_linux::file::FileRead> {
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..2)
+            .map(|index| {
+                let h = held.clone();
+                let finished = finished.clone();
+                scope.spawn(move || {
+                    if fail_first && index == 0 {
+                        panic!("injected first public reader failure");
+                    }
+                    let read = h
+                        .read_all(limits(10), &OperationControl::unlimited())
+                        .unwrap();
+                    drop(h);
+                    if index == 1 {
+                        finished.store(true, Ordering::Release);
+                    }
+                    read
+                })
+            })
+            .collect();
+        before_join();
+        // Collect every join before propagating any worker failure/assertion.
+        let results: Vec<_> = workers.into_iter().map(|worker| worker.join()).collect();
+        results.into_iter().map(|result| result.unwrap()).collect()
+    })
 }
 fn limits(bytes: u64) -> ReadLimits {
     ReadLimits {
@@ -73,18 +163,15 @@ fn shared_cursor_does_not_create_suffix_success() {
         6,
         "read must preserve shared cursor"
     );
-    let workers: Vec<_> = (0..2)
-        .map(|_| {
-            let h = held.clone();
-            std::thread::spawn(move || {
-                h.read_all(limits(10), &OperationControl::unlimited())
-                    .unwrap()
-            })
-        })
-        .collect();
-    alias.seek(SeekFrom::Start(9)).unwrap();
-    for worker in workers {
-        assert_eq!(worker.join().unwrap().bytes(), b"0123456789");
+    for result in with_public_readers(
+        &held,
+        false,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        || {
+            alias.seek(SeekFrom::Start(9)).unwrap();
+        },
+    ) {
+        assert_eq!(result.bytes(), b"0123456789");
     }
     assert_eq!(alias.stream_position().unwrap(), 9);
 }
@@ -181,12 +268,13 @@ fn clone_keeps_one_payload_and_capacity() {
 }
 #[test]
 fn held_authority_survives_replacement_and_unlink() {
-    let f = Fixture::new(b"ORIGINAL");
+    let directory = Directory::new();
+    let source = directory.write("input", b"ORIGINAL");
     let resolver = ProcFdResolver::open_self().unwrap();
-    let h = HeldFile::open(&f.0, &resolver, SymlinkPolicy::Follow).unwrap();
-    let old = f.0.with_extension("old");
-    fs::rename(&f.0, &old).unwrap();
-    fs::write(&f.0, b"NEW").unwrap();
+    let h = HeldFile::open(&source, &resolver, SymlinkPolicy::Follow).unwrap();
+    let old = directory
+        .replace_input_with(b"NEW", |file, bytes| file.write_all(bytes))
+        .unwrap();
     fs::remove_file(old).unwrap();
     assert_eq!(
         h.read_all(limits(16), &OperationControl::unlimited())
@@ -194,7 +282,7 @@ fn held_authority_survives_replacement_and_unlink() {
             .bytes(),
         b"ORIGINAL"
     );
-    assert_eq!(fs::read(&f.0).unwrap(), b"NEW");
+    assert_eq!(fs::read(source).unwrap(), b"NEW");
 }
 #[test]
 fn public_read_contract_is_private_and_bounded() {
@@ -221,4 +309,72 @@ fn public_read_contract_is_private_and_bounded() {
         assert!(s.len() <= 256 && s.is_ascii());
         assert!(!s.contains("CANARY"));
     }
+}
+
+#[test]
+fn fixture_setup_and_rename_failures_preserve_exclusive_paths() {
+    let existing = Fixture::new(b"COLLISION-CANARY");
+    let collision = Fixture::create_at_with(existing.0.clone(), |_| {
+        panic!("writer must not run on collision")
+    });
+    assert_eq!(
+        collision.err().unwrap().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(fs::read(&existing.0).unwrap(), b"COLLISION-CANARY");
+    let directory = Directory::new();
+    let failed_path = directory.0.join("failed-write");
+    let result = Fixture::create_at_with(failed_path.clone(), |file| {
+        file.write_all(b"partial")?;
+        Err(std::io::Error::other("injected write failure"))
+    });
+    assert!(result.is_err());
+    assert!(
+        !failed_path.exists(),
+        "failed write must clean its exclusively created name"
+    );
+    let input = directory.write("input", b"ORIGINAL");
+    let old = directory.write("old", b"SIBLING-CANARY");
+    let collision = directory.replace_input_with(b"NEW", |f, b| f.write_all(b));
+    assert_eq!(
+        collision.unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(
+        fs::read(&old).unwrap(),
+        b"SIBLING-CANARY",
+        "rename must preserve pre-existing sibling bytes"
+    );
+    assert_eq!(fs::read(&input).unwrap(), b"ORIGINAL");
+    drop(directory);
+    let directory = Directory::new();
+    let root = directory.0.clone();
+    directory.write("input", b"ORIGINAL");
+    let failed = directory.replace_input_with(b"NEW", |f, _| {
+        f.write_all(b"partial")?;
+        Err(std::io::Error::other("replacement failed"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(fs::read(root.join("old")).unwrap(), b"ORIGINAL");
+    drop(directory);
+    assert!(
+        !root.exists(),
+        "directory owner must clean both renamed original and failed replacement"
+    );
+}
+#[test]
+fn public_reader_first_failure_joins_remaining_worker() {
+    let f = Fixture::new(b"0123456789");
+    let h = Arc::new(f.held());
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observe = finished.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_public_readers(&h, true, observe, || {})
+    }));
+    assert!(result.is_err());
+    assert!(
+        finished.load(Ordering::Acquire),
+        "remaining worker must finish before first failure escapes"
+    );
+    assert_eq!(Arc::strong_count(&h), 1);
 }

@@ -56,13 +56,13 @@ def main():
     add('wrapped-offset','requests_never_exceed_64k_or_initial_plus_one','    i64::try_from(offset).ok().map(|_| offset)','    Some(offset as i64 as u64)','signed offsets refuse wrapping')
     # This bounded wrong invocation owner reports before its still-owned inner
     # worker returns. It subsequently joins it, ensuring negative cleanup too.
-    old='''            let e = read_all_with(&h, limits(), &control, &mut o).unwrap_err();
-            done_tx.send(e).unwrap();'''
-    new='''            let read_control=control.clone();
-            let inner=std::thread::spawn(move || read_all_with(&h, limits(), &read_control, &mut o));
-            while control.checkpoint().is_ok() { std::thread::yield_now(); }
-            done_tx.send(ReadOps::default().semantic(Reason::Cancelled)).unwrap();
-            let _ = inner.join().unwrap();'''
+    old='''                let e = read_all_with(&h, limits(), &control, &mut o).unwrap_err();
+                done_tx.send(e).unwrap();'''
+    new='''                let read_control=control.clone();
+                let inner=std::thread::spawn(move || read_all_with(&h, limits(), &read_control, &mut o));
+                while control.checkpoint().is_ok() { std::thread::yield_now(); }
+                done_tx.send(ReadOps::default().semantic(Reason::Cancelled)).unwrap();
+                let _ = inner.join().unwrap();'''
     # Deterministic deadline seam is bypassed for this control's first cancel branch.
     add('report-before-release','blocked_read_is_not_cancelled_until_return',old,new,'synchronous read retains custody until explicit release',testrel)
     add('reopen-authority','read_errors_keep_original_authority','            Err(e) => return Err(ops.errno(e)),','            Err(e) => { use std::os::fd::{AsFd,AsRawFd}; let reopened=std::fs::File::open(format!("/proc/self/fd/{}",held.as_fd().as_raw_fd())).unwrap(); let mut changed=ops.errno(e); changed.charges.acquired=1; drop(reopened); return Err(changed); },','assertion `left == right` failed')

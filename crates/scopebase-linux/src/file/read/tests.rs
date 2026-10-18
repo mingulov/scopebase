@@ -36,18 +36,27 @@ pub(super) struct Hooks {
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
+    fn create_at_with(
+        path: PathBuf,
+        write: impl FnOnce(&mut File) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let owner = Self(path);
+        write(&mut file)?;
+        Ok(owner)
+    }
     fn new(bytes: &[u8]) -> Self {
         loop {
-            let p = std::env::temp_dir().join(format!(
+            let path = std::env::temp_dir().join(format!(
                 "lx03-unit-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
-            match OpenOptions::new().write(true).create_new(true).open(&p) {
-                Ok(mut f) => {
-                    f.write_all(bytes).unwrap();
-                    return Self(p);
-                }
+            match Self::create_at_with(path, |file| file.write_all(bytes)) {
+                Ok(owner) => return owner,
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => panic!("fixture: {e}"),
             }
@@ -59,7 +68,7 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.0).unwrap();
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 fn limits() -> ReadLimits {
@@ -890,18 +899,17 @@ impl Drop for OwnedChild {
         }
     }
 }
-#[test]
-fn blocked_read_is_not_cancelled_until_return() {
-    if std::env::var_os("LX03_BLOCK_CHILD").is_none() {
+fn owned_watchdog(test: &str, environment: &str) -> bool {
+    if std::env::var_os(environment).is_none() {
         let _guard = FD_TABLE.lock().unwrap();
         let mut child = OwnedChild(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "file::read::tests::blocked_read_is_not_cancelled_until_return",
+                    &format!("file::read::tests::{test}"),
                     "--nocapture",
                 ])
-                .env("LX03_BLOCK_CHILD", "1")
+                .env(environment, "1")
                 .spawn()
                 .unwrap(),
         );
@@ -918,6 +926,31 @@ fn blocked_read_is_not_cancelled_until_return() {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+        return true;
+    }
+    false
+}
+// Created inside the scoped-thread join owner before any worker starts.
+// Every exit releases all waiters before std::thread::scope joins all workers.
+struct ReleaseAll(Vec<std::sync::mpsc::Sender<()>>);
+impl ReleaseAll {
+    fn release(&mut self) {
+        for sender in self.0.drain(..) {
+            let _ = sender.send(());
+        }
+    }
+}
+impl Drop for ReleaseAll {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+#[test]
+fn blocked_read_is_not_cancelled_until_return() {
+    if owned_watchdog(
+        "blocked_read_is_not_cancelled_until_return",
+        "LX03_BLOCK_CHILD",
+    ) {
         return;
     }
     let _guard = FD_TABLE.lock().unwrap();
@@ -934,50 +967,53 @@ fn blocked_read_is_not_cancelled_until_return() {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let expire = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let clock = expire.clone();
-        let worker = std::thread::spawn(move || {
-            let mut o = ReadOps::default();
-            o.test_now = Some(now);
-            o.hooks.read = Some(Box::new(move |h, b, off| {
-                entered_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                io::pread(h, b, off)
-            }));
-            o.hooks.event = Some(Box::new(move |_| {
-                if clock.load(Ordering::Acquire) {
-                    Some(at)
-                } else {
-                    None
-                }
-            }));
-            let e = read_all_with(&h, limits(), &control, &mut o).unwrap_err();
-            done_tx.send(e).unwrap();
-        });
-        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        if deadline {
-            expire.store(true, Ordering::Release)
-        } else {
-            signal.cancel();
-        }
-        let pending = done_rx.recv_timeout(Duration::from_millis(30));
-        release_tx.send(()).unwrap();
-        worker.join().unwrap();
-        assert!(
-            matches!(pending, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
-            "synchronous read retains custody until explicit release"
-        );
-        let e = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        refusal(
-            &e,
+        std::thread::scope(|scope| {
+            let mut releases = ReleaseAll(vec![release_tx]);
+            let worker = scope.spawn(move || {
+                let mut o = ReadOps::default();
+                o.test_now = Some(now);
+                o.hooks.read = Some(Box::new(move |h, b, off| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    io::pread(h, b, off)
+                }));
+                o.hooks.event = Some(Box::new(move |_| {
+                    if clock.load(Ordering::Acquire) {
+                        Some(at)
+                    } else {
+                        None
+                    }
+                }));
+                let e = read_all_with(&h, limits(), &control, &mut o).unwrap_err();
+                done_tx.send(e).unwrap();
+            });
+            entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
             if deadline {
-                Reason::Deadline
+                expire.store(true, Ordering::Release)
             } else {
-                Reason::Cancelled
-            },
-            1,
-            1,
-            3,
-            3,
-        );
+                signal.cancel();
+            }
+            let pending = done_rx.recv_timeout(Duration::from_millis(30));
+            releases.release();
+            worker.join().unwrap();
+            assert!(
+                matches!(pending, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+                "synchronous read retains custody until explicit release"
+            );
+            let e = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            refusal(
+                &e,
+                if deadline {
+                    Reason::Deadline
+                } else {
+                    Reason::Cancelled
+                },
+                1,
+                1,
+                3,
+                3,
+            );
+        });
     }
 }
 
@@ -1036,46 +1072,177 @@ fn read_diagnostics_omit_source_and_payload() {
         }
     }
 }
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum CursorFault {
+    None,
+    BeforeEntry,
+    ControllerAfterEntry,
+    FirstWorker,
+}
+struct ReaderOwner {
+    held: Option<Arc<HeldFile>>,
+    retired: Arc<AtomicU64>,
+}
+impl Drop for ReaderOwner {
+    fn drop(&mut self) {
+        drop(self.held.take());
+        self.retired.fetch_add(1, Ordering::Release);
+    }
+}
+fn cursor_workers(
+    held: &Arc<HeldFile>,
+    alias: &mut File,
+    fault: CursorFault,
+    retired: Arc<AtomicU64>,
+) {
+    std::thread::scope(|scope| {
+        let mut releases = ReleaseAll(Vec::new());
+        let (entered, entries) = std::sync::mpsc::channel();
+        let mut workers = Vec::new();
+        for index in 0..2 {
+            let h = held.clone();
+            let retired = retired.clone();
+            let entered = entered.clone();
+            let (release, wait) = std::sync::mpsc::channel();
+            releases.0.push(release);
+            workers.push(scope.spawn(move || {
+                let owner = ReaderOwner {
+                    held: Some(h),
+                    retired,
+                };
+                if fault == CursorFault::BeforeEntry && index == 0 {
+                    panic!("injected pre-entry worker failure");
+                }
+                let mut o = ReadOps::default();
+                o.hooks.event = Some(Box::new(move |point| {
+                    if point == Point::BeforeRead(0) {
+                        entered.send(index).unwrap();
+                        wait.recv().expect("release guard must wake every waiter");
+                        if fault == CursorFault::FirstWorker && index == 0 {
+                            panic!("injected first worker failure");
+                        }
+                    }
+                    None
+                }));
+                run(owner.held.as_deref().unwrap(), limits(), &mut o).unwrap()
+            }));
+        }
+        for _ in 0..2 {
+            entries
+                .recv_timeout(Duration::from_millis(200))
+                .expect("both readers must enter before barrier release");
+        }
+        if fault == CursorFault::ControllerAfterEntry {
+            panic!("injected controller failure after entry");
+        }
+        alias.seek(SeekFrom::Start(7)).unwrap();
+        releases.release();
+        let results: Vec<_> = workers.into_iter().map(|worker| worker.join()).collect();
+        for result in results {
+            assert_eq!(
+                result.unwrap().bytes(),
+                b"0123456789",
+                "alias movement cannot create suffix success"
+            );
+        }
+    });
+    assert_eq!(
+        alias.stream_position().unwrap(),
+        7,
+        "library never moves shared cursor"
+    );
+}
 #[test]
 fn shared_cursor_advances_at_read_barriers_without_suffix_success() {
+    if owned_watchdog(
+        "shared_cursor_advances_at_read_barriers_without_suffix_success",
+        "LX03_CURSOR_CHILD",
+    ) {
+        return;
+    }
     let _guard = FD_TABLE.lock().unwrap();
     let f = Fixture::new(b"0123456789");
     let mut original = File::open(&f.0).unwrap();
     original.seek(SeekFrom::Start(4)).unwrap();
     let mut alias = original.try_clone().unwrap();
     let h = Arc::new(HeldFile::from_file(original).unwrap());
-    let enter = Arc::new(std::sync::Barrier::new(3));
-    let release = Arc::new(std::sync::Barrier::new(3));
-    let mut workers = Vec::new();
-    for _ in 0..2 {
-        let h = h.clone();
-        let enter = enter.clone();
-        let release = release.clone();
-        workers.push(std::thread::spawn(move || {
-            let mut o = ReadOps::default();
-            o.hooks.event = Some(Box::new(move |p| {
-                if p == Point::BeforeRead(0) {
-                    enter.wait();
-                    release.wait();
-                }
-                None
-            }));
-            run(&h, limits(), &mut o).unwrap()
-        }));
-    }
-    enter.wait();
-    alias.seek(SeekFrom::Start(7)).unwrap();
-    release.wait();
-    for worker in workers {
-        assert_eq!(
-            worker.join().unwrap().bytes(),
-            b"0123456789",
-            "alias movement cannot create suffix success"
-        );
+    let retired = Arc::new(AtomicU64::new(0));
+    cursor_workers(&h, &mut alias, CursorFault::None, retired.clone());
+    assert_eq!(retired.load(Ordering::Acquire), 2);
+    assert_eq!(Arc::strong_count(&h), 1);
+}
+#[test]
+fn fixture_write_failure_and_collision_keep_path_ownership() {
+    let _guard = FD_TABLE.lock().unwrap();
+    let existing = Fixture::new(b"COLLISION-CANARY");
+    let collision = Fixture::create_at_with(existing.0.clone(), |_| {
+        panic!("collision must not enter writer")
+    });
+    assert_eq!(
+        collision.err().unwrap().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(std::fs::read(&existing.0).unwrap(), b"COLLISION-CANARY");
+    let path = existing.0.with_extension("owned-write-failure");
+    let mut seen = None;
+    let failed = Fixture::create_at_with(path.clone(), |f| {
+        use std::os::fd::AsRawFd;
+        seen = Some(f.as_raw_fd());
+        f.write_all(b"partial")?;
+        Err(std::io::Error::other("injected writer failure"))
+    });
+    assert!(failed.is_err());
+    assert!(
+        !path.exists(),
+        "failed write must remove exclusively created path"
+    );
+    // Like the accepted held-file retirement oracle, raw F_GETFD accepts an
+    // inactive numeric slot without manufacturing an invalid BorrowedFd.
+    unsafe extern "C" {
+        fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
     }
     assert_eq!(
-        alias.stream_position().unwrap(),
-        7,
-        "library never moves shared cursor"
+        unsafe { fcntl(seen.unwrap(), 1) },
+        -1,
+        "failed fixture's file must close before FD_TABLE release"
     );
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(9));
+}
+#[test]
+fn cursor_fixture_failure_paths_retire_every_worker() {
+    if owned_watchdog(
+        "cursor_fixture_failure_paths_retire_every_worker",
+        "LX03_CURSOR_FAILURE_CHILD",
+    ) {
+        return;
+    }
+    let _guard = FD_TABLE.lock().unwrap();
+    for fault in [
+        CursorFault::BeforeEntry,
+        CursorFault::ControllerAfterEntry,
+        CursorFault::FirstWorker,
+    ] {
+        let f = Fixture::new(b"0123456789");
+        let file = File::open(&f.0).unwrap();
+        let mut alias = file.try_clone().unwrap();
+        let h = Arc::new(HeldFile::from_file(file).unwrap());
+        let retired = Arc::new(AtomicU64::new(0));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cursor_workers(&h, &mut alias, fault, retired.clone())
+        }));
+        assert!(
+            result.is_err(),
+            "injected fixture failure must remain visible"
+        );
+        assert_eq!(
+            retired.load(Ordering::Acquire),
+            2,
+            "all started workers must retire before fixture unwind returns"
+        );
+        assert_eq!(
+            Arc::strong_count(&h),
+            1,
+            "every worker must release its HeldFile clone"
+        );
+    }
 }
