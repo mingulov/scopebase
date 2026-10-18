@@ -980,7 +980,11 @@ class Execution:
         if '--locked' in arguments and before_lock != r['lock_sha256']:
             raise PolicyError('LOCK_CHANGED')
         diagnostic = Path(result['logs']['stderr']['path']).read_text(errors='replace')
-        if result['exit_code'] != 0 and '--locked' in arguments and 'needs to be updated' in diagnostic and '--locked' in diagnostic:
+        if result['exit_code'] != 0 and '--locked' in arguments and (
+                ('needs to be updated' in diagnostic and '--locked' in diagnostic) or
+                any(line.startswith(('error: cannot create the lock file ', 'error: cannot update the lock file '))
+                    and line.endswith(' because --locked was passed to prevent this')
+                    for line in diagnostic.splitlines())):
             raise PolicyError('LOCK_REQUIRED', detail=result)
         if result['exit_code'] != 0 and ('offline' in Path(result['logs']['stderr']['path']).read_text(errors='replace').lower()) and arguments[0] in ('metadata','generate-lockfile'):
             raise PolicyError('OFFLINE_CLOSURE_INCOMPLETE','BLOCKED',result)

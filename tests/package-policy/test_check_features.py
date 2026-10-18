@@ -512,6 +512,147 @@ class RealCargoControls(unittest.TestCase):
                 self.assertFalse(list((run/'targets').rglob('changed-metadata-marker')))
 
 
+class LockDiagnosticControls(unittest.TestCase):
+    """Real pinned Cargo refusals, separate from the full feature matrix."""
+    def setUp(self):
+        import os
+        output = Path(os.environ.get('SCOPEBASE_TEST_OUTPUT_ROOT', str(ROOT/'.scopebase/test-output')))
+        output.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix='lock-diagnostic-', dir=output)
+        temporary._finalizer.detach()  # Preserve partial outcomes and raw logs.
+        self.output = Path(temporary.name)
+        self.matrix_path = ROOT/'package-policy.json'
+        self.matrix = json.loads(self.matrix_path.read_text())
+        self.execution = policy.Execution('lock-controls', self.matrix_path, self.matrix, self.output)
+        self.addCleanup(lambda: policy.atomic_json(self.output/'report.json', self.execution.report))
+        runtime = os.environ.get('XDG_RUNTIME_DIR')
+        self.lock_root = Path(runtime)/'scopebase-locks' if runtime else Path.home()/'.cache/scopebase/locks'
+
+    def command(self, ident, toolchain, manifest):
+        from unittest.mock import patch
+        real_run = policy.run
+        def owned_run(argv, *args, **kwargs):
+            return real_run([ROOT/'bin/scopebase-build', '--lock-root', self.lock_root, '--', *argv], *args, **kwargs)
+        self.execution.reserve(ident, toolchain=toolchain['id'], phase='metadata')
+        with patch.object(policy, 'run', side_effect=owned_run):
+            return self.execution.step(ident, lambda row: self.execution.command(
+                row, toolchain, manifest,
+                ['metadata', '--offline', '--locked', '--format-version', '1', '--filter-platform', policy.HOST],
+                self.output/('target-'+toolchain['id'])))
+
+    def workspace(self):
+        import shutil
+        subject = self.output/'input'; subject.mkdir()
+        for name in ('Cargo.toml', 'Cargo.lock'):
+            shutil.copyfile(ROOT/name, subject/name)
+        for member in self.matrix['members']:
+            path = Path(member['manifest']).parent
+            shutil.copytree(ROOT/path, subject/path)
+        policy.stage_inputs(self.matrix['cargo_inputs'], self.output)
+        return subject
+
+    def assert_command(self, ident, toolchain, subject, wanted):
+        before = policy.tree_digest(subject)
+        reason = None
+        try:
+            result = self.command(ident, toolchain, subject/'Cargo.toml')
+            metadata = json.loads(policy.stdout(result))
+            self.assertEqual(len(metadata['workspace_members']), 2)
+        except policy.PolicyError as error:
+            reason = error.code
+        row = self.execution.by_id[ident]
+        self.assertEqual(row['cleanup'], 'complete')
+        self.assertEqual(row['input_sha256'], before)
+        self.assertEqual(row['input_sha256_after'], before)
+        self.assertEqual(policy.tree_digest(subject), before)
+        self.assertEqual(row['lock_sha256_before'], row['lock_sha256'])
+        self.assertEqual(reason, wanted)
+        self.assertEqual(row['status'], 'PASS' if wanted is None else
+                         'BLOCKED' if wanted == 'OFFLINE_CLOSURE_INCOMPLETE' else 'FAIL')
+
+    def test_missing_stale_and_restored_locks_on_both_pinned_compilers(self):
+        subject = self.workspace(); lock = subject/'Cargo.lock'; valid = lock.read_bytes()
+        needle = b'name = "scopebase-capture"\nversion = "0.1.0"'
+        self.assertEqual(valid.count(needle), 1)
+        stale = valid.replace(needle, b'name = "scopebase-capture"\nversion = "0.0.0"')
+        for toolchain in self.matrix['toolchains']:
+            for label, raw, wanted in (('valid', valid, None), ('missing', None, 'LOCK_REQUIRED'),
+                                       ('missing-restored', valid, None), ('stale', stale, 'LOCK_REQUIRED'),
+                                       ('stale-restored', valid, None)):
+                with self.subTest(compiler=toolchain['id'], control=label):
+                    if raw is None: lock.unlink()
+                    else: lock.write_bytes(raw)
+                    self.assert_command(toolchain['id']+'-'+label, toolchain, subject, wanted)
+                    self.assertEqual(lock.read_bytes() if lock.exists() else None, raw)
+
+    def test_real_unavailable_offline_source_is_not_a_lock_refusal(self):
+        subject = self.workspace()
+        manifest = subject/self.matrix['members'][0]['manifest']; valid = manifest.read_bytes()
+        manifest.write_bytes(valid+b'\n[dependencies.scopebase-unavailable-offline-control]\nversion="=0.0.0"\n')
+        for toolchain in self.matrix['toolchains']:
+            with self.subTest(compiler=toolchain['id']):
+                self.assert_command(toolchain['id']+'-offline', toolchain, subject, 'OFFLINE_CLOSURE_INCOMPLETE')
+                row = self.execution.by_id[toolchain['id']+'-offline']
+                diagnostic = Path(row['logs']['stderr']['path']).read_text()
+                self.assertIn('no matching package named', diagnostic)
+                self.assertIn('scopebase-unavailable-offline-control', diagnostic)
+        manifest.write_bytes(valid)
+        for toolchain in self.matrix['toolchains']:
+            with self.subTest(restored=toolchain['id']):
+                self.assert_command(toolchain['id']+'-offline-restored', toolchain, subject, None)
+
+    def test_lock_diagnostic_does_not_override_process_cleanup_or_lock_changes(self):
+        from unittest.mock import patch
+        subject = self.output/'input'; subject.mkdir()
+        manifest = subject/'Cargo.toml'; manifest.write_text('[workspace]\n')
+        lock = subject/'Cargo.lock'; lock.write_text('owned lock\n')
+        diagnostic = 'error: cannot create the lock file /owned/Cargo.lock because --locked was passed to prevent this\nhelp: use --offline instead.\n'
+        captured = policy.run([sys.executable, '-c', 'import sys; sys.stderr.write('+repr(diagnostic)+'); sys.exit(101)'],
+                              subject, {'PATH': '/usr/bin:/bin'}, self.output/'captured')
+        for index, (reason, cleanup, changed, wanted) in enumerate((
+                ('TIMEOUT', 'complete', False, 'TIMEOUT'),
+                ('LOG_BOUND', 'complete', False, 'LOG_BOUND'),
+                ('INTERNAL_ERROR', 'complete', False, 'INTERNAL_ERROR'),
+                (None, 'unresolved', False, 'CLEANUP_UNRESOLVED'),
+                (None, 'complete', True, 'LOCK_CHANGED'))):
+            with self.subTest(reason=wanted):
+                result = {**captured, 'reason_code': reason, 'cleanup': cleanup}
+                ident = 'priority-'+str(index); self.execution.reserve(ident)
+                def run(*args, **kwargs):
+                    if changed: lock.write_text('changed lock\n')
+                    return result
+                with patch.object(policy, 'run', side_effect=run), self.assertRaises(policy.PolicyError) as error:
+                    self.execution.step(ident, lambda row: self.execution.command(
+                        row, self.matrix['toolchains'][0], manifest,
+                        ['metadata', '--offline', '--locked'], self.output/'target'))
+                self.assertEqual(error.exception.code, wanted)
+
+    def test_lock_wording_requires_a_failed_locked_command_and_the_specific_refusal(self):
+        from unittest.mock import patch
+        subject = self.output/'input'; subject.mkdir()
+        manifest = subject/'Cargo.toml'; manifest.write_text('[workspace]\n')
+        refusal = 'error: cannot create the lock file /owned/Cargo.lock because --locked was passed to prevent this\n'
+        help_text = 'help: remove --locked and use --offline instead.\n'
+        for index, (diagnostic, locked, code, wanted) in enumerate((
+                ('error: cannot create the lock file /owned/Cargo.lock: Permission denied\n'+help_text, True, 101, 'OFFLINE_CLOSURE_INCOMPLETE'),
+                ('error: failed to read lock file /owned/Cargo.lock\n'+help_text, True, 101, 'OFFLINE_CLOSURE_INCOMPLETE'),
+                (refusal+help_text, False, 101, 'OFFLINE_CLOSURE_INCOMPLETE'),
+                (refusal+help_text, True, 0, None))):
+            with self.subTest(control=index):
+                captured = policy.run([sys.executable, '-c', 'import sys; sys.stderr.write('+repr(diagnostic)+'); sys.exit('+str(code)+')'],
+                                      subject, {'PATH': '/usr/bin:/bin'}, self.output/('diagnostic-'+str(index)))
+                ident = 'wording-'+str(index); self.execution.reserve(ident)
+                arguments = ['metadata', '--offline']+(['--locked'] if locked else [])
+                observed = None
+                with patch.object(policy, 'run', return_value=captured):
+                    try:
+                        self.execution.step(ident, lambda row: self.execution.command(
+                            row, self.matrix['toolchains'][0], manifest, arguments, self.output/'target'))
+                    except policy.PolicyError as error:
+                        observed = error.code
+                self.assertEqual(observed, wanted)
+
+
 class ProductPolicyControls(unittest.TestCase):
     """First-product lock custody and true workspace-member staging controls."""
     @classmethod
