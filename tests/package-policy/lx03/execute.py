@@ -87,7 +87,12 @@ def main():
                 except p.PolicyError as error:
                     # Independent semantic controls retain every failed attempt
                     # and still restore their twin; unresolved process custody stops.
-                    if error.code not in ('WRONG_RED','EXPECTED_FAILURE_NOT_REACHED','WRONG_EXACT_COMPILE_REFUSAL'): raise
+                    result = error.detail
+                    if (error.code not in ('WRONG_RED','EXPECTED_FAILURE_NOT_REACHED','WRONG_EXACT_COMPILE_REFUSAL')
+                            or not isinstance(result, dict) or result.get('reason_code')
+                            or result.get('cleanup') != 'complete'
+                            or type(result.get('exit_code')) is not int or result['exit_code'] <= 0):
+                        raise
                 if 'semantic_control' in item: ex.by_id[item['id']]['semantic_control']=item['semantic_control']
     except Exception as error:
         return finish(error)
