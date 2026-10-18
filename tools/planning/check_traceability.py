@@ -3,11 +3,14 @@
 
 No network, SSH, source mutation, build, runtime probe or qualification occurs.
 Optional local checks read immutable Git objects and selected dirty worktree bytes.
-Exit 0: valid requested checks; 2: required local source unavailable; 3: invalid.
+Exit 0: valid requested checks; 2: required named evidence unavailable; 3: invalid.
 """
 import argparse
 import hashlib
 import json
+import errno
+import os
+import stat
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -562,6 +565,258 @@ def validate(registry, ledger, repo_root):
     return errors
 
 
+
+# Receipt work is opt-in. These caps bound reads/parsing/hashing, not syscall time.
+PORT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z', re.ASCII)
+PORT_DOCUMENT_BYTES = 1024 * 1024
+PORT_DESTINATION_BYTES = 16 * 1024 * 1024
+PORT_COLLECTION = 128
+PORT_CHAIN_LINKS = 16
+PORT_LABEL_CHARS = 256
+PORT_CHUNK_BYTES = 64 * 1024
+PORT_FIELDS = {'schema_version', 'kind', 'id', 'task_id', 'copy_state', 'admission',
+               'mappings', 'preservation_map', 'supersedes'}
+
+
+class PortInputError(ValueError):
+    def __init__(self, code, context, *, unavailable=False):
+        super().__init__(context)
+        self.code, self.unavailable = code, unavailable
+
+
+def validate_port_receipt(registry, path, repo_root, *, seen_ids=None):
+    """Check one named receipt and its bounded historical chain, never donors.
+
+    Paths are repository-relative. Only the requested receipt's destinations
+    are compared to current bytes. Parent receipts retain historical destination
+    observations; their documents/grants still must match their bound hashes.
+    seen_ids optionally shares ID-to-document bindings across explicit requests.
+    Hashes are observations, not authentication, copy proof or qualification.
+    """
+    errors, unavailable = [], []
+    seen_ids = {} if seen_ids is None else seen_ids
+
+    def reject(code, context):
+        raise PortInputError(code, str(context))
+
+    def exact(value, keys, context):
+        if not isinstance(value, dict) or set(value) != keys:
+            reject('PORT_SCHEMA', context + ': exact fields required')
+
+    def sha(value):
+        return isinstance(value, str) and SHA256.fullmatch(value)
+
+    def relative(value):
+        if not safe_relative(value):
+            reject('PORT_PATH', str(value))
+
+    def reference(value, context):
+        exact(value, {'path', 'sha256'}, context)
+        relative(value['path'])
+        if not sha(value['sha256']):
+            reject('PORT_SCHEMA', context + ': SHA256 required')
+
+    def read_file(value, cap, *, expected=None, retain=True):
+        relative(value)
+        # Traverse with descriptor-relative NOFOLLOW, including parent components.
+        # Refuse all symlinks, FIFOs/devices/directories and pathname races that
+        # could redirect a read outside the repository or block opening a FIFO.
+        descriptor = None
+        try:
+            descriptor = os.open(repo_root, os.O_RDONLY | os.O_DIRECTORY)
+            parts = value.split('/')
+            for index, part in enumerate(parts):
+                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                if index < len(parts) - 1:
+                    flags |= os.O_DIRECTORY
+                else:
+                    # Some nonregular entries (notably Unix sockets) fail open
+                    # before fstat. Reject their observed type without opening
+                    # known devices/FIFOs; errno alone cannot establish type.
+                    entry = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                    if not stat.S_ISREG(entry.st_mode):
+                        reject('PORT_PATH', value + ': regular file required')
+                child = os.open(part, flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            # The pre-open observation can race; the actual descriptor remains
+            # authoritative for file type and every byte read below.
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                reject('PORT_PATH', value + ': regular file required')
+            if info.st_size > cap:
+                reject('PORT_LIMIT', value + ': byte cap exceeded')
+            result, total, hasher = [], 0, hashlib.sha256()
+            while True:
+                block = os.read(descriptor, min(PORT_CHUNK_BYTES, cap - total + 1))
+                if not block:
+                    break
+                total += len(block)
+                if total > cap:
+                    reject('PORT_LIMIT', value + ': byte cap exceeded')
+                hasher.update(block)
+                if retain:
+                    result.append(block)
+            actual = hasher.hexdigest()
+            if expected is not None and actual != expected:
+                reject('PORT_HASH', value + ': observed bytes differ')
+            return b''.join(result), actual
+        except OSError as error:
+            if error.errno in {errno.ELOOP, errno.ENOTDIR}:
+                reject('PORT_PATH', value + ': unsafe or non-directory path component')
+            raise PortInputError('PORT_UNAVAILABLE', value + ': ' + str(error), unavailable=True) from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def parse(data, context):
+        try:
+            return json.loads(data, object_pairs_hook=unique_members,
+                              parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+        except (ValueError, RecursionError) as error:
+            reject('PORT_JSON', context + ': ' + str(error))
+
+    def collection(value, context):
+        if not isinstance(value, list) or not value:
+            reject('PORT_SCHEMA', context + ': nonempty array required')
+        if len(value) > PORT_COLLECTION:
+            reject('PORT_LIMIT', context + ': collection cap exceeded')
+
+    def mapping_identity(mapping):
+        scope = mapping['source_scope']
+        return (mapping['file_id'], json.dumps('FILE' if scope == 'FILE' else merged_ranges(scope)))
+
+    def admission_files(ledger):
+        # The digest binds the already admitted snapshot. Recheck only the
+        # source/grant metadata consumed here; do not reopen historical links,
+        # licenses or donor paths, or claim a fresh full intake validation.
+        if (ledger.get('kind') != 'SCOPEBASE_SOURCE_INTAKE' or ledger.get('schema_version') != '2.0.0'
+                or ledger.get('qualification') != 'NOT_RUN'):
+            reject('PORT_SCHEMA', 'admission: schema 2.0.0 unqualified intake required')
+        if ledger.get('authorizations') != [OWNER_GRANT]:
+            reject('AUTHORIZATION', 'admission: exact canonical provisional owner grant required')
+        files, donors = {}, {}
+        for key, destination in (('donors', donors), ('files', files)):
+            values = ledger.get(key)
+            if not isinstance(values, list):
+                reject('PORT_SCHEMA', 'admission: ' + key + ' array required')
+            for record in values:
+                if not isinstance(record, dict) or not nonempty(record.get('id')):
+                    reject('PORT_SCHEMA', 'admission: record ID required')
+                if record['id'] in destination:
+                    reject('PORT_DUPLICATE', 'admission: duplicate ID ' + record['id'])
+                destination[record['id']] = record
+        return files, donors
+
+    try:
+        relative(path)
+        active_paths, lineage_ids, first_identity = set(), set(), None
+        expected, depth = None, 0
+        while True:
+            if path in active_paths:
+                reject('PORT_CYCLE', path)
+            if depth > PORT_CHAIN_LINKS:
+                reject('PORT_LIMIT', 'supersedes: at most 16 links')
+            active_paths.add(path)
+            data, receipt_hash = read_file(path, PORT_DOCUMENT_BYTES, expected=expected)
+            receipt = parse(data, path)
+            exact(receipt, PORT_FIELDS, path)
+            if (type(receipt['schema_version']) is not int or receipt['schema_version'] != 1
+                    or receipt['kind'] != 'SELECTED_PORT_RECEIPT'
+                    or receipt['copy_state'] != 'PORTED_SELECTED_SCOPE'
+                    or not isinstance(receipt['id'], str) or not PORT_ID.fullmatch(receipt['id'])
+                    or not isinstance(receipt['task_id'], str)):
+                reject('PORT_SCHEMA', path + ': invalid version, kind, ID, task or copy state')
+            ident = receipt['id']
+            binding = (path, receipt_hash)
+            if ident in lineage_ids or (ident in seen_ids and seen_ids[ident] != binding):
+                reject('PORT_DUPLICATE', path + ': receipt ID ' + ident)
+            lineage_ids.add(ident)
+            seen_ids[ident] = binding
+            collection(receipt['mappings'], 'mappings')
+            mapping_keys = set()
+            for mapping in receipt['mappings']:
+                if not isinstance(mapping, dict) or 'source_scope' not in mapping:
+                    reject('PORT_SCOPE', path + ': mapping source_scope required')
+                exact(mapping, {'file_id', 'source_scope', 'destinations'}, 'mapping')
+                if not isinstance(mapping['file_id'], str):
+                    reject('PORT_SCHEMA', 'mapping: file_id must be a string')
+                if not valid_scope(mapping['source_scope']):
+                    reject('PORT_SCOPE', 'mapping: invalid source scope')
+                key = mapping_identity(mapping)
+                if key in mapping_keys:
+                    reject('PORT_DUPLICATE', 'mapping: ' + str(key))
+                mapping_keys.add(key)
+                collection(mapping['destinations'], 'destinations')
+                destination_paths = set()
+                for destination in mapping['destinations']:
+                    exact(destination, {'path', 'sha256', 'symbols'}, 'destination')
+                    relative(destination['path'])
+                    if not sha(destination['sha256']):
+                        reject('PORT_SCHEMA', 'destination: SHA256 required')
+                    if destination['path'] in destination_paths:
+                        reject('PORT_DUPLICATE', 'destination: ' + destination['path'])
+                    destination_paths.add(destination['path'])
+                    collection(destination['symbols'], 'symbols')
+                    if any(not nonempty(label) or len(label) > PORT_LABEL_CHARS
+                           for label in destination['symbols']):
+                        reject('PORT_SCHEMA', 'symbols: nonempty labels of at most 256 characters')
+            for name in ('admission', 'preservation_map'):
+                reference(receipt[name], name)
+            identity = (receipt['task_id'], receipt['admission'], sorted(mapping_identity(m) for m in receipt['mappings']))
+            if first_identity is None:
+                first_identity = identity
+            elif identity != first_identity:
+                reject('PORT_IDENTITY', path + ': supersedes task/admission/slice differs')
+            known_tasks = {t['id'] for t in registry.get('tasks', [])}
+            if receipt['task_id'] not in known_tasks:
+                reject('PORT_REFERENCE', path + ': unknown task')
+            admission = receipt['admission']
+            data, _ = read_file(admission['path'], PORT_DOCUMENT_BYTES, expected=admission['sha256'])
+            ledger = parse(data, admission['path'])
+            if not isinstance(ledger, dict):
+                reject('PORT_SCHEMA', 'admission: intake object required')
+            files, donors = admission_files(ledger)
+            for mapping in receipt['mappings']:
+                record = files.get(mapping['file_id'])
+                if record is None:
+                    reject('PORT_REFERENCE', path + ': unknown file_id ' + mapping['file_id'])
+                donor = donors.get(record.get('donor'), {})
+                if (not isinstance(record.get('commit'), str) or not SHA.fullmatch(record['commit'])
+                        or record['commit'] != donor.get('commit') or not sha(record.get('sha256'))
+                        or not safe_relative(record.get('path'))
+                        or record['id'] != str(record.get('donor')) + ':' + record['path']):
+                    reject('PORT_REFERENCE', record['id'] + ': invalid parent source pin/hash/path')
+                adoption_errors = []
+                validate_adoption(record.get('adoption'), {OWNER_GRANT['id']: OWNER_GRANT},
+                                  lambda code, context: adoption_errors.append((code, context)), record['id'])
+                if adoption_errors:
+                    code, context = adoption_errors[0]
+                    reject(code, context)
+                adoption = record['adoption']
+                if adoption['decision_status'] != 'READY_FOR_SELECTED_SCOPE':
+                    reject('PORT_GRANT', mapping['file_id'] + ': ready grant required')
+                if not scope_contains(adoption['source_scope'], mapping['source_scope']):
+                    reject('PORT_SCOPE', mapping['file_id'] + ': mapping exceeds ready grant')
+                if depth == 0:
+                    for destination in mapping['destinations']:
+                        read_file(destination['path'], PORT_DESTINATION_BYTES,
+                                  expected=destination['sha256'], retain=False)
+            preservation = receipt['preservation_map']
+            read_file(preservation['path'], PORT_DOCUMENT_BYTES, expected=preservation['sha256'], retain=False)
+            previous = receipt['supersedes']
+            if previous is None:
+                break
+            reference(previous, 'supersedes')
+            path, expected = previous['path'], previous['sha256']
+            depth += 1
+    except PortInputError as error:
+        (unavailable if error.unavailable else errors).append({'code': error.code, 'context': str(error)})
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
+        errors.append({'code': 'PORT_JSON', 'context': str(error)})
+    return errors, unavailable
+
+
 def verify_local_sources(ledger, source_roots):
     errors, unavailable = [], []
 
@@ -642,6 +897,8 @@ def main(argv=None):
     parser.add_argument('--verify-local-sources', action='store_true')
     parser.add_argument('--source-root', action='append', default=[], metavar='ALIAS=PATH',
                         help='explicit local checkout for an observed donor; never initiates SSH')
+    parser.add_argument('--port-receipt', action='append', default=[], metavar='PATH',
+                        help='explicit repository-relative selected-port receipt (repeatable; no automatic scan)')
     args = parser.parse_args(argv)
     report = {'status': 'INVALID', 'mode': 'STRUCTURAL', 'source_verification': 'NOT_RUN',
               'qualification': 'NOT_EVALUATED', 'errors': [], 'unavailable': []}
@@ -651,6 +908,19 @@ def main(argv=None):
         if not isinstance(registry, dict) or not isinstance(ledger, dict):
             raise ValueError('top-level JSON values must be objects')
         report['errors'] = validate(registry, ledger, args.repo_root)
+        if args.port_receipt:
+            if len(args.port_receipt) > PORT_COLLECTION:
+                report['errors'].append({'code': 'PORT_LIMIT', 'context': 'at most 128 requested receipts'})
+            elif not report['errors']:
+                seen_ids, requested_paths = {}, set()
+                for path in args.port_receipt:
+                    if path in requested_paths:
+                        report['errors'].append({'code': 'PORT_DUPLICATE', 'context': path})
+                        continue
+                    requested_paths.add(path)
+                    errors, unavailable = validate_port_receipt(registry, path, args.repo_root, seen_ids=seen_ids)
+                    report['errors'].extend(errors)
+                    report['unavailable'].extend(unavailable)
         roots = {}
         for value in args.source_root:
             alias, separator, path = value.partition('=')
@@ -662,9 +932,11 @@ def main(argv=None):
             raise ValueError('unknown source-root aliases: ' + ','.join(sorted(roots.keys() - known)))
         if not report['errors'] and args.verify_local_sources:
             report['mode'] = 'STRUCTURAL_AND_LOCAL_SOURCES'
-            report['errors'], report['unavailable'] = verify_local_sources(ledger, roots)
-            report['source_verification'] = ('INVALID' if report['errors'] else
-                                             'INCOMPLETE' if report['unavailable'] else 'VERIFIED_SELECTED_SOURCES')
+            errors, unavailable = verify_local_sources(ledger, roots)
+            report['errors'].extend(errors)
+            report['unavailable'].extend(unavailable)
+            report['source_verification'] = ('INVALID' if errors else
+                                             'INCOMPLETE' if unavailable else 'VERIFIED_SELECTED_SOURCES')
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         report['errors'].append({'code': 'JSON_INPUT', 'context': str(error)})
     if report['errors']:

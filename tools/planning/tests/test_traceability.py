@@ -1,5 +1,9 @@
 """Behavioral intake controls: real JSON documents and a temporary Git donor."""
 import copy
+import errno
+import os
+import socket
+import stat
 import hashlib
 import importlib.util
 import json
@@ -8,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'check_traceability.py'
 REPO_ROOT = SCRIPT.parents[2]
@@ -701,6 +706,496 @@ class AdoptionContractTests(IntakeFixture, unittest.TestCase):
                 self.assert_valid()
                 adoption['artifact_role'] = 'host'
                 self.assert_invalid('ADOPTION_ROLE')
+
+
+class PortReceiptTests(IntakeFixture, unittest.TestCase):
+    """Owned positive/negative/restored twins, without reading real donors."""
+    def setUp(self):
+        super().setUp()
+        self.ledger['files'][0]['adoption']['source_scope'] = [[1, 2]]
+        self.cli_ledger = copy.deepcopy(self.ledger)
+        self.admission = self.root / 'admission.json'
+        self.destination = self.root / 'destination.rs'
+        self.destination.write_bytes(b'pub fn retained_owner() {}\n')
+        self.preservation = self.root / 'preservation.md'
+        self.preservation.write_text('retains_original_owner -> retained_owner; original-byte oracle; '
+                                     'reopen-successor bad control; line 1 unported.\n')
+        self.receipt_path = self.root / 'receipt.json'
+        self.write_admission()
+        self.receipt = {
+            'schema_version': 1, 'kind': 'SELECTED_PORT_RECEIPT', 'id': 'fixture-port-1',
+            'task_id': 'SB01', 'copy_state': 'PORTED_SELECTED_SCOPE',
+            'admission': self.binding(self.admission),
+            'mappings': [{'file_id': 'D:owner.rs', 'source_scope': [[2, 2]],
+                          'destinations': [{'path': 'destination.rs',
+                              'sha256': self.hash(self.destination), 'symbols': ['retained_owner']}]}],
+            'preservation_map': self.binding(self.preservation), 'supersedes': None}
+
+    def run_check(self, *args):
+        # The current intake stays valid while the separately retained admission
+        # is mutated, so refusal must come from receipt validation itself.
+        admission = self.ledger
+        self.ledger = self.cli_ledger
+        try:
+            return super().run_check(*args)
+        finally:
+            self.ledger = admission
+
+    @staticmethod
+    def hash(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def binding(self, path):
+        return {'path': str(path.relative_to(self.root)), 'sha256': self.hash(path)}
+
+    def write_admission(self):
+        self.admission.write_text(json.dumps(self.ledger))
+
+    def write_receipt(self, value=None, path=None):
+        (path or self.receipt_path).write_text(json.dumps(self.receipt if value is None else value))
+
+    def check_port(self, *paths):
+        self.write_receipt()
+        args = [arg for path in (paths or [self.receipt_path])
+                for arg in ('--port-receipt', str(path.relative_to(self.root)))]
+        result = self.run_check(*args)
+        self.assertTrue(result.stdout, result.stderr)
+        return result, json.loads(result.stdout)
+
+    def assert_port_valid(self):
+        result, payload = self.check_port()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload['status'], 'VALID')
+        self.assertEqual(payload['qualification'], 'NOT_EVALUATED')
+        self.assertEqual(payload['source_verification'], 'NOT_RUN')
+        self.assertNotIn('accepted', payload)
+
+    def assert_port_invalid(self, code):
+        result, payload = self.check_port()
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn(code, {e['code'] for e in payload['errors']}, payload)
+
+    def test_selected_function_valid_without_claiming_other_granted_lines(self):
+        self.assert_port_valid()
+        self.assertEqual(self.receipt['mappings'][0]['source_scope'], [[2, 2]])
+        self.assertEqual(INTAKE.load_json(self.admission)['files'][0]['adoption']['copy_status'], 'NOT_COPIED')
+        self.assertEqual(self.receipt['copy_state'], 'PORTED_SELECTED_SCOPE')
+
+    def test_outside_grant_and_file_overreach_refused_then_restored(self):
+        self.assert_port_valid()
+        for scope in ([[3, 3]], 'FILE', None, [[True, 2]], [[2, 1]]):
+            with self.subTest(scope=scope):
+                self.receipt['mappings'][0]['source_scope'] = scope
+                self.assert_port_invalid('PORT_SCOPE')
+                self.receipt['mappings'][0]['source_scope'] = [[2, 2]]
+                self.assert_port_valid()
+
+    def test_unresolved_and_reference_grants_refused_then_restored(self):
+        baseline = copy.deepcopy(self.ledger)
+        self.assert_port_valid()
+        for state in ('NEEDS_DECISION', 'REFERENCE_ONLY'):
+            with self.subTest(state=state):
+                a = self.ledger['files'][0]['adoption']
+                a.update(decision_status=state, blocked_reason='not admitted')
+                if state == 'REFERENCE_ONLY':
+                    a.update(copy_status='BLOCKED', disposition='REFERENCE_ONLY', destination_license=None)
+                self.write_admission()
+                self.receipt['admission'] = self.binding(self.admission)
+                self.assert_port_invalid('PORT_GRANT')
+                self.ledger = copy.deepcopy(baseline)
+                self.write_admission()
+                self.receipt['admission'] = self.binding(self.admission)
+                self.assert_port_valid()
+        self.write_admission()
+        self.receipt['admission'] = self.binding(self.admission)
+        self.assert_port_valid()
+
+    def test_unknown_file_task_and_duplicate_mapping_refused(self):
+        baseline = copy.deepcopy(self.receipt)
+        mutations = [('PORT_REFERENCE', lambda r: r.update(task_id='SB99')),
+                     ('PORT_REFERENCE', lambda r: r['mappings'][0].update(file_id='D:absent.rs')),
+                     ('PORT_SCOPE', lambda r: r['mappings'][0].pop('source_scope')),
+                     ('PORT_DUPLICATE', lambda r: r['mappings'].append(copy.deepcopy(r['mappings'][0])))]
+        self.assert_port_valid()
+        for code, mutate in mutations:
+            with self.subTest(code=code):
+                mutate(self.receipt)
+                self.assert_port_invalid(code)
+                self.receipt = copy.deepcopy(baseline)
+                self.assert_port_valid()
+
+    def test_exact_schema_types_and_duplicate_json_members(self):
+        baseline = copy.deepcopy(self.receipt)
+        mutations = [lambda r: r.update(schema_version=True), lambda r: r.update(schema_version=1.0),
+                     lambda r: r.update(extra='not permitted'), lambda r: r.update(id='../unsafe'),
+                     lambda r: r.update(copy_state='QUALIFIED'), lambda r: r.update(mappings=[]),
+                     lambda r: r['admission'].update(extra=1),
+                     lambda r: r['mappings'][0]['destinations'][0].update(symbols=['']),
+                     lambda r: r['mappings'][0]['destinations'][0].update(symbols=['x' * 257]),
+                     lambda r: r['mappings'][0]['destinations'][0].update(extra=1)]
+        self.assert_port_valid()
+        for mutate in mutations:
+            with self.subTest(mutation=mutations.index(mutate)):
+                mutate(self.receipt)
+                self.assert_port_invalid('PORT_SCHEMA')
+                self.receipt = copy.deepcopy(baseline)
+                self.assert_port_valid()
+        self.write_receipt()
+        self.receipt_path.write_text(self.receipt_path.read_text().replace('"schema_version": 1',
+                                                               '"schema_version": 1, "schema_version": 1'))
+        errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertFalse(unavailable)
+        self.assertIn('PORT_JSON', {e['code'] for e in errors})
+        self.assert_port_valid()
+
+    def test_changed_binding_bytes_fail_then_original_twin_restores(self):
+        self.assert_port_valid()
+        for path in (self.admission, self.destination, self.preservation):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original + b'\nchanged')
+                self.assert_port_invalid('PORT_HASH')
+                path.write_bytes(original)
+                self.assert_port_valid()
+        original = self.admission.read_bytes()
+        self.ledger['authorizations'][0]['allowed_destinations']['host'] = 'MIT'
+        self.write_admission()
+        self.receipt['admission'] = self.binding(self.admission)
+        self.assert_port_invalid('AUTHORIZATION')
+        self.admission.write_bytes(original)
+        self.ledger = INTAKE.load_json(self.admission)
+        self.receipt['admission'] = self.binding(self.admission)
+        self.assert_port_valid()
+
+    def test_missing_named_evidence_is_incomplete(self):
+        for path in (self.admission, self.destination, self.preservation):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.unlink()
+                result, payload = self.check_port()
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(payload['status'], 'INCOMPLETE')
+                self.assertIn('PORT_UNAVAILABLE', {e['code'] for e in payload['unavailable']})
+                path.write_bytes(original)
+                self.assert_port_valid()
+
+    def test_socket_artifacts_are_invalid_then_regular_twins_restore(self):
+        for path in (self.destination, self.preservation, self.admission, self.receipt_path):
+            with self.subTest(role=path.name):
+                self.assert_port_valid()
+                original = path.read_bytes()
+                path.unlink()
+                parent = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+                        # The private TMPDIR can exceed AF_UNIX's pathname limit.
+                        # This short descriptor path creates the real socket in
+                        # the owned fixture without changing process cwd.
+                        endpoint.bind('/proc/self/fd/' + str(parent) + '/' + path.name)
+                        self.assertTrue(stat.S_ISSOCK(path.lstat().st_mode))
+                        result = self.run_check('--port-receipt', 'receipt.json')
+                finally:
+                    os.close(parent)
+                    path.unlink()
+                    path.write_bytes(original)
+                self.assert_port_valid()
+                payload = json.loads(result.stdout)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertEqual(payload['status'], 'INVALID')
+                self.assertIn('PORT_PATH', {e['code'] for e in payload['errors']})
+                self.assertEqual(payload['unavailable'], [])
+
+    def test_fifo_and_internal_symlink_refused_then_regular_twin_restores(self):
+        for kind in ('fifo', 'internal symlink'):
+            with self.subTest(kind=kind):
+                self.assert_port_valid()
+                original = self.destination.read_bytes()
+                self.destination.unlink()
+                try:
+                    if kind == 'fifo':
+                        os.mkfifo(self.destination)
+                    else:
+                        self.destination.symlink_to(self.preservation.name)
+                    result = self.run_check('--port-receipt', 'receipt.json')
+                finally:
+                    self.destination.unlink()
+                    self.destination.write_bytes(original)
+                self.assert_port_valid()
+                payload = json.loads(result.stdout)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn('PORT_PATH', {e['code'] for e in payload['errors']})
+                self.assertEqual(payload['unavailable'], [])
+
+    def test_unexplained_open_enxio_on_regular_file_remains_unavailable(self):
+        self.assert_port_valid()
+        self.write_receipt()
+        real_open = os.open
+
+        def open_with_unexplained_failure(path, *args, **kwargs):
+            if path == self.destination.name:
+                raise OSError(errno.ENXIO, 'injected regular-file backend failure')
+            return real_open(path, *args, **kwargs)
+
+        # A narrow syscall failure seam represents a backend error whose errno
+        # alone does not prove path type. All metadata/other reads stay real.
+        with mock.patch.object(INTAKE.os, 'open', side_effect=open_with_unexplained_failure):
+            errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertEqual(errors, [])
+        self.assertEqual([e['code'] for e in unavailable], ['PORT_UNAVAILABLE'])
+        self.assert_port_valid()
+
+    def test_unsafe_and_symlink_escape_paths_refused(self):
+        baseline = copy.deepcopy(self.receipt)
+        outside = self.root.parent / (self.root.name + '-outside')
+        outside.write_bytes(b'outside')
+        self.addCleanup(outside.unlink)
+        link = self.root / 'escape'
+        link.symlink_to(outside)
+        directory_link = self.root / 'directory-link'
+        directory_link.symlink_to(self.root.parent, target_is_directory=True)
+        self.assert_port_valid()
+        for path in ('../outside', '/etc/passwd', './destination.rs', 'a//b', 'a\\b', 'escape',
+                     'directory-link/' + outside.name, 'destination.rs/child'):
+            with self.subTest(path=path):
+                self.receipt['mappings'][0]['destinations'][0]['path'] = path
+                self.assert_port_invalid('PORT_PATH')
+                self.receipt = copy.deepcopy(baseline)
+                self.assert_port_valid()
+        self.receipt['preservation_map']['path'] = 'donor'
+        self.assert_port_invalid('PORT_PATH')
+        self.receipt = baseline
+        self.assert_port_valid()
+
+    def test_duplicate_requested_ids_and_paths_refused(self):
+        self.assert_port_valid()
+        twin = self.root / 'twin.json'
+        self.write_receipt(path=twin)
+        for paths in ((self.receipt_path, twin), (self.receipt_path, self.receipt_path)):
+            with self.subTest(paths=paths):
+                result, payload = self.check_port(*paths)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn('PORT_DUPLICATE', {e['code'] for e in payload['errors']})
+        self.assert_port_valid()
+
+    def test_destination_and_collection_caps_exact_then_plus_one(self):
+        self.ledger['files'][0]['adoption']['source_scope'] = 'FILE'
+        self.write_admission()
+        self.receipt['admission'] = self.binding(self.admission)
+        baseline = copy.deepcopy(self.receipt)
+        destination = self.receipt['mappings'][0]['destinations'][0]
+        destination['symbols'] = ['symbol_' + str(i) for i in range(128)]
+        self.assert_port_valid()
+        destination['symbols'].append('one_too_many')
+        self.assert_port_invalid('PORT_LIMIT')
+        self.receipt = copy.deepcopy(baseline)
+        for i in range(129):
+            (self.root / ('dest-' + str(i))).write_bytes(b'one')
+        self.receipt['mappings'][0]['destinations'] = [
+            {'path': 'dest-' + str(i), 'sha256': self.hash(self.root / ('dest-' + str(i))),
+             'symbols': ['owner']} for i in range(128)]
+        self.assert_port_valid()
+        self.receipt['mappings'][0]['destinations'].append(
+            {'path': 'dest-128', 'sha256': self.hash(self.root / 'dest-128'), 'symbols': ['owner']})
+        self.assert_port_invalid('PORT_LIMIT')
+        self.receipt = copy.deepcopy(baseline)
+        self.receipt['mappings'] = [dict(copy.deepcopy(baseline['mappings'][0]), source_scope=[[i, i]])
+                                    for i in range(1, 129)]
+        self.assert_port_valid()
+        self.receipt['mappings'].append(dict(copy.deepcopy(baseline['mappings'][0]), source_scope=[[129, 129]]))
+        self.assert_port_invalid('PORT_LIMIT')
+        self.receipt = baseline
+        self.assert_port_valid()
+        self.destination.write_bytes(b'x' * (16 * 1024 * 1024))
+        self.receipt['mappings'][0]['destinations'][0]['sha256'] = self.hash(self.destination)
+        self.assert_port_valid()
+        with self.destination.open('ab') as stream:
+            stream.write(b'x')
+        self.assert_port_invalid('PORT_LIMIT')
+        with self.destination.open('r+b') as stream:
+            stream.truncate(16 * 1024 * 1024)
+        self.assert_port_valid()
+
+    def test_document_byte_caps_exact_then_plus_one(self):
+        self.assert_port_valid()
+        for path, binding in ((self.admission, 'admission'), (self.preservation, 'preservation_map')):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original + b' ' * (1024 * 1024 - len(original)))
+                self.receipt[binding] = self.binding(path)
+                self.assert_port_valid()
+                with path.open('ab') as stream:
+                    stream.write(b' ')
+                self.assert_port_invalid('PORT_LIMIT')
+                path.write_bytes(original)
+                self.receipt[binding] = self.binding(path)
+                self.assert_port_valid()
+        self.write_receipt()
+        original = self.receipt_path.read_bytes()
+        self.receipt_path.write_bytes(original + b' ' * (1024 * 1024 - len(original)))
+        errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertEqual((errors, unavailable), ([], []))
+        with self.receipt_path.open('ab') as stream:
+            stream.write(b' ')
+        errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertIn('PORT_LIMIT', {e['code'] for e in errors})
+        self.assertFalse(unavailable)
+        self.assert_port_valid()
+
+    def test_requested_receipt_cap_exact_then_plus_one(self):
+        paths = []
+        for i in range(129):
+            path = self.root / ('requested-' + str(i) + '.json')
+            value = dict(copy.deepcopy(self.receipt), id='port-' + str(i))
+            self.write_receipt(value, path)
+            paths.append(path)
+        result, payload = self.check_port(*paths[:128])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result, payload = self.check_port(*paths)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PORT_LIMIT', {e['code'] for e in payload['errors']})
+        self.assert_port_valid()
+
+    def chain(self, links):
+        previous = None
+        for i in range(links):
+            path = self.root / ('previous-' + str(i) + '.json')
+            value = dict(copy.deepcopy(self.receipt), id='previous-' + str(i), supersedes=previous)
+            # Old destination bytes need not exist at the current tip.
+            value['mappings'][0]['destinations'][0]['sha256'] = '0' * 64
+            self.write_receipt(value, path)
+            previous = self.binding(path)
+        self.receipt['supersedes'] = previous
+
+    def test_replacements_keep_identity_and_check_historical_documents(self):
+        self.assert_port_valid()
+        self.chain(1)
+        self.assert_port_valid()
+        old_path = self.root / self.receipt['supersedes']['path']
+        old = INTAKE.load_json(old_path)
+        for key, value in (('task_id', 'SB99'), ('mappings', [dict(copy.deepcopy(old['mappings'][0]), source_scope=[[1, 1]])])):
+            with self.subTest(key=key):
+                changed = dict(copy.deepcopy(old), **{key: value})
+                self.write_receipt(changed, old_path)
+                self.receipt['supersedes'] = self.binding(old_path)
+                self.assert_port_invalid('PORT_IDENTITY')
+                self.write_receipt(old, old_path)
+                self.receipt['supersedes'] = self.binding(old_path)
+                self.assert_port_valid()
+        original = old_path.read_bytes()
+        old_path.write_bytes(original + b' ')
+        self.assert_port_invalid('PORT_HASH')
+        old_path.write_bytes(original)
+        self.assert_port_valid()
+        # Standalone old receipt is historical, not valid about new bytes.
+        result, payload = self.check_port(old_path)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PORT_HASH', {e['code'] for e in payload['errors']})
+
+    def test_real_changed_destination_replacement_and_explicit_old_refusal(self):
+        self.assert_port_valid()
+        original_destination = self.destination.read_bytes()
+        original_receipt = copy.deepcopy(self.receipt)
+        old_path = self.root / 'original.json'
+        self.write_receipt(original_receipt, old_path)
+        old_hash = self.hash(old_path)
+        self.destination.write_bytes(b'pub fn retained_owner() { /* revised */ }\n')
+        self.receipt['id'] = 'fixture-port-2'
+        self.receipt['mappings'][0]['destinations'][0]['sha256'] = self.hash(self.destination)
+        self.receipt['supersedes'] = self.binding(old_path)
+        self.assert_port_valid()
+        self.assertEqual(self.hash(old_path), old_hash)
+        result, payload = self.check_port(old_path)
+        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+        self.assertIn('PORT_HASH', {e['code'] for e in payload['errors']})
+        self.destination.write_bytes(original_destination)
+        result, payload = self.check_port(old_path)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.receipt = original_receipt
+        self.assert_port_valid()
+
+    def test_supersedes_admission_identity_cannot_be_rebound(self):
+        self.chain(1)
+        self.assert_port_valid()
+        old_path = self.root / self.receipt['supersedes']['path']
+        old = INTAKE.load_json(old_path)
+        admission_twin = self.root / 'other-admission.json'
+        admission_twin.write_bytes(self.admission.read_bytes())
+        old['admission'] = self.binding(admission_twin)
+        self.write_receipt(old, old_path)
+        self.receipt['supersedes'] = self.binding(old_path)
+        self.assert_port_invalid('PORT_IDENTITY')
+        self.receipt['supersedes'] = None
+        self.assert_port_valid()
+
+    def test_scope_segmentation_does_not_change_lineage_identity(self):
+        self.ledger['files'][0]['adoption']['source_scope'] = [[1, 2]]
+        self.write_admission()
+        self.receipt['admission'] = self.binding(self.admission)
+        self.receipt['mappings'][0]['source_scope'] = [[1, 2]]
+        self.chain(1)
+        old_path = self.root / self.receipt['supersedes']['path']
+        old = INTAKE.load_json(old_path)
+        old['mappings'][0]['source_scope'] = [[1, 1], [2, 2]]
+        self.write_receipt(old, old_path)
+        self.receipt['supersedes'] = self.binding(old_path)
+        self.assert_port_valid()
+
+    def test_identifier_and_label_length_boundaries(self):
+        self.receipt['id'] = 'r' * 64
+        self.receipt['mappings'][0]['destinations'][0]['symbols'] = ['s' * 256]
+        self.assert_port_valid()
+        self.receipt['id'] = 'r' * 65
+        self.assert_port_invalid('PORT_SCHEMA')
+        self.receipt['id'] = 'r' * 64
+        self.receipt['mappings'][0]['destinations'][0]['symbols'] = ['s' * 257]
+        self.assert_port_invalid('PORT_SCHEMA')
+        self.receipt['mappings'][0]['destinations'][0]['symbols'] = ['s' * 256]
+        self.assert_port_valid()
+
+    def test_supersedes_path_cycle_rejected_before_recursive_hash_read(self):
+        self.assert_port_valid()
+        self.receipt['supersedes'] = {'path': 'receipt.json', 'sha256': '0' * 64}
+        self.assert_port_invalid('PORT_CYCLE')
+        self.receipt['supersedes'] = None
+        self.assert_port_valid()
+
+    def test_supersedes_depth_cap_exact_then_plus_one(self):
+        self.chain(16)
+        self.assert_port_valid()
+        self.chain(17)
+        self.assert_port_invalid('PORT_LIMIT')
+        self.receipt['supersedes'] = None
+        self.assert_port_valid()
+
+    def test_receipt_api_reads_only_named_artifacts_without_reopening_intake_links(self):
+        self.write_receipt()
+        # Historical linkage was admitted separately. Receipt validation must not
+        # reopen its original research documents, or any synthetic donor source.
+        (self.root / 'regression_family.md').unlink()
+        (self.repo / 'owner.rs').unlink()
+        errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertEqual((errors, unavailable), ([], []))
+
+    def test_normalized_duplicate_mapping_is_refused_then_restored(self):
+        self.receipt['mappings'][0]['source_scope'] = [[1, 2]]
+        self.assert_port_valid()
+        duplicate = copy.deepcopy(self.receipt['mappings'][0])
+        duplicate['source_scope'] = [[1, 1], [2, 2]]
+        self.receipt['mappings'].append(duplicate)
+        self.assert_port_invalid('PORT_DUPLICATE')
+        self.receipt['mappings'].pop()
+        self.assert_port_valid()
+
+    def test_no_receipt_legacy_report_is_unchanged_and_does_not_scan(self):
+        self.receipt_path.write_text('invalid unrequested receipt')
+        conventional = self.root / 'docs/provenance/ports/unrequested.json'
+        conventional.parent.mkdir(parents=True)
+        conventional.write_text('invalid unrequested receipt')
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            'status': 'VALID', 'mode': 'STRUCTURAL', 'source_verification': 'NOT_RUN',
+            'qualification': 'NOT_EVALUATED', 'errors': [], 'unavailable': []})
 
 
 if __name__ == '__main__':

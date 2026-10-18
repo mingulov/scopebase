@@ -1,6 +1,6 @@
 # ScopeBase source-license intake
 
-Revision 2, 2026-10-18. Owner: SB01; consuming owners: SB02, LX01, BP01, CP01, TC02 and NX02. The authoritative per-file record is [donors.json](donors.json); [adoption decisions](adoption-decisions.md) explain reuse choices. This metadata separates historical source observations from proposed destination grants. No source is copied or qualified by this intake.
+Revision 3, 2026-10-18. Owner: SB01; consuming owners: SB02, LX01, BP01, CP01, TC02 and NX02. The authoritative per-file record is [donors.json](donors.json); [adoption decisions](adoption-decisions.md) explain reuse choices. This metadata separates historical source observations from proposed destination grants. No source is copied or qualified by this intake.
 
 ## Provisional destination policy
 
@@ -16,7 +16,9 @@ Each `adoption` record states disposition, copy/decision status, selected source
 
 `NEEDS_DECISION` preserves unselected or unclassified future inputs with `NOT_COPIED`, explicit nulls and a concrete missing-decision reason. `REFERENCE_ONLY` requires `BLOCKED`, a reference/product-local disposition, a null destination and a technical/reference reason. Both states preserve knowledge without admitting a source copy. Neither blocks unrelated host work or foundation acceptance.
 
-All 124 actual inputs currently remain unselected: 121 are `NEEDS_DECISION`; three MojoBPF compiler implementation files stay product-local/reference-only because the plan reuses their emitted objects and regressions rather than importing a compiler. None is marked ready. The earlier automatic block on 14 `NOASSERTION` inputs is superseded by this model; their observed SPDX values and evidence are unchanged, and their unselected scopes now require a decision rather than a copying ban inferred from a label.
+Of 124 observed inputs, eleven narrow scopes are `READY_FOR_SELECTED_SCOPE` for LX02/CP02, 110 remain `NEEDS_DECISION`, and three MojoBPF compiler implementation files stay product-local/reference-only because the plan reuses their emitted objects and regressions rather than importing a compiler. The eleven ready scopes retain `NOT_COPIED` as pre-copy admission state at their bound snapshot; readiness does not assert an actual port. The earlier automatic block on 14 `NOASSERTION` inputs is superseded by this model; their observed SPDX values and evidence are unchanged, and their unselected scopes now require a decision rather than a copying ban inferred from a label.
+
+A separate version 1 [selected-port receipt](adoption-decisions.md#selected-port-receipts) records actual selected destination bytes against a retained ready admission snapshot. It preserves schema 2.0.0 source observations, original authorizations and pre-copy flags. Destination/preservation hashes bind observations, not authenticity, ownership or license correctness; independent review checks scope correspondence, regression preservation and applicable notices. Replacement receipts append a bound supersedes reference rather than rewriting earlier evidence. An intake-only check cannot infer no copying occurred or accept a port.
 
 ## Retained upstream options
 
@@ -32,4 +34,4 @@ The libbpf-mojo bridge and selected MojoBPF files retain their observed Apache-2
 
 The observer captured a bare quote alongside Apache-2.0 WITH LLVM-exception in J `src/mojobpf/inspect.py`. Both raw fields, the normalization note and the supported exact expression remain unchanged. P `third-party/README.md` refers to missing license paths; the observed existing upstream license texts and hashes remain preserved. No donor documentation is repaired here.
 
-Before a production port, select the concrete slice and role, classify owned/upstream portions, recheck moving bytes, preserve headers/notices and original regressions, review the actual dependency closure, then run affected checks on ScopeBase bytes. The later payload manifest enumerates actual source/generated inputs. Source grants, final ELF license bytes and loader/kernel runtime admission remain independent checks. This intake runs no BPF program, proves no runtime compatibility and publishes nothing.
+Before a production port, select the concrete slice and role, classify owned/upstream portions, verify the selected frozen bytes, preserve headers/notices and original regressions, review the actual dependency closure, then run affected checks on ScopeBase bytes. The later payload manifest enumerates actual source/generated inputs. Source grants, final ELF license bytes and loader/kernel runtime admission remain independent checks. This intake runs no BPF program, proves no runtime compatibility and publishes nothing.

@@ -142,6 +142,29 @@ For example, this adoption object is structurally ready for a **synthetic user-o
 
 The repair uses the accepted plan amendment as its planning baseline: 120 requirements, 179 mappings and H01–H33. Preserve the original 178 observation/obligation values and H01–H32 inputs; append H33 as the explicit new ScopeBase planning obligation with no invented historical donor failure. The controller integrates these plan inputs into the isolated repair checkout before dispatch and records the exact resulting product base; this does not merge or accept the uncorrected M0 candidate.
 
+### Selected-port receipt contract
+
+This is bounded SB01 provenance maintenance, supplementing schema 2.0.0 without changing its adoption semantics or historical observations. NOT_COPIED/BLOCKED describe pre-copy admission state at a bound snapshot; they are not mutable current-copy flags. Retain an immutable task-specific ready intake snapshot and append `docs/provenance/ports/<task>-<receipt-id>.json` for actual selected PORT/ADAPT/VECTORS_ONLY completion. First real LX02/CP02 receipts require their completed candidate mappings; receipt-tool fixtures are not product receipts or acceptance.
+
+The version 1 object has exactly these fields:
+
+| Field | Required value or binding |
+|---|---|
+| `schema_version`, `kind` | JSON integer `1` (not boolean/float), `SELECTED_PORT_RECEIPT` |
+| `id`, `task_id` | Unique receipt ID using the existing ASCII job/profile grammar `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`; task ID resolves in the supplied task registry |
+| `copy_state` | `PORTED_SELECTED_SCOPE`; no whole-file, accepted or qualified inference |
+| `admission` | Exactly `{path,sha256}` for the retained ready schema 2.0.0 intake actually used; preserve nested source observations and grants |
+| `mappings` | Nonempty array of exactly `{file_id,source_scope,destinations}`; file ID resolves in that intake; FILE/ranges use the existing grammar and must be contained in its READY_FOR_SELECTED_SCOPE grant |
+| `destinations` | Per mapping, nonempty array of exactly `{path,sha256,symbols}`; actual destination file digest and nonempty symbol/section labels |
+| `preservation_map` | Exactly `{path,sha256}` for the existing reviewed task map: source/destination symbols, original regression IDs, independent oracle/control, deliberate differences and unported scope; no second case database or inferred pass/fail summary |
+| `supersedes` | `null` or exactly `{path,sha256}` of the previous immutable receipt; same task, admission path/hash and normalized file/scope identity; different source/admission starts a separate lineage |
+
+All artifact paths are safe repository-relative regular-file paths. Reject absolute/traversal/empty components, backslashes, NUL, symlinks (including parents), duplicate JSON members, duplicate receipt IDs or mapping entries, unresolved references, stale hashes and unresolved/reference-only grants. Receipt IDs are unique across distinct supplied/chain documents; a shared identical chain ancestor is the same document, not a second receipt ID. Duplicate explicitly requested paths are invalid. Mapping identity normalizes adjacent inclusive ranges; mapping order does not affect lineage identity. Multiple selected ranges/destinations are permitted without claiming every line in a grant was ported. Labels contain 1–256 characters with non-whitespace content.
+
+Caps are 1 MiB each for receipt, admission and preservation documents; 128 mappings, destinations per mapping, labels per destination and explicitly requested receipts; 16 supersedes links. Destination hashing reads 64 KiB chunks with a 16 MiB/file cap. These bound parsing/read/hash work, not syscall duration or semantic copying. The requested receipt compares actual current destination bytes; historical chain documents/grants/preservation maps remain hash-checked, while historical destination hashes are observations about their old bytes, not the new tip. Explicitly checking an old receipt against changed current files returns mismatch. Review checks correspondence and regression completeness; hashes provide no authenticity or ownership proof.
+
+Use repeatable explicit `--port-receipt PATH` with `tools/planning/check_traceability.py`; `validate_port_receipt` returns errors and required-evidence unavailability without source acquisition. The receipt check rechecks its consumed parent source pins/hashes and ready adoption/owner grants from the bound schema 2.0.0 snapshot; it does not reopen historical research/license links or repeat full source-intake validation. No automatic global scan, donor read, build, network or task acceptance occurs. The legacy invocation/report/exit behavior stays intact: without receipts it is intake-only and cannot assert no port occurred. Invalid input/binding is INVALID/3; missing named required evidence is INCOMPLETE/2. Every expected first-port receipt must be named at acceptance; omission is not evidence of absence. The controller retains snapshots/receipts and binds the same destination hashes plus actual reviewed revision separately in the acceptance record. Real source mapping and retained-regression coverage require independent review.
+
 ## Freeze source slices and missing design inputs
 
 **Owning tasks:** SB01 supplies the selection/preservation format; SB02/SB03 and component foundation tasks supply their own exact decisions. These are refinements of existing tasks, not 86 new administrative tasks.
