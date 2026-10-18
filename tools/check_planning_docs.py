@@ -5,14 +5,24 @@ Run from any directory: python3 tools/check_planning_docs.py
 Counts and PLANNED/NOT_RUN guards describe this initial documentation baseline.
 Update them explicitly when implementation changes the baseline.
 """
-import collections, json, re
+import collections, json, os, re, subprocess
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 root=Path(__file__).resolve().parents[1]
 base=root/'docs/research/2026-10-17-shared-libraries'
-md=sorted(root.rglob('*.md'))
-js=sorted(root.rglob('*.json'))
+
+def discover_files(repo_root, suffix):
+    """Return Git-deliverable files, including untracked nonignored files."""
+    listed=subprocess.run(
+        ['git','-C',str(repo_root),'ls-files','-z','--cached','--others','--exclude-standard'],
+        check=True,stdout=subprocess.PIPE,
+    ).stdout
+    paths={Path(os.fsdecode(raw)) for raw in listed.split(b'\0') if raw}
+    return sorted(repo_root/path for path in paths if path.suffix==suffix and (repo_root/path).is_file())
+
+md=discover_files(root,'.md')
+js=discover_files(root,'.json')
 errors=[]
 counts=collections.Counter()
 docs={p:p.read_text() for p in md}
