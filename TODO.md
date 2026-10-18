@@ -1,6 +1,6 @@
 # ScopeBase TODO
 
-Status: specifications/plans prepared and development coordination setup in progress; **library implementation and runtime qualification have not started**. This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
+Status: development coordination setup accepted; SB01 source/contract intake is implementing in its isolated worktree. **No shared Rust library or runtime profile is implemented or qualified yet.** This is the canonical execution ledger. Update a task only when its own definition of done is satisfied, and record exact commit, commands/results, selected profiles, open gates and resource custody. Designing a task does not complete it.
 
 Read the [master specification](docs/superpowers/specs/2026-10-17-scopebase-design.md), [master plan](docs/superpowers/plans/2026-10-17-scopebase.md), and selected subsystem pair. [Machine-readable traceability](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps all **119 requirements and 86 tasks** to the **81 research TODO items, 32 historical regression families, 23 public-contract gaps, 14 user-conformance cases and 28 overlap rows**. The G items are also in the research TODO; these counts are not disjoint bug counts.
 
@@ -10,10 +10,10 @@ Package-ready, SDK/native-ready and product-migrated are separate statuses. Migr
 
 The [execution setup plan](docs/superpowers/plans/2026-10-18-scopebase-execution.md) is a separate preparatory checklist; it does not close any of the 86 product tasks. The active M0–M6 goal additionally requires preserving/porting donor fixes, allows justified API/architecture improvements and independently tested missing components, and permits appropriate CI/CD and privileged real-kernel tests. Follow [DEVELOPMENT](DEVELOPMENT.md) and the [current handoff](handoff.md).
 
-- [ ] EX01: isolated task briefs, model dispatch records and immutable review packages.
-- [ ] EX02: supplementary readonly Muse review and cooperative build/resource locking.
-- [ ] EX03: controller rules, templates, Git-aware document checks and a single restart route.
-- [ ] EX04: independent review and final setup verification.
+- [x] EX01: isolated task briefs, model dispatch records and immutable review packages.
+- [x] EX02: supplementary readonly Muse review and cooperative build/resource locking.
+- [x] EX03: controller rules, templates, Git-aware document checks and a single restart route.
+- [x] EX04: independent review and final setup verification. See the [accepted setup record](docs/superpowers/reviews/2026-10-18-scopebase-execution-verification.md): final implementation `79318cf`, 70 orchestration tests, doctor/dry-run, actual read-only preparation and reconciliation, planning/whitespace checks; no product qualification.
 
 ## Execution and parallelization
 
