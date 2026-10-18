@@ -430,7 +430,7 @@ impl HeldFile {
         }
         #[cfg(test)]
         if let Some(callback) = ops.hooks.after_pin.as_mut() {
-            callback();
+            callback(pin.as_raw_fd());
         }
         let mut buf = [0; 32];
         let name = decimal(pin.as_raw_fd() as u32, &mut buf);
@@ -547,7 +547,7 @@ struct Hooks {
     malformed_stat: bool,
     verify_flags: Option<FdFlags>,
     reopen_mutation: u8,
-    after_pin: Option<Box<dyn FnMut()>>,
+    after_pin: Option<Box<dyn FnMut(i32)>>,
     pipe_observer: Option<Box<dyn FnMut(i32, fs::Stat)>>,
     trace: Vec<Step>,
     fds: Vec<i32>,
@@ -801,18 +801,72 @@ mod tests {
     #[test]
     fn resolver_denial_never_reopens_path() {
         let _fd_table = FD_TABLE.lock().unwrap();
-        let f = Fixture::new();
-        let p = f.write("a", b"A");
-        let r = ProcFdResolver::open_self().unwrap();
-        let mut o = Ops::default();
-        o.hooks.fail = Some((Step::Reopen, Errno::ACCESS));
-        let e = HeldFile::open_with(&p, &r, SymlinkPolicy::Follow, &mut o).unwrap_err();
-        check_error(&e, Stage::ReopenHeld, Reason::Denied, Some(13));
-        assert_eq!(
-            o.hooks.trace,
-            [Step::PathOpen, Step::PathStat, Step::Reopen]
-        );
-        assert_closed(&o.hooks.fds);
+        for (errno, reason) in [
+            (Errno::ACCESS, Reason::Denied),
+            (Errno::NOENT, Reason::Disappeared),
+            (Errno::MFILE, Reason::Unavailable),
+        ] {
+            let f = Fixture::new();
+            let path = f.write("live", b"original-A");
+            let b = f.write("other", b"accessible-B");
+            let original = File::open(&path).unwrap();
+            let other = File::open(&b).unwrap();
+            let a_key = key(&fs::fstat(&original).unwrap());
+            let b_key = key(&fs::fstat(&other).unwrap());
+            assert_ne!(a_key, b_key);
+            let moved = f.0.join("saved-A");
+            let barrier = Arc::new(Barrier::new(2));
+            let twin = Arc::clone(&barrier);
+            let live = path.clone();
+            let worker = std::thread::spawn(move || {
+                twin.wait();
+                stdfs::rename(&live, &moved).unwrap();
+                stdfs::rename(&b, &live).unwrap();
+                let current = File::open(&live).unwrap();
+                assert_eq!(
+                    key(&fs::fstat(&current).unwrap()),
+                    b_key,
+                    "B must be accessible before failed reopen"
+                );
+                let mut bytes = [0; 12];
+                current.read_exact_at(&mut bytes, 0).unwrap();
+                assert_eq!(&bytes, b"accessible-B");
+                twin.wait();
+            });
+            let resolver = ProcFdResolver::open_self().unwrap();
+            let mut o = Ops::default();
+            o.hooks.fail = Some((Step::Reopen, errno));
+            o.hooks.after_pin = Some(Box::new(move |_| {
+                barrier.wait();
+                barrier.wait();
+            }));
+            let result = HeldFile::open_with(&path, &resolver, SymlinkPolicy::Follow, &mut o);
+            worker.join().unwrap();
+            if let Ok(held) = &result {
+                assert_eq!(
+                    held.stat().unwrap().key(),
+                    a_key,
+                    "error path must retain A and never fall back to accessible B"
+                );
+            }
+            let error = result
+                .expect_err("retained reopen error must be returned without pathname fallback");
+            check_error(
+                &error,
+                Stage::ReopenHeld,
+                reason,
+                Some(errno.raw_os_error()),
+            );
+            assert_eq!(
+                o.hooks.trace,
+                [Step::PathOpen, Step::PathStat, Step::Reopen]
+            );
+            assert_eq!(
+                (o.syscalls, o.attempted, o.completed, o.acquired, o.peak),
+                (3, 4, 3, 1, 1)
+            );
+            assert_closed(&o.hooks.fds);
+        }
     }
     #[test]
     fn fifo_trace_proves_no_data_open() {
@@ -868,7 +922,7 @@ mod tests {
                 twin.wait();
             });
             let mut o = Ops::default();
-            o.hooks.after_pin = Some(Box::new(move || {
+            o.hooks.after_pin = Some(Box::new(move |_| {
                 barrier.wait();
                 barrier.wait();
             }));
@@ -1096,6 +1150,10 @@ mod tests {
             format!("{:#?}", e.error),
         ] {
             assert!(text.len() <= 256 && text.is_ascii());
+            assert!(
+                text.bytes().all(|b| (0x20..=0x7e).contains(&b)),
+                "diagnostic must contain only printable bytes"
+            );
             assert!(!text.contains("CANARY"));
         }
     }
@@ -1295,5 +1353,78 @@ mod tests {
         );
         assert_eq!(o.hooks.trace, [Step::RootOpen, Step::RootFs]);
         assert_closed(&o.hooks.fds);
+    }
+    fn exec_must_close(fd: i32, expected: StatFileKey, canary: &OwnedFd) {
+        // Caller retains the actual owner through this complete synchronous probe.
+        let actual = fs::fstat(unsafe { BorrowedFd::borrow_raw(fd) }).unwrap();
+        assert_eq!(key(&actual), expected, "pre-exec original FD identity");
+        let c = fs::fstat(canary).unwrap();
+        let value = format!("{} {} {} {}", fd, canary.as_raw_fd(), c.st_dev, c.st_ino);
+        let standalone = std::env::var_os("SCOPEBASE_EXEC_PROBE");
+        let executable = standalone
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or(std::env::current_exe().unwrap());
+        let mut command = std::process::Command::new(executable);
+        if standalone.is_some() {
+            command.env("LX02_EXEC", value);
+        } else {
+            command
+                .args([
+                    "--exact",
+                    "file::held::tests::private_exec_probe_child",
+                    "--nocapture",
+                ])
+                .env("LX02_INTERNAL_EXEC", value);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "internal owner must close across exec: {:?}",
+            output
+        );
+        if standalone.is_some() {
+            assert!(output.stdout.is_empty() && output.stderr.is_empty());
+        }
+    }
+    #[test]
+    fn private_exec_probe_child() {
+        if let Ok(value) = std::env::var("LX02_INTERNAL_EXEC") {
+            let values: Vec<u64> = value.split(' ').map(|v| v.parse().unwrap()).collect();
+            let owner = slot_flags(values[0] as i32);
+            let canary = slot_flags(values[1] as i32);
+            assert_eq!(
+                owner
+                    .expect_err("internal owner must close across exec")
+                    .raw_os_error(),
+                Some(9)
+            );
+            canary.unwrap();
+            let actual = fs::fstat(unsafe { BorrowedFd::borrow_raw(values[1] as i32) }).unwrap();
+            assert_eq!(
+                (actual.st_dev as u64, actual.st_ino as u64),
+                (values[2], values[3]),
+                "independent canary must survive"
+            );
+        }
+    }
+    #[test]
+    fn resolver_and_live_path_pin_close_across_exec() {
+        let _fd_table = FD_TABLE.lock().unwrap();
+        let fixture = Fixture::new();
+        let path = fixture.write("a", b"A");
+        let oracle = File::open(&path).unwrap();
+        let expected_pin = key(&fs::fstat(&oracle).unwrap());
+        let resolver = ProcFdResolver::open_self().unwrap();
+        let resolver_fd = resolver.directory.as_raw_fd();
+        let expected_resolver = key(&fs::fstat(&resolver.directory).unwrap());
+        let canary = fs::open(&path, OFlags::RDONLY, Mode::empty()).unwrap();
+        let mut o = Ops::default();
+        o.hooks.after_pin = Some(Box::new(move |pin_fd| {
+            exec_must_close(resolver_fd, expected_resolver, &canary);
+            exec_must_close(pin_fd, expected_pin, &canary);
+        }));
+        let held = HeldFile::open_with(&path, &resolver, SymlinkPolicy::Follow, &mut o).unwrap();
+        assert_eq!(held.stat().unwrap().key(), expected_pin);
     }
 }

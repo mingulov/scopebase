@@ -83,14 +83,14 @@
       "source": "tests/ui/held_raw.rs",
       "code": "E0599",
       "contains": "no method named",
-      "line": 4
+      "line": 5
     },
     {
       "id": "resolver_raw",
       "source": "tests/ui/resolver_raw.rs",
       "code": "E0599",
       "contains": "no method named",
-      "line": 4
+      "line": 5
     },
     {
       "id": "file_ref",

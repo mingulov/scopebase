@@ -148,6 +148,23 @@ fn reject_final_differs_from_follow() {
             .reason(),
         Reason::NonRegular
     );
+    let dangling = f.0.join("dangling");
+    std::os::unix::fs::symlink(f.0.join("absent"), &dangling).unwrap();
+    let error = HeldFile::open(&dangling, &r, SymlinkPolicy::Follow).unwrap_err();
+    assert_eq!(
+        (
+            error.stage(),
+            error.reason(),
+            error.source().unwrap().raw_os_error()
+        ),
+        (Stage::AcquirePath, Reason::Disappeared, Some(2))
+    );
+    let error = HeldFile::open(&dangling, &r, SymlinkPolicy::RejectFinal).unwrap_err();
+    assert_eq!(
+        (error.stage(), error.reason()),
+        (Stage::ValidateFile, Reason::NonRegular)
+    );
+    assert!(error.source().is_none());
     let intermediate = f.0.join("dir-link");
     std::os::unix::fs::symlink(&f.0, &intermediate).unwrap();
     assert!(HeldFile::open(&intermediate.join("a"), &r, SymlinkPolicy::RejectFinal).is_ok());
@@ -273,6 +290,10 @@ fn debug_escapes_without_payload() {
         format!("{:?}", e.charges()),
     ] {
         assert!(text.is_ascii() && text.len() <= 256);
+        assert!(
+            text.bytes().all(|b| (0x20..=0x7e).contains(&b)),
+            "diagnostic must contain only printable bytes"
+        );
         assert!(!text.contains("CANARY"));
     }
 }
@@ -374,4 +395,77 @@ fn stat_preserves_pre_epoch_seconds() {
     let h = HeldFile::from_file(original.try_clone().unwrap()).unwrap();
     assert_eq!(h.stat().unwrap().mtime(), (-1, 0));
     assert_truth(&h, &original);
+}
+
+#[test]
+fn empty_and_nonempty_regular_open_and_adopt() {
+    let fixture = Fixture::new();
+    let resolver = ProcFdResolver::open_self().unwrap();
+    for (name, payload) in [("empty", b"".as_slice()), ("nonempty", b"A".as_slice())] {
+        let path = fixture.write(name, payload);
+        let original = File::open(&path).unwrap();
+        let opened = HeldFile::open(&path, &resolver, SymlinkPolicy::Follow).unwrap();
+        assert_truth(&opened, &original);
+        assert_eq!(read_held(&opened), payload);
+        let adopted = HeldFile::from_file(original.try_clone().unwrap()).unwrap();
+        assert_truth(&adopted, &original);
+        assert_eq!(read_held(&adopted), payload);
+    }
+}
+#[test]
+fn fifo_adoption_and_owned_directory_socket_refusals() {
+    use std::os::unix::net::UnixListener;
+    let fixture = Fixture::new();
+    let fifo = fixture.0.join("fifo");
+    sys::mknodat(
+        sys::CWD,
+        &fifo,
+        sys::FileType::Fifo,
+        Mode::RUSR | Mode::WUSR,
+        0,
+    )
+    .unwrap();
+    let original = File::from(
+        sys::open(
+            &fifo,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap(),
+    );
+    let fd = original.as_raw_fd();
+    let truth = original.metadata().unwrap();
+    let status = sys::fcntl_getfl(&original).unwrap();
+    let refusal = HeldFile::from_file(original).unwrap_err();
+    assert_eq!(refusal.file.as_raw_fd(), fd);
+    assert_eq!(
+        (
+            refusal.file.metadata().unwrap().dev(),
+            refusal.file.metadata().unwrap().ino()
+        ),
+        (truth.dev(), truth.ino())
+    );
+    assert_eq!(sys::fcntl_getfl(&refusal.file).unwrap(), status);
+    assert_eq!(
+        (refusal.error.stage(), refusal.error.reason()),
+        (Stage::ValidateFile, Reason::NonRegular)
+    );
+    assert!(refusal.error.source().is_none());
+    let socket = fixture.0.join("socket");
+    // Unix socket address limits are smaller than this job's TMPDIR. Bind
+    // through our own retained directory, without changing process cwd.
+    let socket_directory = File::open(&fixture.0).unwrap();
+    let socket_alias = format!("/proc/self/fd/{}/socket", socket_directory.as_raw_fd());
+    let _listener = UnixListener::bind(&socket_alias).unwrap();
+    let resolver = ProcFdResolver::open_self().unwrap();
+    for path in [&fixture.0, &socket] {
+        let refusal = HeldFile::open(path, &resolver, SymlinkPolicy::Follow).unwrap_err();
+        assert_eq!(
+            (refusal.stage(), refusal.reason()),
+            (Stage::ValidateFile, Reason::NonRegular)
+        );
+        assert_eq!(refusal.charges().syscall_attempts(), 2);
+        assert_eq!(refusal.charges().fd_acquisitions(), 1);
+        assert!(refusal.source().is_none());
+    }
 }

@@ -10,4 +10,6 @@ fn check(value: HeldFile, resolver: ProcFdResolver, stat: StatObservation) {
     let _ = Arc::clone(&Arc::new(resolver));
     let _ = (stat.key().device_raw(), stat.key().inode(), stat.len(), stat.mtime(), stat.ctime());
 }
-fn main() {}
+fn adopt(file: std::fs::File) { let _ = HeldFile::from_file(file); }
+fn send_sync<T: Send + Sync>() {}
+fn main() { send_sync::<HeldFile>(); send_sync::<ProcFdResolver>(); }
