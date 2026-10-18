@@ -1,6 +1,6 @@
 # Preserved issue and regression knowledge
 
-Owner: SB01 for this index; each issue's implementing task owns its concrete reproducer and package delivery. Source intake records issue obligations and inspected regressions; no issue below is claimed fixed in ScopeBase. [The donor ledger](../provenance/donors.json) retains exact selected bytes, source symbols, proposed independent oracles, active-negative controls and H/G/UC/TODO/task references. [Adoption decisions](../provenance/adoption-decisions.md) and [license gates](../provenance/licenses.md) control copying.
+Owner: SB01 for this index; each issue's implementing task owns its concrete reproducer and package delivery. Source intake records issue obligations and inspected regressions; intake entries alone do not claim a ScopeBase fix. Concrete implementation records below retain their own evidence and acceptance limits. [The donor ledger](../provenance/donors.json) retains exact selected bytes, source symbols, proposed independent oracles, active-negative controls and H/G/UC/TODO/task references. [Adoption decisions](../provenance/adoption-decisions.md) and [license gates](../provenance/licenses.md) control copying.
 
 ## Intake index
 
@@ -30,3 +30,8 @@ Run the affected tests after changing implementation, fixture, oracle, source se
 W compiler files, local Aya patch additions and other unselected inputs retain their candidate dispositions and `NEEDS_DECISION` adoption records until concrete source slices, ownership and destination terms are reviewed under the [recorded license rules](../provenance/licenses.md#uncertain-selected-inputs). Historical GPL or missing headers do not prohibit an owner-authorized port; upstream portions retain their applicable terms. The three J compiler implementation files remain product-local/reference-only for the recorded technical boundary. Compiler, ring and object obligations remain assigned. The observer's two J dirty sources require explicit later selection and refresh. The six newly assigned selected-file group mappings remain visible in the ledger.
 
 New necessary work is reported to the integration owner for root TODO and traceability with affected capability, dependencies and an exit criterion. SB03 later supplies the reusable issue template and broader contribution/versioning guidance. No external issue creation, publication, upstream submission or donor mutation follows automatically from this index.
+
+## Implemented mechanism records
+
+- [Positional bounded reads](linux/positional-reads.md): LX03 candidate, preserved P/O fixes, delivered assertions and independently wired clients; root acceptance and wider mapping/operator gates are separate.
+- [Capture provenance](capture/provenance.md): CP01–CP03 source and independent-fact boundaries; follow each selected-port and acceptance record for exact implemented scope.

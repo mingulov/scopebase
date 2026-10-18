@@ -129,3 +129,5 @@ The package ships `tests/positional_read.rs`, deterministic read-loop regression
 fixtures, privacy cases, and independently wired public client sources in
 `tests/support/read_{adopted,opened}.rs`. Run package tests explicitly with
 `cargo test --locked`; a downstream dependency's tests do not run automatically.
+
+Selected user-owned p11scope and OSSLscope host mechanisms and regression shapes are adapted under the owner-authorized Apache-2.0 destination terms. Their historical GPL-3.0-or-later source labels remain recorded in ScopeBase source-admission and selected-port receipts LX02, LX04 and LX03; the destination grant does not relicense unrelated third-party or kernel/BPF source. LX03 preserves positional/short-read handling, bounded allocation and EOF checks, final-stat raced-read refusal, shared payloads and checked work accounting. Application policies and broader mapped-image behavior remain separate.

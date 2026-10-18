@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "LX03-20261018-reads",
+  "task_id": "LX03",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-lx03-read.json",
+    "sha256": "febbccc2e9aac08ec4d14ccf119db09e35f6a22ca47569c9b9fcc681eb3d6d36"
+  },
+  "mappings": [
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          271,
+          315
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "read_all_with",
+            "admit_size"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          720,
+          741
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read/tests.rs",
+          "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac",
+          "symbols": [
+            "R04 an_early_zero_read_is_rejected_as_a_short_read"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          1200,
+          1233
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "ReadOps::charge_read"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          6504,
+          6514
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read/tests.rs",
+          "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac",
+          "symbols": [
+            "R08 work_budget_allows_exact_ceiling_and_rejects_overflow"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "source_scope": [
+        [
+          287,
+          292
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "FileRead",
+            "FileRead::clone"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "source_scope": [
+        [
+          334,
+          417
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "admit_size",
+            "read_all_with"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/site_identity.rs",
+      "source_scope": [
+        [
+          1149,
+          1355
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read/tests.rs",
+          "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac",
+          "symbols": [
+            "R02 r14_caps_empty_and_huge_before_allocation",
+            "R03 growth_requires_positive_sentinel",
+            "R05 final_identity_and_size_changes_refuse"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/positional_read.rs",
+          "sha256": "2efcd70c4a145aa22f5e1ac977daa1423ecf487f2e1157f3a1a4cc04c12be872",
+          "symbols": [
+            "r14_caps_empty_and_huge_before_allocation"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/site_identity.rs",
+      "source_scope": [
+        [
+          1381,
+          1399
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read/tests.rs",
+          "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac",
+          "symbols": [
+            "R07 clone_keeps_one_payload_and_capacity"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          4403,
+          4418
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "read_all_with final observation comparison"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          4546,
+          4584
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read.rs",
+          "sha256": "ee50159c7a9c79591311817f0042b7c5b943865be4a5441f4ef61da87e318dae",
+          "symbols": [
+            "read_all_with final observation comparison"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/capture_controller.rs",
+      "source_scope": [
+        [
+          7486,
+          7604
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/read/tests.rs",
+          "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac",
+          "symbols": [
+            "R06 raced_file_read_is_discarded_clean_sibling_survives"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/LX03-preservation-20261018.md",
+    "sha256": "3a4757dc906dba7377bcf6cbc1a28da4e0322d70a923d4dbca42f63debd6e66a"
+  },
+  "supersedes": null
+}

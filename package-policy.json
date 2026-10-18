@@ -125,8 +125,8 @@
             "mapping",
             "process"
           ],
-          "id": "linux-minimal",
-          "source": "tests/package-policy/clients/linux-minimal.rs"
+          "id": "read-adopted",
+          "source": "crates/scopebase-linux/tests/support/read_adopted.rs"
         },
         {
           "default_features": false,
@@ -134,8 +134,8 @@
             "supervision",
             "walk"
           ],
-          "id": "linux-union",
-          "source": "tests/package-policy/clients/linux-union.rs"
+          "id": "read-opened",
+          "source": "crates/scopebase-linux/tests/support/read_opened.rs"
         }
       ],
       "default": [],
@@ -310,7 +310,19 @@
         "tests/ui/control_construct_private.rs",
         "tests/ui/control_inject_clock.rs",
         "tests/ui/control_numeric_deadline.rs",
-        "tests/ui/control_positive.rs"
+        "tests/ui/control_positive.rs",
+        "src/file/read.rs",
+        "src/file/read/tests.rs",
+        "tests/positional_read.rs",
+        "tests/support/read_adopted.rs",
+        "tests/support/read_opened.rs",
+        "tests/ui/read_positive.rs",
+        "tests/ui/read_private.rs",
+        "tests/ui/read_mut.rs",
+        "tests/ui/read_observations_private.rs",
+        "tests/ui/read_charges_private.rs",
+        "tests/ui/read_limits_default.rs",
+        "tests/ui/read_owner.rs"
       ],
       "role": "product",
       "supported_unions": [
