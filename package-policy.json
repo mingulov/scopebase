@@ -659,7 +659,17 @@
         "tests/ui/count_units_do_not_mix.rs",
         "tests/ui/count_units_match.rs",
         "tests/ui/sealed_unit.rs",
-        "tests/ui/private_capture_id.rs"
+        "tests/ui/private_capture_id.rs",
+        "src/counter.rs",
+        "src/loss.rs",
+        "tests/counter_deltas.rs",
+        "tests/loss_units.rs",
+        "tests/ui/counter_units_do_not_mix.rs",
+        "tests/ui/signal_is_not_event_loss.rs",
+        "tests/ui/cp03_units_match.rs",
+        "tests/support/check_cp03_controls.py",
+        "examples/counter_windows.rs",
+        "examples/diagnostic_lanes.rs"
       ],
       "role": "product",
       "supported_unions": [

@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "CP03-20261018-counters",
+  "task_id": "CP03",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-cp03-counters.json",
+    "sha256": "d1c3a040f5ec492be692f10021b0667568d5e904028953a513397d563eec1098"
+  },
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          133,
+          161
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/loss.rs",
+          "sha256": "0f1226a8bde0e13a597ddb1ed105efa0c931b6c8e871787e1d11f7839d5024f9",
+          "symbols": [
+            "fold_capped_signals",
+            "CappedLossSignal"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          862,
+          888
+        ],
+        [
+          890,
+          902
+        ],
+        [
+          904,
+          917
+        ],
+        [
+          919,
+          930
+        ],
+        [
+          932,
+          954
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/loss_units.rs",
+          "sha256": "703cc3e40935dc196796635d6a591809787c377db26d820e5cd650e85964fabe",
+          "symbols": [
+            "k_lanes_cap_and_remain_independent",
+            "invalid_late_lane_is_not_hidden",
+            "diagnostic_exhaustive_pairs"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "source_scope": [
+        [
+          172,
+          191
+        ],
+        [
+          235,
+          259
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/counter_deltas.rs",
+          "sha256": "2aa5dba4bdd1d8f41b616e317b8af516b9ef4a08e7c57ebdd2f20cc432edbb5c",
+          "symbols": [
+            "saturation_is_lower_bound"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/loss_units.rs",
+          "sha256": "703cc3e40935dc196796635d6a591809787c377db26d820e5cd650e85964fabe",
+          "symbols": [
+            "k_lanes_cap_and_remain_independent"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          1504,
+          1515
+        ],
+        [
+          8881,
+          8890
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/counter.rs",
+          "sha256": "de8ac13a11d93941151a34e8385bc25083931bd363d4e36b6b3e301cd76bf18b",
+          "symbols": [
+            "sample_delta"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/counter_deltas.rs",
+          "sha256": "2aa5dba4bdd1d8f41b616e317b8af516b9ef4a08e7c57ebdd2f20cc432edbb5c",
+          "symbols": [
+            "missing_baseline_is_unknown",
+            "monotonic_and_reset"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/evidence.rs",
+      "source_scope": [
+        [
+          300,
+          348
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/loss.rs",
+          "sha256": "0f1226a8bde0e13a597ddb1ed105efa0c931b6c8e871787e1d11f7839d5024f9",
+          "symbols": [
+            "LossFact",
+            "LossMagnitude",
+            "LossKind"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/evidence_model.rs",
+      "source_scope": [
+        [
+          520,
+          554
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/loss_units.rs",
+          "sha256": "703cc3e40935dc196796635d6a591809787c377db26d820e5cd650e85964fabe",
+          "symbols": [
+            "kinds_units_and_magnitudes_are_retained",
+            "k_lanes_cap_and_remain_independent"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/CP03-preservation-20261018.md",
+    "sha256": "0760b52ff306dad4deb7402defe386f58b0f0e7cf02ef8c0dd46d81d982545c0"
+  },
+  "supersedes": null
+}
