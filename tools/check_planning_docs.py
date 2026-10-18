@@ -2,8 +2,9 @@
 """Check the current ScopeBase planning documents, not future software behavior.
 
 Run from any directory: python3 tools/check_planning_docs.py
-Counts and PLANNED/NOT_RUN guards describe this initial documentation baseline.
-Update them explicitly when implementation changes the baseline.
+Task progress is administrative; acceptance records never certify runtime support.
+Counts and unqualified capability guards describe the current foundation schema.
+Amend those guards explicitly when a later qualification schema is implemented.
 """
 import collections, json, os, re, subprocess
 from pathlib import Path
@@ -45,6 +46,19 @@ def headings(p):
             counts_slug[s]+=1
     return result
 anchors={p:headings(p) for p in md}
+def acceptance_record(value):
+    """Require public Markdown beneath docs/reviews, without symlink custody."""
+    if not isinstance(value,str) or not value or '\0' in value:
+        return False
+    path=Path(value)
+    if path.is_absolute() or '..' in path.parts or path.parts[:2]!=('docs','reviews'):
+        return False
+    if len(path.parts)<3 or path.suffix!='.md':
+        return False
+    if any(root.joinpath(*path.parts[:i]).is_symlink() for i in range(1,len(path.parts)+1)):
+        return False
+    return root/path in docs
+
 def link(p,target):
     if target.startswith(('<','>')):
         target=target.strip('<>')
@@ -132,24 +146,51 @@ tasks=reg['tasks']
 task_ids=[t['id'] for t in tasks]
 task_map={t['id']:t for t in tasks}
 if len(task_ids)!=86 or len(set(task_ids))!=86: fail('planning task IDs/count')
-if reg['implementation_status']!='NOT_IMPLEMENTED' or reg['qualification_status']!='NOT_RUN' or reg['runnable']:
-    fail('planning state overclaims implementation or qualification')
+progressed=any(t.get('status')!='PLANNED' for t in tasks)
+expected_state=('DEVELOPMENT','IN_PROGRESS') if progressed else ('DESIGN_ONLY','NOT_IMPLEMENTED')
+if (reg.get('status'),reg.get('implementation_status'))!=expected_state:
+    fail('planning execution state differs from task progress')
+if reg.get('qualification_status')!='NOT_RUN' or reg.get('runnable') is not False:
+    fail('planning qualification status')
 plan_ids=[]
 for p,body in docs.items():
     if p.parent != root/'docs/superpowers/plans': continue
     plan_ids.extend(re.findall(r'^#{2,3} (?:Task )?((?:SB|LX|BP|TC|CP|TT|SDK|NX|RL|MG)\d{2}):',body,re.M))
 if collections.Counter(plan_ids)!=collections.Counter(task_ids): fail('task registry differs from detailed plans')
-todo_ids=re.findall(r'^- \[ \] \[((?:SB|LX|BP|TC|CP|TT|SDK|NX|RL|MG)\d{2}):',docs[root/'TODO.md'],re.M)
+todo_rows=[]
+for line in docs[root/'TODO.md'].splitlines():
+    match=re.match(r'^- \[([ x])\] \[((?:SB|LX|BP|TC|CP|TT|SDK|NX|RL|MG)\d{2}):',line)
+    if match: todo_rows.append((match[2],match[1],line))
+todo_ids=[ident for ident,_,_ in todo_rows]
 if collections.Counter(todo_ids)!=collections.Counter(task_ids): fail('root TODO differs from registry')
 all_edges={}
 for task in tasks:
-    if task['status']!='PLANNED': fail(task['id']+': unqualified task status')
+    state=task.get('status')
+    if state not in ('PLANNED','IN_PROGRESS','ACCEPTED'):
+        fail(task['id']+': unknown task status')
+    if state in ('IN_PROGRESS','ACCEPTED'):
+        unmet=[dep for dep in task['depends_on'] if task_map.get(dep,{}).get('status')!='ACCEPTED']
+        if unmet: fail(task['id']+': mandatory prerequisites not ACCEPTED: '+','.join(unmet))
+    if state=='ACCEPTED':
+        acceptance=task.get('acceptance')
+        if not isinstance(acceptance,dict) or not {'subject_commit','evidence_record'}<=acceptance.keys():
+            fail(task['id']+': invalid acceptance object')
+        else:
+            subject=acceptance['subject_commit']
+            if not isinstance(subject,str) or not re.fullmatch(r'[0-9a-f]{40}',subject):
+                fail(task['id']+': invalid acceptance subject_commit')
+            if not acceptance_record(acceptance['evidence_record']):
+                fail(task['id']+': invalid acceptance evidence_record')
+    elif 'acceptance' in task:
+        fail(task['id']+': acceptance requires ACCEPTED')
     link(root/'README.md',task['plan']+'#'+task['anchor'])
     all_edges[task['id']]=set(task['depends_on'])
     for gate in task['profile_gates']:
         all_edges[task['id']].update(gate['requires_tasks'])
     if len(task['depends_on'])!=len(set(task['depends_on'])): fail(task['id']+': duplicate dependency')
-    line=next((l for l in docs[root/'TODO.md'].splitlines() if l.startswith('- [ ] ['+task['id']+':')), '')
+    checkbox,line=next(((checked,line) for ident,checked,line in todo_rows if ident==task['id']), ('',''))
+    if checkbox!=('x' if state=='ACCEPTED' else ' '):
+        fail(task['id']+': root TODO checkbox differs from task status')
     match=re.search(r'prerequisites: ([^;.]+)',line)
     listed=[] if match and match[1]=='none' else (match[1].split(', ') if match else None)
     if listed!=task['depends_on']: fail(task['id']+': root TODO prerequisites drift')
@@ -176,6 +217,7 @@ for p,body in docs.items():
 requirements=reg['requirements']
 if len(requirements)!=119 or {r['id'] for r in requirements}!=set(spec_ids): fail('requirement registry differs from specifications')
 for r in requirements:
+    if r.get('status')!='PLANNED': fail(r['id']+': requirement status must remain PLANNED')
     if root/r['spec']!=spec_ids.get(r['id']): fail(r['id']+': wrong spec path')
     if not r['tasks'] or any(t not in task_map for t in r['tasks']): fail(r['id']+': missing/dangling owner')
     for t in r['tasks']:
@@ -200,10 +242,12 @@ profile_edges={p:set(v['requires_profiles']) for p,v in profiles.items()}
 for ident in [*profiles,*extensions]:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}',ident): fail('invalid profile/extension ID '+ident)
 for e in extensions.values():
+    if 'status' in e and e['status']!='PLANNED': fail(e['id']+': extension status must remain PLANNED')
     if e['profile'] not in profiles: fail('unknown extension owner '+e['id'])
     else: profile_edges[e['profile']].update(e['requires_profiles'])
     if any(t not in task_map for t in e['requires_tasks']): fail('dangling extension task '+e['id'])
 for p in profiles.values():
+    if p.get('status')!='PLANNED': fail(p['id']+': profile status must remain PLANNED')
     if any(e not in extensions for e in p['requires_extensions']): fail('dangling extension '+p['id'])
     if any(t not in task_map for t in p['readiness_tasks']): fail('dangling readiness task '+p['id'])
 for t in tasks:
