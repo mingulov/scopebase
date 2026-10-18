@@ -24,6 +24,8 @@ def discover_files(repo_root, suffix):
 
 md=discover_files(root,'.md')
 js=discover_files(root,'.json')
+catalog_dir=Path('crates/scopebase-testkit/tests/fixtures/catalog')
+catalog_metadata={'admission-expectations.json','profile-schema-v1.json'}
 errors=[]
 counts=collections.Counter()
 docs={p:p.read_text() for p in md}
@@ -92,11 +94,26 @@ for p,body in docs.items():
                 fail(f'{p.relative_to(root)}:{no}: table width {len(cells)} expected {table_width}')
         else: table_width=None
     if fenced: fail(f'{p.relative_to(root)}: unclosed fence')
+json_values={}
+json_parse_errors=False
 for p in js:
-    try: json.loads(p.read_text())
-    except Exception as e: fail(f'{p.relative_to(root)}: JSON {e}')
-    for no,line in enumerate(p.read_text().splitlines(),1):
+    relative=p.relative_to(root)
+    # Catalog suites judge raw payloads, including intentionally invalid JSON.
+    # Their metadata and all JSON outside this exact corpus remain checked here.
+    if relative.parent==catalog_dir and p.name not in catalog_metadata:
+        continue
+    try:
+        body=p.read_text()
+        json_values[p]=json.loads(body)
+    except Exception as e:
+        fail(f'{relative}: JSON {e}')
+        json_parse_errors=True
+        continue
+    for no,line in enumerate(body.splitlines(),1):
         if line.rstrip()!=line: fail(f'{p.relative_to(root)}:{no}: trailing whitespace')
+if json_parse_errors:
+    print(json.dumps({'counts':dict(counts),'errors':errors,'result':'FAIL'},indent=2))
+    raise SystemExit(1)
 h=re.findall(r'^\| (H\d{2}) \|',docs[base/'testing-strategy.md'],re.M)
 g=re.findall(r'^## (G\d{2})\.',docs[base/'gap-analysis.md'],re.M)
 uc=re.findall(r'^\| \*\*(UC\d{2}) ',docs[base/'user-conformance.md'],re.M)
@@ -107,7 +124,7 @@ for label,actual,n in [('H',h,33),('G',g,23),('UC',uc,14)]:
     if actual!=expected: fail(f'{label} identifiers mismatch: {actual}')
 if len(todo)!=len(set(todo)): fail('duplicate TODO identifiers')
 if [int(x) for x in ov]!=list(range(1,29)): fail(f'overlap rows mismatch: {ov}')
-cat=json.loads((base/'regression-catalog.json').read_text())
+cat=json_values[base/'regression-catalog.json']
 if cat['schema_version']!='0.2.0': fail('catalog schema version')
 if cat['runnable'] or cat['execution_status']!='NOT_RUN' or cat['implementation_status']!='NOT_IMPLEMENTED': fail('catalog qualification status')
 if [c['id'] for c in cat['cases']]!=h: fail('catalog H identifiers mismatch')
@@ -135,13 +152,13 @@ for c in cat['cases']:
     for typ,valid in [('UC',uc),('G',g),('TODO',todo)]:
         for ref in c['related_obligations'][typ]:
             if ref not in valid: fail(c['id']+': unknown '+typ+' '+ref)
-src=json.loads((base/'external-sources.json').read_text())
+src=json_values[base/'external-sources.json']
 for entry in src['sources']:
     if not re.fullmatch(r'[0-9a-f]{40}',entry['sha']): fail('invalid upstream SHA '+str(entry))
 counts.update(markdown_files=len(md), json_files=len(js), H_families=len(h), UC_scenarios=len(uc), G_obligations=len(g), backlog_items=len(todo), overlap_rows=len(ov), upstream_research_pins=len(src['sources']))
 
 registry_path=root/'docs/superpowers/plans/2026-10-17-scopebase-traceability.json'
-reg=json.loads(registry_path.read_text())
+reg=json_values[registry_path]
 tasks=reg['tasks']
 task_ids=[t['id'] for t in tasks]
 task_map={t['id']:t for t in tasks}
