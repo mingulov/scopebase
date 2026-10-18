@@ -1,0 +1,437 @@
+{
+  "schema_version": 1,
+  "kind": "LX02_GRANTED_ADAPTATIONS_AND_REFERENCE_ONLY_CONTEXT",
+  "candidate_commit": "791eb932d0b4fb99bb79ee8587eaea8482271aa4",
+  "supersedes_for_actual_copy_classification": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/jobs/lx02-held-file-20261018/evidence/source-mapping-791eb932.json",
+    "sha256": "793e2f694929561fd6342809ef2badd1fd453af07de1721bbe94fd8aae0ecbfb",
+    "historical_artifact_unchanged": true
+  },
+  "inputs": {
+    "admission": {
+      "path": "/home/user/src/m/bpfscope/.scopebase/jobs/lx02-held-file-20261018/inputs/canonical/docs/provenance/donors.json",
+      "sha256": "1719bcab8a38ee88ac0419cb9b7d32ca58d9813042981fe001b214e5489557d6"
+    },
+    "dispatch": {
+      "path": "/home/user/src/m/bpfscope/.scopebase/jobs/lx02-held-file-20261018/dispatch-contract.md",
+      "sha256": "32c0f2fd9c90f429f094e2d707e7f1d239d5833b1b5bed380661488755f14d66"
+    }
+  },
+  "selected_ports": [
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "donor_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "source_sha256": "03969328ba13caaf054a64e839732f91a74ded3647d4ff15c4a63264e17b0d64",
+      "source_scope": [
+        [
+          177,
+          194
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          177,
+          194
+        ]
+      ],
+      "source_symbols": [
+        "open_regular"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "1fe7d0aee6a11d3bec076a2b0a237665bb1d5a4bd61ab9d621f93944279fafcb",
+          "symbols": [
+            "HeldFile::open_with"
+          ],
+          "adaptation_scope": "O_PATH acquisition and regular-type gate before data open; retain original pin until readable reopen"
+        }
+      ],
+      "limits": "Retained resolver, full post-reopen parity, fixed buffers and structured errors are new contract adapters. No whole-file copy."
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "donor_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "source_sha256": "ff5a08d4ce93a24f8b3c2c712d5c30e4bcdd83e417124facbdf8c3e8b96c6a7f",
+      "source_scope": [
+        [
+          37,
+          57
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          37,
+          57
+        ],
+        [
+          4057,
+          4071
+        ],
+        [
+          5195,
+          5241
+        ]
+      ],
+      "source_symbols": [
+        "Pin",
+        "pin_of",
+        "pin_from_metadata"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "1fe7d0aee6a11d3bec076a2b0a237665bb1d5a4bd61ab9d621f93944279fafcb",
+          "symbols": [
+            "key",
+            "HeldFile::stat_with"
+          ],
+          "adaptation_scope": "Descriptor-derived stat observations retain opened-file identity rather than resampling a pathname"
+        },
+        {
+          "path": "crates/scopebase-linux/src/identity.rs",
+          "sha256": "dce374ad116b4288265c7b744a98a6ee2896430082cf3aece6919f0ef94a84a5",
+          "symbols": [
+            "StatObservation::from_stat"
+          ],
+          "adaptation_scope": "Descriptor len/ctime observation handoff; full stat domain and checked conversion are the R2 addition"
+        }
+      ],
+      "limits": "P Pin does not supply a full raw device/inode identity or the new conversion contract; device and additional fields follow O selected opened-stat mechanism plus R2. No mount/cache/proof policy copied."
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "donor_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "source_sha256": "ff5a08d4ce93a24f8b3c2c712d5c30e4bcdd83e417124facbdf8c3e8b96c6a7f",
+      "source_scope": [
+        [
+          4057,
+          4071
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          37,
+          57
+        ],
+        [
+          4057,
+          4071
+        ],
+        [
+          5195,
+          5241
+        ]
+      ],
+      "source_symbols": [
+        "retained_view_object_open_rejects_a_fifo_without_data_open"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "1fe7d0aee6a11d3bec076a2b0a237665bb1d5a4bd61ab9d621f93944279fafcb",
+          "symbols": [
+            "tests::fifo_trace_proves_no_data_open"
+          ],
+          "adaptation_scope": "Preserve real no-writer FIFO refusal with explicit ordering oracle"
+        },
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "rejects_fifo_before_read_open"
+          ],
+          "adaptation_scope": "Shipped public regular-file acquisition refuses FIFO before readable open"
+        }
+      ],
+      "limits": "Original regression scenario is adapted to the public package API. Additional empty/nonempty/type fixtures follow the reviewed packet."
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "donor_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "source_sha256": "ff5a08d4ce93a24f8b3c2c712d5c30e4bcdd83e417124facbdf8c3e8b96c6a7f",
+      "source_scope": [
+        [
+          5195,
+          5241
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          37,
+          57
+        ],
+        [
+          4057,
+          4071
+        ],
+        [
+          5195,
+          5241
+        ]
+      ],
+      "source_symbols": [
+        "retained_mapped_identity_keeps_the_original_file_and_rejects_changes"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "retained_owner_and_same_bytes_different_inode",
+            "stat_tracks_held_descriptor"
+          ],
+          "adaptation_scope": "Preserve retained Arc ownership, same-bytes/distinct-inode counterexample and fresh held-descriptor observation after truncate/replacement"
+        }
+      ],
+      "limits": "Only acquisition/stat/owner counterexamples are adapted here. Mapped proof/calibration/changed-content decisions remain LX03/LX06; no mapped proof mechanism is copied or certified."
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "donor_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "18132719eb9d770118568a560985e2f3bb8d33cabdcc56318e81cee9c3a26299",
+      "source_scope": [
+        [
+          205,
+          240
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          205,
+          240
+        ],
+        [
+          1123,
+          1141
+        ]
+      ],
+      "source_symbols": [
+        "PinnedFile",
+        "resolve_pinned"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "1fe7d0aee6a11d3bec076a2b0a237665bb1d5a4bd61ab9d621f93944279fafcb",
+          "symbols": [
+            "HeldFile",
+            "HeldFile::open_with",
+            "HeldFile::stat_with"
+          ],
+          "adaptation_scope": "Retain original opened File and observe descriptor device/inode; private fields and AsFd replace public owning fields"
+        }
+      ],
+      "limits": "The allowed range also contains link_path; no public formatted fd-path method or its String implementation is copied. Descriptor-relative lookup/validation is new R1 work. P type-before-data-open gate remains stronger."
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "donor_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "18132719eb9d770118568a560985e2f3bb8d33cabdcc56318e81cee9c3a26299",
+      "source_scope": [
+        [
+          1123,
+          1141
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          205,
+          240
+        ],
+        [
+          1123,
+          1141
+        ]
+      ],
+      "source_symbols": [
+        "resolve_pinned_stats_the_open_file"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "stat_tracks_held_descriptor",
+            "missing_input_returns_original_errno"
+          ],
+          "adaptation_scope": "Preserve independent opened-file MetadataExt comparison and missing-input refusal"
+        }
+      ],
+      "limits": "This is the actual opened-stat regression; the retry regression at 998-1050 is reference-only below."
+    },
+    {
+      "file_id": "O:tests/count_deadline.rs",
+      "donor_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "25c24349ac0311606543cb27186d9ac96dd9407fd2aa5108cc93e9fe601c59f4",
+      "source_scope": [
+        [
+          551,
+          596
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          551,
+          596
+        ],
+        [
+          598,
+          665
+        ]
+      ],
+      "source_symbols": [
+        "h4_t3_pin_survives_path_deletion_until_session_drop"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "retained_owner_and_same_bytes_different_inode",
+            "final_drop_releases_original_fd_with_live_alias"
+          ],
+          "adaptation_scope": "Preserve unlink retention through live owners"
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/fd_probe.rs",
+          "sha256": "3b423496bbb4558d069b4232a6e2c91a6d0d2ea8d5f32a3baf072856fc3c6ad2",
+          "symbols": [
+            "retirement_check"
+          ],
+          "adaptation_scope": "Preserve last-owner release with an independent live alias and exact descriptor slot checks"
+        }
+      ],
+      "limits": "No CountSession/backend implementation, detach success or installed_at mechanism is copied. Attachment retirement remains BP04/MG02."
+    },
+    {
+      "file_id": "O:tests/count_deadline.rs",
+      "donor_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "25c24349ac0311606543cb27186d9ac96dd9407fd2aa5108cc93e9fe601c59f4",
+      "source_scope": [
+        [
+          598,
+          665
+        ]
+      ],
+      "grant_source_scope": [
+        [
+          551,
+          596
+        ],
+        [
+          598,
+          665
+        ]
+      ],
+      "source_symbols": [
+        "h4_t1_mid_attach_swap_binds_pinned_inode_via_fd_path"
+      ],
+      "origin": "ADAPT",
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "1fe7d0aee6a11d3bec076a2b0a237665bb1d5a4bd61ab9d621f93944279fafcb",
+          "symbols": [
+            "tests::open_holds_a_through_a_b_a_and_unlink"
+          ],
+          "adaptation_scope": "Adapt real mid-operation pathname replacement and retained original identity, with B-installation barrier"
+        }
+      ],
+      "limits": "The source regression is replacement-only. Complete A-to-B-to-A and unlink-before-reopen populations are reviewed LX02 additions, not attributed as original O coverage. No backend attach/cookie logic copied."
+    }
+  ],
+  "reference_only": [
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "source_scope": [
+        [
+          1912,
+          1925
+        ]
+      ],
+      "symbols": [
+        "open_view_object_cached"
+      ],
+      "use": "Read-only call-site context for owner handoff; ProcessView/mount-table/cache policy is not present in LX02 and remains product/LX06/MG01 work.",
+      "copied_or_adapted": false
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "source_scope": [
+        [
+          256,
+          267
+        ],
+        [
+          998,
+          1050
+        ]
+      ],
+      "symbols": [
+        "resolve_pinned_retry",
+        "h4_t2_pin_open_retries_bounded_then_fails"
+      ],
+      "use": "Read-only contrast: O bounded 1/2/3-attempt last-error retry is application policy. No retry loop or original retry-test body is copied/adapted into LX02. ScopeBase one-attempt/first-error checks are new tests of the ratified R1/R3 no-retry contract.",
+      "copied_or_adapted": false
+    },
+    {
+      "file_id": "O:src/count_session.rs",
+      "source_scope": [
+        [
+          332,
+          342
+        ],
+        [
+          659,
+          704
+        ]
+      ],
+      "symbols": [
+        "CountSession::link_pins",
+        "CountSession attachment/custody call site"
+      ],
+      "use": "Read-only attachment custody/retirement context; backend and link state machine stay BP04/MG02.",
+      "copied_or_adapted": false
+    },
+    {
+      "file_id": "O:tests/site_identity.rs",
+      "source_scope": [
+        [
+          87,
+          144
+        ],
+        [
+          987,
+          1018
+        ]
+      ],
+      "symbols": [
+        "Stage fixture context",
+        "missed_bind_leaves_installed_at_unset"
+      ],
+      "use": "Read-only product test and stale-plan/installed_at context. No Stage helper body or installed_at mechanism is copied; package fixture helpers are new bounded std-only test code.",
+      "copied_or_adapted": false
+    }
+  ],
+  "new_mechanisms": [
+    "R1 retained resolver/PID/fresh-pipe validation and supported-context guard",
+    "Owner-preserving adoption with real failed-set flag uncertainty",
+    "R2 complete bounded StatObservation conversion",
+    "R3 structured errors/effects/charges and one-attempt/no-retry regression models",
+    "R5 private fault/checkpoint and independent package/UI fixtures",
+    "R6 fixed path/FD scratch and printable bounded diagnostic checks"
+  ],
+  "clarification": "Earlier mapping source_scope strings mixed actual granted adaptations with contextual call-site/retry references. This separate receipt corrects their classification only; it does not amend an intake, source grant, historical map or candidate bytes. Exact numeric source_scope values above are selected from the bound ready grants. No out-of-scope source mechanism or regression body was copied/adapted.",
+  "additional_source_grant_required": false,
+  "runtime_qualification": false,
+  "tests_rerun": false,
+  "donor_access_performed": false
+}
