@@ -1,5 +1,9 @@
 """Behavioral intake controls: real JSON documents and a temporary Git donor."""
 import copy
+import errno
+import os
+import socket
+import stat
 import hashlib
 import importlib.util
 import json
@@ -8,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'check_traceability.py'
 REPO_ROOT = SCRIPT.parents[2]
@@ -873,6 +878,71 @@ class PortReceiptTests(IntakeFixture, unittest.TestCase):
                 self.assertIn('PORT_UNAVAILABLE', {e['code'] for e in payload['unavailable']})
                 path.write_bytes(original)
                 self.assert_port_valid()
+
+    def test_socket_artifacts_are_invalid_then_regular_twins_restore(self):
+        for path in (self.destination, self.preservation, self.admission, self.receipt_path):
+            with self.subTest(role=path.name):
+                self.assert_port_valid()
+                original = path.read_bytes()
+                path.unlink()
+                parent = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+                        # The private TMPDIR can exceed AF_UNIX's pathname limit.
+                        # This short descriptor path creates the real socket in
+                        # the owned fixture without changing process cwd.
+                        endpoint.bind('/proc/self/fd/' + str(parent) + '/' + path.name)
+                        self.assertTrue(stat.S_ISSOCK(path.lstat().st_mode))
+                        result = self.run_check('--port-receipt', 'receipt.json')
+                finally:
+                    os.close(parent)
+                    path.unlink()
+                    path.write_bytes(original)
+                self.assert_port_valid()
+                payload = json.loads(result.stdout)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertEqual(payload['status'], 'INVALID')
+                self.assertIn('PORT_PATH', {e['code'] for e in payload['errors']})
+                self.assertEqual(payload['unavailable'], [])
+
+    def test_fifo_and_internal_symlink_refused_then_regular_twin_restores(self):
+        for kind in ('fifo', 'internal symlink'):
+            with self.subTest(kind=kind):
+                self.assert_port_valid()
+                original = self.destination.read_bytes()
+                self.destination.unlink()
+                try:
+                    if kind == 'fifo':
+                        os.mkfifo(self.destination)
+                    else:
+                        self.destination.symlink_to(self.preservation.name)
+                    result = self.run_check('--port-receipt', 'receipt.json')
+                finally:
+                    self.destination.unlink()
+                    self.destination.write_bytes(original)
+                self.assert_port_valid()
+                payload = json.loads(result.stdout)
+                self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                self.assertIn('PORT_PATH', {e['code'] for e in payload['errors']})
+                self.assertEqual(payload['unavailable'], [])
+
+    def test_unexplained_open_enxio_on_regular_file_remains_unavailable(self):
+        self.assert_port_valid()
+        self.write_receipt()
+        real_open = os.open
+
+        def open_with_unexplained_failure(path, *args, **kwargs):
+            if path == self.destination.name:
+                raise OSError(errno.ENXIO, 'injected regular-file backend failure')
+            return real_open(path, *args, **kwargs)
+
+        # A narrow syscall failure seam represents a backend error whose errno
+        # alone does not prove path type. All metadata/other reads stay real.
+        with mock.patch.object(INTAKE.os, 'open', side_effect=open_with_unexplained_failure):
+            errors, unavailable = INTAKE.validate_port_receipt(self.registry, 'receipt.json', self.root)
+        self.assertEqual(errors, [])
+        self.assertEqual([e['code'] for e in unavailable], ['PORT_UNAVAILABLE'])
+        self.assert_port_valid()
 
     def test_unsafe_and_symlink_escape_paths_refused(self):
         baseline = copy.deepcopy(self.receipt)

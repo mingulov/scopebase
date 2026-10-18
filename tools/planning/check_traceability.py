@@ -629,9 +629,18 @@ def validate_port_receipt(registry, path, repo_root, *, seen_ids=None):
                 flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
                 if index < len(parts) - 1:
                     flags |= os.O_DIRECTORY
+                else:
+                    # Some nonregular entries (notably Unix sockets) fail open
+                    # before fstat. Reject their observed type without opening
+                    # known devices/FIFOs; errno alone cannot establish type.
+                    entry = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                    if not stat.S_ISREG(entry.st_mode):
+                        reject('PORT_PATH', value + ': regular file required')
                 child = os.open(part, flags, dir_fd=descriptor)
                 os.close(descriptor)
                 descriptor = child
+            # The pre-open observation can race; the actual descriptor remains
+            # authoritative for file type and every byte read below.
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 reject('PORT_PATH', value + ': regular file required')
