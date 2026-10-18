@@ -778,14 +778,18 @@
       "anchor": "task-cp01-package-donor-custody-and-issue-contracts",
       "lane": "capture",
       "milestone": "M4",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB02"
       ],
       "requirements": [
         "CP-R01"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "69c59459486d0722a005bfc1dd39fd5001a345dd",
+        "evidence_record": "docs/reviews/2026-10-18-cp01-foundation.md"
+      }
     },
     {
       "id": "CP02",
@@ -1063,7 +1067,7 @@
       "anchor": "lx01-foundation-choices-and-selected-donor-contract-register",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB01",
         "SB02"
@@ -1073,7 +1077,11 @@
         "LX-R01",
         "LX-R22"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "69c59459486d0722a005bfc1dd39fd5001a345dd",
+        "evidence_record": "docs/reviews/2026-10-18-lx01-foundation.md"
+      }
     },
     {
       "id": "LX02",
@@ -2208,7 +2216,7 @@
       "anchor": "sb03-versioning-support-and-documentation-contracts",
       "lane": "integration",
       "milestone": "M0",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB01",
         "SB02"
@@ -2220,7 +2228,11 @@
         "SB-R17",
         "SB-R18"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "f81f121f7ec711d72a593b57d82e9ec203965cf5",
+        "evidence_record": "docs/reviews/2026-10-18-sb03-foundation.md"
+      }
     },
     {
       "id": "RL01",

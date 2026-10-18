@@ -27,6 +27,7 @@ impl HeldFile {
                 symlinks: SymlinkPolicy) -> Result<Self, LinuxError>;
     pub fn from_file(file: std::fs::File) -> Result<Self, AdoptFileError>;
     pub fn stat(&self) -> Result<StatObservation, LinuxError>;
+    // LX03/LX04: export only with the read/control implementation, never as an LX02 stub.
     pub fn read_all(&self, limits: ReadLimits,
                     control: &OperationControl) -> Result<FileRead, LinuxError>;
 }
@@ -35,11 +36,43 @@ impl AsFd for HeldFile {
 }
 ```
 
-`AdoptFileError` exposes `error: LinuxError` and `file: File`; refusal returns the submitted owner. `from_file` admits a readable regular descriptor after setting CLOEXEC, preserves open-description status flags and cursor, and reports partial descriptor-flag effects. `open` validates an O_PATH-held regular inode, reopens only through the retained validated proc-fd resolver and revalidates the resulting inode. There is no fallback to the input pathname. `RejectFinal` concerns the final symlink only. Resolver reuse after caller fork without exec is unsupported.
+`AdoptFileError` exposes `error: LinuxError` and `file: File`; refusal returns exactly the submitted owner/FD. Adoption validates fstat/type, F_GETFL readable mode and F_GETFD before optional F_SETFD(original OR CLOEXEC), the final fallible step. It never dup/reopens, reads/seeks or changes shared status/cursor. A failed set retains its primary errno, performs one flag observation, and reports Unchanged/CloexecSet/Unknown without restoration; before any set the effect is NotAttempted. Success cannot retroactively close the incoming non-CLOEXEC inheritance window.
 
-`HeldFile` has no public Clone, raw-owning conversion, mutable File access, Deref or serde implementation. Callers share `Arc<HeldFile>`; attachments retain that Arc alongside backend ownership through successful retirement or explicit unresolved custody. `AsFd` is borrowed integration access, not a universal identity or protection against deliberate raw-FD misuse. `HeldFile`, `ProcFdResolver` and immutable read results are Send+Sync. Positional concurrent reads do not share a cursor; successful reads remain interval observations, not immutable snapshots. File Drop does not produce a fallible native-retirement receipt or promise a hard latency bound.
+`open` admits nonempty raw paths up to 4095 bytes without NUL, with fixed 4096-byte C-string scratch and zero operations on admission refusal. Then it checks creating PID, retains an O_PATH regular inode before any data open, reopens only through the retained resolver, and compares regular type plus raw device and inode while both owners remain live. No fallback/retry; RejectFinal concerns only the final symlink. No read/control placeholder is exported in LX02.
 
-Dependent read signatures remain the Linux specification's `ReadLimits`, `FileRead`, `ReadObservations`, `ReadCharges` and `OperationControl`; they are not replaced with a testkit reader trait. LX01/LX02 qualify acquisition and reads independently. LX05–LX08 separately implement calibrated mapping/retained range evidence and real filesystem/namespace cells. A file-only increment cannot close mapped-image capability.
+The [resolver validation sequence](../superpowers/specs/2026-10-17-scopebase-linux-design.md#retained-resolver-validation-and-support-boundary) requires procfs type, bounded self/PID checks and a fresh CLOEXEC pipe created after candidate acquisition, reopened as O_PATH and checked by type/device/inode. It supports ordinary procfs/shared FD tables with main-thread proc entries available; coherent hostile proc/FD substitution, unshared-table reuse and fork-without-exec reuse are outside guarantees. This is not namespace attestation. Ambient `/proc` replacement alone does not invalidate a retained directory; never reacquire ambient paths, and report observed retained-resolution failure/mismatch. Fresh-pipe denial/unavailability refuses resolver creation. Its approved dependency closure is rustix 1.1.5 `std,fs,pipe`, with exact inputs/features bound before implementation.
+
+HeldFile and ProcFdResolver have private fields and no Clone, raw-owning conversion, mutable File access, Deref, serde or owner construction from keys/reports. Callers share Arc; attachments retain original authority through successful retirement or explicit unresolved custody. AsFd is borrowed integration, not protection against deliberate descriptor misuse. Both are Send+Sync in the supported shared-table context. Positional reads remain interval observations. Drop releases its FD once without close-EINTR retry and proves no backend retirement or hard latency bound.
+
+The [stat handoff](../superpowers/specs/2026-10-17-scopebase-linux-design.md#lx02-stat-observations) is exact:
+
+```rust
+// identity; private fields, Copy/Clone/Eq/PartialEq and bounded custom Debug
+pub struct StatFileKey { /* raw device:u64, inode:u64 */ }
+impl StatFileKey {
+    pub fn device_raw(&self) -> u64;
+    pub fn inode(&self) -> u64;
+}
+pub struct StatObservation { /* key, len:u64, mtime:(i64,u32), ctime:(i64,u32) */ }
+impl StatObservation {
+    pub fn key(&self) -> StatFileKey;
+    pub fn len(&self) -> u64;
+    pub fn mtime(&self) -> (i64, u32);
+    pub fn ctime(&self) -> (i64, u32);
+}
+```
+
+No public raw/serde/MapsFileKey/owner conversion exists. Observation conversion rejects invalid nanoseconds, negative/unrepresentable length and unrepresentable seconds/device/inode as ValidateFile/Malformed without invented errno. Equality creates no live authority; acquisition itself need not require unchanged size/times.
+
+The [error/effect/charge contract](../superpowers/specs/2026-10-17-scopebase-linux-design.md#controls-errors-and-effects) has private fields and no public constructors. LinuxError implements std Error/Display/bounded Debug and has `&self` getters `stage()->Stage`, `reason()->Reason`, `source()->Option<&io::Error>`, `effect()->&EffectSummary`, `charges()->&ResourceCharges`. EffectSummary getters are `attempted_operations()->u64`, `completed_operations()->u64`, `target_mappings_created()->u64`, `target_mappings_retired()->u64`, `cleanup()->CleanupDisposition`, `descriptor_flags()->DescriptorFlagEffect`; ResourceCharges getters are `syscall_attempts()->u64`, `fd_acquisitions()->u64`, `peak_new_fds()->u64`, all taking `&self`.
+
+Stage/Reason/CleanupDisposition/DescriptorFlagEffect are non-exhaustive Copy/Clone/Eq/PartialEq. LX02 stages are ResolveProc/AcquirePath/ValidateFile/ReopenHeld; reasons InvalidInput/NonRegular/Unreadable/Denied/Unavailable/Disappeared/ChangedSource/WrongContext/Malformed/Inconclusive. Initial cleanup is NotNeeded/Complete; descriptor flags NotAttempted/Unchanged/CloexecSet/Unknown. Future variants/custody wrappers arrive only with implementing owners. Preserve actual errno and operation-specific classifications from the specification.
+
+Charge every explicit operational syscall, including failure, before execution; successful results complete an operation even if a predicate refuses. PID queries count operations, not explicit syscall charges; successful pipe2 counts two FD acquisitions. RAII closes are excluded; counts do not claim every process syscall. Complete means temporary ownership released, not observed close/durable-write/detach success. Resolver success: 11 explicit calls/13 operations/6 acquired FDs/peak4/final1; file open: 4/5/2/peak2/final1; stat one call/no new FD; adoption three or four calls/no new FD, with failed-set verification charged. Target mapping counts are zero in LX02. No hidden surviving file resource, hard syscall wait or kernel-memory bound follows.
+
+Default LinuxError/AdoptFileError Display/Debug, including alternate/nested formatting, is at most 256 ASCII bytes: static labels and optional numeric errno, no raw path/PID/FD/key/payload or nested source/File rendering. Owner/stat Debug contains fixed type labels only. Explicit getters are opt-in; library output/logging is absent.
+
+Dependent read signatures remain ReadLimits/FileRead/ReadObservations/ReadCharges/OperationControl. LX02 qualifies acquisition; LX03/LX04 implement reads/controls independently. LX05–LX08 separately implement mapping/process domains and evidence. LX11/LX12 and their required cells/installed consumers gate profile readiness; a file acquisition increment cannot close held-file-v1 or mapped-image capability.
 
 ## Testkit adapter and runner
 
