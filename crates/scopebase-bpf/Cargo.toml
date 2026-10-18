@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-bpf"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+build = false
+readme = "README.md"
+description = "ScopeBase host BPF error and budget contracts"
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/lib.rs", "src/error.rs", "src/limits.rs", "tests/api_contract.rs", "tests/ui/positive.rs", "tests/ui/non_exhaustive.rs", "tests/ui/limits_default.rs", "tests/ui/error_clone.rs", "tests/ui/source_not_send.rs"]
+
+[features]
+default = []
