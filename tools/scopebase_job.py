@@ -220,6 +220,30 @@ def section(text, heading, level):
     return text[match.start():end].rstrip() + '\n'
 
 
+
+def task_section(text, task_id):
+    pattern = r'^(?:## (?:Task )?' + re.escape(task_id) + r':|### ' + re.escape(task_id) + r':)[^\n]*(?:\n|$)'
+    matches = list(re.finditer(pattern, text, re.MULTILINE))
+    require(len(matches) == 1, f'plan requires exactly one task heading for {task_id}; found {len(matches)}')
+    match = matches[0]
+    level = len(match.group().split(' ', 1)[0])
+    following = re.search(r'^#{1,' + str(level) + r'} ', text[match.end():], re.MULTILINE)
+    end = match.end() + following.start() if following else len(text)
+    return text[match.start():end].rstrip() + '\n'
+
+
+def validate_base_paths(repo, base, allowed):
+    # Inspect Git's selected tree, not the caller's newer filesystem view.
+    entries = git(repo, 'ls-tree', '-r', '-z', base, binary=True).split(b'\0')
+    symlinks = {entry.split(b'\t', 1)[1] for entry in entries
+                if entry and entry.split(b' ', 1)[0] == b'120000'}
+    for path in allowed:
+        parts = path.split('/')
+        for end in range(1, len(parts) + 1):
+            prefix = '/'.join(parts[:end]).encode('utf-8')
+            require(prefix not in symlinks, f'ownership path crosses a selected-base symlink: {path!r}')
+
+
 def inputs(repo, task_id):
     registry = json_file(repo / REGISTRY)
     tasks = registry.get('tasks') if isinstance(registry, dict) else None
@@ -247,7 +271,7 @@ def inputs(repo, task_id):
         paths.add(MASTER_PLAN)
     contents = {name: regular_bytes(repo / relative_path(name, repo)) for name in sorted(paths)}
     text = decode_text(contents[plan], plan)
-    task_text = section(text, '### ' + task_id + ':', 3)
+    task_text = task_section(text, task_id)
     constraints = section(text, '## Global Constraints', 2)
     if MASTER_PLAN in contents and MASTER_PLAN != plan:
         constraints = section(decode_text(contents[MASTER_PLAN], MASTER_PLAN), '## Global Constraints', 2) + '\n' + constraints
@@ -263,6 +287,77 @@ def bound_to_commit(repo, base, contents):
         require(expected == content, f'source binding differs from selected base: {name}')
 
 
+
+def bounded_nonempty_text(content, label):
+    require(len(content) <= GOAL_LIMIT, f'{label} exceeds {GOAL_LIMIT} byte bound')
+    text = decode_text(content, label)
+    require(text.strip(), f'{label} must be nonempty text')
+    return text
+
+
+def matching_reconciliation(directory, manifest):
+    path = directory / 'reconciliation.json'
+    if not os.path.lexists(path):
+        return False
+    record = json_file(path)
+    require(isinstance(record, dict) and record.get('schema_version') == 1 and
+            record.get('kind') == 'SCOPEBASE_ADMINISTRATIVE_RECONCILIATION' and
+            record.get('job_id') == directory.name == manifest.get('job_id') and
+            record.get('resources_retired') is True and
+            record.get('job_manifest_sha256') == digest(regular_bytes(directory / 'job.json')),
+            f'invalid or nonmatching reconciliation: {directory.name}; ownership retained')
+    reason = record.get('reason')
+    require(isinstance(reason, str), 'invalid reconciliation reason')
+    bounded_nonempty_text(reason.encode('utf-8'), 'reconciliation reason')
+    require(record.get('reason_sha256') == digest(reason.encode('utf-8')) and
+            record.get('evidence_snapshot') == 'reconciliation-evidence.txt', 'invalid reconciliation evidence binding')
+    evidence = regular_bytes(directory / 'reconciliation-evidence.txt', GOAL_LIMIT)
+    bounded_nonempty_text(evidence, 'reconciliation evidence')
+    require(record.get('evidence_sha256') == digest(evidence), 'reconciliation evidence hash differs; ownership retained')
+    return True
+
+
+def reconcile(args):
+    job_id = identifier(args.job, 'job')
+    require(args.resources_retired, 'explicit --resources-retired assertion required; pending resources retain ownership')
+    reason = bounded_nonempty_text(args.reason.encode('utf-8'), 'reconciliation reason')
+    evidence_path = Path(args.evidence_file)
+    require(evidence_path.is_absolute(), 'reconciliation evidence-file must be an absolute path')
+    evidence = regular_bytes(evidence_path, GOAL_LIMIT)
+    bounded_nonempty_text(evidence, 'reconciliation evidence')
+    _, root, common = repository(args.repo)
+    with controller(root) as state:
+        jobs = state / 'jobs'
+        require(not jobs.is_symlink() and jobs.is_dir(), 'job state missing or symlink refused')
+        job = jobs / job_id
+        require(not job.is_symlink() and job.is_dir(), 'job missing or symlink refused')
+        manifest_bytes = regular_bytes(job / 'job.json')
+        manifest = json_file(job / 'job.json')
+        require(isinstance(manifest, dict) and manifest.get('schema_version') == 1 and
+                manifest.get('kind') == 'SCOPEBASE_ADMINISTRATIVE_JOB' and manifest.get('job_id') == job_id and
+                manifest.get('repository_root') == str(root) and manifest.get('git_common_dir') == str(common) and
+                manifest.get('execution_state') in ('PREPARING', 'PREPARED', 'PREPARATION_FAILED') and
+                isinstance(manifest.get('allowed_paths'), list), 'job manifest binding invalid for reconciliation')
+        for path in manifest['allowed_paths']:
+            relative_path(path)
+        record_path = job / 'reconciliation.json'
+        snapshot = job / 'reconciliation-evidence.txt'
+        require(not os.path.lexists(record_path) and not os.path.lexists(snapshot),
+                'reconciliation or evidence snapshot already exists; evidence never overwritten')
+        record = {'schema_version': 1, 'kind': 'SCOPEBASE_ADMINISTRATIVE_RECONCILIATION',
+                  'job_id': job_id, 'reconciled_utc': datetime.now(timezone.utc).isoformat(),
+                  'resources_retired': True, 'reason': reason, 'reason_sha256': digest(reason.encode('utf-8')),
+                  'job_manifest_sha256': digest(manifest_bytes), 'evidence_original_path': str(evidence_path),
+                  'evidence_snapshot': snapshot.name, 'evidence_sha256': digest(evidence),
+                  'acceptance': 'NOT_ATTESTED; controller assertion releases administrative ownership only'}
+        # A failure between these writes preserves a partial attempt and its claim.
+        new_file(snapshot, evidence)
+        new_file(record_path, json_bytes(record))
+        require(matching_reconciliation(job, manifest), 'reconciliation did not validate; ownership retained')
+        return {'job': str(job), 'reconciliation': str(record_path), 'evidence_snapshot': str(snapshot),
+                'ownership': 'RELEASED_BY_CONTROLLER_ASSERTION'}
+
+
 def admission(state, allowed, cap):
     jobs = state / 'jobs'
     private_directory(jobs)
@@ -272,7 +367,9 @@ def admission(state, allowed, cap):
         manifest = json_file(directory / 'job.json')
         require(isinstance(manifest, dict) and isinstance(manifest.get('allowed_paths'), list),
                 f'malformed existing ownership manifest: {directory}')
-        # Every retained manifest conservatively holds its ownership; process absence never expires it.
+        # Only a complete matching controller closure releases a claim. Process absence never does.
+        if matching_reconciliation(directory, manifest):
+            continue
         existing = [relative_path(p) for p in manifest['allowed_paths']]
         if existing:
             writers += 1
@@ -308,6 +405,7 @@ def prepare(args):
         if allowed:
             require(all(status in ACCEPTED for status in prerequisites.values()),
                     f'task prerequisites are not accepted: {prerequisites}')
+        validate_base_paths(source, base, allowed)
         job = state / 'jobs' / job_id
         worktrees = root / '.worktrees'
         require(not os.path.lexists(job), f'job already exists: {job_id}')
@@ -342,6 +440,8 @@ def prepare(args):
             new_file(job / 'goal.txt', goal)
             worktree.mkdir(mode=0o700)
             git(source, 'worktree', 'add', '-b', branch, str(worktree), base)
+            for path in allowed:
+                relative_path(path, worktree)
             manifest['worktree_git_dir'] = git(worktree, 'rev-parse', '--absolute-git-dir').strip()
             # Reject a hook or concurrent source edit instead of accepting different task bytes.
             for name, expected in manifest['bindings'].items():
@@ -448,13 +548,15 @@ def review_package(args):
         require(ancestor.returncode == 0, 'candidate HEAD is not descended from recorded base')
         dirty = git(worktree, 'status', '--porcelain=v1', '--untracked-files=all')
         require(not dirty, 'dirty/untracked source in job worktree; commit or preserve it separately')
-        names = git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', base, candidate, binary=True).split(b'\0')
+        names = git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', base, candidate, binary=True).split(b'\0')
         allowed = manifest['allowed_paths']
         for name in filter(None, names):
             decoded = name.decode('utf-8', errors='strict')
             require(any(decoded == prefix or decoded.startswith(prefix + '/') for prefix in allowed),
                     f'candidate changed a path outside allowed ownership: {decoded}')
-        package = job / 'review-package'
+        reviews = job / 'reviews'
+        private_directory(reviews)
+        package = reviews / candidate
         require(not os.path.lexists(package), 'review package already exists; evidence never overwritten')
         diff = git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--binary', '--full-index', base, candidate, binary=True)
         commits = git(worktree, 'log', '--format=fuller', '--reverse', base + '..' + candidate)
@@ -525,9 +627,13 @@ def main(argv=None):
     review = commands.add_parser('review-package')
     for option in ('repo', 'job', 'head'):
         review.add_argument('--' + option, required=True)
+    closure = commands.add_parser('reconcile')
+    for option in ('repo', 'job', 'reason', 'evidence-file'):
+        closure.add_argument('--' + option, required=True)
+    closure.add_argument('--resources-retired', action='store_true')
     try:
         args = parser.parse_args(argv)
-        result = {'doctor': doctor, 'prepare': prepare, 'review-package': review_package}[args.command](args)
+        result = {'doctor': doctor, 'prepare': prepare, 'review-package': review_package, 'reconcile': reconcile}[args.command](args)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (JobError, OSError, ValueError, KeyError, TypeError) as exc:

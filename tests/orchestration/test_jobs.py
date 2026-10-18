@@ -1,6 +1,7 @@
 """EX01 acceptance tests: real local Git, no worker or external service launch."""
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -17,6 +18,10 @@ HELPER = Path(__file__).resolve().parents[2] / 'tools' / 'scopebase_job.py'
 PLAN = 'docs/superpowers/plans/product.md'
 SPEC = 'docs/superpowers/specs/product.md'
 REGISTRY = 'docs/superpowers/plans/2026-10-17-scopebase-traceability.json'
+_spec = importlib.util.spec_from_file_location('scopebase_job', HELPER)
+job_helper = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(job_helper)
+
 POLICY = {
     'schema_version': 1,
     'roles': {
@@ -372,7 +377,7 @@ class JobTests(unittest.TestCase):
         self.git('reset', '--hard', orphan, cwd=worktree)
         result = self.package(head=orphan, ok=False)
         self.assertIn('descended', result.stderr.lower())
-        self.assertFalse((Path(prepared['job']) / 'review-package').exists())
+        self.assertFalse((Path(prepared['job']) / 'reviews').exists())
 
     def test_partial_preparation_failure_preserves_manifest_and_reserved_resources(self):
         fake_bin = Path(self.temp.name) / 'failing bin'
@@ -400,6 +405,201 @@ class JobTests(unittest.TestCase):
         self.write('orchestration/policy.json', json.dumps(bad))
         self.assertIn('policy', self.cli('doctor', '--repo', self.repo, ok=False).stderr.lower())
         self.assertFalse((self.repo / '.scopebase').exists())
+
+    def reconciliation_args(self, job='first', retired=True, reason='Reviewed and inspected; no active resources remain', evidence=None):
+        if evidence is None:
+            evidence = Path(self.temp.name) / 'retirement evidence.txt'
+            evidence.write_text('Fixture controller inspected resources; no processes, builds or guests remain.\n')
+        args = ['reconcile', '--repo', self.repo, '--job', job, '--reason', reason,
+                '--evidence-file', evidence]
+        if retired:
+            args.append('--resources-retired')
+        return args
+
+    def test_review_rejects_both_sides_of_owned_and_unowned_renames(self):
+        self.write('outside.txt', 'outside source preserved in fixture\n')
+        self.git('add', 'outside.txt')
+        self.git('commit', '-qm', 'rename fixture')
+        self.git('config', 'diff.renames', 'true')
+        for job, source, destination, allowed in (
+                ('inward', 'outside.txt', 'owned.txt', 'owned.txt'),
+                ('outward', 'src/first.txt', 'other-outside.txt', 'src/first.txt')):
+            with self.subTest(direction=job):
+                prepared = self.prepare(job=job, paths=(allowed,))
+                worktree = Path(prepared['worktree'])
+                self.git('mv', source, destination, cwd=worktree)
+                self.git('commit', '-qm', 'cross ownership rename', cwd=worktree)
+                candidate = self.git('rev-parse', 'HEAD', cwd=worktree).stdout.strip()
+                refusal = self.package(job=job, head=candidate, ok=False)
+                self.assertIn('allowed', refusal.stderr.lower())
+                self.assertFalse((Path(prepared['job']) / 'reviews' / candidate).exists())
+
+    def test_all_86_actual_registry_tasks_have_exact_bounded_sections(self):
+        actual_root = HELPER.parents[1]
+        registry = json.loads((actual_root / REGISTRY).read_text())
+        self.assertEqual(len(registry['tasks']), 86)
+        self.write(REGISTRY, json.dumps(registry))
+        for plan in {task['plan'] for task in registry['tasks']}:
+            self.write(plan, (actual_root / plan).read_text())
+        for task in registry['tasks']:
+            with self.subTest(task=task['id']):
+                extracted = job_helper.inputs(self.repo, task['id'])[3]
+                plan = (self.repo / task['plan']).read_text()
+                prefix = ('## Task ' if task['id'].startswith('CP') else
+                          '## ' if task['id'].startswith('LX') else '### ') + task['id'] + ':'
+                heading = next(line for line in plan.splitlines() if line.startswith(prefix))
+                self.assertEqual(extracted.splitlines()[0], heading)
+                self.assertIn('- [ ]', extracted)
+                for other in registry['tasks']:
+                    if other['id'] == task['id'] or other['plan'] != task['plan']:
+                        continue
+                    for line in plan.splitlines():
+                        if line.startswith(('## ' + other['id'] + ':', '## Task ' + other['id'] + ':',
+                                            '### ' + other['id'] + ':')):
+                            self.assertNotIn(line, extracted)
+
+    def test_task_heading_depth_exact_id_missing_and_duplicate_refusal(self):
+        for heading in ('## SB01: Intake', '## Task SB01: Intake', '### SB01: Intake'):
+            with self.subTest(heading=heading):
+                self.write(PLAN, '# Plan\n\n' + GLOBAL + heading + '\n\nselected body\n\n' +
+                           '#### Nested detail\n\nretained detail\n\n## Boundary\n\nexcluded tail\n')
+                selected = job_helper.inputs(self.repo, 'SB01')[3]
+                self.assertIn('retained detail', selected)
+                self.assertNotIn('excluded tail', selected)
+        for bad in ('### SB010: wrong ID\nbody\n', '### SB01x: wrong ID\nbody\n',
+                    '### Task SB01: unsupported form\nbody\n',
+                    '### SB01: first\nbody\n## Task SB01: duplicate\nother\n'):
+            with self.subTest(malformed=bad):
+                self.write(PLAN, '# Plan\n\n' + GLOBAL + bad)
+                with self.assertRaises(job_helper.JobError):
+                    job_helper.inputs(self.repo, 'SB01')
+
+    def test_selected_base_tree_rejects_owned_symlink_before_any_job_reservation(self):
+        outside = Path(self.temp.name) / 'outside authority'
+        outside.mkdir()
+        (outside / 'file.txt').write_text('must remain untouched\n')
+        (self.repo / 'owned').symlink_to(outside, target_is_directory=True)
+        self.git('add', 'owned')
+        self.git('commit', '-qm', 'older symlink tree')
+        older = self.git('rev-parse', 'HEAD').stdout.strip()
+        (self.repo / 'owned').unlink()
+        self.write('owned/file.txt', 'safe current source\n')
+        self.git('add', 'owned')
+        self.git('commit', '-qm', 'current regular tree')
+        refusal = self.cli(*self.prepare_args(paths=('owned/file.txt',), extra=('--base', older)), ok=False)
+        self.assertIn('path', refusal.stderr.lower())
+        self.assertFalse((self.repo / '.scopebase/jobs/first').exists())
+        self.assertFalse((self.repo / '.worktrees/first').exists())
+        self.assertEqual((outside / 'file.txt').read_text(), 'must remain untouched\n')
+
+    def test_populated_worktree_symlink_refuses_and_retains_failed_custody(self):
+        self.write('owned/file.txt', 'safe committed file\n')
+        self.git('add', 'owned')
+        self.git('commit', '-qm', 'safe selected tree')
+        outside = Path(self.temp.name) / 'outside authority'
+        outside.mkdir()
+        (outside / 'file.txt').write_text('must remain untouched\n')
+        fake_bin = Path(self.temp.name) / 'mutating git bin'
+        fake_bin.mkdir()
+        wrapper = fake_bin / 'git'
+        worktree = self.repo / '.worktrees/first'
+        wrapper.write_text('#!' + sys.executable + '\nimport os, shutil, subprocess, sys\n'
+                           'result = subprocess.call([' + repr(shutil.which('git')) + ', *sys.argv[1:]])\n'
+                           'if result == 0 and "worktree" in sys.argv and "add" in sys.argv:\n'
+                           '    owned = ' + repr(str(worktree / 'owned')) + '\n'
+                           '    shutil.rmtree(owned)\n'
+                           '    os.symlink(' + repr(str(outside)) + ', owned)\n'
+                           'sys.exit(result)\n')
+        wrapper.chmod(0o755)
+        result = subprocess.run([sys.executable, str(HELPER), *map(str, self.prepare_args(paths=('owned/file.txt',)))],
+                                text=True, capture_output=True,
+                                env=dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ['PATH']))
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assertIn('path', result.stderr.lower())
+        manifest = json.loads((self.repo / '.scopebase/jobs/first/job.json').read_text())
+        self.assertEqual(manifest['execution_state'], 'PREPARATION_FAILED')
+        self.assertTrue((worktree / 'owned').is_symlink())
+        self.assertIn('overlap', self.cli(*self.prepare_args(job='retry', paths=('owned/file.txt',)), ok=False).stderr.lower())
+        self.assertEqual((outside / 'file.txt').read_text(), 'must remain untouched\n')
+        self.cli(*self.reconciliation_args())
+        self.prepare(job='after-abandonment', paths=('owned/file.txt',))
+        self.assertTrue((worktree / 'owned').is_symlink(), 'reconciliation must not clean up retained evidence')
+
+    def test_fix_commit_gets_fresh_candidate_package_and_preserves_prior_package(self):
+        prepared = self.prepare(paths=('src',))
+        worktree, first = self.commit_candidate(prepared)
+        first_package = Path(self.package(head=first)['package'])
+        saved = {path.name: path.read_bytes() for path in first_package.iterdir()}
+        self.assertEqual(first_package, Path(prepared['job']) / 'reviews' / first)
+        (worktree / 'src/first.txt').write_text('fixed candidate\n')
+        self.git('add', 'src/first.txt', cwd=worktree)
+        self.git('commit', '-qm', 'fix candidate', cwd=worktree)
+        second = self.git('rev-parse', 'HEAD', cwd=worktree).stdout.strip()
+        second_package = Path(self.package(head=second)['package'])
+        self.assertEqual(second_package, Path(prepared['job']) / 'reviews' / second)
+        self.assertEqual(saved, {path.name: path.read_bytes() for path in first_package.iterdir()})
+        self.assertIn('exist', self.package(head=second, ok=False).stderr.lower())
+
+    def test_only_explicit_valid_reconciliation_releases_prefix_and_lane(self):
+        prepared = self.prepare(paths=('src',))
+        self.prepare(job='second-lane', paths=('tests',))
+        self.prepare(job='third-lane', paths=('bin',))
+        self.assertIn('lane', self.cli(*self.prepare_args(job='fourth', paths=('tools',)), ok=False).stderr.lower())
+        missing = self.cli(*self.reconciliation_args(retired=False), ok=False)
+        self.assertIn('retired', missing.stderr.lower())
+        self.assertIn('overlap', self.cli(*self.prepare_args(job='same-prefix', paths=('src',)), ok=False).stderr.lower())
+        manifest = Path(prepared['manifest']).read_bytes()
+        original_package = Path(self.package(head=self.base)['package'])
+        package_metadata = (original_package / 'package.json').read_bytes()
+        args = self.reconciliation_args()
+        evidence = Path(args[args.index('--evidence-file') + 1])
+        expected_evidence = evidence.read_bytes()
+        result = self.cli(*args)
+        record_path = Path(result['reconciliation'])
+        record = json.loads(record_path.read_text())
+        self.assertEqual(record['job_manifest_sha256'], hashlib.sha256(manifest).hexdigest())
+        self.assertTrue(record['resources_retired'])
+        self.assertEqual(Path(result['evidence_snapshot']).read_bytes(), expected_evidence)
+        evidence.write_text('later user edit must not replace closure evidence\n')
+        self.assertEqual(Path(result['evidence_snapshot']).read_bytes(), expected_evidence)
+        self.assertEqual(Path(prepared['manifest']).read_bytes(), manifest)
+        self.assertTrue(Path(prepared['worktree']).is_dir())
+        self.assertEqual((original_package / 'package.json').read_bytes(), package_metadata)
+        self.prepare(job='new-ownership', paths=('src',))
+        self.assertIn('exist', self.cli(*self.prepare_args(), ok=False).stderr.lower())
+        before = record_path.read_bytes()
+        self.assertIn('exist', self.cli(*args, ok=False).stderr.lower())
+        self.assertEqual(record_path.read_bytes(), before)
+        self.assertEqual(json.loads((self.repo / REGISTRY).read_text())['tasks'][0]['status'], 'PLANNED')
+
+    def test_invalid_reconciliation_inputs_and_tampered_record_keep_claims(self):
+        prepared = self.prepare(paths=('src',))
+        evidence = Path(self.temp.name) / 'closure.txt'
+        for content in ('', '   \n', 'x' * 65537, '\x00invalid'):
+            with self.subTest(invalid_evidence=len(content)):
+                evidence.write_text(content)
+                self.cli(*self.reconciliation_args(evidence=evidence), ok=False)
+                self.assertFalse((Path(prepared['job']) / 'reconciliation.json').exists())
+        evidence.write_text('independently inspected fixture resources retired\n')
+        self.cli(*self.reconciliation_args(evidence=Path('relative-evidence')), ok=False)
+        self.cli(*self.reconciliation_args(evidence=evidence, reason='  '), ok=False)
+        self.assertIn('overlap', self.cli(*self.prepare_args(job='blocked', paths=('src',)), ok=False).stderr.lower())
+        result = self.cli(*self.reconciliation_args(evidence=evidence))
+        record_path = Path(result['reconciliation'])
+        original = record_path.read_bytes()
+        record = json.loads(original)
+        for key, value in (('resources_retired', False), ('job_manifest_sha256', '0' * 64),
+                           ('job_id', 'wrong-job')):
+            with self.subTest(tamper=key):
+                altered = dict(record, **{key: value})
+                record_path.write_text(json.dumps(altered))
+                refusal = self.cli(*self.prepare_args(job='tampered-' + key, paths=('src',)), ok=False)
+                self.assertIn('reconciliation', refusal.stderr.lower())
+                self.assertFalse((self.repo / '.scopebase/jobs' / ('tampered-' + key)).exists())
+        record_path.write_bytes(original)
+        snapshot = Path(result['evidence_snapshot'])
+        snapshot.write_text('tampered snapshot\n')
+        self.assertIn('reconciliation', self.cli(*self.prepare_args(job='tampered-snapshot', paths=('src',)), ok=False).stderr.lower())
 
     def test_doctor_reports_optional_absence_without_launching_models(self):
         fake_bin = Path(self.temp.name) / 'local bin'
