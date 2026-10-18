@@ -1,0 +1,768 @@
+{
+  "schema_version": 1,
+  "kind": "bp01_foundation_provenance",
+  "status": "FOUNDATION_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "base_commit": "d96a8b9c60ae4f5281c1f5cddf6d02c7e836dfe2",
+  "packet_sha256": "a83f119cf48b58df89ea5b672ec85af291e8889f52562e8baadc3f9bc778a916",
+  "source_record_sha256": "89e873b507b5f52c594213dcda6d8b0598b14be9672ad4953de3714a3ff123d3",
+  "expert_inputs_sha256": "d5113d62dafa7bd33193d95e61abc4987c6968060369d1698dfe862508d8567e",
+  "reference_observation": "Frozen packet selections only; BP01 did not refresh or inspect live donors. Selected dirty_sha256 null does not assert whole-worktree cleanliness.",
+  "selected_sources": [
+    {
+      "id": "P:crates/bpf-multi/src/lib.rs",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "path": "crates/bpf-multi/src/lib.rs",
+      "checkout_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "checkout_mapping": "w003",
+      "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "sha256": "9f0bd281729c37fec8a3299121707c4c02f23a6c367015dc140e6618dcf5aa8a",
+      "dirty_sha256": null,
+      "slices": [
+        [
+          284,
+          335
+        ],
+        [
+          928,
+          980
+        ]
+      ],
+      "symbols": [
+        "GroupHalt::source",
+        "is_permission_err",
+        "is_exhaustion_err",
+        "bisect_permission_fails_fast_without_splitting",
+        "bisect_exhaustion_and_unsupported_halt_instead_of_refusing"
+      ],
+      "historical_license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/bpf-multi/src/lib.rs",
+            "sha256": "9f0bd281729c37fec8a3299121707c4c02f23a6c367015dc140e6618dcf5aa8a",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/bpf-multi/Cargo.toml",
+            "sha256": "cc6321e73304aaa89e4e1e9aeb70cfa265f2ca44b8e9099207cb1a3d672d0b14",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "abb1308bbd77a8d742fa83b61c90912e64346383b45816a5514b5741683bf051",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "prior_adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/bpf-multi/src/lib.rs; expert selection is required before copying."
+      },
+      "bp01_use": "REFERENCE_ONLY: constraints and deferred regression custody; no donor code ported in BP01",
+      "source_use": "reference_only",
+      "destination_role": "reference_only; no implementation copied"
+    },
+    {
+      "id": "P:crates/ebpf/src/main.rs",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "path": "crates/ebpf/src/main.rs",
+      "checkout_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "checkout_mapping": "w003",
+      "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "sha256": "eab693b95783f1a0532910c6fc84b197cd9195a871cd44aba6794f3314cdf097",
+      "dirty_sha256": null,
+      "slices": [
+        [
+          749,
+          790
+        ]
+      ],
+      "symbols": [
+        "SelectionTransport",
+        "no_selection",
+        "const offset and size assertions"
+      ],
+      "historical_license": {
+        "spdx": "GPL-2.0-only",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/ebpf/src/main.rs",
+            "sha256": "eab693b95783f1a0532910c6fc84b197cd9195a871cd44aba6794f3314cdf097",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/ebpf/Cargo.toml",
+            "sha256": "c3953c92ef4dc10ade46c87d1b74a9006341cd7fb9fe27894f8d26811210c45c",
+            "declarations": [
+              "\"GPL-2.0-only\""
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "abb1308bbd77a8d742fa83b61c90912e64346383b45816a5514b5741683bf051",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-2.0-only"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-2.0-only"
+        ],
+        "normalization_note": null
+      },
+      "prior_adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/src/main.rs; expert selection is required before copying."
+      },
+      "bp01_use": "REFERENCE_ONLY: constraints and deferred regression custody; no donor code ported in BP01",
+      "source_use": "reference_only",
+      "destination_role": "reference_only; no implementation copied"
+    },
+    {
+      "id": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "path": "crates/kryprobe-privilege/src/drain/frame.rs",
+      "checkout_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/kryprobe-ws/tree/kryprobe",
+      "checkout_mapping": "w001",
+      "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/kryprobe-ws/history/r001.git",
+      "sha256": "5fd4a04a921537416176d554669a7bca129b6e7cf20195f41f1512c5ca978cb7",
+      "dirty_sha256": null,
+      "slices": [
+        [
+          49,
+          151
+        ]
+      ],
+      "symbols": [
+        "frame_step",
+        "near_max_consumer_stops_without_wrap",
+        "max_producer_exact_fit_emits"
+      ],
+      "historical_license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/kryprobe-privilege/src/drain/frame.rs",
+            "sha256": "5fd4a04a921537416176d554669a7bca129b6e7cf20195f41f1512c5ca978cb7",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-or-later.txt",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/kryprobe-privilege/Cargo.toml",
+            "sha256": "2b4cbeef20ba53cc1b3dd829029ea76bf51f0c847c8032d73956648fa6c68aa7",
+            "declarations": [
+              "true"
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "297ba19b03dcbb89d42c2cc3a540fabe89eceacc08075c100b285eb99fb513cf",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "prior_adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/drain/frame.rs; expert selection is required before copying."
+      },
+      "bp01_use": "REFERENCE_ONLY: constraints and deferred regression custody; no donor code ported in BP01",
+      "source_use": "reference_only",
+      "destination_role": "reference_only; no implementation copied"
+    },
+    {
+      "id": "O:src/plan.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "path": "src/plan.rs",
+      "checkout_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21",
+      "checkout_mapping": "checkout-018",
+      "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/histories/repo-001/history.git",
+      "sha256": "18132719eb9d770118568a560985e2f3bb8d33cabdcc56318e81cee9c3a26299",
+      "dirty_sha256": null,
+      "slices": [
+        [
+          670,
+          711
+        ],
+        [
+          890,
+          925
+        ],
+        [
+          961,
+          973
+        ]
+      ],
+      "symbols": [
+        "bisect_attach",
+        "bisect_isolates_nonstandard_errno",
+        "bisect_fails_fast_on_permission_err"
+      ],
+      "historical_license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/plan.rs",
+            "sha256": "18132719eb9d770118568a560985e2f3bb8d33cabdcc56318e81cee9c3a26299",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "e791d495780ed43a41cdbe2fd4cf3536939c3e010c8c05bf35588557bd8ec852",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "prior_adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            205,
+            240
+          ],
+          [
+            1123,
+            1141
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "bp01_use": "REFERENCE_ONLY: constraints and deferred regression custody; no donor code ported in BP01",
+      "source_use": "reference_only",
+      "destination_role": "reference_only; no implementation copied"
+    },
+    {
+      "id": "L:native/src/ring_stage.h",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "path": "native/src/ring_stage.h",
+      "checkout_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/checkout/repos/libbpf-mojo",
+      "checkout_mapping": "checkout-002",
+      "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/histories/repo-002/history.git",
+      "sha256": "93afa30ae54224e3fa7e3e73f118d271a17b8b278da865d751acdc77ab6c30f5",
+      "dirty_sha256": null,
+      "slices": [
+        [
+          1,
+          70
+        ]
+      ],
+      "symbols": [
+        "lmb_classify_record",
+        "lmb_frame_total",
+        "lmb_encode_frame"
+      ],
+      "historical_license": {
+        "spdx": "Apache-2.0 WITH LLVM-exception",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "native/src/ring_stage.h",
+            "sha256": "93afa30ae54224e3fa7e3e73f118d271a17b8b278da865d751acdc77ab6c30f5",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/LLVM-exception.txt",
+            "sha256": "ddabf2be4dbf3d983bce354836ed5b72221aba21e807e308948f182423c79306",
+            "kind": "license_text"
+          }
+        ],
+        "raw_spdx_observation": [
+          "Apache-2.0 WITH LLVM-exception"
+        ],
+        "raw_effective_license_observation": [
+          "Apache-2.0 WITH LLVM-exception"
+        ],
+        "normalization_note": null
+      },
+      "prior_adoption": {
+        "disposition": "DEPENDENCY_ADAPTER",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/ring_stage.h; expert selection is required before copying."
+      },
+      "bp01_use": "REFERENCE_ONLY: constraints and deferred regression custody; no donor code ported in BP01",
+      "source_use": "reference_only",
+      "destination_role": "reference_only; no implementation copied"
+    }
+  ],
+  "mechanisms": [
+    {
+      "id": "error-carrier",
+      "origin": "NEW",
+      "destination": "crates/scopebase-bpf/src/error.rs",
+      "symbols": [
+        "ErrorKind",
+        "Stage",
+        "OperationError"
+      ],
+      "reason": "Donors have operation-specific policy/owner types; no standalone lossless caller-classified carrier matches this shared contract.",
+      "oracle": "api_contract: lossless typed fields, original source identity/chain, independent errno, bounded ASCII and silent source formatters",
+      "controls": [
+        "wrong-kind",
+        "wrong-stage",
+        "normalized-errno",
+        "erased-source",
+        "zero-required-size",
+        "clamped-required-size",
+        "source-formatting"
+      ]
+    },
+    {
+      "id": "independent-limits",
+      "origin": "NEW",
+      "destination": "crates/scopebase-bpf/src/limits.rs",
+      "symbols": [
+        "Limits",
+        "Limits::validate"
+      ],
+      "reason": "Independent cap configuration is a frozen new shared contract; donor operation arithmetic/admission is not cap validation.",
+      "oracle": "literal all-zero/MAX, independent single-zero/MAX and cross-field populations remain valid and unchanged",
+      "controls": [
+        "rejected-zero",
+        "rejected-max",
+        "cross-field-inequality"
+      ]
+    }
+  ],
+  "historical_manifest_bindings": [
+    {
+      "path": "docs/provenance/donors.json",
+      "sha256": "1719bcab8a38ee88ac0419cb9b7d32ca58d9813042981fe001b214e5489557d6",
+      "meaning": "reference inventory; not a port or passing receipt"
+    },
+    {
+      "path": "docs/provenance/frozen-donors-2026-10-18.md",
+      "sha256": "6a686c60129be3c726305a7debf3e3dd63bda23551abf20af81a27f59c33d780",
+      "meaning": "reference inventory; not a port or passing receipt"
+    },
+    {
+      "path": "docs/research/2026-10-17-shared-libraries/regression-catalog.json",
+      "sha256": "bc29eb28fccbbc6561d14047359ac70c7ad841fb867f54afceb23273a1fbeb2a",
+      "meaning": "reference inventory; not a port or passing receipt"
+    }
+  ],
+  "conditional_dependency_inputs": [
+    {
+      "id": "btf-rs",
+      "candidate": {
+        "name": "btf-rs",
+        "version": "2.0.0",
+        "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+        "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9"
+      },
+      "default_features": false,
+      "features": [],
+      "tier": "host_semantic",
+      "assertions": [
+        "tests::base_names_ids_chain",
+        "tests::split_domain_and_refusals",
+        "tests::truncated_and_invalid_id",
+        "tests::wrong_first_match_control",
+        "tests::wrong_domain_control"
+      ],
+      "expected_fit": "GAP",
+      "availability": "ready",
+      "compile_refusals": []
+    },
+    {
+      "id": "aya-host",
+      "candidate": {
+        "name": "aya",
+        "version": "0.14.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "sha256": "66e644424fada9fff4fdc63848db1732fb69b626e8328202ef55c03df1f4d939"
+      },
+      "default_features": false,
+      "features": [],
+      "tier": "compile",
+      "assertions": [
+        "effectful_apis_typecheck"
+      ],
+      "expected_fit": "SATISFIED",
+      "availability": "ready",
+      "compile_refusals": []
+    },
+    {
+      "id": "aya-btf",
+      "candidate": {
+        "name": "aya-obj",
+        "version": "0.3.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "sha256": "8c76b9c75d9cdc155ff8f6a06d61e873f67bf47be8cfa92a3b5aaea43f4b4077"
+      },
+      "default_features": false,
+      "features": [],
+      "tier": "host_semantic",
+      "assertions": [
+        "tests::public_parse_and_query",
+        "tests::malformed_btf_refusals",
+        "tests::first_match_observation_and_control"
+      ],
+      "expected_fit": "GAP",
+      "availability": "ready",
+      "compile_refusals": [
+        {
+          "id": "PP09",
+          "manifest": "probes/aya-btf-private/Cargo.toml",
+          "diagnostic_code": "E0624",
+          "diagnostic_contains": "type_by_id",
+          "positive_case": "aya-btf"
+        }
+      ]
+    }
+  ],
+  "dependencies_admitted": [],
+  "license_boundary": {
+    "owned_host": "Apache-2.0",
+    "owned_future_bpf": "GPL-2.0-only",
+    "owned_shared": "Apache-2.0 OR GPL-2.0-only or approved separation",
+    "applications": "GPL-3.0-or-later",
+    "project_mit_option": false,
+    "actual_target_option_selected": false,
+    "future_runtime_license": "GPL",
+    "source_object_runtime_checks": "independent; no BPF/shared/tool/native payload copied or executed here"
+  },
+  "bridge_refs": {
+    "memveil_consumed": "681096cb588379307d0c8e94e1d77e53de4be22f",
+    "inspected_l": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+    "separate_ring_fix": "497279c63c247922dfc3f516e6e09c7a623f1478",
+    "disposition": "distinct captured versions; no automatic merge or port"
+  },
+  "deferred_preservation": [
+    {
+      "source": "P:crates/bpf-multi/src/lib.rs",
+      "owners": [
+        "BP04",
+        "BP05"
+      ],
+      "invariant": "Preserve permission/exhaustion/unsupported terminal policy, one-call count and retained-link identity; carrier imposes no retry policy.",
+      "original_tests": [
+        "bisect_permission_fails_fast_without_splitting",
+        "bisect_exhaustion_and_unsupported_halt_instead_of_refusing"
+      ],
+      "bad_controls": [
+        "split-on-denied",
+        "retry-exhaustion",
+        "drop-link"
+      ],
+      "status": "NOT_PORTED"
+    },
+    {
+      "source": "O:src/plan.rs",
+      "owners": [
+        "BP04",
+        "BP05"
+      ],
+      "invariant": "Nonpermission errno 524 splits; preserve deliberate P/O policy differences with fixed site-index/cookie/call-count literals.",
+      "original_tests": [
+        "bisect_isolates_nonstandard_errno",
+        "bisect_fails_fast_on_permission_err"
+      ],
+      "bad_controls": [
+        "every-error-terminal",
+        "split-on-denied"
+      ],
+      "status": "NOT_PORTED"
+    },
+    {
+      "source": "P:crates/ebpf/src/main.rs",
+      "fix": "67c7aef755f226f6fc7c5631f08fea7484195ddd",
+      "owners": [
+        "BP03",
+        "TC03",
+        "TC06",
+        "TC07"
+      ],
+      "invariant": "SelectionTransport named initialized _pad, repr(C), size/offset checks; EACCES on BPF_PROG_LOAD can be old verifier unwritten-stack refusal. Preserve operation/stage/verifier evidence and initialized final-object bytes.",
+      "required_cells": [
+        "affected 5.15",
+        "affected 6.2",
+        "new-kernel semantic twin"
+      ],
+      "bad_controls": [
+        "uninitialized-padding",
+        "errno-only-cause"
+      ],
+      "status": "NOT_PORTED"
+    },
+    {
+      "source": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+      "owners": [
+        "BP06",
+        "BP11"
+      ],
+      "invariant": "Donor saturating absolute cursors differ from modular fixed-tail API. Deliberate adaptation requires wrap/BUSY/boundary oracle, real mapped-reader and ordering cells.",
+      "original_tests": [
+        "near_max_consumer_stops_without_wrap",
+        "max_producer_exact_fit_emits"
+      ],
+      "bad_controls": [
+        "saturating-position",
+        "wrapping-cross-tail"
+      ],
+      "status": "NOT_PORTED"
+    },
+    {
+      "source": "L:native/src/ring_stage.h",
+      "owners": [
+        "BP06",
+        "NX03"
+      ],
+      "invariant": "Zero records malformed; occupied staging retains original; byte/frame arithmetic checked. Disabled zero cap is distinct from a zero record.",
+      "original_tests": [
+        "tests/native/ring_conformance.c",
+        "generic-ring vectors"
+      ],
+      "oracle": "literal frame bytes plus C/Mojo execution when claimed",
+      "bad_controls": [
+        "short-output-consumes",
+        "retry-overwrites",
+        "source-mutation"
+      ],
+      "status": "NOT_PORTED"
+    },
+    {
+      "owners": [
+        "TC01",
+        "TC03",
+        "TC07",
+        "BP08",
+        "BP11"
+      ],
+      "invariant": "Affected 7.0 private-stack and H08-H11/H29-H33 retain final-object ISA/helper/BTF/verifier/compiler/runtime identities and workaround-removal controls. Current load/version comparisons prove no removal.",
+      "status": "NOT_RUN"
+    },
+    {
+      "owners": [
+        "BP02",
+        "BP04",
+        "BP05",
+        "BP06",
+        "BP09",
+        "TC02"
+      ],
+      "invariant": "Actual owners reject positive work against zero, check arithmetic before allocation/effects under MAX, and retain outstanding-effect charges. Limits configuration grants none of these rights.",
+      "status": "NOT_IMPLEMENTED_BY_BP01"
+    },
+    {
+      "owners": [
+        "BP10",
+        "BP11",
+        "TT07"
+      ],
+      "invariant": "BP-R12 remains partial; BP-R13 requires two independent behavioral consumers and installed operator route. No bpf-host-v1/live/object profile closure.",
+      "status": "OPEN"
+    }
+  ],
+  "kernel_source_inputs": {
+    "binding": "docs/contracts/host-kernel-source-selection.md",
+    "sha256": "219d1e402809dc564553a576ceaed3e6c2a81a3fdeda656af9725f6636bf0ebf",
+    "attribution": "controller-selected frozen expected source hashes; no BP01 acquisition/signature/image/runtime verification",
+    "releases": [
+      {
+        "version": "5.15.223",
+        "source_archive": "v5.x/linux-5.15.223.tar.xz",
+        "expected_sha256": "c1faba89652ec4af585fb96131fdb70d99e891c2b368cbf6d9c1e5fb7f156c23"
+      },
+      {
+        "version": "6.12.113",
+        "source_archive": "v6.x/linux-6.12.113.tar.xz",
+        "expected_sha256": "e09b6727e5c521253f0d41694900b9c38fb7604db7d35238a8197aa9f7de2428"
+      },
+      {
+        "version": "7.2.11",
+        "source_archive": "v7.x/linux-7.2.11.tar.xz",
+        "expected_sha256": "fd0fc479f983a8c05313f13e9c36330fe6651cf725396748c40d5cd93fa1e6a4"
+      }
+    ],
+    "runtime_qualification": "NOT_RUN"
+  },
+  "conditional_feature_dispositions": [
+    {
+      "feature": "aya",
+      "owner": "BP10",
+      "candidate": "aya =0.14.0; defaults off/features []",
+      "disposition": "not admitted by BP01; host API typecheck only, no effects executed; preserve BP06 ring reader/bounded-consumption patches"
+    },
+    {
+      "feature": "btf",
+      "owner": "BP09",
+      "candidate": "btf-rs/derive 2.0.0 at 0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0; defaults off, no ELF/compression/regex; LGPL-2.1-or-later",
+      "disposition": "public query PASS/GAP only; internal caller budgets not enforced; actual bounded preflight/corpus/closure remain mandatory"
+    },
+    {
+      "feature": "libbpf",
+      "owner": "BP10",
+      "candidate": null,
+      "disposition": "actual Rust/native dependency and ABI/build selection deferred; frozen bridge does not qualify that closure"
+    },
+    {
+      "feature": "producer-fixtures",
+      "owner": "BP07/BP08/TC01",
+      "candidate": null,
+      "disposition": "actual target/compiler/object closure deferred; no BP01 flag/build script"
+    }
+  ],
+  "production_inventory": {
+    "inventory": "/home/user/src/m/bpfscope/.scopebase/jobs/sb02-build-policy-20261018/evidence/acquisition-v1/source-inventory.json",
+    "sha256": "e61f0e57fa2b7b7e4093d9f1f2189d718d7cf5022bab77257db8dc6040bb0c60"
+  },
+  "probe_inventory_limit": "11 production versus 46 probe roots: only actual production inventory grants apply; source availability does not admit dependencies/build scripts",
+  "dispatch_manifest_bindings": [
+    {
+      "path": "docs/provenance/donors.json",
+      "sha256": "e5fdea9b49993ac551b86a1ecf2e6171e8214e4e0166db45796abc088f12ed9a",
+      "meaning": "actual immutable dispatch-base inventory; retains all captured source/WIP/grant records without a new donor audit"
+    },
+    {
+      "path": "docs/research/2026-10-17-shared-libraries/regression-catalog.json",
+      "sha256": "bc29eb28fccbbc6561d14047359ac70c7ad841fb867f54afceb23273a1fbeb2a",
+      "meaning": "actual immutable dispatch-base inventory; retains all captured source/WIP/grant records without a new donor audit"
+    },
+    {
+      "path": "docs/provenance/frozen-donors-2026-10-18.md",
+      "sha256": "6a686c60129be3c726305a7debf3e3dd63bda23551abf20af81a27f59c33d780",
+      "meaning": "actual immutable dispatch-base inventory; retains all captured source/WIP/grant records without a new donor audit"
+    }
+  ],
+  "historical_binding_limit": "Preparation donors.json hash precedes subsequent root integration; dispatch_manifest_bindings records actual selected base. Both are retained, neither is a new donor audit."
+}

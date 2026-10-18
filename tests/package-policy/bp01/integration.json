@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "bp01_root_integration_proposal",
+  "base_commit": "d96a8b9c60ae4f5281c1f5cddf6d02c7e836dfe2",
+  "root_owner_actions": {
+    "Cargo.toml": {
+      "append_members": ["crates/scopebase-bpf"],
+      "append_default_members": ["crates/scopebase-bpf"],
+      "preserve_existing": true
+    },
+    "Cargo.lock": {
+      "append_package": {"name": "scopebase-bpf", "version": "0.1.0"},
+      "dependencies": [],
+      "protocol": "Generate offline under common build lease with admitted compiler and production inventory; preserve all existing entries."
+    },
+    "package-policy.json": {
+      "append_member_from": "tests/package-policy/bp01/member-policy.json",
+      "preserve_existing_members_grants_inventory": true,
+      "requires_accepted_single_client_schema": true
+    },
+    "boundary_client": {
+      "source": "tests/package-policy/bp01/bpf-contracts.rs",
+      "install_at": "tests/package-policy/clients/bpf-contracts.rs"
+    },
+    "contract_registry": {
+      "path": "docs/contracts/interfaces.md",
+      "owner": "SB01/controller",
+      "add": "BP01 foundation: ErrorKind/Stage non-exhaustive typed enums, lossless move-only OperationError, explicit independent Limits configuration; exact signatures/traits from ratified BPF specification. No authority, allocation/admission, errno classifier or source formatting."
+    },
+    "status": {
+      "paths": ["TODO.md", "handoff.md", "docs/superpowers/plans/2026-10-17-scopebase-traceability.json"],
+      "only_after_independent_review_and_current_candidate_verification": true,
+      "increment": "BP01 std-only error/limits foundation",
+      "retain_open": ["BP-R12 remaining BP10/BP11", "BP-R13 two independent consumers/operator route", "TC-R10/H33 other facets", "bpf-host-v1", "all live/object/kernel profiles", "product migrations", "publication"]
+    }
+  }
+}

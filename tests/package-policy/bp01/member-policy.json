@@ -1,0 +1,53 @@
+{
+  "id": "scopebase-bpf",
+  "manifest": "crates/scopebase-bpf/Cargo.toml",
+  "role": "product",
+  "minimal": [],
+  "default": [],
+  "supported_unions": [],
+  "clients": [
+    {
+      "id": "bpf-contracts",
+      "source": "tests/package-policy/clients/bpf-contracts.rs",
+      "default_features": false,
+      "features": []
+    }
+  ],
+  "package_files": [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-APACHE",
+    "THIRD-PARTY-NOTICES.md",
+    "src/lib.rs",
+    "src/error.rs",
+    "src/limits.rs",
+    "tests/api_contract.rs",
+    "tests/ui/positive.rs",
+    "tests/ui/non_exhaustive.rs",
+    "tests/ui/limits_default.rs",
+    "tests/ui/error_clone.rs",
+    "tests/ui/source_not_send.rs",
+    "Cargo.toml.orig",
+    "Cargo.lock"
+  ],
+  "allowed_dependencies": [],
+  "minimal_dependencies": [],
+  "notice_entries": [],
+  "license_files": [
+    {
+      "path": "LICENSE-APACHE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  ],
+  "denied_packages": [
+    "aya",
+    "aya-obj",
+    "aya-ebpf",
+    "aya-build",
+    "libbpf-rs",
+    "libbpf-sys",
+    "bpf-linker",
+    "cc",
+    "bindgen"
+  ]
+}
