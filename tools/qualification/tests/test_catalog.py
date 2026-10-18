@@ -167,3 +167,72 @@ class CatalogTests(unittest.TestCase):
   draft=read('revision-a');changed=copy.deepcopy(draft);changed['catalog_revision']=2;changed['profiles'][0].update(definition_state='FROZEN',open_owners=[]);changed['cases'][0]['required_cells'].append('revision-after')
   self.assertTrue(c.select(check(changed),'revision-fixture-v1')['definition_complete'])
   with self.assertRaisesRegex(c.CatalogInvalid,'BaselineSemantics'):c.baseline(check(changed),check(draft))
+ def test_wide_objects_refuse_before_whole_document_decoder(self):
+  from unittest.mock import patch
+  # Instrument the real decoding route without changing admission behavior.
+  # The previous production path calls the full decoder and its pairs hook with
+  # all 1,000 added members; that is the specific allocation defect under test.
+  for location,positive in [('root',read('revision-a')),('nested',read('registered'))]:
+   wide=copy.deepcopy(positive)
+   target=wide if location=='root' else wide['cases'][0]['registration']['oracle']
+   for n in range(1000):target['unknown'+str(n)]=0
+   valid_raw=json.dumps(positive).encode();wide_raw=json.dumps(wide).encode()
+   real_loads=c.json.loads;real_pairs=c.pairs;decoded=[];hook_widths=[]
+   def observe_loads(value,*args,**kwargs):
+    if 'object_pairs_hook' in kwargs:decoded.append(len(value))
+    return real_loads(value,*args,**kwargs)
+   def observe_pairs(items):
+    hook_widths.append(len(items))
+    return real_pairs(items)
+   with self.subTest(location=location):
+    with patch.object(c.json,'loads',observe_loads),patch.object(c,'pairs',observe_pairs):
+     c.validate(valid_raw)
+     self.assertEqual(decoded,[len(valid_raw)])
+     self.assertEqual(max(hook_widths),9)
+     decoded.clear();hook_widths.clear()
+     with self.assertRaisesRegex(c.CatalogInvalid,'^UnknownField$'):c.validate(wide_raw)
+     self.assertEqual(decoded,[], 'wide object reached whole-document decoding')
+     self.assertEqual(hook_widths,[], 'wide object reached pairs construction')
+ def test_full_envelope_revision_literals_and_original_closures(self):
+  initial=read('cases-v1');a=read('full-revision-a');b=read('full-revision-b')
+  old=[('H04.revision-fixture',1,'revision-before','T0',('revision-fixture-v1',))]
+  new=[('H04.revision-fixture',2,'revision-after','T0',('revision-fixture-v2',)),('H04.revision-fixture',2,'revision-before','T0',('revision-fixture-v2',))]
+  native=[('H33.final-object-license',1,'h33-final-object-license','T2',('compiler-object-v1',)),('H33.installed-notices',1,'h33-installed-notices','T5',('mojo-elf-v1',)),('H33.license-admission',1,'h33-license-admission','T4',('btf-shape-le-v1',)),('H33.source-closure',1,'h33-source-closure','T0',('compiler-object-v1',))]
+  for full,cases,profiles in [(a,5,20),(b,6,21)]:
+   with self.subTest(cases=cases):
+    for field,count in [('tasks',86),('obligations',179),('families',33),('extensions',1),('cells',6),('cases',cases),('profiles',profiles)]:self.assertEqual(len(full[field]),count)
+    for field in ['tasks','obligations','families','extensions']:self.assertEqual(full[field],initial[field])
+    for field in ['cells','cases','profiles']:
+     for record in initial[field]:self.assertIn(record,full[field])
+    data=check(full);pairs={(r['id'],r['version']):r for r in data['cases']}
+    self.assertEqual(pairs['H04.revision-fixture',1]['required_cells'],['revision-before']);self.assertNotIn(('H04.revision-fixture',0),pairs);self.assertNotIn(('H04.revision-fixture',3),pairs)
+    self.assertEqual(c.select(data,'revision-fixture-v1')['required'],old)
+    plan=c.select(data,'native-v1');self.assertEqual(plan['profiles'],['bpf-host-v1','btf-shape-le-v1','capture-core-v1','compiler-object-v1','mojo-elf-v1','native-v1']);self.assertEqual(plan['extensions'],['btf-runtime-linkage-v1']);self.assertEqual(plan['required'],native);self.assertFalse(plan['definition_complete'])
+    self.assertTrue(all(case['implementation_status']=='UNIMPLEMENTED' and case['registration'] is None for case in full['cases']))
+    self.assertEqual(c.select(data,'btf-shape-le-v1')['required'],[]);self.assertEqual(c.select(data,'btf-shape-le-v1')['extensions'],[]);self.assertEqual(data['extensions'][0]['required_cases'],[])
+  data=check(b);self.assertEqual(c.select(data,'revision-fixture-v2')['required'],new)
+  pairs={(r['id'],r['version']):r for r in data['cases']};self.assertEqual(pairs['H04.revision-fixture',2]['required_cells'],['revision-before','revision-after'])
+  reversed_b=copy.deepcopy(b);reversed_b['cases'].reverse();data=check(reversed_b)
+  pairs={(r['id'],r['version']):r for r in data['cases']};self.assertEqual(pairs['H04.revision-fixture',1]['required_cells'],['revision-before']);self.assertEqual(pairs['H04.revision-fixture',2]['required_cells'],['revision-before','revision-after'])
+  self.assertEqual(c.select(data,'revision-fixture-v1')['required'],old);self.assertEqual(c.select(data,'revision-fixture-v2')['required'],new)
+ def test_full_envelope_baseline_and_unrelated_root_rejection(self):
+  a=read('full-revision-a');b=read('full-revision-b');c.baseline(check(b),check(a))
+  for mode in ['old-pair','old-profile','cell','remove-old-pair','inactive-predicate']:
+   changed=copy.deepcopy(b);changed['catalog_revision']=3
+   if mode=='old-pair':next(r for r in changed['cases'] if r['id']=='H04.revision-fixture' and r['version']==1)['required_cells'].append('revision-after')
+   if mode=='old-profile':next(p for p in changed['profiles'] if p['id']=='revision-fixture-v1')['required_cases'][0]['case_version']=2
+   if mode=='cell':next(r for r in changed['cells'] if r['id']=='revision-before')['tier']='T2'
+   if mode=='remove-old-pair':
+    changed['cases']=[r for r in changed['cases'] if (r['id'],r['version'])!=('H04.revision-fixture',1)];changed['profiles']=[p for p in changed['profiles'] if p['id']!='revision-fixture-v1']
+   if mode=='inactive-predicate':next(p for p in changed['profiles'] if p['id']=='btf-shape-le-v1')['required_cases']=[]
+   with self.subTest(mode=mode):
+    with self.assertRaisesRegex(c.CatalogInvalid,'BaselineRemoved' if mode=='remove-old-pair' else 'BaselineSemantics'):c.baseline(check(changed),check(a))
+  missing=copy.deepcopy(b);missing['cases']=[r for r in missing['cases'] if (r['id'],r['version'])!=('H04.revision-fixture',1)];self.invalid(missing,'UnknownReference')
+  reversed_b=copy.deepcopy(b);reversed_b['catalog_revision']=3;reversed_b['cases'].reverse();c.baseline(check(reversed_b),check(b))
+  req=[{'case_id':'H04.revision-fixture','case_version':1,'when_extensions':[]}]
+  for name in ['revision-left-v1','revision-right-v1']:b['profiles'].append({'id':name,'definition_state':'DRAFT','requires_profiles':[],'requires_extensions':[],'required_cases':copy.deepcopy(req),'open_owners':['TT01']})
+  b['profiles'].append({'id':'revision-join-v1','definition_state':'DRAFT','requires_profiles':['revision-left-v1','revision-right-v1'],'requires_extensions':[],'required_cases':[],'open_owners':['TT01']})
+  valid=check(b);self.assertEqual(c.select(valid,'revision-join-v1')['required'],[('H04.revision-fixture',1,'revision-before','T0',('revision-left-v1','revision-right-v1'))])
+  self.assertEqual(c.select(valid,'compiler-object-v1')['required'],[('H33.final-object-license',1,'h33-final-object-license','T2',('compiler-object-v1',)),('H33.source-closure',1,'h33-source-closure','T0',('compiler-object-v1',))])
+  next(p for p in b['profiles'] if p['id']=='revision-right-v1')['required_cases'][0]['case_version']=2
+  self.assertIn('compiler-object-v1',[p['id'] for p in b['profiles']]);self.invalid(b,'VersionConflict')

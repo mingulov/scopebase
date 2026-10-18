@@ -440,6 +440,8 @@
     "tests/fixtures/catalog/extension-derived-case-conflict.json",
     "tests/fixtures/catalog/extension-stem-conflict.json",
     "tests/fixtures/catalog/float-case-version.json",
+    "tests/fixtures/catalog/full-revision-a.json",
+    "tests/fixtures/catalog/full-revision-b.json",
     "tests/fixtures/catalog/inactive-reference-cycle-free.json",
     "tests/fixtures/catalog/inactive-unknown-revision.json",
     "tests/fixtures/catalog/indirect-cycle.json",

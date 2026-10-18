@@ -35,7 +35,8 @@ are capped at 128. Callers may lower positive limits. These bound metadata bytes
 and work; they promise no exact RSS or wall-clock guarantee.
 
 The archive ships integration tests, independent literal closure expectations,
-revision fixtures, invalid-input populations and harmless registered metadata
+revision fixtures retaining the complete canonical envelope, small exact-budget
+fixtures, invalid-input populations and harmless registered metadata
 fixtures. Run `cargo test --offline --locked --lib --tests` and explicitly
 `cargo test --offline --locked --doc` in an admitted archive environment with
 its pinned dependencies. An application's ordinary cargo test does not run

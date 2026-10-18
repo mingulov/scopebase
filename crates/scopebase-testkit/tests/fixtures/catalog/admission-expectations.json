@@ -242,5 +242,13 @@
   {
     "file": "empty-lexical-suffix.json",
     "expected": "accept"
+  },
+  {
+    "file": "full-revision-a.json",
+    "expected": "accept"
+  },
+  {
+    "file": "full-revision-b.json",
+    "expected": "accept"
   }
 ]

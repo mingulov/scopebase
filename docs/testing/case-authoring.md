@@ -126,8 +126,13 @@ Tasks and families are capped at 128 each. Zero or above-ceiling settings are
 InvalidLimits. A quote/escape-aware delimiter preflight bounds nesting; serde
 and Python json remain the JSON grammar authorities. Rust bounded visitors
 never reserve from size_hint and refuse the next collection element before
-pushing it. Python preflights delimiter population counts before json can grow
-collections. An invalid document may hit a bound before its grammar error.
+pushing it. Python preflights array populations and object members before the
+full json decoder can grow collections. Its object ceiling is the widest declared schema
+object (nine fields), derived from the schema field table rather than a public
+limit. A bounded key set detects duplicates before insertion; a new key beyond
+that ceiling is UnknownField. Both wide roots and nested objects are refused
+before whole-document decoding or pairs-hook construction. An invalid document
+may hit a bound before its grammar error.
 Every reference/ownership edge counts, including nested obligation references,
 required-case declarations, extension predicates, case family references and extension base profiles.
 
@@ -177,3 +182,14 @@ not run automatically with an application's ordinary cargo test. This slice
 supplies no domain runner or installed operator qualification route; TT02 and
 TT07 retain those later obligations. Package readiness, domain execution,
 profile qualification, migration and publication remain separate boundaries.
+
+The delivered full-revision-a.json and full-revision-b.json retain all 86 tasks,
+179 obligations, 33 families, 19 canonical profiles and the original extension.
+They append the amendment's literal two cells, H04 revision case/profile v1,
+then case/profile v2 in B. A has six cells, five cases and 20 profiles; B has
+six cells, six cases and 21 profiles. Both Rust and Python exercise exact
+revision lookup/selection, record reversal, mixed-revision rejection with the
+canonical compiler-object root still present, and unchanged literal native/H33
+conditional closure. Python additionally compares these complete baselines,
+including old-pair/profile/cell and inactive-predicate refusal controls. The
+small revision-a/b fixtures remain separate exact-budget test inputs.

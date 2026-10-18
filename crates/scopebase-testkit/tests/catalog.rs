@@ -673,3 +673,197 @@ fn exact_initial_inventory_is_planned_metadata() {
         .iter()
         .all(|c| c["implementation_status"] == "UNIMPLEMENTED" && c["registration"].is_null()));
 }
+
+#[test]
+fn complete_envelope_revision_evolution_preserves_canonical_registry() {
+    let initial: Value = serde_json::from_slice(INITIAL).unwrap();
+    let a: Value =
+        serde_json::from_slice(include_bytes!("fixtures/catalog/full-revision-a.json")).unwrap();
+    let b: Value =
+        serde_json::from_slice(include_bytes!("fixtures/catalog/full-revision-b.json")).unwrap();
+    let old = vec![(
+        "H04.revision-fixture".into(),
+        1,
+        "revision-before".into(),
+        EvidenceTier::T0,
+        vec!["revision-fixture-v1".into()],
+    )];
+    let new = vec![
+        (
+            "H04.revision-fixture".into(),
+            2,
+            "revision-after".into(),
+            EvidenceTier::T0,
+            vec!["revision-fixture-v2".into()],
+        ),
+        (
+            "H04.revision-fixture".into(),
+            2,
+            "revision-before".into(),
+            EvidenceTier::T0,
+            vec!["revision-fixture-v2".into()],
+        ),
+    ];
+    let native = vec![
+        (
+            "H33.final-object-license".into(),
+            1,
+            "h33-final-object-license".into(),
+            EvidenceTier::T2,
+            vec!["compiler-object-v1".into()],
+        ),
+        (
+            "H33.installed-notices".into(),
+            1,
+            "h33-installed-notices".into(),
+            EvidenceTier::T5,
+            vec!["mojo-elf-v1".into()],
+        ),
+        (
+            "H33.license-admission".into(),
+            1,
+            "h33-license-admission".into(),
+            EvidenceTier::T4,
+            vec!["btf-shape-le-v1".into()],
+        ),
+        (
+            "H33.source-closure".into(),
+            1,
+            "h33-source-closure".into(),
+            EvidenceTier::T0,
+            vec!["compiler-object-v1".into()],
+        ),
+    ];
+    let id = CaseId::parse("H04.revision-fixture").unwrap();
+    for (full, cases, profiles) in [(&a, 5, 20), (&b, 6, 21)] {
+        for (field, count) in [
+            ("tasks", 86),
+            ("obligations", 179),
+            ("families", 33),
+            ("extensions", 1),
+            ("cells", 6),
+            ("cases", cases),
+            ("profiles", profiles),
+        ] {
+            assert_eq!(full[field].as_array().unwrap().len(), count, "{field}");
+        }
+        for field in ["tasks", "obligations", "families", "extensions"] {
+            assert_eq!(full[field], initial[field], "preserved {field}");
+        }
+        for field in ["cells", "cases", "profiles"] {
+            for record in initial[field].as_array().unwrap() {
+                assert!(
+                    full[field].as_array().unwrap().contains(record),
+                    "preserved {field}: {record}"
+                );
+            }
+        }
+        let catalog = load(full).unwrap();
+        assert_eq!(
+            catalog.case(&id, 1).unwrap().required_cells(),
+            ["revision-before"]
+        );
+        assert!(catalog.case(&id, 0).is_none());
+        assert!(catalog.case(&id, 3).is_none());
+        assert_eq!(projection(&select(&catalog, "revision-fixture-v1")), old);
+        let plan = select(&catalog, "native-v1");
+        assert_eq!(
+            plan.profiles()
+                .iter()
+                .map(ProfileId::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "bpf-host-v1",
+                "btf-shape-le-v1",
+                "capture-core-v1",
+                "compiler-object-v1",
+                "mojo-elf-v1",
+                "native-v1"
+            ]
+        );
+        assert_eq!(
+            plan.extensions()
+                .iter()
+                .map(ProfileId::as_str)
+                .collect::<Vec<_>>(),
+            ["btf-runtime-linkage-v1"]
+        );
+        assert_eq!(projection(&plan), native);
+        assert!(!plan.definition_complete());
+        assert!(plan
+            .required()
+            .iter()
+            .all(|r| r.implementation_status() == ImplementationStatus::Unimplemented));
+        let bare = select(&catalog, "btf-shape-le-v1");
+        assert!(bare.required().is_empty());
+        assert!(bare.extensions().is_empty());
+        assert_eq!(full["extensions"][0]["required_cases"], json!([]));
+    }
+    let catalog = load(&b).unwrap();
+    assert_eq!(
+        catalog.case(&id, 2).unwrap().required_cells(),
+        ["revision-before", "revision-after"]
+    );
+    assert_eq!(projection(&select(&catalog, "revision-fixture-v2")), new);
+    let mut reversed = b.clone();
+    reversed["cases"].as_array_mut().unwrap().reverse();
+    let reversed = load(&reversed).unwrap();
+    assert_eq!(
+        reversed.case(&id, 1).unwrap().required_cells(),
+        ["revision-before"]
+    );
+    assert_eq!(
+        reversed.case(&id, 2).unwrap().required_cells(),
+        ["revision-before", "revision-after"]
+    );
+    assert_eq!(projection(&select(&reversed, "revision-fixture-v1")), old);
+    assert_eq!(projection(&select(&reversed, "revision-fixture-v2")), new);
+
+    // The canonical unrelated root remains in the same admitted population.
+    let mut mixed = b;
+    let req = json!([{"case_id":"H04.revision-fixture","case_version":1,"when_extensions":[]}]);
+    mixed["profiles"].as_array_mut().unwrap().extend([
+        draft("revision-left-v1", json!([]), req.clone()),
+        draft("revision-right-v1", json!([]), req),
+        draft(
+            "revision-join-v1",
+            json!(["revision-left-v1", "revision-right-v1"]),
+            json!([]),
+        ),
+    ]);
+    let valid = load(&mixed).unwrap();
+    assert_eq!(
+        projection(&select(&valid, "revision-join-v1")),
+        vec![(
+            "H04.revision-fixture".into(),
+            1,
+            "revision-before".into(),
+            EvidenceTier::T0,
+            vec!["revision-left-v1".into(), "revision-right-v1".into()]
+        )]
+    );
+    assert_eq!(
+        select(&valid, "compiler-object-v1")
+            .required()
+            .iter()
+            .map(|r| (r.case_id().as_str(), r.tier()))
+            .collect::<Vec<_>>(),
+        [
+            ("H33.final-object-license", EvidenceTier::T2),
+            ("H33.source-closure", EvidenceTier::T0)
+        ]
+    );
+    let right = mixed["profiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["id"] == "revision-right-v1")
+        .unwrap();
+    right["required_cases"][0]["case_version"] = json!(2);
+    assert!(mixed["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == "compiler-object-v1"));
+    bad(&mixed, CatalogErrorKind::VersionConflict);
+}

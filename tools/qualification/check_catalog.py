@@ -60,6 +60,9 @@ def preflight(raw,limits):
  try:s=raw.decode('utf-8',errors='strict')
  except UnicodeError:fail('InvalidJson')
  stack=[];last_string=None;pending='';i=0;edges=0
+ # All legal objects fit the widest declared schema object. This also bounds
+ # the preflight key set; no full object pairs reach json.loads above it.
+ object_cap=max(len(fields.split()) for fields in FIELDS.values())
  edge_keys={'owners','required_cells','requires_profiles','requires_extensions','required_cases','when_extensions','open_owners','requires_tasks'}
  def enter_element():
   nonlocal edges
@@ -85,6 +88,11 @@ def preflight(raw,limits):
    try:n=len(value.encode('utf-8'))
    except UnicodeError:fail('InvalidJson')
    if n>limits['max_string_bytes']:fail('LimitExceeded')
+   if stack and stack[-1]['type']=='{' and stack[-1]['next']:
+    frame=stack[-1]
+    if value in frame['keys']:fail('DuplicateField')
+    if frame['count']==frame['cap']:fail('UnknownField')
+    frame['keys'].add(value);frame['count']+=1;frame['next']=False
    last_string=value;i=j+1;continue
   if ch==':':
    pending=last_string or ''
@@ -98,7 +106,8 @@ def preflight(raw,limits):
    cap=128 if key in ('tasks','families') else limits.get('max_'+key,limits['max_edges'])
    # Only root obligations are a population; nested obligations are edges.
    if key=='obligations' and len(stack)>1:cap=limits['max_edges']
-   stack.append({'type':ch,'count':0,'cap':cap,'next':True,'edge':key in edge_keys or (key=='obligations' and len(stack)>1)})
+   if ch=='{':cap=object_cap
+   stack.append({'type':ch,'count':0,'cap':cap,'next':True,'keys':set(),'edge':key in edge_keys or (key=='obligations' and len(stack)>1)})
    if len(stack)>limits['max_depth']:fail('LimitExceeded')
   elif ch in ']}':
    if stack:stack.pop()
