@@ -84,61 +84,15 @@ impl Limits { pub fn validate(&self) -> Result<(), OperationError>; }
 
 At v0.1, `Limits::validate` validates configuration only. Every representable combination of its independent unsigned caps is structurally valid, including zero and the type maximum; it returns `Ok(())` without allocation, operation-derived arithmetic or operational permission. There are no cross-field ordering restrictions, `Default` implementation or implicit unlimited sentinel. Each operation must refuse positive work/resources against a zero corresponding cap and use checked arithmetic before allocation or effects, even with maximum caps. BP02 owns CPU/alignment/extent arithmetic, BP04 split-attempt calculations, BP05 cumulative retirement charges, BP06 frame/staging arithmetic, BP09 parser budgets and TC02 executor charges; their existing zero/overflow regressions remain mandatory. A valid cap configuration does not validate an ABI value or authorize a live operation. Persistent retirement-pool and compiler-executor charges additionally bound outstanding effects across operations; per-operation bounds include both initial and split attempts; every retained attachment, ring staging slot, BTF graph and transformed object is charged to its configured bound. Byte, iteration, FD/link, retained-custody and elapsed limits are separate. A synchronous syscall can outlive a deadline; elapsed budgets constrain checks/retries, not arbitrary kernel syscall interruption. Worker cancellation, if later offered, needs the separate ownership-transfer contract and does not appear as an unimplemented async API here.
 
-Pure values are `Send + Sync`. The initial RetirementPool/CompilerExecutor and their tickets are `!Send + !Sync`, with serialized mutable operations; supporting movable/concurrent native factories needs a separate qualified profile. `ValidatedMap` and active attachment owners are `Send` only where the selected backend's ownership permits it, with exclusive `&mut self` for changing operations. `RingReader` and `StagedRecord` are `!Sync`; one reader cannot be cloned or imported twice. Backend native handles do not acquire unsafe auto-traits by wrapping pointers. Public callback/policy code runs outside internal locks; policy panic propagates while the enclosing acquisition guard preserves links and authority. Poisoned state cannot provide evidence; destructors do not panic. `panic=abort`, malicious unsafe backend code and process crash are outside unwinding guarantees.
+Pure values are `Send + Sync`. The initial RetirementPool/CompilerExecutor and their tickets are `!Send + !Sync`, with serialized mutable operations; supporting movable/concurrent native factories needs a separate qualified profile. BP02 `LiveCpuTopology` and `ValidatedMap` are `!Send + !Sync` under their [native ownership contract](2026-10-18-scopebase-bp02-native.md#authentic-topology-and-task-context), with exclusive `&mut self` for lookup. Active attachment owners are `Send` only where their separately selected backend ownership permits it, with exclusive `&mut self` for changing operations. `RingReader` and `StagedRecord` are `!Sync`; one reader cannot be cloned or imported twice. Backend native handles do not acquire unsafe auto-traits by wrapping pointers. Public callback/policy code runs outside internal locks; policy panic propagates while the enclosing acquisition guard preserves links and authority. Poisoned state cannot provide evidence; destructors do not panic. `panic=abort`, malicious unsafe backend code and process crash are outside unwinding guarantees.
 
 ## Map topology, metadata and ABI
 
-```rust
-pub struct CpuTopology { /* private canonical sorted CPU IDs and source bytes */ }
-impl CpuTopology {
-    pub fn parse_possible(input: &[u8], max_cpu_id: u32,
-        max_count: usize) -> Result<Self, OperationError>;
-    pub fn count(&self) -> usize;
-    pub fn ids(&self) -> &[u32];
-}
-pub struct LiveCpuTopology { /* private source capability and immutable-boot snapshot */ }
-impl LiveCpuTopology {
-    pub fn acquire(limits: &Limits) -> Result<Self, OperationError>;
-    pub fn snapshot(&self) -> &CpuTopology;
-    pub fn revalidate(&self) -> Result<(), OperationError>;
-}
-pub struct ValueLayout { pub size: usize, pub alignment: usize,
-    pub schema: [u8; 32] }
-pub struct PerCpuGeometry { /* private */ }
-impl PerCpuGeometry {
-    pub fn checked(value_size: usize, possible_cpus: usize,
-        byte_limit: usize) -> Result<Self, OperationError>;
-    pub fn stride(&self) -> usize;
-    pub fn buffer_len(&self) -> usize;
-}
-pub struct MapMetadata { pub map_id: u32, pub map_type: u32,
-    pub key_size: u32, pub value_size: u32, pub max_entries: u32,
-    pub flags: u32, pub btf_id: u32, pub btf_key_type_id: u32,
-    pub btf_value_type_id: u32 }
-pub struct MapBtfExpectation { pub image: ArtifactId, pub key_type_id: u32,
-    pub value_type_id: u32 }
-pub struct MapExpectation { pub map_type: u32, pub key_size: u32,
-    pub value: ValueLayout, pub max_entries: u32, pub required_flags: u32,
-    pub btf: Option<MapBtfExpectation> }
-pub struct ValidatedMap { /* owns FD, admitted metadata and LiveCpuTopology */ }
-impl ValidatedMap {
-    pub fn from_owned_fd(fd: std::os::fd::OwnedFd, expected: &MapExpectation,
-        limits: &Limits) -> Result<Self, OperationError>;
-    pub fn lookup(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, OperationError>;
-    pub fn metadata(&self) -> &MapMetadata;
-    pub fn geometry(&self) -> &PerCpuGeometry;
-}
-```
+The controller-ratified [BP02 map/public contract](2026-10-18-scopebase-bp02-maps.md), [native authority/syscall/resource contract](2026-10-18-scopebase-bp02-native.md) and [preservation/verification contract](../plans/2026-10-18-scopebase-bp02-verification.md) replace this section's earlier proposed signatures and live-admission wording. They own the exact APIs, algorithms, error order, bounded effects and required controls, including independently approved BP02-R1. They specify implementation and acceptance obligations; no implementation or runtime qualification follows from this amendment.
 
-Bloom membership maps are refused for output-value lookup before extent arithmetic, allocation or native calls. The empty-key insertion/membership semantics remain with the appropriate backend; this safe wrapper does not emulate them. Native-style caller-output adapters use scratch-before-success copy and disjoint size-output validation: failure preserves all output bytes.
+Pure CpuTopology/PerCpuGeometry values remain descriptive and portable. The native API is restricted to the admitted x86_64 Linux GNU little-endian 64-bit cfg, retains authentic task/source/map authority internally and exposes no caller-topology/native-injection route. LiveCpuTopology and ValidatedMap are !Send and !Sync. The immutable global possible-mask Linux ABI is the lengthless-copy bound; source checks and the exact original-task text/fresh-stat predicate detect observed substitution/task loss and suppress publication without claiming continuous observation or arbitrary ABA detection.
 
-The safe FD path reads metadata from the actual retained FD and checks its map kind, immutable geometry, flags and supported key/value semantics. `ValueLayout::schema` names the caller ABI, not a schema attested by map metadata; matching byte size alone cannot establish its meaning. When BTF is required, fetch the actual map BTF image and validate its digest/domain and expected key/value IDs, refusing unavailable validation. Without BTF, the caller must bind the actual producer object/profile to its explicit byte decoder and conformance tests; the API makes only the checked byte-buffer geometry guarantee. Alignment is a nonzero power of two no greater than 8 for the first byte-buffer map profile. It cannot accept caller assertions as metadata. The first safe map wrapper supports only explicitly tested per-CPU array/hash lookup; other map kinds return Unsupported. It does not expose a safe arbitrary raw map syscall or native typed cast into an undersized buffer. `CpuTopology::parse_possible` and `PerCpuGeometry::checked` are pure/model operations over untrusted caller data; even a valid `"0"` parse grants no live-syscall authority. They have no conversion into `LiveCpuTopology`. `ValidatedMap::from_owned_fd` accepts no caller topology and internally acquires/retains `LiveCpuTopology`; native lookup never sizes from a diagnostic report, serialized snapshot, caller path, custom safe reader or parsed CPU list. Public `LiveCpuTopology::acquire` is descriptive to callers; no native method accepts a caller-replaced snapshot.
-
-Live acquisition pins and authenticates the kernel sysfs root and the actual `devices/system/cpu/possible` attribute in the current kernel context. Validate sysfs superblock and true filesystem-root identity, traverse relative to the retained root without symlink/bind-mount crossings, reject substituted leaves/subtree mounts, and preserve kernel/source/boot identity. No caller-supplied path or ordinary `read_to_string("/sys/...")` result is accepted as a trusted source. A hidden, denied, replaced or unauthenticatable source returns Unsupported/Denied before map lookup. Testing filesystem readers are private/unsafe injection seams, never a safe live constructor. Qualify root/leaf authentication with a fake regular file, bind-mounted `online` attribute, a sysfs subtree presented as root, source replacement and a well-formed caller `"0"` undercount against the real multi-lane kernel.
-
-Map/topology authentication is a memory-safety precondition and must pass adversarial source-substitution tests before the safe native method is enabled; a conformance report cannot manufacture this internal authority. The first live implementation is restricted to qualified Linux kernel configurations whose possible-CPU mask is immutable for the boot and is the same mask used by the map syscall. That kernel invariant is part of the audited safe syscall boundary, not an assertion the caller may supply. Before each lookup, revalidate retained source/boot/context and exact mask; after reading, validate again to mark a raced sample Changed. Before/after checks alone cannot prevent a kernel copy overrun if a supported kernel could grow the possible mask between sizing and syscall. Therefore a kernel/configuration with a mutable mask, an unestablished invariant, or an unauthenticated source is Unsupported for this safe lengthless-copy route; enabling it requires a separately reviewed kernel-atomic bound/allocation mechanism. `LiveCpuTopology::revalidate` fails closed and cannot refresh/rewrite a prior snapshot in place. CPU online/offline changes do not shrink possible lanes; no online-count fallback is permitted. Missing topology is an error, lists cannot overlap and allocation uses count, not highest CPU ID plus one. Backend byte I/O adapters must satisfy these preconditions through private/unsafe audited seams.
-
-ABI fixture coverage includes sizes 1/7/8/9/13, checked overflow, guard pages/canaries, padding initialization and the KryProbe WHO 80→88 transition. WHO's 88-byte layout is a regression fixture rather than a generic public crypto struct. Every path consuming WHO—including live lookup stride, fold and report adapter—must reject a stale 80-byte schema. An asserted Rust struct size alone is insufficient.
+Only the checked perCPU array/hash byte-buffer lookup contracts are included. Actual bloom permits the metadata query needed to discover kind and then refuses before extent arithmetic, allocation, topology, key witness and value lookup. Fully implemented optional linked-BTF raw-image SHA-256/type-ID equality supplies no semantic layout or producer-object proof; BP09 owns semantic BTF. WHO88 remains package-delivered regression/client fixture policy, with every selected lookup/decoder/fold/report path preserved. Exact evidence cells and source/archive clients remain required before this increment closes.
 
 ## Capability observations and explicit probes
 
@@ -146,7 +100,7 @@ ABI fixture coverage includes sizes 1/7/8/9/13, checked overflow, guard pages/ca
 pub enum CapabilityState { Supported, Unsupported, Denied, Unknown, Incompatible }
 pub enum EvidenceStage { Metadata, Object, Load, Attach, Behavior }
 pub enum HazardState { Clean, Affected, Unknown }
-pub struct ArtifactId(pub [u8; 32]);
+// ArtifactId is the shared root-exported value from artifact.rs, delivered by BP02.
 pub struct ProfileId(String);
 impl ProfileId {
     pub fn new(value: &str) -> Result<Self, OperationError>;
@@ -168,6 +122,8 @@ pub struct ProbePopulation { pub expected_owned_hits: u64,
 pub fn assess_filter_probe(population: &ProbePopulation)
     -> Result<CapabilityState, OperationError>;
 ```
+
+`ArtifactId` is defined once by the [BP02 shared public API](2026-10-18-scopebase-bp02-maps.md#exact-public-api) in `scopebase-bpf/src/artifact.rs` and reexported at the crate root. BP03 consumes that same descriptive `[u8;32]` value instead of declaring a second domain; linked BTF uses SHA-256 of exact raw image bytes and capability callers still bind their actual object/profile context. The value itself grants no runtime authority.
 
 `ProfileId::new` admits 1..128 ASCII bytes matching `[a-z0-9][a-z0-9._/-]*`; the shared testkit maps its independently validated ID by that string and does not use raw unchecked constructors. Construction records object/profile/context, operation, stage, actual outcome and reason. Public constructors for descriptive observations must label their provenance; they cannot yield loaded-link or retirement authority. `expected_owned_hits > 0`, independent owned-ledger completion and `independently_executed_excluded > 0` are prerequisites for a support verdict. Exact counts and per-thread identities supplement the abbreviated population structure through case data. Zero observations from a disabled trigger are Unknown/incomplete, never Supported. An excluded hit is Incompatible. Permission denial remains Denied at its stage, not Unsupported. Preserve operation, raw errno and bounded verifier/backend evidence: EPERM/EACCES alone does not establish permission denial for BPF_PROG_LOAD. A demonstrated verifier or license refusal remains a distinct cause; an ambiguous cause is Unknown. The donor initialized-padding defect returned verifier EACCES on older kernels, so an errno-only classifier is forbidden. Seccomp/uretprobe hazard classification and attach feature classification use separate results and caller policy; an unsafe override cannot cure missing privilege.
 

@@ -88,6 +88,12 @@ The normative [TT02 intent/cause matrix](2026-10-18-scopebase-tt02-engine.md#int
 
 The normative [TT02 actual-contract import boundary](2026-10-18-scopebase-tt02-engine.md#result-schema-actual-contract-matching-and-import-boundary) recomputes descriptive verdicts while preserving Imported origin; it retains fixed actual entry/final metadata and raw elapsed/cancellation/completion observations for pure gate reconstruction, but cannot re-execute arbitrary oracle logic or authenticate a coherent forged host claim.
 
+### BP02 clarification under D07
+
+**Status:** SETTLED by controller ratification on 2026-10-18, including independently approved BP02-R1. **Owners:** BP02 and controller. This adds no decision/task/requirement ID or dependency edge. **What/why:** The [BP02 map contract and six R1 alternatives](2026-10-18-scopebase-bp02-maps.md#ratified-choices-and-reasons) freeze executable ABI/source/task preconditions, authentic whole-root bind admission, one private audited unsafe module, metadata-before-bloom refusal, lookup_into/shared ArtifactId/actual linked-BTF matching, and exact grammar/error/resource bounds. Version/config/report strings cannot authorize native copies. The [native predicate](2026-10-18-scopebase-bp02-native.md#bp02-r1-exact-original-task-continuity-phase) additionally retains exact original authenticated thread-self text and requires a fresh positive one-byte stat read relative to the original held task directory: proc inode numbers wrap, getattr can outlive a task and cached output cannot prove current liveness. Keep its precise initial/admitted error/sticky/output/accounting rules and [independent controls](../plans/2026-10-18-scopebase-bp02-verification.md#bp02-r1-focused-amendment-controls). This is continuity at checks, distinct from the unchanged immutable-global-mask copy bound. Design ratification does not admit source/dependencies, qualify a kernel or close BP02; the controller binds those inputs and owned live resources separately, without making resource discovery a prerequisite of source implementation.
+
+
+
 ## D08 — Cleanup and bounded work are observable contracts
 
 **Status:** SETTLED. **Owners:** LX04/LX06/LX09, BP05/BP06, TC02/TC07 and NX03–NX06.
@@ -147,6 +153,10 @@ The normative [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md) fixes 
 **Why:** A checks-only record loses the independent harness verdict and original capability evidence. A zero-or-one vector would add cardinality rules to an inherently optional return. Retaining the complete response gives imports the evidence needed to reconstruct Invalid and prevents a copied Pass summary from masking it.
 
 **Limit:** Import does not rerun or authenticate a custom oracle. Missing fields and the superseded alias reject in the unreleased major-1 schema; partial mode does not rehabilitate malformed returned records. Root ratified Astra supplement `c63b83bcaa0f08320189be41814ecc426a7dd7ac335d9ec9df508922c4febc70`; task/profile status is unchanged.
+
+### TT02-R5: preserve typed dialect rejection
+
+**What:** Add CaseErrorCategory::UnsupportedSchema with whole-script preflight, empty operation progress, Unknown cause and unchanged execute/receipt channels; enforce the [exact amendment](2026-10-18-scopebase-tt02-dialect-errors.md). **Why:** InvalidOutput plus a magic stage string loses the promised typed distinction, while Refused/UnsupportedOperation invents operation evidence. Structural envelope, adapter dialect and malformed operation data stay separate. Retain actual effects/oracle/error records and lifecycle custody; recompute zero effective operation activity. Eight focused groups with independent positive/negative controls remain required before TT02 acceptance. No task or profile is promoted by this decision.
 
 ## D10 — Generic types do not erase application policy
 

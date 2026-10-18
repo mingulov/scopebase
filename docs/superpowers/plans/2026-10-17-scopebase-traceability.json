@@ -7804,6 +7804,58 @@
         "G20",
         "G22"
       ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-tt02-dialect-errors.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "TT02"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "TT02-R5 typed dialect preflight; immutable independent ruling 0fc84db5ab225bfb58ac6fdfcd7046f00cc7efef7bb6b3da3d75907b870b31f7"
+      ],
+      "acceptance_boundary": "Typed pre-read UnsupportedSchema, empty attempted progress, actual effects/oracle/error preservation and no invented operation capability; eight focused acceptance groups. Unreleased schema 1 only; no product or profile acceptance.",
+      "preserved_source_obligations": [
+        "F05",
+        "Q05",
+        "H23",
+        "T03",
+        "G12",
+        "G18",
+        "U03",
+        "U06",
+        "U07",
+        "OV27",
+        "H33"
+      ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-bp02-maps.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "BP02"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "BP01 accepted",
+        "BP02 v2 independent design approval including exact task text and fresh original-anchor read",
+        "23-copy-scope admission bc5293b72dc53f1e180bc2b289a15cf73c7a595035135d23ae433b560d51547d",
+        "13-package exact existing host dependency projection; actual consumer lock/features remain checked outputs"
+      ],
+      "acceptance_boundary": "Full checked perCPU map/BTF/topology/task/WHO implementation, delivered source/archive clients and meaningful controls plus minimum owned live cells and independent unsafe review. No TT05 dependency or full-profile/migration promotion.",
+      "preserved_source_obligations": [
+        "B01",
+        "H15",
+        "H16",
+        "H28"
+      ]
     }
   ]
 }

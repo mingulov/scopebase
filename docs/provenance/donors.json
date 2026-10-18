@@ -16,7 +16,7 @@
     ]
   },
   "selection": {
-    "selected_file_count": 128,
+    "selected_file_count": 129,
     "selected_file_ids": [
       "P:crates/manifest/src/identity.rs",
       "P:crates/manifest/src/maps.rs",
@@ -145,7 +145,8 @@
       "P:src/scope/inventory_cgroup.rs",
       "P:src/discovery/scan.rs",
       "O:src/args.rs",
-      "O:tests/cli_limits.rs"
+      "O:tests/cli_limits.rs",
+      "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs"
     ],
     "unselected_disposition": "RESEARCH_ONLY_NOT_ADOPTED",
     "unselected_scope": "All other refs, worktrees, untracked experiments and source paths remain research references. No merging or source publication is authorized by intake.",
@@ -155,7 +156,8 @@
       "O preview integration 4bcb24ce, M main 8307a17d and L main ff6ea508 remain at research pins; selected paths are clean. Product roots, topic worktrees and cached remote refs remain separate authorities.",
       "LJ current e55ecbef succeeds research 54bcebd5 and diverges from L main. Selected native map/ring implementation/header bytes match L main; selected support docs, integration test and toolchain lock differ from L main. Since research 54bcebd5, observed changes concern CI/package/provenance/toolchain tooling. No runtime qualification asserted.",
       "J catalog source CR09-M1 remains f520a529 but has 63 tracked modifications and 11 untracked entries at observation. tests/kernel/test_map_roundtrip.py and compiler/lib/MapMetadata.cpp are selected dirty inputs with current SHA256 recorded. Current dev and D2/checkouts remain separate; D2 test_map_btf.py has distinct dirty bytes recorded in worktree metadata.",
-      "MemVeil consumes libbpf-mojo 681096cb588379307d0c8e94e1d77e53de4be22f per toolchain.lock.json; neither L nor LJ is automatically its consumed runtime."
+      "MemVeil consumes libbpf-mojo 681096cb588379307d0c8e94e1d77e53de4be22f per toolchain.lock.json; neither L nor LJ is automatically its consumed runtime.",
+      "BP02 adds the exact frozen K snapshot_who consumer row and admits 23 ADAPT scopes across seven K/L rows; nine selected comparison scopes remain reference-only. Prior narrower admissions and current CP04 authorizations are preserved. This is source admission, not copying or runtime qualification."
     ]
   },
   "donors": [
@@ -286,7 +288,8 @@
         "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs": "3d267feee7f8db4d403330f2c2cb7954205226340a932e5d54ac688332cb9f81",
         "docs/dependencies/pins.md": "ddedc4750e9d52a07f8df259c3b0d99171f55ee3496627b99078622a42e9e036",
         "docs/decisions/ADR-0013.md": "f19f9c25256c81b0dc676ebcdb3b67ef7d6b6bef69bbf1b3b8f2293cd2a6c336",
-        "docs/decisions/ADR-0011.md": "027b3daf0b894e86eb3a9d35690bd610013a45031e81427a02d03d837f286009"
+        "docs/decisions/ADR-0011.md": "027b3daf0b894e86eb3a9d35690bd610013a45031e81427a02d03d837f286009",
+        "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db"
       }
     },
     {
@@ -6223,14 +6226,35 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/mapops.rs; expert selection is required before copying."
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            160,
+            215
+          ],
+          [
+            258,
+            285
+          ],
+          [
+            320,
+            414
+          ],
+          [
+            471,
+            508
+          ],
+          [
+            515,
+            631
+          ]
+        ],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7154,14 +7178,19 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/kcrypto_snapshot.rs; expert selection is required before copying."
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1100,
+            1111
+          ]
+        ],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7514,42 +7543,54 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "READY_FOR_SELECTED_SCOPE",
-        "source_scope": [
-          [
-            133,
-            161
-          ],
-          [
-            825,
-            837
-          ],
-          [
-            842,
-            846
-          ],
-          [
-            857,
-            861
-          ],
-          [
-            1153,
-            1191
-          ],
-          [
-            1193,
-            1200
-          ],
-          [
-            1208,
-            1240
-          ]
-        ],
         "ownership_basis": "USER_OWNED",
         "artifact_role": "host",
         "destination_license": "Apache-2.0",
         "authorization_ref": "OWNER-2026-10-18",
         "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            133,
+            166
+          ],
+          [
+            483,
+            506
+          ],
+          [
+            508,
+            579
+          ],
+          [
+            807,
+            868
+          ],
+          [
+            874,
+            879
+          ],
+          [
+            953,
+            965
+          ],
+          [
+            967,
+            978
+          ],
+          [
+            980,
+            1004
+          ],
+          [
+            1152,
+            1240
+          ],
+          [
+            1345,
+            1385
+          ]
+        ],
         "blocked_reason": null
       },
       "source_evidence": {
@@ -7877,14 +7918,15 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
-            448,
-            523
-          ],
-          [
-            531,
+            432,
             692
           ],
           [
@@ -7924,11 +7966,6 @@
             954
           ]
         ],
-        "ownership_basis": "USER_OWNED",
-        "artifact_role": "host",
-        "destination_license": "Apache-2.0",
-        "authorization_ref": "OWNER-2026-10-18",
-        "third_party_terms": [],
         "blocked_reason": null
       },
       "source_evidence": {
@@ -18765,7 +18802,8 @@
         "H": [
           "H15",
           "H16",
-          "H17"
+          "H17",
+          "H28"
         ],
         "G": [
           "G03",
@@ -18824,16 +18862,21 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "DEPENDENCY_ADAPTER",
+        "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/object_maps.c; expert selection is required before copying."
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            24,
+            98
+          ]
+        ],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19446,7 +19489,8 @@
         "H": [
           "H15",
           "H16",
-          "H17"
+          "H17",
+          "H28"
         ],
         "G": [
           "G03",
@@ -19505,16 +19549,21 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "DEPENDENCY_ADAPTER",
+        "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/generic_maps.c; expert selection is required before copying."
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            344,
+            501
+          ]
+        ],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20767,16 +20816,21 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "DEPENDENCY_ADAPTER",
-        "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
+        "disposition": "REFERENCE_ONLY",
+        "copy_status": "BLOCKED",
+        "decision_status": "REFERENCE_ONLY",
+        "source_scope": [
+          [
+            24,
+            98
+          ]
+        ],
         "ownership_basis": "UNRESOLVED",
         "artifact_role": null,
         "destination_license": null,
         "authorization_ref": null,
         "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:native/src/object_maps.c; expert selection is required before copying."
+        "blocked_reason": "BP02 selects byte-identical L baseline fragments for adaptation; this LJ successor is comparison evidence only. No source copy is admitted from this row."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21109,16 +21163,21 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "DEPENDENCY_ADAPTER",
-        "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
+        "disposition": "REFERENCE_ONLY",
+        "copy_status": "BLOCKED",
+        "decision_status": "REFERENCE_ONLY",
+        "source_scope": [
+          [
+            344,
+            501
+          ]
+        ],
         "ownership_basis": "UNRESOLVED",
         "artifact_role": null,
         "destination_license": null,
         "authorization_ref": null,
         "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:tests/native/generic_maps.c; expert selection is required before copying."
+        "blocked_reason": "BP02 selects byte-identical L baseline fragments for adaptation; this LJ successor is comparison evidence only. No source copy is admitted from this row."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -23390,6 +23449,150 @@
         "unselected_ranges": [],
         "license_note": "Historical GPL-3.0-or-later retained as observed source label; selected user-owned host code uses OWNER-2026-10-18 -> Apache-2.0."
       }
+    },
+    {
+      "id": "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
+      "dirty_sha256": null,
+      "owner": "BP02",
+      "intended_contracts": [
+        "possible-cpu-map-geometry"
+      ],
+      "references": {
+        "H": [
+          "H15",
+          "H16",
+          "H17"
+        ],
+        "G": [
+          "G03",
+          "G15",
+          "G16",
+          "G18",
+          "G20",
+          "G22",
+          "G23"
+        ],
+        "UC": [],
+        "TODO": [
+          "B01",
+          "B08",
+          "Q01",
+          "T01",
+          "T03"
+        ],
+        "tasks": [
+          "BP02",
+          "BP07",
+          "NX05"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+            "sha256": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-or-later.txt",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/kryprobe-privilege/Cargo.toml",
+            "sha256": "2b4cbeef20ba53cc1b3dd829029ea76bf51f0c847c8032d73956648fa6c68aa7",
+            "declarations": [
+              "true"
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "297ba19b03dcbb89d42c2cc3a540fabe89eceacc08075c100b285eb99fb513cf",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            40,
+            50
+          ],
+          [
+            263,
+            265
+          ],
+          [
+            279,
+            304
+          ]
+        ],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
+        "observed_sha256": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 14787,
+        "original_observation_sha256": "b6c1b5e356a834922e82b5545879aaa5d907ef9866fbbc42586ab2cd8efe4feb",
+        "selection_note": "Added from the completed frozen K capture by BP02 exact source selection; explicitly matched frozen HEAD. No live donor refresh or historical initial-intake observation claimed."
+      },
+      "source_issue_test": {
+        "issues": [
+          "possible-cpu-map-geometry"
+        ],
+        "existing_symbols": [
+          {
+            "name": "fold_vwho",
+            "line": 48
+          },
+          {
+            "name": "snapshot_who",
+            "line": 249
+          },
+          {
+            "name": "snapshot_who_cached",
+            "line": 259
+          },
+          {
+            "name": "kattrloss_read_refuses_on_unreadable_map",
+            "line": 353
+          }
+        ],
+        "evidence": "Exact frozen source inspected for BP02 WHO88 consumer preservation; no donor execution."
+      }
     }
   ],
   "port_groups": [
@@ -24355,7 +24558,8 @@
         "H": [
           "H15",
           "H16",
-          "H17"
+          "H17",
+          "H28"
         ],
         "G": [
           "G03",
@@ -24389,7 +24593,8 @@
         "L:native/src/object_maps.c",
         "L:tests/native/generic_maps.c",
         "LJ:native/src/object_maps.c",
-        "LJ:tests/native/generic_maps.c"
+        "LJ:tests/native/generic_maps.c",
+        "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs"
       ],
       "selected_regressions_to_port_or_adapt": [
         {
@@ -24656,6 +24861,34 @@
           "path": "tests/native/generic_maps.c",
           "name": "bloom_maps",
           "line": 469,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+          "name": "fold_vwho",
+          "line": 48,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+          "name": "snapshot_who",
+          "line": 249,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+          "name": "snapshot_who_cached",
+          "line": 259,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+          "name": "kattrloss_read_refuses_on_unreadable_map",
+          "line": 353,
           "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
         }
       ],
