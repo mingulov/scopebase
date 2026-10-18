@@ -3,8 +3,10 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -50,7 +52,7 @@ pathlib.Path(os.environ['FAKE_LAUNCH']).write_text(json.dumps({
 if os.environ.get('FAKE_CHANGE_HEAD'):
     subprocess.run(['git', 'commit', '--allow-empty', '-qm', 'moved during review'], check=True)
 if os.environ.get('FAKE_WRITE_PATH'):
-    pathlib.Path(os.environ['FAKE_WRITE_PATH']).write_text('changed during review\\n')
+    pathlib.Path(os.environ['FAKE_WRITE_PATH']).write_text(os.environ.get('FAKE_WRITE_CONTENT', 'changed during review\\n'))
 sys.stdout.buffer.write(pathlib.Path(os.environ['FAKE_EVENTS']).read_bytes())
 sys.stdout.buffer.flush()
 if os.environ.get('FAKE_SIGNAL'):
@@ -92,6 +94,27 @@ raise SystemExit(int(os.environ.get('FAKE_EXIT', '0')))
         self.assertFalse(self.launch.exists())
         for suffix in (".jsonl", ".err", ".final.txt", ".execution.json", ".tmp"):
             self.assertFalse(Path(str(self.prefix) + suffix).exists())
+
+    def configure_source_filter(self, field="clean", canonical=False):
+        (self.repo / ".gitattributes").write_text("source.txt filter=review-fixture\n")
+        self.git("add", ".gitattributes")
+        self.git("commit", "-qm", "declare source filter")
+        self.head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.report["reviewed_commit"] = self.head
+        self.set_events([self.terminal()])
+        marker = self.base / "filter executed"
+        script = self.base / "configured filter.py"
+        body = "#!/usr/bin/env python3\nimport pathlib, sys\npathlib.Path(" + repr(str(marker)) + ").touch()\n"
+        if field == "process":
+            # Deliberately exit after the sentinel; no filter protocol emulator.
+            body += "raise SystemExit(1)\n"
+        else:
+            body += "content = sys.stdin.buffer.read()\n"
+            body += "sys.stdout.buffer.write(b'candidate\\n' if " + repr(canonical) + " else content)\n"
+        script.write_text(body)
+        self.git("config", "filter.review-fixture." + field, shlex.join([sys.executable, str(script)]))
+        self.git("config", "filter.review-fixture.required", "true")
+        return marker
 
     def test_valid_review_keeps_findings_separate_from_acceptance(self):
         result = self.run_wrapper()
@@ -308,6 +331,51 @@ raise SystemExit(int(os.environ.get('FAKE_EXIT', '0')))
         result = self.run_wrapper()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(marker.exists())
+
+    def test_source_check_does_not_execute_configured_clean_filter(self):
+        marker = self.configure_source_filter()
+        source = self.repo / "source.txt"
+        before = source.stat()
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        result = self.run_wrapper("--dry-run")
+        self.assertFalse(marker.exists(), "Git status executed the configured clean filter")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.launch.exists())
+        self.assertEqual(source.read_bytes(), b"candidate\n")
+
+    def test_source_check_does_not_execute_configured_process_filter(self):
+        marker = self.configure_source_filter(field="process")
+        source = self.repo / "source.txt"
+        before = source.stat()
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+        result = self.run_wrapper("--dry-run")
+        self.assertFalse(marker.exists(), "Git status executed the configured process filter")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.launch.exists())
+
+    def test_canonicalizing_filter_cannot_hide_dirty_source_before_review(self):
+        marker = self.configure_source_filter(canonical=True)
+        (self.repo / "source.txt").write_bytes(b"different\n")
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assert_not_launched_or_reserved()
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.head)
+        self.assertEqual((self.repo / "source.txt").read_bytes(), b"different\n")
+
+    def test_canonicalizing_filter_cannot_hide_dirty_source_after_review(self):
+        marker = self.configure_source_filter(canonical=True)
+        self.env.update(FAKE_WRITE_PATH="source.txt", FAKE_WRITE_CONTENT="different\n")
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertFalse(marker.exists())
+        record = self.metadata()
+        self.assertEqual(record["raw_exit_status"], 0)
+        self.assertEqual(record["before_head"], self.head)
+        self.assertEqual(record["after_head"], self.head)
+        self.assertFalse(record["source_clean_after"])
+        self.assertEqual(record["execution_state"], "INVALID_EVIDENCE")
+        self.assertEqual((self.repo / "source.txt").read_bytes(), b"different\n")
 
     def test_prompt_limit_uses_utf8_bytes_at_n_and_n_plus_one(self):
         cases = ((b"a" * 65536, 0), (b"a" * 65537, 64),

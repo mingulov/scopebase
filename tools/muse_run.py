@@ -59,13 +59,24 @@ def head(worktree):
 
 
 def source_status(worktree):
-    """Observe tracked/untracked source without running fsmonitor/hooks.
+    """Observe tracked/untracked source without running filters/fsmonitor/hooks.
 
     Ignored private review inputs/outputs stay outside this cleanliness check.
     Optional Git index refresh writes are disabled for this read-only check.
     """
+    configured = subprocess.run(
+        ["git", "-C", str(worktree), "config", "--name-only", "--get-regexp", r"^filter\..*\.[^.]+$"],
+        capture_output=True, text=True)
+    if configured.returncode not in (0, 1):
+        configured.check_returncode()
+    # A clean/process filter can execute a shell command or canonicalize changed
+    # source back to the indexed bytes. Disable each configured driver locally.
+    overrides = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+    for driver in sorted({key.rsplit(".", 1)[0] for key in configured.stdout.splitlines()}):
+        for field, value in (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false")):
+            overrides.extend(["-c", driver + "." + field + "=" + value])
     result = subprocess.run(
-        ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+        ["git", "--no-optional-locks", *overrides,
          "-C", str(worktree), "status", "--porcelain=v1", "-z", "--untracked-files=all",
          "--ignore-submodules=none"], capture_output=True, check=True)
     return result.stdout
