@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prepare the selected native-worker and supplementary Muse-review workflow for the user's next ScopeBase goal.
+**Goal:** Prepare the selected native-worker and supplementary Muse-review workflow for the active ScopeBase M0–M6 goal.
 
 **Architecture:** The controller uses the existing product DAG and small local helpers. Native agents implement and review; an explicitly invoked Muse process supplies additional readonly review, with immutable artifacts and no acceptance authority.
 
@@ -39,7 +39,7 @@
 
 **Requirements:** ORG-R01–ORG-R03/ORG-R06. **Files:** as table. **Interfaces:** exact `scopebase-job` commands and private job layout in spec.
 
-- [ ] Write real temporary-Git tests for valid SB01 preparation/model dispatch, relative/escaping ownership, duplicate jobs, overlap, missing prerequisite, max without reason, readonly roles, stale/dirty review source and full BASE..HEAD package. Run `python3 -m unittest discover -s tests/orchestration -p test_jobs.py -v`; observe intended failures before implementation.
+- [ ] Write real temporary-Git tests for valid SB01 preparation/model dispatch, relative/escaping ownership, duplicate jobs, overlap, missing prerequisite, max without reason, readonly roles, stale/dirty review source, both directions of cross-boundary renames, selected-base symlink escapes, all86actual task-heading extraction, full BASE..HEAD packages across fix commits and recorded resource-retired reconciliation. Run `python3 -m unittest discover -s tests/orchestration -p test_jobs.py -v`; observe intended failures before implementation.
 - [ ] Implement the specified validation, controller lock, fresh worktree/job binding and exact task extraction. No agent launch or automatic task completion.
 - [ ] Run the tests and valid/invalid real-repository controls; record commands and limits. Commit only the owned helper/bin/test files with report.
 
@@ -47,7 +47,7 @@
 
 **Requirements:** ORG-R03–ORG-R05/ORG-R07. **Files:** as table. **Interfaces:** exact positional Muse wrapper and build-lock command in spec.
 
-- [ ] Write tests using a controlled executable in place of the external service, real temp Git and real flock subprocesses. Check valid report, raw exit failure, zero-exit failed/missing/duplicate/malformed terminal, wrong candidate, protected artifacts, paths with spaces, dry-run no invocation, no flag override, child75 exactly once and contended timeout without execution.
+- [ ] Write tests using a controlled executable in place of the external service, real temp Git and real flock subprocesses. Check valid report, raw exit failure, zero-exit failed/missing/duplicate/malformed terminal, wrong/dirty candidate before or during execution, oversized prompt, protected artifacts, paths with spaces, dry-run no invocation, no flag override, child75 exactly once and contended timeout without execution.
 - [ ] Run `python3 -m unittest discover -s tests/orchestration -p 'test_muse.py' -v` and the matching `test_lock.py` command; save red evidence.
 - [ ] Implement the specified helpers and thin bin entrypoints. Keep the underlying tool/protocol provenance and effective-tier uncertainty explicit.
 - [ ] Rerun controlled tests plus local version/help and dry-run; preserve output and commit only owned files. An actual model call is separately recorded if the controller selects one.
@@ -58,7 +58,7 @@
 
 - [ ] Write a failing real-repository check showing ignored worker Markdown is excluded while a new untracked bad local link is detected. Implement Git-aware document discovery and rerun the documentation checker.
 - [ ] Write the controller workflow, common worker rules and worker/reviewer/fix/report templates. Record routing/escalation, exact task/review evidence, serial integration/resource ownership, effects, handoff and explicit missing-environment status.
-- [ ] Add the Muse-specific route, reference file hashes and known wrapper failure cases without copying Haskoki assumptions. Add a single root handoff with no active goal and first future product task SB01.
+- [ ] Add the Muse-specific route, reference file hashes and known wrapper failure cases without copying Haskoki assumptions. Add a single root handoff with the active M0–M6 goal and first product task SB01.
 - [ ] Update navigation/TODO to distinguish completed preparation from open product work. Run all orchestration tests and `python3 tools/check_planning_docs.py`.
 
 ### EX04: Independent review and setup acceptance
