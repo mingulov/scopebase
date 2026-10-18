@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
   "kind": "SCOPEBASE_SOURCE_INTAKE",
   "status": "SOURCE_INTAKE_NOT_PRODUCTION_PORT",
   "qualification": "NOT_RUN",
@@ -696,8 +696,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/manifest/src/identity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -920,8 +926,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/manifest/src/maps.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -1108,8 +1120,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/manifest/src/elf.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -1251,8 +1269,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/discovery/identity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -1695,8 +1719,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/discovery/kernel_identity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -1812,8 +1842,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/process.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2055,8 +2091,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/events.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2357,8 +2399,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/history.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2481,8 +2529,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/attach/native_retirement.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2605,8 +2659,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/attach/native_retirement_tests.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2774,8 +2834,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/bpf-multi/src/lib.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2984,8 +3050,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/native/image_identity.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3109,8 +3181,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/native/image_identity_fork.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3246,8 +3324,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/native/stop_gate.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3378,8 +3462,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/native/task_owner.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3510,8 +3600,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/native/instance_epoch.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3649,8 +3745,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/ebpf/src/main.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3780,8 +3882,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:build_support/bpf_tools.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -3911,8 +4019,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:build_support/clang_resolve.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4046,9 +4160,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:third-party/patches/aya-0.14.0/aya-ring-reader.patch; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4250,9 +4370,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:third-party/patches/aya-obj-0.3.0/aya-obj-map-relocation.patch; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4397,9 +4523,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:third-party/sources.json; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4529,8 +4661,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:third-party/README.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4660,8 +4798,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:tests/bpf_map_contracts.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4808,8 +4952,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:tests/exec_task_continuity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -4961,8 +5111,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:tests/python/test_bpf_map_defs.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5149,8 +5305,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:scripts/check-stop-gate-object.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5280,8 +5442,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:tests/python/test_diagnostic_linkage.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5424,8 +5592,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:tests/object_journal_contracts.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5585,8 +5759,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/uretprobe_hazard.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5842,8 +6022,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/attach/cleanup_worker.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6003,8 +6189,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/mapops.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6165,8 +6357,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/btf.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6351,8 +6549,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/btf_resolve.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6629,8 +6833,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/drain/frame.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6771,8 +6981,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/drain.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -6904,8 +7120,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/kcrypto_snapshot.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7064,8 +7286,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/kcrypto_fence.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7251,8 +7479,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-abi/src/kcrypto_agg.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7459,8 +7693,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-2.0-only",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/bpf-kcrypto/src/bin/kcrypto.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7572,8 +7812,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/tests/kcrypto_who.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7834,8 +8080,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/evidence/integrity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7996,8 +8248,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/backend/driver.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8158,8 +8416,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/workload/identity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8316,8 +8580,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/workload/evidence.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8478,8 +8748,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/workload/scope.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8644,8 +8920,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/workload/observation.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8781,8 +9063,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/src/workload_launch.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -9135,8 +9423,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-workload-helper/src/host_reader.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -9327,8 +9621,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:xtask/src/bpf/strip.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -9515,8 +9815,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:xtask/src/bpf/mod.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -9661,8 +9967,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:scripts/kcrypto_perf/successorvalidity.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -9790,8 +10102,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:tests/kcrypto_perf/test_successor.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10208,8 +10526,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10631,8 +10955,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:docs/dependencies/pins.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10750,8 +11080,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:docs/decisions/ADR-0013.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10869,8 +11205,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:docs/decisions/ADR-0011.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10966,9 +11308,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:llvm-bpf-toolchain-experiment.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11064,9 +11412,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:llvm-bpf-atomic-load-report.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11162,9 +11516,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:evidence/llvm-toolchain-review-20260922/kernel-oracle/cases.json; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11260,9 +11620,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11358,9 +11724,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:evidence/llvm-toolchain-review-20260922/kernel-oracle/run.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11456,9 +11828,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:evidence/llvm-toolchain-review-20260922/kernel-oracle/run-raw-bpf.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11559,9 +11937,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for W:evidence/llvm-toolchain-review-20260922/bpf-linker-repair/0001-Repair-LLVM-23-debug-record-sanitation.patch; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11723,8 +12107,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/plan.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -11897,8 +12287,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/pin.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12026,8 +12422,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/target.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12214,8 +12616,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/capture.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12740,8 +13148,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/evidence.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12859,8 +13273,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/count_session.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13018,8 +13438,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/discovery/maps.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13177,8 +13603,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/discovery/elf.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13339,8 +13771,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/loader.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13646,8 +14084,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/site_identity.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13882,8 +14326,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/identity_domain_audit.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -14025,8 +14475,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/count_deadline.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -14215,8 +14671,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/target_lifecycle.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -14539,8 +15001,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/capture_controller.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15177,8 +15645,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/evidence_model.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15348,8 +15822,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/d_btf_load.rs; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15519,8 +15999,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/model/validate.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15645,8 +16131,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/model/identity.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15771,8 +16263,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/analysis/mappings.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15887,8 +16385,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/capture/stop.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15989,8 +16493,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/platform/btf.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -16115,8 +16625,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_reader.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -16546,8 +17062,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_mappings.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -16869,8 +17391,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_engine.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17118,8 +17646,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_stop.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17353,8 +17887,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_identity.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17508,8 +18048,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/fixtures/attempts/gen_corpus.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17624,9 +18170,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/fixtures/attempts/corpus.txt; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17751,8 +18303,14 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "destination_license": "GPL-3.0-or-later",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/native/test_attempt_decode.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17873,9 +18431,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:toolchain.lock.json; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17976,8 +18540,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/object_maps.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18078,8 +18648,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/generic_ring.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18189,8 +18765,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/ring.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18300,8 +18882,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/src/ring_stage.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18410,8 +18998,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:native/include/libbpf_mojo_generic.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18520,8 +19114,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:src/libbpf_mojo/buffer.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18621,8 +19221,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/generic_maps.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18812,8 +19418,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/generic_object.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -18979,8 +19591,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/ring_conformance.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19202,8 +19820,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/generic_ring.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19357,8 +19981,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/native/attach_rollback.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19472,8 +20102,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:tests/mojo/test_generic_maps.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19615,8 +20251,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:docs/ownership.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19725,8 +20367,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for L:docs/support.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19826,8 +20474,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:native/src/object_maps.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -19928,8 +20582,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:native/src/generic_ring.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20048,8 +20708,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:native/include/libbpf_mojo_generic.h; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20150,8 +20816,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:tests/native/generic_maps.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20341,8 +21013,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:tests/integration/standard_objects/test_first_live_maps.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20451,8 +21129,14 @@
       "adoption": {
         "disposition": "DEPENDENCY_ADAPTER",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:docs/support.md; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20551,9 +21235,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for LJ:toolchain.lock.json; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20665,8 +21355,14 @@
       "adoption": {
         "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:tests/elf/test_map_btf.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20811,8 +21507,14 @@
       "adoption": {
         "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:tests/compile/map_roundtrip.mojo; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -20924,8 +21626,14 @@
       "adoption": {
         "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:tests/kernel/test_map_roundtrip.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21082,8 +21790,14 @@
       "adoption": {
         "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:tests/kernel/test_core_layouts.py; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21268,8 +21982,14 @@
       "adoption": {
         "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "destination_license": "Apache-2.0 WITH LLVM-exception",
-        "blocked_reason": null
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
+        "destination_license": null,
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:tests/reference_c/map_roundtrip_ref.bpf.c; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21380,9 +22100,15 @@
       },
       "adoption": {
         "disposition": "PRODUCT_LOCAL",
-        "copy_status": "NOT_COPIED",
+        "copy_status": "BLOCKED",
+        "decision_status": "REFERENCE_ONLY",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": null
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Compiler implementation stays product-local; select emitted-object/vector regressions separately, without importing the compiler."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21493,9 +22219,15 @@
       },
       "adoption": {
         "disposition": "PRODUCT_LOCAL",
-        "copy_status": "NOT_COPIED",
+        "copy_status": "BLOCKED",
+        "decision_status": "REFERENCE_ONLY",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": null
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Compiler implementation stays product-local; select emitted-object/vector regressions separately, without importing the compiler."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21608,9 +22340,15 @@
       },
       "adoption": {
         "disposition": "PRODUCT_LOCAL",
-        "copy_status": "NOT_COPIED",
+        "copy_status": "BLOCKED",
+        "decision_status": "REFERENCE_ONLY",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": null
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Compiler implementation stays product-local; select emitted-object/vector regressions separately, without importing the compiler."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -21712,9 +22450,15 @@
       },
       "adoption": {
         "disposition": "REFERENCE_ONLY",
-        "copy_status": "BLOCKED",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "ownership_basis": "UNRESOLVED",
+        "artifact_role": null,
         "destination_license": null,
-        "blocked_reason": "Selected file grant/inheritance or mixed patch-addition attribution remains unresolved; preserve issue and oracle obligations, do not copy."
+        "authorization_ref": null,
+        "third_party_terms": null,
+        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for J:toolchains.lock.json; expert selection is required before copying."
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -26527,6 +27271,44 @@
         ]
       },
       "scope_limits": "The retained repair reference is documented in the matrix; this catalog does not invent a fix ref or claim its selected compiler/toolchain includes the repair."
+    },
+    "H33": {
+      "short_contract": "Keep author-authorized source/destination grants and target input options separate from final object/runtime license bytes and intended-reason kernel admission.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/Cargo.toml; crates/ebpf/native/image_identity.c; crates/ebpf/src/main.rs SelectionTransport",
+          "coverage": "INSPECTED_SOURCE_NOT_EXECUTED",
+          "pin_document": "license-boundaries.md#actual-inspected-inputs"
+        }
+      ],
+      "independent_oracle": "Per-input ownership/role/offered-option manifest and original notices; independently decoded final license bytes; actual loader declaration; a supported GPL-only-helper fixture with nonempty independent owned workload, otherwise-valid non-GPL refusal at the selected kernel license check, and helper-free non-GPL control where the type permits it. Preserve same-errno different-cause evidence.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Authorize Apache-only target inputs solely from a GPL ELF string; substitute historical source SPDX for owner destination grant; remove or change final/runtime license; accept generic EACCES or zero activity as intended GPL-only refusal; drop required upstream notice.",
+        "required_failure_layer": "source-closure, final-object/binding, intended kernel license reason, non-vacuity or installed-notice assertion after valid positive setup; unrelated privilege/verifier failures remain incomplete"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC14"
+        ],
+        "G": [
+          "G18",
+          "G19",
+          "G20",
+          "G22"
+        ],
+        "TODO": [
+          "F01",
+          "F02",
+          "B03",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Runtime acceptance does not adjudicate copyright permission. Do not require unrelated LSM/struct_ops/kfunc features. Preserve original third-party options and settle no-MIT dependency scope explicitly. Required missing positive/cell/cause evidence stays incomplete.",
+      "origin": "NEW_SCOPEBASE_PLAN_OBLIGATION_2026_10_18_NOT_A_HISTORICAL_DONOR_FAILURE"
     }
   },
   "obligation_coverage": [
@@ -28297,6 +29079,42 @@
         "NX08",
         "NX09"
       ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H33",
+      "owners": [
+        "SB01",
+        "SB02",
+        "BP01",
+        "BP03",
+        "TC01",
+        "TC03",
+        "TC07",
+        "TC08",
+        "TT01",
+        "TT02",
+        "TT05",
+        "TT07",
+        "NX02",
+        "RL02"
+      ]
+    }
+  ],
+  "authorizations": [
+    {
+      "id": "OWNER-2026-10-18",
+      "authority": "USER_DECLARED_AUTHOR",
+      "status": "PROVISIONAL",
+      "scope": "USER_CONTRIBUTIONS_IN_SELECTED_FILES",
+      "decision_ref": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md#d03--license-by-code-ownership-and-actual-build-destination",
+      "allowed_destinations": {
+        "host": "Apache-2.0",
+        "bpf-target": "GPL-2.0-only",
+        "shared-target-source": "Apache-2.0 OR GPL-2.0-only",
+        "host-build-tool": "Apache-2.0",
+        "data-document": "Apache-2.0"
+      }
     }
   ]
 }
