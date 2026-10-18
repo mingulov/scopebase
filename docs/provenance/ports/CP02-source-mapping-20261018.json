@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "task": "CP02",
+  "admission_sha256": "1719bcab8a38ee88ac0419cb9b7d32ca58d9813042981fe001b214e5489557d6",
+  "whole_file_copied": false,
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-core/src/workload/scope.rs",
+      "source_commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "source_sha256": "e6fd9432232ff7a7e788fa944c1f38c3d177f0223b5b13cf610dd63c471acf94",
+      "source_scope": [
+        [
+          32,
+          36
+        ],
+        [
+          59,
+          97
+        ],
+        [
+          313,
+          334
+        ]
+      ],
+      "disposition": "ADAPT",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/conservation.rs",
+          "sha256": "3ca6b922ffca08f77f6fd042982551759ca0240fa5a234a843ef8a424493a2a3",
+          "symbols": [
+            "ScopePartition::new",
+            "ScopePartition::{total,matched,nonmatched,unknown}"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/domain_quantity.rs",
+          "sha256": "62ead7342016a1f6941bfe2d5e7d0c83c4018c8e142f6430d9eab6cb9b38994e",
+          "symbols": [
+            "k_partition_invariant_holds",
+            "k_zero_population_is_valid",
+            "k_deserialization_overflow_vector_refuses",
+            "units_and_checked_partitions"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/workload/evidence.rs",
+      "source_commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "source_sha256": "776c702eccf3e165c58726f77697af50dae6810440ca537c746a642e9dceb19a",
+      "source_scope": [
+        [
+          85,
+          125
+        ],
+        [
+          324,
+          349
+        ],
+        [
+          462,
+          482
+        ]
+      ],
+      "disposition": "ADAPT",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/time.rs",
+          "sha256": "fc43e41a1e8afc03fe7927a9f44ba9699742edbb46d93490203ff1f25f44222c",
+          "symbols": [
+            "TimeInterval::new",
+            "Timestamp"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/time_domains.rs",
+          "sha256": "e5258713bc3497ce390e790ac23b978b1d2689c6856648627d4833dce5f4db92",
+          "symbols": [
+            "k_reversed_interval_vectors_refuse",
+            "half_open_zero_and_clock_mismatch",
+            "inclusive_donor_and_half_open_membership_are_distinct"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/model/validate.mojo",
+      "source_commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "source_sha256": "234bf4efd0b9c31fa20873c2129b90e9891e43435b992630fb62739eb13d8a65",
+      "source_scope": [
+        [
+          84,
+          88
+        ]
+      ],
+      "disposition": "ADAPT",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/quantity.rs",
+          "sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1",
+          "symbols": [
+            "Count::checked_add"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_mappings.mojo",
+      "source_commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "source_sha256": "8348f3d7aac12c184629dac32fc1a49bafea571d65568106e2ea23a3b026f3e1",
+      "source_scope": [
+        [
+          599,
+          607
+        ],
+        [
+          768,
+          783
+        ]
+      ],
+      "disposition": "VECTORS_ADAPTED",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/domain_quantity.rs",
+          "sha256": "62ead7342016a1f6941bfe2d5e7d0c83c4018c8e142f6430d9eab6cb9b38994e",
+          "symbols": [
+            "m_mapped_bytes_overflow_vector_refuses",
+            "m_unpaired_copy_overflow_vector_refuses"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/evidence.rs",
+      "source_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "49c206bbc60389713903939e1dc9f4c4dc2e9463f596eb769ccb9afe40b7d6a9",
+      "source_scope": [
+        [
+          145,
+          152
+        ]
+      ],
+      "disposition": "ADAPT",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/quantity.rs",
+          "sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1",
+          "symbols": [
+            "CountBounds::{new,lower,upper}"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/evidence_model.rs",
+      "source_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "source_sha256": "e1d7af0513904ce62e69e759de2e496acb54c73a823120bd7f6e9524bbcb49ea",
+      "source_scope": [
+        [
+          110,
+          110
+        ],
+        [
+          121,
+          126
+        ],
+        [
+          604,
+          604
+        ]
+      ],
+      "disposition": "VECTORS_ADAPTED",
+      "copy_status": "SELECTED_SCOPE_ADAPTED",
+      "historical_source_license": "GPL-3.0-or-later",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/domain_quantity.rs",
+          "sha256": "62ead7342016a1f6941bfe2d5e7d0c83c4018c8e142f6430d9eab6cb9b38994e",
+          "symbols": [
+            "o_seven_call_bounds_representation",
+            "o_zero_call_bounds_representation"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "L:tests/native/ring_conformance.c",
+      "source_commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "source_sha256": "08d30f51697f5eba46552c3b28d4322d995bf799997aa56081effdd1ed3ef4e1",
+      "source_scope": [
+        [
+          536,
+          538
+        ],
+        [
+          572,
+          574
+        ]
+      ],
+      "disposition": "VECTORS_ONLY",
+      "copy_status": "SELECTED_LITERAL_VECTORS_RETAINED",
+      "historical_source_license": "Apache-2.0 WITH LLVM-exception",
+      "authorization_ref": "OWNER-2026-10-18",
+      "destination_license": "Apache-2.0",
+      "ownership_basis": "USER_OWNED",
+      "third_party_terms": [],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/domain_quantity.rs",
+          "sha256": "62ead7342016a1f6941bfe2d5e7d0c83c4018c8e142f6430d9eab6cb9b38994e",
+          "symbols": [
+            "l_conservation_session_vector",
+            "l_conservation_buffer_vector"
+          ]
+        }
+      ]
+    }
+  ],
+  "new_mechanisms": {
+    "domain.rs": "Fixed-size caller assertions, epoch and source representation absent in selected donors; no join/identity/lifetime machinery copied.",
+    "error.rs": "Specified payload-free common vocabulary absent from selected slices.",
+    "quantity.rs": "Sealed units and checked_sub generic wrapper are NEW; no operator conversions.",
+    "conservation.rs": "Generic explicit disjoint-parts sum is NEW; selected bridge source provides only literal counter assertions.",
+    "time.rs": "Checked half-open storage is NEW; donor inclusive constructor defers order refusal. No production inclusive conversion."
+  }
+}
