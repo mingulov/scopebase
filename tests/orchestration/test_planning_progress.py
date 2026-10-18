@@ -81,7 +81,7 @@ class PlanningProgressTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, report['errors'])
             self.assertEqual(report['errors'], [])
             self.assertEqual(report['counts']['planned_tasks'], 86)
-            self.assertEqual(report['counts']['normative_requirements'], 119)
+            self.assertEqual(report['counts']['normative_requirements'], 120)
         else:
             self.assertNotEqual(result.returncode, 0, 'invalid progress unexpectedly accepted')
             self.assertTrue(report['errors'], 'invalid progress produced no diagnostic')
