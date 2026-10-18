@@ -191,6 +191,7 @@ impl Ops {
                 syscalls: self.syscalls,
                 acquired: self.acquired,
                 peak: self.peak,
+                read: None,
             },
         }
     }

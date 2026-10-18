@@ -29,6 +29,7 @@ fn charges(syscalls: u64) -> ResourceCharges {
         syscalls,
         acquired: 0,
         peak: 0,
+        read: None,
     }
 }
 fn control_at(start: Instant, after: Duration, token: CancelToken) -> OperationControl {
@@ -205,6 +206,7 @@ fn cancel_after_success_preserves_metadata() {
             syscalls: 3,
             acquired: 2,
             peak: 2,
+            read: None,
         },
     );
     assert_eq!(

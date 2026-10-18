@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Retained file acquisition, descriptor stat observations and cooperative controls.
+//! Retained file acquisition, bounded positional reads and cooperative controls.
 //!
-//! Acquisition only: reads, mappings, processes and conformance profiles remain
-//! later work. Host target x86_64-unknown-linux-gnu, edition 2021, MSRV 1.88.0.
-//! No BPF tools, implicit policy changes or target content reads are required.
+//! Descriptor observations and read results do not prove immutable snapshots.
+//! Mappings, processes and conformance profiles remain later work. Host target
+//! x86_64-unknown-linux-gnu, edition 2021, MSRV 1.88.0. No BPF tools or implicit
+//! policy changes are required.
 //!
 //! ```
 //! use scopebase_linux::file::ProcFdResolver;
@@ -14,6 +15,7 @@
 compile_error!("scopebase-linux requires Linux");
 pub mod control;
 pub mod error;
+/// Retained file authority and bounded positional reads with observation-only results.
 pub mod file;
 pub mod identity;
 

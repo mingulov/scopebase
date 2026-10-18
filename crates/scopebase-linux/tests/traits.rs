@@ -21,3 +21,13 @@ fn owners_and_observations_are_send_sync() {
     check::<scopebase_linux::identity::StatFileKey>();
     check::<scopebase_linux::identity::StatObservation>();
 }
+
+#[test]
+fn read_values_are_send_sync() {
+    fn check<T: Send + Sync>() {}
+    check::<scopebase_linux::file::FileRead>();
+    check::<scopebase_linux::file::ReadLimits>();
+    check::<scopebase_linux::file::ReadCharges>();
+    check::<scopebase_linux::file::ReadObservations>();
+    check::<scopebase_linux::file::ContentSnapshot>();
+}

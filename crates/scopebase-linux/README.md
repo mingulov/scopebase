@@ -1,6 +1,6 @@
 # scopebase-linux
 
-ScopeBase `0.1.0` supplies retained readable regular-file acquisition and descriptor stat observations on Linux. This includes the LX02 acquisition increment and LX04 cooperative control primitives. Reads, mapping association, process APIs, developer conformance adapters, installed operator clients and supported conformance profiles remain later work.
+ScopeBase `0.1.0` supplies retained readable regular-file acquisition and descriptor stat observations on Linux. This includes LX02 acquisition, LX04 cooperative control primitives and LX03 bounded positional reads. Mapping association, process APIs, developer conformance adapters, installed operator clients and supported conformance profiles remain later work.
 
 ```rust
 use scopebase_linux::file::{HeldFile, ProcFdResolver, SymlinkPolicy};
@@ -19,7 +19,7 @@ let observation = held.stat()?;
 
 Share owners with `Arc`. `AsFd` lends integration access; deliberate close, flag changes and other mutating syscalls through a borrow invalidate affected guarantees. Stat getters describe the held descriptor, including signed seconds, without proving immutable content, mapping identity or an atomic snapshot. Observations cannot construct owners. Debug uses fixed owner/observation labels; error Display and Debug are silent, ASCII and bounded to 256 bytes, with no paths, payload, raw owner fields or source-error text. Opt-in getters expose errno and observations.
 
-Failures report stage/reason, actual primary `io::Error`, operation effects and incurred syscall/FD charges. Successful predicates that later refuse remain charged. Pipe creation counts one syscall and two FDs; PID queries count operations but no explicit syscall. RAII close is excluded. `Complete` cleanup records release of temporary owners, without claiming observed close or backend retirement success. No target content read, mapping, hidden thread, process-global policy change, hard syscall/Drop time or RSS bound is supplied.
+Failures report stage/reason, actual primary `io::Error`, operation effects and incurred syscall/FD charges. Successful predicates that later refuse remain charged. Pipe creation counts one syscall and two FDs; PID queries count operations but no explicit syscall. RAII close is excluded. `Complete` cleanup records release of temporary owners, without claiming observed close or backend retirement success. Acquisition and stat do not read target content. Explicit positional reads are described below. No mapping, hidden thread, process-global policy change, hard syscall/Drop time or RSS bound is supplied.
 
 From this package source, run `cargo test --lib`, `cargo test --test held_file`, `cargo test --test traits` and `cargo test --doc`. `cargo build --example fd_probe` builds the single-purpose exec/retirement oracle; setting `SCOPEBASE_EXEC_PROBE` to that executable when running `held_file` uses it directly. Without that override, tests run a single selected fixture in a new test process. `tests/ui/cases.json` binds shipped compile-refusal sources to exact diagnostic code/message/primary line, with a positive source first. The ScopeBase SB02 bounded JSON-diagnostic route executes these against the same archived library/features on both selected compilers. Dependency tests do not automatically run from a downstream client's `cargo test`.
 
@@ -103,6 +103,29 @@ and `target.rs::run_under_control` cancellation-first preflight. Captured heads
 and historical licenses are the P/O pins above; the owner's Apache-2.0 host
 grant covers the explicitly admitted slices. Full P collection latching and
 traversal regressions stay with LX10; O abandoned-worker fail-fast behavior stays
-application-local. LX03 owns real HeldFile read integration and numerical byte/
+application-local. LX03 supplies bounded HeldFile read integration and numerical byte/
 work ceilings; LX06/LX09 own unresolved mapping/child custody; LX11/LX12 retain
 standalone/installed conformance qualification.
+
+
+`HeldFile::read_all(ReadLimits, &OperationControl)` reads from offset zero with
+positional I/O, preserving the open-description cursor. Callers set separate
+input-byte, pread-attempt and payload-capacity ceilings. The operation attempts
+one initial-length-plus-one reservation and requests at most 64 KiB per read.
+EOF, EINTR and positive sentinel bytes consume their actual work/byte charges;
+errors retain historical requested/granted capacity and return no partial bytes.
+Allocator overgrant can occur transiently before refusal; this is no hard RSS
+or global memory bound. Cooperative cancellation cannot interrupt a blocked
+syscall, allocation or scheduling. No FD or mapping is acquired by a read.
+
+A successful `FileRead` shares one immutable payload across clones, including
+after the original `HeldFile` is dropped. Equal before/after descriptor metadata
+only brackets observations: same-size writes can evade detection or tear content,
+so `ContentSnapshot::NotProven` is unconditional. No snapshot or mapped-image
+proof is created. Full runtime, filesystem, installed/operator and migration
+qualification remain later gates.
+
+The package ships `tests/positional_read.rs`, deterministic read-loop regression
+fixtures, privacy cases, and independently wired public client sources in
+`tests/support/read_{adopted,opened}.rs`. Run package tests explicitly with
+`cargo test --locked`; a downstream dependency's tests do not run automatically.

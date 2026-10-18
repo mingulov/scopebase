@@ -9,6 +9,7 @@ pub enum Stage {
     ValidateFile,
     ReopenHeld,
     ConfigureControl,
+    ReadFile,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -25,6 +26,15 @@ pub enum Reason {
     Inconclusive,
     Cancelled,
     Deadline,
+    Allocation,
+    LimitExceeded(LimitKind),
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum LimitKind {
+    InputBytes,
+    ReadCalls,
+    BufferCapacity,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -72,8 +82,12 @@ pub struct ResourceCharges {
     pub(crate) syscalls: u64,
     pub(crate) acquired: u64,
     pub(crate) peak: u64,
+    pub(crate) read: Option<crate::file::ReadCharges>,
 }
 impl ResourceCharges {
+    pub fn read(&self) -> Option<crate::file::ReadCharges> {
+        self.read
+    }
     pub fn syscall_attempts(&self) -> u64 {
         self.syscalls
     }

@@ -161,6 +161,48 @@
       "code": "E0308",
       "contains": "mismatched types",
       "line": 4
+    },
+    {
+      "id": "read_private",
+      "source": "tests/ui/read_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "read_mut",
+      "source": "tests/ui/read_mut.rs",
+      "code": "E0594",
+      "contains": "cannot assign",
+      "line": 4
+    },
+    {
+      "id": "read_observations_private",
+      "source": "tests/ui/read_observations_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "read_charges_private",
+      "source": "tests/ui/read_charges_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "read_limits_default",
+      "source": "tests/ui/read_limits_default.rs",
+      "code": "E0277",
+      "contains": "Default",
+      "line": 4
+    },
+    {
+      "id": "read_owner",
+      "source": "tests/ui/read_owner.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
     }
   ]
 }

@@ -85,6 +85,7 @@ fn deadline_after_at(start: Instant, duration: Duration) -> Result<MonotonicDead
                 syscalls: 0,
                 acquired: 0,
                 peak: 0,
+                read: None,
             },
         })
 }
@@ -110,9 +111,16 @@ impl OperationControl {
         Self { deadline, cancel }
     }
     // Consumed by subsequent operation owners. No public checkpoint/clock seam.
-    #[allow(dead_code)]
     pub(crate) fn checkpoint(&self) -> Result<(), ControlStop> {
         self.checkpoint_using(Instant::now)
+    }
+    #[cfg(test)]
+    pub(crate) fn with_test_deadline(at: Instant, cancel: CancelToken) -> Self {
+        Self::new(Some(MonotonicDeadline { at }), cancel)
+    }
+    #[cfg(test)]
+    pub(crate) fn checkpoint_at(&self, now: Instant) -> Result<(), ControlStop> {
+        self.checkpoint_using(|| now)
     }
     fn checkpoint_using(&self, now: impl FnOnce() -> Instant) -> Result<(), ControlStop> {
         if self.cancel.cancelled.load(Ordering::Acquire) {
@@ -131,7 +139,6 @@ pub(crate) enum ControlStop {
 }
 impl ControlStop {
     // Caller transfers its actual metadata; no refund, cleanup, or Drop action.
-    #[allow(dead_code)]
     pub(crate) fn into_error(
         self,
         stage: Stage,
