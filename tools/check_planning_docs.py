@@ -88,7 +88,7 @@ g=re.findall(r'^## (G\d{2})\.',docs[base/'gap-analysis.md'],re.M)
 uc=re.findall(r'^\| \*\*(UC\d{2}) ',docs[base/'user-conformance.md'],re.M)
 todo=re.findall(r'^\| ([A-Z]\d{2}) \|',docs[base/'TODO.md'],re.M)
 ov=re.findall(r'^\| (\d{1,2}) [^|]*\|',docs[base/'overlap-matrix.md'],re.M)
-for label,actual,n in [('H',h,32),('G',g,23),('UC',uc,14)]:
+for label,actual,n in [('H',h,33),('G',g,23),('UC',uc,14)]:
     expected=[f'{label}{i:02d}' for i in range(1,n+1)]
     if actual!=expected: fail(f'{label} identifiers mismatch: {actual}')
 if len(todo)!=len(set(todo)): fail('duplicate TODO identifiers')
@@ -174,7 +174,7 @@ for p,body in docs.items():
         if ident in spec_ids: fail('duplicate requirement '+ident)
         spec_ids[ident]=p
 requirements=reg['requirements']
-if len(requirements)!=119 or {r['id'] for r in requirements}!=set(spec_ids): fail('requirement registry differs from specifications')
+if len(requirements)!=120 or {r['id'] for r in requirements}!=set(spec_ids): fail('requirement registry differs from specifications')
 for r in requirements:
     if root/r['spec']!=spec_ids.get(r['id']): fail(r['id']+': wrong spec path')
     if not r['tasks'] or any(t not in task_map for t in r['tasks']): fail(r['id']+': missing/dangling owner')

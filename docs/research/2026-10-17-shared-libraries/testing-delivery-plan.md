@@ -1,6 +1,6 @@
 # Delivering and maintaining trustworthy regression tests
 
-2026-10-17. Proposed future engineering workflow. This study implements and runs none of these tests, fixtures, packages or CI jobs. Donor test source and historical receipts remain evidence about their named donors. The [testing strategy](testing-strategy.md) defines H01–H32 and tiers; [user conformance](user-conformance.md) defines UC01–UC14; [gap analysis](gap-analysis.md) defines G01–G23. Those are related obligations, not 69 interchangeable tests. The planned [regression catalog](regression-catalog.json) is an initial index of the 32 H families, not executable CI or a passing result ledger.
+2026-10-17. Proposed future engineering workflow. This study implements and runs none of these tests, fixtures, packages or CI jobs. Donor test source and historical receipts remain evidence about their named donors. The [testing strategy](testing-strategy.md) defines H01–H32 and tiers, with H33 appended on 2026-10-18; [user conformance](user-conformance.md) defines UC01–UC14; [gap analysis](gap-analysis.md) defines G01–G23. Those are related obligations, not 69 interchangeable tests. The planned [regression catalog](regression-catalog.json) is an index of the 32 initial H families plus the explicitly new H33 license-boundary obligation, not executable CI or a passing result ledger.
 
 ## First delivery and present gaps
 

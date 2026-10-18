@@ -1,6 +1,6 @@
 # ScopeBase current handoff
 
-Date: 2026-10-18. Current work: execution setup accepted; SB01 source/contract intake proceeds in its isolated worktree under the active M0–M6 goal. Product requirements remain 119 and tasks remain 86; no product task is accepted yet.
+Date: 2026-10-18. Current steering: strengthen plans/decisions before further implementation. The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) are the current route. Planning inventory is 120 requirements, 86 tasks and 179 source mappings; TC-R10/H33 append licensing coverage. No product task is accepted.
 
 ## Active goal and accepted steering
 
@@ -16,6 +16,18 @@ Main repository: `/home/user/src/m/bpfscope`. Setup integration: `.worktrees/exe
 2. A completed actual read-only LX01 preparation smoke lives in `.scopebase/jobs/lx01-readonly-smoke-20261018` with immutable review and administrative reconciliation. No worker, model, build, VM or runtime probe was launched. This is separate from LX01 implementation. A status-check evolution worker is active in `.worktrees/progress-checks`, owning only the planning checker and its progress regression test; review it before admitting product status changes.
 3. SB01 is implementing in `.worktrees/sb01-intake`, branch `feat/sb01-intake`, from base `c62d4dc`. The read-only source refresh records 124 selected files across eight authorities, including two dirty MojoBPF inputs. Its assignment and report/evidence are in that worktree's private `.scopebase/`; root retains the source refresh under the setup ledger. Preserve the GPL direct-port licensing and unresolved reference-only inputs, per-file provenance, adopted defects, regressions and proposed API mapping.
 4. Accept SB01 only after its own checks/review, then start SB02. Future lanes follow the product DAG. Update this handoff with exact current commits, commands/results, open gates and resource owners at every substantive transition.
+
+## Current plan-repair findings and next bounded task
+
+Plan changes are isolated in `.worktrees/plan-hardening`, branch `docs/executor-plan-hardening`, from main setup commit `bbcad0d9b52d8cb607ca7d1d6e120823e7c169b9`. They do not resume production implementation or alter any donor license.
+
+SB01 candidate `8417beead68a03ecaff361d0d76da5f38c09820f` in `.worktrees/sb01-intake` is **unaccepted**. Its 124 observations/eight authorities/two dirty inputs were independently preserved, but the validator can lazily fetch/mutate partial clones and ignores nested case/regression references. Its compulsory historical-GPL/NOASSERTION copying policy is withdrawn. The next bounded task is the repair plan's exact SB01 packet, retaining existing code/data and fixing these cases with sensitive controls.
+
+The candidate and independently approved auxiliary progress-check commit `ca9169a7a8da866e2a00503e93a81087d04a782e` have integration copies on `feat/m0-foundations` in `.worktrees/m0-integration`; that branch has not been accepted or merged into main. Do not infer product acceptance from its code or copy its old license policy. Private reviewer reports remain under its `.scopebase/reviews/`. All workers are finished; no implementation or privileged lane is running.
+
+The provisional user choice is Apache-2.0 userspace ScopeBase, GPL-2.0-only BPF and GPL-3.0-or-later apps, without a project MIT option. Shared project-owned target source needs the explicit compatible choice in D03. The compatible option for existing Aya target dependencies remains a specifically scoped decision before that payload build; do not silently broaden the user's no-MIT preference or silently choose a branch. No publication/final licensing action is implied. Host-only work can proceed when its own packet is ready.
+
+Packets now require selected symbols/tests/destinations, preservation/oracle/control maps, actual predecessor inputs and WHAT/WHY decisions. Coarse group counts are not readiness. The existing job helper does not mechanically enforce these new semantic fields; the controller must check them. No additional coordination framework is needed.
 
 The bounded SB02 dependency preflight is complete at the setup ledger's `sb02-dependency-preflight.md`. Both Rust1.88.0 and selected1.98.1 run locally; cached dependency candidates and procfs/BTF gaps are recorded. No dependency/API probes have been built yet. A disposable empty-workspace metadata check succeeded on both toolchains; zero members does not qualify a library. No Git remote is configured, so CI configuration and local owned qualification precede any separately selected external service execution.
 

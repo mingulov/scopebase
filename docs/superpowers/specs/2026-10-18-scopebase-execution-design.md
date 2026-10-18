@@ -1,6 +1,6 @@
 # ScopeBase execution setup specification
 
-The user requested preparation of the development workflow and has now activated M0–M6 implementation, preserving/porting existing fixes, allowing justified API/architecture improvements and independently tested missing components, with appropriate CI/CD and privileged real-kernel tests. Product migrations/publication remain later. This tooling implements development coordination; the 119 library requirements and 86 product tasks remain open. The accepted [project specification](2026-10-17-scopebase-design.md) and [master plan](../plans/2026-10-17-scopebase.md) remain authoritative for product behavior. Preparation and model reviews cannot qualify a library or environment.
+The user requested preparation of the development workflow and has now activated M0–M6 implementation, preserving/porting existing fixes, allowing justified API/architecture improvements and independently tested missing components, with appropriate CI/CD and privileged real-kernel tests. Product migrations/publication remain later. This tooling implements development coordination; the current 120 library requirements and 86 product tasks remain open (the accepted setup baseline had 119 requirements). The accepted [project specification](2026-10-17-scopebase-design.md) and [master plan](../plans/2026-10-17-scopebase.md) remain authoritative for product behavior. Preparation and model reviews cannot qualify a library or environment.
 
 ## Organization and alternatives
 

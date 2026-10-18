@@ -12,15 +12,15 @@
     "profile_composition": "Expand requires_profiles and requires_extensions transitively before environment discovery. Required profile and extension results are separately bound; omitted closure is incomplete. Profile gates activate when any listed profile is in the expanded set AND every when_extensions ID is selected. The independent checker recomputes closure; reasons are explanatory only.",
     "conditional_edges": "The union of all depends_on and profile-gate edges is acyclic. A reference to a tool does not require all eventual users of that tool to be ready.",
     "partial_readiness": "Task progress and profile results are separate. A qualified held-file or SDK-host increment cannot close full LX12 or SDK09 scope. Every task starts PLANNED.",
-    "source_coverage": "178 rows: 81 source TODO, 32 H families, 23 G gaps already also represented in TODO, 14 UC cases, 28 overlap rows. Coverage is design mapping, not ported or passing tests.",
+    "source_coverage": "179 rows: 81 source TODO, 33 H families (32 initial plus new H33 license boundary), 23 G gaps also represented in TODO, 14 UC cases and 28 overlap rows. Mapping is not ported or passing tests.",
     "evaluation": "CP12 reservation extraction and separate BTF/build crates require their stated evidence before stable export; evaluation/refusal is an explicit deliverable, never an unchecked omission.",
     "migration": "MG tasks remain later and are not prerequisites of package/SDK/native acceptance. First selected MG owns creation of shared migration verifier under serialized integration ownership."
   },
   "counts": {
     "tasks": 86,
-    "requirements": 119,
+    "requirements": 120,
     "research_todo": 81,
-    "regression_families": 32,
+    "regression_families": 33,
     "public_contract_gaps": 23,
     "user_conformance": 14,
     "overlap_rows": 28
@@ -293,7 +293,8 @@
       "requirements": [
         "SB-R03",
         "BP-R01",
-        "BP-R12"
+        "BP-R12",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -332,7 +333,8 @@
       "requirements": [
         "SB-R12",
         "BP-R03",
-        "BP-R13"
+        "BP-R13",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -595,7 +597,8 @@
         "SB-R03",
         "SB-R17",
         "TC-R01",
-        "TC-R08"
+        "TC-R08",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -633,7 +636,8 @@
       "requirements": [
         "SB-R12",
         "TC-R02",
-        "TC-R07"
+        "TC-R07",
+        "TC-R10"
       ],
       "profile_gates": [
         {
@@ -722,7 +726,8 @@
         "TC-R03",
         "TC-R04",
         "TC-R05",
-        "TC-R07"
+        "TC-R07",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -749,7 +754,8 @@
         "SB-R10",
         "SB-R17",
         "TC-R08",
-        "TC-R09"
+        "TC-R09",
+        "TC-R10"
       ],
       "profile_gates": [
         {
@@ -1707,7 +1713,8 @@
       "requirements": [
         "NX-R02",
         "NX-R07",
-        "NX-R12"
+        "NX-R12",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -1939,7 +1946,8 @@
         "SB-R13",
         "SB-R17",
         "TT-R01",
-        "TT-R04"
+        "TT-R04",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -1962,7 +1970,8 @@
         "TT-R04",
         "TT-R05",
         "TT-R08",
-        "TT-R12"
+        "TT-R12",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -2029,7 +2038,8 @@
         "SB-R12",
         "TT-R03",
         "TT-R07",
-        "TT-R12"
+        "TT-R12",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -2074,7 +2084,8 @@
         "TT-R02",
         "TT-R05",
         "TT-R10",
-        "TT-R14"
+        "TT-R14",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -2158,7 +2169,8 @@
         "SB-R03",
         "SB-R05",
         "SB-R16",
-        "SB-R17"
+        "SB-R17",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -2176,7 +2188,8 @@
       "requirements": [
         "SB-R03",
         "SB-R04",
-        "SB-R12"
+        "SB-R12",
+        "TC-R10"
       ],
       "profile_gates": []
     },
@@ -2467,7 +2480,8 @@
       ],
       "requirements": [
         "SB-R02",
-        "SB-R04"
+        "SB-R04",
+        "TC-R10"
       ],
       "profile_gates": [
         {
@@ -3688,7 +3702,7 @@
     {
       "id": "BP-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "description": "Allocate checked `align_up(value_size, 8) × possible_cpu_count` for per-CPU I/O; validate map metadata, key/value ABI and every actual consumer stride before syscall. Parsed/model topology cannot authorize a lengthless kernel copy; use opaque internally acquired live topology and refuse unauthenticated source/change. Reject unknown/overlapping topology and overflow.",
+      "description": "Allocate checked `align_up(value_size, 8) \u00d7 possible_cpu_count` for per-CPU I/O; validate map metadata, key/value ABI and every actual consumer stride before syscall. Parsed/model topology cannot authorize a lengthless kernel copy; use opaque internally acquired live topology and refuse unauthenticated source/change. Reject unknown/overlapping topology and overflow.",
       "tasks": [
         "BP02"
       ],
@@ -3706,7 +3720,7 @@
     {
       "id": "BP-R04",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "description": "Attachment plans preserve file authority and offset-cookie associations, use at most `2n−1` attempts for nonempty n-site split isolation, and obey caller error policy without retrying terminal denial/resource failures.",
+      "description": "Attachment plans preserve file authority and offset-cookie associations, use at most `2n\u22121` attempts for nonempty n-site split isolation, and obey caller error policy without retrying terminal denial/resource failures.",
       "tasks": [
         "BP04",
         "BP05",
@@ -3924,7 +3938,7 @@
     {
       "id": "CP-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "description": "Unit-safe checked arithmetic, partitions and conservation; unknown ≠ zero",
+      "description": "Unit-safe checked arithmetic, partitions and conservation; unknown \u2260 zero",
       "tasks": [
         "CP02",
         "CP03",
@@ -5020,6 +5034,28 @@
         "TT07",
         "TT08",
         "TT10"
+      ],
+      "status": "PLANNED"
+    },
+    {
+      "id": "TC-R10",
+      "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
+      "description": "Separate authorized input license closure, final object/load-time declaration and intended-reason GPL-only kernel admission with delivered notices.",
+      "tasks": [
+        "SB01",
+        "SB02",
+        "BP01",
+        "BP03",
+        "TC01",
+        "TC03",
+        "TC07",
+        "TC08",
+        "TT01",
+        "TT02",
+        "TT05",
+        "TT07",
+        "NX02",
+        "RL02"
       ],
       "status": "PLANNED"
     }
@@ -7213,7 +7249,7 @@
       "kind": "overlap_row",
       "id": "OV12",
       "source": "docs/research/2026-10-17-shared-libraries/overlap-matrix.md",
-      "description": "Admission → writer quiescence → final sample",
+      "description": "Admission \u2192 writer quiescence \u2192 final sample",
       "tasks": [
         "BP07",
         "CP09",
@@ -7435,6 +7471,29 @@
       ],
       "disposition": "SELECT_SHARED_MECHANISM_ADAPTER_VECTOR_OR_DOCUMENT_PRODUCT_LOCAL_BOUNDARY",
       "status": "OPEN"
+    },
+    {
+      "kind": "regression_family",
+      "id": "H33",
+      "source": "docs/research/2026-10-17-shared-libraries/regression-catalog.json",
+      "tasks": [
+        "SB01",
+        "SB02",
+        "BP01",
+        "BP03",
+        "TC01",
+        "TC03",
+        "TC07",
+        "TC08",
+        "TT01",
+        "TT02",
+        "TT05",
+        "TT07",
+        "NX02",
+        "RL02"
+      ],
+      "disposition": "EXPAND_NEW_LICENSE_BOUNDARY_OBLIGATION_TO_SUBCASES_WITH_ORACLE_CONTROL_AND_PROFILE",
+      "status": "OPEN"
     }
   ],
   "validated_all_edges_topological_order": [
@@ -7524,5 +7583,16 @@
     "MG04",
     "MG05",
     "RL04"
+  ],
+  "plan_amendments": [
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "added_requirement": "TC-R10",
+      "added_case_family": "H33",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false
+    }
   ]
 }

@@ -12,6 +12,10 @@
 
 ## Global Constraints
 
+- Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.
+- PORT/ADAPT preserves the identified donor mechanism, affected call sites, original regression, independent oracle and bad control together. NEW requires the recorded missing-mechanism reason and frozen design. Unresolved architecture, source, license, support or expected-result choices return NEEDS_DECISION; no fresh approximation or weaker gate.
+- Apply provisional Apache-2.0 userspace / GPL-2.0-only BPF / GPL-3.0-or-later application terms and the shared-source/third-party rules in D03–D04. Keep source SPDX, author authorization, actual target input option and kernel runtime declaration distinct.
+
 - Default and `--no-default-features` builds of `scopebase-bpf` are host-only.
 - `btf`, `aya`, `libbpf`, and `producer-fixtures` are opt-in features.
 - Host crates use edition 2021 and proposed MSRV 1.88.0; SB02 must qualify selected dependencies at that compiler before implementation claims support.
@@ -62,6 +66,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 
 **Interfaces:** Consume SB02's actual dependency/MSRV policy. Produce spec `ErrorKind`, `Stage`, `OperationError::{kind,stage,raw_os_error}`, `Limits::validate`, host-only feature graph and full selected donor/source/dirty-file/license manifest.
 
+**Preservation/decision gate:** Freeze the D03–D04 host/BPF/shared/tool input roles and compatible actual dependency option. New source-license policy does not authorize Apache-only input in a GPLv2 payload. Keep user authorization separate from historical SPDX; no blanket GPL or MIT default.
+
+**TC-R10/H33 facet:** host/BPF/shared input policy and actual dependency-role decisions. Follow D03–D04; other facets remain with their named owners.
+
 - [ ] **Step 1: Write `api_contract` tests.** Check `Limits` with each budget 0 admits no corresponding work, usize/u64 maximum calculations refuse Overflow before allocation, raw EACCES survives as `Denied/Admission`, error sources are accessible without display parsing, and host-only exports contain no Aya/libbpf types. Use positive and negative compile assertions for intended auto-traits.
 - [ ] **Step 2: Verify failure.** Future: `cargo test -p scopebase-bpf --no-default-features --test api_contract`; expect missing crate/API, then the precise invariant failures until implemented. A compiler/dependency/tooling setup error is not a semantic red test.
 - [ ] **Step 3: Implement the minimal host crate and pin ledger.** Read-only refresh visible donor refs/worktrees and selected files from the spec's pin table, record selected full SHA/dirty hashes and SPDX, and explain acceptance of any changed donor bytes. Do not fetch/checkout/clean donors. Freeze parser/backend releases from proof-of-fit, record host GNU 5.15/6.12/exact-current profile eligibility, and register only planned—not passing—cases.
@@ -102,6 +110,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 **Files:** Create `crates/scopebase-bpf/src/capability.rs`, `crates/scopebase-bpf/tests/capability.rs`, `fixtures/bpf/capability/populations.json`, `crates/scopebase-testkit/src/bpf/adapter.rs`.
 
 **Interfaces:** Produce spec `CapabilityState`, `EvidenceStage`, `HazardState`, `CapabilityObservation::{state,stage,applies_to}`, `ProbeContext`, `ProbePopulation`, `assess_filter_probe(&ProbePopulation)->Result<CapabilityState,OperationError>`. Consume shared `ConformanceAdapter`/`SubjectBinding`/`CaseInvocation`/`FixtureAccess`/`Observation`/`CaseError`; adapter provides observations, never expected truth.
+
+**Preservation/decision gate:** Add H33 same-errno/different-cause and GPL-helper admission cases. Preserve BPF_PROG_LOAD operation, raw errno and bounded verifier evidence; verifier/license refusal is not automatically Denied. Unknown cause stays Unknown. Bridge BP/testkit ProfileIds by checked unchanged bytes; slash/long/uppercase domain-only inputs refuse in the receiving grammar.
+
+**TC-R10/H33 facet:** cause classification and planned runtime-license controls; live execution remains later. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] **Step 1: Write `capability` tests.** `quiet_zero_is_unknown` asserts zero expected/observed trigger cannot be Supported; `active_excluded_hit_is_incompatible` uses independently executed nonempty child plus own-thread positives; `denied_is_not_unsupported` preserves EACCES/stage; `receipt_cannot_mint_runtime_authority` is compile-fail; `context_change_invalidates` changes object/profile/namespace/security/BTF/topology one at a time. Hazard override leaves Denied unchanged. `ProfileId::new` tests 1..128-byte `[a-z0-9][a-z0-9._/-]*` IDs, rejecting empty, non-ASCII, newline and 129-byte inputs.
 - [ ] **Step 2: Run red tests.** Future: `cargo test -p scopebase-bpf --test capability`; known all-zero-as-supported and denied-as-unsupported mutants fail their exact classification assertions.
@@ -215,6 +227,8 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 
 **Interfaces:** Implement shared `ConformanceAdapter` against actual package APIs; register subject binding with package/source/features/backend and exact final object IDs. Use single TT runner, independent expected results and TT profile accounting. No production dependency on testkit.
 
+**Preservation/decision gate:** Apply H33 for the actual selected source/object/backend/package profiles, including independent runtime string/cause checks and delivered notices. Do not certify another compiled copy or count expected refusal as supported behavior.
+
 - [ ] **Step 1: Write downstream/package red tests.** Two independent public API consumers build from packaged archives in external workspaces with independent lockfiles and no sibling paths. One minimal geometry/map client and one image-attachment/BTF client test their own behavior; loader-specific clients select only supported features. Intentionally resolve copy A and B and require report binding to refuse A→B certification. Remove fixture, swap object/backend, change features or omit required case: required coverage remains incomplete.
 - [ ] **Step 2: Verify packaging failures are visible.** Future: `cargo package -p scopebase-bpf --list`, package/external-client scripts owned by TT07, and installed runner tests using the canonical `scopebase-conformance run --profile ID --fixture-root PATH --output PATH` route with BPF profile IDs. Missing fixture is ERROR/BLOCKED, never skipped into a complete verdict.
 - [ ] **Step 3: Package API, fixture closure and profile instructions.** Prebuilt final objects and static fixtures enable offline inspection/live routes without compilers; compile profiles declare their tools separately. Install shared runner into read-only prefix, write only explicit owned scratch root, no source/network access. Document component readiness separately from product migration status.
@@ -228,6 +242,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 **Files:** Create `tools/bpf-compat/{README.md,profiles.schema.json,patches.json,issues/}`, `fixtures/bpf/{atomic-rmw,atomic-load,isa,metadata,object-graph}/provenance.json`, `crates/scopebase-testkit/tests/bpf_profile_schema.rs`.
 
 **Interfaces:** Produce `ObjectContract::from_json(&[u8],&Limits)->Result<Self,OperationError>` and strict versioned serialization and individually scoped patch/workaround records; consume shared artifact/profile/case IDs with validated constructors. Preserve no public paths into private evidence archives.
+
+**Preservation/decision gate:** Record H33 source/destination grants, actual target versus host-tool closure, selected upstream option and applicable notice texts. Retain the user-authorized Apache destination without changing observed donor GPL fields; three selected Aya packages lack standalone license texts, so record exact upstream text delivery.
+
+**TC-R10/H33 facet:** source/build/option/runtime requirement manifest and notice provenance. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] **Step 1: Write profile/register parsing tests.** Reject duplicate JSON fields, malformed/newline-suffixed hashes, unknown required schema version, contradictory CPU/ISA feature state, missing exact backend identity, wildcard-required kernel cells and a patch missing preimage/removal test. Assert LLVM atomic correction and private linker repair are separate records with separate tests.
 - [ ] **Step 2: Run red tests.** Future: `cargo test -p scopebase-testkit --features object --test bpf_profile_schema`; permissive parsing and patch-merged-equals-expired mutants fail admission assertions.
@@ -256,6 +274,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 **Files:** Create `crates/scopebase-testkit/src/object/{mod,manifest,inspect,rules}.rs`, `crates/scopebase-testkit/tests/object_isa.rs`, `fixtures/bpf/isa/{sources/,expected.json,mutants.json}`.
 
 **Interfaces:** Produce `inspect_final_object(&[u8],&ObjectContract,&Limits)->Result<ObjectInspection,OperationError>` over selected existing decoder; produce `ObjectInspection::{object_id,violations,conforms}` and `RuleViolation` from the spec, with per-rule location/category and internal decoded inventories. Consume explicit compiler closure output and actual object hashes.
+
+**Preservation/decision gate:** Add H33 final-object rules: bounded unambiguous NUL-terminated runtime license declaration after transformation, source/runtime fields kept separate, exact loader-supplied string and reachable helper/kfunc/type requirements. Missing, duplicated, truncated, swapped or incompatible declarations fail the intended rule.
+
+**TC-R10/H33 facet:** bounded final-object declaration and expected loader binding; actual runtime remains later. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] **Step 1: Write decoded-object tests.** Every advertised instruction family has a minimal emitted fixture and exact expected encoding class, including extended jumps/JMP32/ALU32/original-v4 forms/acquire-release/indirect jumps as selected. Forbidden opcode, missing required form, wrong endian/target ABI and unknown instruction refuse. Empty CPU/generic/v3 and feature-masked v4 produce independently recorded expected subsets; a preset drift cannot silently broaden a profile.
 - [ ] **Step 2: Run red tests.** Future: `cargo test -p scopebase-testkit --features object --test object_isa`; preset-name-as-proof and forbidden-opcode mutants fail the instruction/profile assertion even if compiler exits zero.
@@ -299,6 +321,8 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 
 **Interfaces:** Produce `prune_dead_code(&[u8],&ObjectContract,&Limits)->Result<Vec<u8>,OperationError>` for restricted admitted graph shapes; extend object rules with per-function/path initialized-byte/linkage/call/stack/prologue requirements.
 
+**Preservation/decision gate:** Preserve SelectionTransport named initialized padding and add the old-verifier EACCES classification counterexample. Do not remove the private-stack/argument/linkage workaround from current-kernel success. Keep the independent negative/valid twins on actual final bytes.
+
 - [ ] **Step 1: Write regression tests.** Dead retained memcpy/memmove/memset roots and relocations are removed only when unreachable; live callback/root remains. Shifted entry target, interior call, misalignment/truncated input and unsupported relocations refuse. Explicit initialized padding survives widened copies; required global linkage is GLOBAL in symbol/BTF; six-scalar BPF call has prescribed pointer-bundled replacement. Stack rule uses selected per-frame minimum accounting; path-scoped initializer guard rejects only forbidden relevant memset path, accepts unrelated memset twin. Required private-stack prologue removal fails current rule.
 - [ ] **Step 2: Run red tests.** Future: `cargo test -p scopebase-testkit --features object --test object_rules`; size-only padding, object-wide memset ban, live-root-strip and removed-prologue mutants fail their intended allowance/refusal assertions.
 - [ ] **Step 3: Implement restricted transformations and manifest rules.** Audit symbols/calls/relocations/BTF and rewrite consistently; preserve original/transformed hashes. Keep donor-specific function inventory in manifests. Confirm direct-tool or pinned genuine final backend codegen fixtures here, with newly built mixed-object reruns assigned to TC07; confirm combined stack budget and old verifier complexity/global-local linkage rather than host ABI alone. No “disable-memory-builtins” flag treated as proof roots disappeared.
@@ -313,6 +337,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 
 **Interfaces:** Implement TC02 `BuildScopeBackend::{start,poll,request_stop}` over TT05 actual owned build-guest/controller/output authority; consume frozen case/profile/fixture closure and `ConformanceAdapter`; produce bounded observations for independent expected workload/atomic/callback oracles. No executor replaces TT05's owned-environment controller.
 
+**Preservation/decision gate:** Execute H33 GPL-only-helper positive, otherwise-valid non-GPL declaration refusal, helper-free non-GPL control where permitted, and only advertised type/kfunc gates. Require intended kernel reason plus actual nonempty valid activity; lack of privilege/helper/config, malformed bytecode or EACCES alone stays incomplete/Unknown. Retain source/loader/object/kernel bindings and positive native retirement.
+
+**TC-R10/H33 facet:** intended kernel refusal and actual valid/helper-free workload controls. Follow D03–D04; other facets remain with their named owners.
+
 - [ ] **Step 1: Write result/admission tests.** Real owned-guest scope test starts Cargo→rustc→linker, forces parent exit with descendant linker still writing, and asserts the executor cannot emit/seal/release/reuse output until whole-guest/controller/writable-backend retirement is proved. Stop timeout returns CompileJob; repeated dropped jobs retain executor reservations. Restored fully settled build produces stable final objects. Wrong object/profile/backend/kernel/BTF binding refuses. Compile refusal, malformed artifact, unsupported feature, denied load, verifier rejection, incorrect execution and unknown are distinct. Required missing cells stay incomplete. Concurrent-map oracle uses returned-old histories plus final values/CAS success counts and declared ordering schedules, rejecting duplicate/missing/swapped operation IDs even if aggregate totals match.
 - [ ] **Step 2: Run red tests.** Future: `cargo test -p scopebase-testkit --features object --test runtime_result_contract`; old-green/new-object substitution, aggregate-only and required-skip-as-pass mutants fail intended binding/semantic/coverage assertions.
 - [ ] **Step 3: Integrate semantic cases with TT05.** Implement the TC02 scope trait against TT05 owned guest lifecycle control with no writable host source/output sharing; retain actual control/output authority in each Job until positively settled. Run actual descendant-writer/mixed-builder controls and only then compile once under pinned producer closure and move exact final hashed bytes into admitted isolated cells; no guest rebuild hidden behind same ID. Select oldest/current/affected/backport/refusal cells before availability discovery; no universal floor. Each live workload has independently completed positives and active negatives, named schedules, bounds and owned cleanup.
@@ -326,6 +354,10 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 **Files:** Create `tests/downstream/compiler-{object-client,mixed-producer}/`, `tests/installed/bpf-compat/`, `tools/bpf-compat/issues/index.md`; update package include lists, `patches.json` and compatibility cookbook.
 
 **Interfaces:** Expose developer toolchain/object APIs and shared runner profiles `compiler-object-v1`/`compiler-runtime-x86-v1`; consume actual subject source/features/backend/final-object bindings. Operator installed inspection needs no compiler; explicit developer compilation requires declared tools.
+
+**Preservation/decision gate:** Ship H33 source/option/notice manifest and final-object/runtime checks with installed closure. Removing a required notice or substituting ELF GPL text for source provenance fails the package gate; kernel success cannot waive it.
+
+**TC-R10/H33 facet:** distributed object/source/notice closure. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] **Step 1: Write package/expiration tests.** Independent object-client and mixed C/Rust producer consume packaged library/toolkit APIs without donor sources. Installed offline closure lists/runs static inspection and declared prebuilt workload cases from read-only prefix. Wrong candidate copy/features/backend/object refuses. Patch preimage mismatch fails without fuzzy application; merged-source-only and missing removal-cell records cannot mark patch expired.
 - [ ] **Step 2: Verify red package controls.** Future TT07 source archive and installed route commands; remove fixture or metadata file, substitute same-semver different source and drop a required cell. Each gives incomplete/error/binding refusal, never complete support.
@@ -357,6 +389,7 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 | TC-R07 | TC03/TC07 | Distinct exact-object/verifier/execution/cleanup cells. |
 | TC-R08 | TC01/TC08 | Per-workaround application and expiration evidence. |
 | TC-R09 | TC08 | Actual downstream and offline installed tool suite. |
+| TC-R10 | SB01/SB02/BP01/BP03/TC01/TC03/TC07/TC08/TT01/TT02/TT05/TT07/NX02/RL02 | H33 source/option, final/runtime declaration, intended GPL-only refusal and notice delivery remain separate, task-owned gates. |
 
 DoD for a task: required tests and bad/valid twins discriminate the named semantic defect, limits/ownership failures are explicit, provenance/license/contract/case links resolve, and checks are tied to changed bytes. DoD for a package profile additionally requires source archive, public API/doctest/feature set, two independently useful downstream consumers, independently runnable installed route and every preselected required cell for that profile. A correct refusal test may pass while capability is Unsupported/Denied/Unknown; required positive support cannot close from that result. Missing fixtures, untriggered concurrency, unresolved cleanup and required BLOCKED/SKIPPED/NOT_RUN remain incomplete. Performance and product integration are separate claims.
 

@@ -12,6 +12,10 @@
 
 ## Global Constraints
 
+- Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.
+- PORT/ADAPT preserves the identified donor mechanism, affected call sites, original regression, independent oracle and bad control together. NEW requires the recorded missing-mechanism reason and frozen design. Unresolved architecture, source, license, support or expected-result choices return NEEDS_DECISION; no fresh approximation or weaker gate.
+- Apply provisional Apache-2.0 userspace / GPL-2.0-only BPF / GPL-3.0-or-later application terms and the shared-source/third-party rules in D03–D04. Keep source SPDX, author authorization, actual target input option and kernel runtime declaration distinct.
+
 - Initial Rust packages use version `0.1.0`; initial host target is `x86_64-unknown-linux-gnu`, Rust edition 2021, proposed MSRV `1.88.0`.
 - Production packages never depend on testkit; default host builds do not invoke BPF/native toolchains.
 - All commands and test files below are future implementation steps, not commands or passing results available in this documentation-only checkout.
@@ -41,6 +45,10 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 
 **Interfaces:** Produce `CaseId::parse`, `ProfileId::parse`, `CaseCatalog::load(bytes, CatalogLimits) -> Result<CaseCatalog,CatalogError>`, `ProfilePlan::select(catalog, profile_id) -> Result<ProfilePlan,PlanError>`. Their immutable result contains required subcases/tiers/cells before any environment query. Preserve `UNIMPLEMENTED` entries separately from runnable cases.
 
+**Required frozen input/control:** Register new H33 as a planned source/build/kernel-license family, without changing H01–H32 meanings. Select its applicable T0/T2/T4/T5 subcases before environment discovery; source closure and intended runtime refusal are separate.
+
+**TC-R10/H33 facet:** H33 registration and applicable subcase/profile selection. Follow D03–D04; other facets remain with their named owners.
+
 - [ ] Write `catalog::exact_ids_and_required_selection` with these assertions and duplicate/unknown-reference controls:
   `assert!(CaseId::parse("H04.path_swap\n").is_err());` and `assert!(CaseId::parse("H04.path_swap").is_ok());`. Removing a selected required case must fail plan validation, not shrink its denominator.
 - [ ] Run `cargo test -p scopebase-testkit --test catalog`; first confirm the intended contract fails, then implement bounded parsing, reference validation and immutable profile selection, including transitive required-component profiles and versioned capability extensions. Reject unknown IDs, cycles, conflicting versions and any attempt to remove a required component after discovery.
@@ -58,6 +66,10 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 
 **Interfaces:** Produce the specification's exact `ConformanceAdapter`, `CaseOracle::evaluate`, `run_profile`, `SubjectBinding`, `RunReport` and typed errors. Implement `RunReport::qualification() -> Qualification` from frozen requirements, preserving underlying fields. Initial parser caps: 8 MiB input/observation, 4,096 case records, 64 KiB diagnostic.
 
+**Required frozen input/control:** Freeze the build/consumer identity recipe and bounded encoding before adapters. Add H33 controls where EPERM/EACCES has distinct permission/verifier/license causes; a generic error or missing positive cannot pass the expected GPL-only rejection.
+
+**TC-R10/H33 facet:** H33 binding/cause/verdict controls without manufacturing legal or runtime authority. Follow D03–D04; other facets remain with their named owners.
+
 - [ ] Write `verdict::refusal_is_not_support`, `binding::wrong_subject_rejected`, `harness_controls::missing_trigger`, `harness_controls::cleanup_survives_zero_exit` and `harness_controls::duplicate_terminal`. Require `assertion=pass, capability=denied` to remain distinct from positive support; wrong artifact yields invalid, missing required trigger yields incomplete, semantic failure stays failed.
 - [ ] Run `cargo test -p scopebase-testkit --test verdict --test binding --test harness_controls`; demonstrate failures at their named validation branches using valid restored twins.
 - [ ] Implement bounded decoding, binding comparison, expected-evidence separation, case aggregation and precedence. Adapters cannot submit their own qualification/expected output. Malformed backend output gives a typed error without unsafe memory access.
@@ -73,6 +85,8 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 **Files:** Create `fixtures/linux/worker/{Cargo.toml,src/main.rs,src/protocol.rs}`, `crates/scopebase-testkit/src/fixture.rs`, `crates/scopebase-testkit/tests/fixture_protocol.rs`, `tools/qualification/linux_oracle.py`, `tools/qualification/tests/test_linux_oracle.py`.
 
 **Interfaces:** `FixtureSession::create(root: &Path, limits: FixtureLimits) -> Result<FixtureSession,FixtureError>`; `FixtureAccess` supplies owned capabilities and phase endpoints. Worker protocol operations: create A/B, acquire FD, map exact range, barrier, rename/unlink/link, mutate, report raw evidence, close. Every request/response carries run and operation IDs and a bounded length.
+
+**Required frozen input/control:** Freeze worker message encoding/framing, operation/run IDs, FD transfer, barriers, readiness and partial-effect custody with LX09 before parallel helper/client implementations. The operation list alone is not a complete protocol.
 
 - [ ] Write `fixture_protocol::false_ready_and_replayed_ledger`, `replacement_keeps_original_fd`, `restricted_credential_is_real` and `worker_death_preserves_custody`. Expected A/B bytes are independently authored; the observer never supplies expected identities. An unrelated ready message fails run/operation binding.
 - [ ] Run `cargo test -p scopebase-testkit --features linux-fixtures --test fixture_protocol`; first observe the named missing behavior, then implement owned creation, IPC barriers, raw fstat/fdinfo/maps/mount evidence and bounded cleanup.
@@ -90,6 +104,8 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 
 **Interfaces:** Provisioner `plan|create|inspect|cleanup --manifest PATH --run-root PATH` only operates on named owned disposable resources. `FixtureManifest::admit(raw: &[u8], context: &ObservedEnvironment) -> Result<AdmittedFixture,FixtureError>` checks actual backing/mount/namespace identities; text manifest alone grants no authority.
 
+**Required frozen input/control:** Freeze deterministic collision/copy-up/foreign-view/denial and transient-mmap audit recipes. Prove the event actually occurred and a deliberate violating control is detected before using matching output as truth.
+
 - [ ] Write `filesystem_cells::split_and_collision_are_required`, `copy_up_trigger_must_happen`, `wrong_mount_view_rejected`, and `transient_target_mmap_detected`. Aligned Btrfs data must not pass the split case; an mmap+munmap between snapshots must fail no-new-mapping enforcement.
 - [ ] Run deterministic provisioner/admission negatives first with `python3 -m unittest discover -s tools/qualification/tests -p test_provision_fs.py`; implement ownership checks, bounded manifests and refusal/cleanup paths.
 - [ ] Build recipes FS01–FS10 from the specification. Pin exact image/kernel/config/tool versions; record xino/metacopy/layer layout and the observed split/collision/copy-up conditions. FS07 remains an explicit separately unsupported profile until qualified, never a silent omission from an advertised claim.
@@ -105,6 +121,10 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 **Files:** Create `profiles/environments/kernel-v1.json`, `tools/qualification/{admit_object,run_guest,inspect_cleanup}.py`, their tests, `docs/testing/kernel-cells.md`; consume TC objects/manifests and BP semantic workloads without rewriting them.
 
 **Interfaces:** `admit_object(manifest_path, object_path, profile_path) -> Admission`; `run_guest(admission, environment_manifest, owned_run_root) -> RunManifest`. Admission records final object digest and cannot rebuild it implicitly inside the guest.
+
+**Required frozen input/control:** Run H33 on exact preselected owned kernel/config cells: valid GPL helper activity, otherwise-valid non-GPL license refusal and helper-free baseline where permitted. Containers sharing the host kernel do not qualify another kernel. Missing privilege/helper/cause/positive remains incomplete.
+
+**TC-R10/H33 facet:** owned real-kernel H33 fixtures and required positive/refusal cells. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] Write `test_loaded_bytes_match_admitted_object`, `test_active_excluded_target_is_required`, `test_no_reproducer_is_incomplete`, and `test_foreign_pin_is_not_cleanup_target` with deliberately modified objects, zero workload and foreign sentinels.
 - [ ] Run `python3 -m unittest discover -s tools/qualification/tests -p 'test_kernel_*.py'`; demonstrate controlled rejection before implementing execution orchestration.
@@ -137,6 +157,10 @@ TT tasks establish reusable tooling and its own named sensitivity tests. Domain 
 **Files:** Create `crates/scopebase-conformance/{Cargo.toml,src/main.rs,src/commands.rs}`, `tests/downstream/conformance-client/`, `tools/qualification/test_installed.py`, `docs/{conformance,install,troubleshooting}.md`, `packaging/fixture-manifest.json`.
 
 **Interfaces:** Future command syntax: `scopebase-conformance describe`; `plan --profile ID --fixture-root PATH`; `run --profile ID --fixture-root PATH --output PATH [--fixture-manifest PATH] [--mapping-policy POLICY]`; `verify-receipt PATH`; `cleanup --run PATH`. Defaults never perform active setup during describe/plan. Use the exact result/exit contracts in the spec.
+
+**Required frozen input/control:** Include H33 applicable original notices, source-option and final-object manifest in the installed offline route; test missing-notice and mismatched-source/object controls. Normal dependency cargo test never substitutes for this user-run delivery.
+
+**TC-R10/H33 facet:** installed applicable H33 route and required notice delivery. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] Write `installed::different_resolved_library_is_not_certified`, `offline_read_only_prefix`, `missing_fixture_is_incomplete`, `cli_refusal_exit_and_effects`, and `receipt_is_not_runtime_authority`. Require exact compiled subject metadata and independently resolved downstream package code.
 - [ ] Build package archives, install fixture closure into a read-only prefix and run `python3 tools/qualification/test_installed.py --prefix PATH --output PATH` in a fresh source-free offline environment; first demonstrate missing-fixture/incorrect-binding failures.

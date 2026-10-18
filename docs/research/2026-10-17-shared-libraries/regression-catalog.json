@@ -7,9 +7,9 @@
   "runnable": false,
   "created_date": "2026-10-17",
   "scope": {
-    "case_families": "H01-H32",
-    "case_count": 32,
-    "coverage_boundary": "Initial mapping of the existing H families, not an exhaustive catalog of every historical bug. UC01-UC14, G01-G23 and capability-specific obligations remain additional requirements.",
+    "case_families": "H01-H33",
+    "case_count": 33,
+    "coverage_boundary": "H01-H32 preserve the initial donor/research families; H33 appends the 2026-10-18 source/build/kernel license-boundary obligation. This is a planned catalog, not implemented or passing tests; UC/G and capability-specific obligations also apply.",
     "primary_source": "testing-strategy.md",
     "test_runner_implemented": false,
     "ci_selector_implemented": false,
@@ -2971,6 +2971,103 @@
         "planning_policy_reference": "selection_policy.tier_and_cell_planning",
         "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
       }
+    },
+    {
+      "id": "H33",
+      "case_kind": "CASE_FAMILY",
+      "status": "PLANNED",
+      "implementation_status": "NOT_IMPLEMENTED",
+      "execution_status": "NOT_RUN",
+      "runnable": false,
+      "origin": "NEW_SCOPEBASE_PLAN_OBLIGATION_2026_10_18_NOT_A_HISTORICAL_DONOR_FAILURE",
+      "short_contract": "Keep author-authorized source/destination grants and target input options separate from final object/runtime license bytes and intended-reason kernel admission.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/Cargo.toml; crates/ebpf/native/image_identity.c; crates/ebpf/src/main.rs SelectionTransport",
+          "coverage": "INSPECTED_SOURCE_NOT_EXECUTED",
+          "pin_document": "license-boundaries.md#actual-inspected-inputs"
+        }
+      ],
+      "independent_oracle": "Per-input ownership/role/offered-option manifest and original notices; independently decoded final license bytes; actual loader declaration; a supported GPL-only-helper fixture with nonempty independent owned workload, otherwise-valid non-GPL refusal at the selected kernel license check, and helper-free non-GPL control where the type permits it. Preserve same-errno different-cause evidence.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Authorize Apache-only target inputs solely from a GPL ELF string; substitute historical source SPDX for owner destination grant; remove or change final/runtime license; accept generic EACCES or zero activity as intended GPL-only refusal; drop required upstream notice.",
+        "required_failure_layer": "source-closure, final-object/binding, intended kernel license reason, non-vacuity or installed-notice assertion after valid positive setup; unrelated privilege/verifier failures remain incomplete"
+      },
+      "affected_capabilities_or_profiles": [
+        "source and dependency license closure",
+        "compiler-object-v1",
+        "compiler-runtime-x86-v1",
+        "bpf-aya-uprobe-v1",
+        "bpf-libbpf-uprobe-v1",
+        "mojo-elf-v1",
+        "packaged BPF conformance"
+      ],
+      "candidate_consumer_applicability": [
+        {
+          "consumer": "p11scope",
+          "applicability": "CANDIDATE",
+          "reason": "Apply only to selected actual host/BPF/shared/source/installed artifact roles; no migration or runtime qualification is claimed."
+        },
+        {
+          "consumer": "KryProbe",
+          "applicability": "CANDIDATE",
+          "reason": "Apply only to selected actual host/BPF/shared/source/installed artifact roles; no migration or runtime qualification is claimed."
+        },
+        {
+          "consumer": "OSSLscope",
+          "applicability": "CANDIDATE",
+          "reason": "Apply only to selected actual host/BPF/shared/source/installed artifact roles; no migration or runtime qualification is claimed."
+        },
+        {
+          "consumer": "MemVeil/libbpf-mojo",
+          "applicability": "CANDIDATE",
+          "reason": "Apply only to selected actual host/BPF/shared/source/installed artifact roles; no migration or runtime qualification is claimed."
+        },
+        {
+          "consumer": "MojoBPF",
+          "applicability": "CANDIDATE",
+          "reason": "Apply only to selected actual host/BPF/shared/source/installed artifact roles; no migration or runtime qualification is claimed."
+        }
+      ],
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC14"
+        ],
+        "G": [
+          "G18",
+          "G19",
+          "G20",
+          "G22"
+        ],
+        "TODO": [
+          "F01",
+          "F02",
+          "B03",
+          "T01",
+          "T03"
+        ]
+      },
+      "matrix_reference": {
+        "document": "testing-strategy.md",
+        "case_id": "H33"
+      },
+      "scope_limits": "Runtime acceptance does not adjudicate copyright permission. Do not require unrelated LSM/struct_ops/kfunc features. Preserve original third-party options and settle no-MIT dependency scope explicitly. Required missing positive/cell/cause evidence stays incomplete.",
+      "family_evidence_tier_inventory": [
+        "T0",
+        "T2",
+        "T4",
+        "T5"
+      ],
+      "inventory_scope_notes": "T0 validates authorization/roles/reference/classification controls; T2 actual final object/declaration; T4 advertised kernel license/admission/behavior; T5 actual package/installed notice and consumer binding. Each subcase fixes applicable tiers before discovery.",
+      "subcase_tier_plan": {
+        "status": "UNRESOLVED_BEFORE_PORTING",
+        "required_subcase_tiers_and_cells": null,
+        "planning_policy_reference": "selection_policy.tier_and_cell_planning",
+        "delivery_gate_reference": "selection_policy.cross_cutting_delivery_gate"
+      }
     }
   ],
   "schema_semantics": {
@@ -2978,5 +3075,12 @@
     "subcase_tier_plan": "Every family starts UNRESOLVED_BEFORE_PORTING with required_subcase_tiers_and_cells=null. Null means no executable acceptance plan exists; it never means no tiers/cells are required. Before porting, split the selected claim into named subcases and fix each required tier, environment cell, oracle, control and cleanup obligation before environment discovery.",
     "inventory_scope_notes": "Research guidance distinguishing narrower and stronger claims. These notes do not populate or approve the unresolved subcase plan.",
     "schema_change_from_0_1_0": "Removed ambiguous required_evidence_tiers and conditional_evidence_tiers fields. Preserved their combined matrix tier inventories, with explicit family/subcase separation and a cross-cutting T5 delivery gate. No implementation or test execution occurred."
-  }
+  },
+  "amendments": [
+    {
+      "date": "2026-10-18",
+      "added": "H33",
+      "reason": "Explicit author/destination, target source closure and kernel license admission must not be conflated. Prior family IDs/meanings are unchanged."
+    }
+  ]
 }
