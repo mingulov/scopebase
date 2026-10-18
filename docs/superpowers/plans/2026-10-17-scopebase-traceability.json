@@ -284,7 +284,7 @@
       "anchor": "bp01-freeze-bpf-boundaries-and-issue-provenance",
       "lane": "bpf",
       "milestone": "M3",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "SB01",
         "SB02",
@@ -1142,7 +1142,7 @@
       "anchor": "lx04-cooperative-deadlinecancellation-and-structured-effect-handling",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "LX01"
       ],
@@ -1953,7 +1953,7 @@
       "anchor": "tt01-versioned-caseprofile-and-traceability-registry",
       "lane": "testing",
       "milestone": "cross-cutting",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB01",
         "SB02"
@@ -1966,7 +1966,11 @@
         "TT-R04",
         "TC-R10"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "6b225d1ae8d3e9a67c87b65a1beb9a627b72e2de",
+        "evidence_record": "docs/reviews/2026-10-18-tt01-registry.md"
+      }
     },
     {
       "id": "TT02",

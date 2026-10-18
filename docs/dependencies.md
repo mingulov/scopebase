@@ -1,6 +1,6 @@
 # ScopeBase dependencies and build policy
 
-Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. The product workspace now contains `scopebase-linux` and `scopebase-capture`; [TODO](../TODO.md) records the accepted implementation scope. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern implementation.
+Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. The product workspace now contains `scopebase-linux`, `scopebase-capture` and `scopebase-testkit`; [TODO](../TODO.md) records the accepted implementation scope. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern implementation.
 
 ## Evaluated toolchains and source identity
 
