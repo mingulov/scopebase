@@ -1,6 +1,6 @@
 # Source adoption decisions
 
-Revision 3, 2026-10-18. Owner: SB01. Eleven narrow scopes are ready for the first LX02/CP02 ports; implementation of those ports has not yet begun. Adoption records describe the pre-copy admission state at their bound intake snapshot, not a mutable current-copy ledger. [The ledger](donors.json) preserves all 124 selected observations from eight authorities, both dirty MojoBPF inputs, all 1,529 mechanically extracted symbol candidates and the observer's 389 selected regression candidates. A symbol candidate can be a helper or wrapper; its presence is inspected source evidence, never a passing test or complete coverage claim.
+Revision 4, 2026-10-18. Owner: SB01. Eleven narrow scopes are ready as admission inputs for the first LX02/CP02 ports; actual completion is recorded separately below. Adoption records describe the pre-copy admission state at their bound intake snapshot, not a mutable current-copy ledger. [The ledger](donors.json) preserves all 124 selected observations from eight authorities, both dirty MojoBPF inputs, all 1,529 mechanically extracted symbol candidates and the observer's 389 selected regression candidates. A symbol candidate can be a helper or wrapper; its presence is inspected source evidence, never a passing test or complete coverage claim.
 
 ## How to use the ledger
 
@@ -34,9 +34,23 @@ Schema 2.0.0 records the canonical provisional owner grant separately from each 
 
 All 124 source observations, raw licenses and hashes remain intact. The 110 remaining unselected inputs use `NEEDS_DECISION` with null scope/role/destination/authorization/third-party classification and a reason naming the selected file. This includes the 14 former automatic NOASSERTION blocks; their candidate reference dispositions remain, but a historical label no longer mandates a copying ban. Three MojoBPF compiler implementation files remain `PRODUCT_LOCAL`/`REFERENCE_ONLY` with an explicit technical boundary and `BLOCKED`. Eleven inputs are `READY_FOR_SELECTED_SCOPE`: four exact P/O ranges for LX02 and seven K/M/O/L ranges for CP02. These retain `NOT_COPIED` as pre-copy admission observations. Their existing `OWNER-2026-10-18` authorization applies to selected user-owned host or vector contributions, with provisional Apache-2.0 destinations and preserved original license evidence. No whole-file or future-range grant follows from a selected range.
 
-Actual PORT/ADAPT/VECTORS_ONLY completion will have a separate immutable selected-port receipt binding the ready intake snapshot, exact selected ranges, destination hashes and existing preservation map. The bounded SB01 maintenance item in root TODO implements its validator before first-port acceptance. It does not delay authorized implementation or change schema2 pre-copy semantics.
+Actual PORT/ADAPT/VECTORS_ONLY completion requires a separate immutable selected-port receipt binding the ready intake snapshot, exact selected ranges, destination hashes and existing preservation map. The bounded SB01 maintenance supplies its explicit validator; the controller records first-port receipt acceptance separately. It does not delay authorized implementation or change schema2 pre-copy semantics.
 
 A ready metadata record requires all fields from the frozen adoption contract, contained nonoverlapping upstream fragments and retained supported options. It does not prove authorship, source-text classification, notice delivery, actual copying or package/runtime readiness. Changing source bytes, role or scope requires expert rechecking before the selected port is dispatched. Unresolved future inputs do not block independent host work or this foundation's structural acceptance.
+
+## Selected-port receipts
+
+Intake schema 2.0.0 and its NOT_COPIED/BLOCKED declarations remain immutable pre-copy admission observations. A version 1 `SELECTED_PORT_RECEIPT` records `PORTED_SELECTED_SCOPE` for actual selected mappings; it never relabels a whole donor file or records task acceptance. The [SB01 receipt contract](../superpowers/plans/2026-10-18-scopebase-plan-repair.md#selected-port-receipt-contract) defines exact fields, bounds and replacement identity. A receipt binds a retained repository-relative ready intake snapshot, each selected file ID/range, actual destination paths/hashes/symbols and the task's reviewed preservation map. Porting one function leaves other granted slices unclaimed. Initial real LX02/CP02 receipts are controller-produced after their candidate mappings exist; owned test fixtures exercise the validator now.
+
+Explicit validation reads only named local retained documents and artifacts, with no donor reads or automatic scan:
+
+```sh
+python3 tools/planning/check_traceability.py docs/superpowers/plans/2026-10-17-scopebase-traceability.json --port-receipt docs/provenance/ports/LX02-RECEIPT_ID.json
+```
+
+This is a usage template, not an existing receipt/result. Repeat `--port-receipt` for every expected first-port receipt. Without this option, success remains intake-only and says nothing about current copying or omitted receipts. Missing named evidence returns INCOMPLETE/2; malformed records, unsafe paths, stale hashes and refused grants return INVALID/3. Successful structural checks retain `qualification: NOT_EVALUATED` and confer no acceptance, authorship, license adjudication or runtime qualification.
+
+Append a replacement with `supersedes: {path,sha256}` rather than rewriting accepted evidence. The task, retained admission path/hash and normalized file/scope identity must remain the same; new source/admission identity starts a separate lineage. Chain checks bind historical receipt, admission and preservation bytes, without comparing historical destination hashes to the new tip. Checking that old receipt explicitly still reports a mismatch when its destination bytes have changed. The acceptance record separately binds reviewed revision, destination hashes and receipt digest.
 
 ## Source custody and moving heads
 
