@@ -16,7 +16,7 @@ Each task brief must contain the following table filled with concrete values or 
 |---|---|
 | Purpose and scope | Task ID, smallest useful increment, included behaviors, explicit non-goals and package/profile claim |
 | Decisions | Applicable D01–D14 decisions, selected alternatives and reasons; exact unresolved decisions and their owner |
-| Starting bytes | Product base SHA; each donor/upstream full SHA, worktree/WIP hash, selected path, function/type and relevant original regression |
+| Starting bytes | Product base SHA; completed private donor snapshot and checkout mapping; each donor/upstream full SHA, captured worktree/WIP hash, selected path, function/type and relevant original regression |
 | Origin per mechanism | PORT, ADAPT, NEW, EVALUATE or QUALIFY; NEW has a concrete reason the mechanism is absent and the reviewed replacement design |
 | Inputs | Accepted prerequisite artifact/version/hash, exact consumed signatures, domain conversions and supported feature/backend/toolchain/profile inputs |
 | Outputs | Exact owned paths and produced signatures/layouts/error categories; no placeholder production export |
@@ -33,7 +33,7 @@ The existing job helper binds files and prepares a worktree; it does **not** enf
 
 ## Preservation sequence
 
-1. Read the selected original mechanism and all applicable donor variants. Verify selected bytes; retain relevant branch/WIP differences. Resolve the task-specific source selection rather than assuming a coarse file group is sufficient.
+1. Read the selected original mechanism and applicable donor variants from the completed private frozen copies. Verify selected copied bytes and retain captured branch/WIP differences. Resolve the task-specific source selection rather than assuming a coarse file group is sufficient. The user's 2026-10-18 direction supersedes earlier live-refresh wording: do not repeatedly inspect moving donor heads or wait for donor cleanliness. A later capture/update needs a named technical reason; ongoing development alone is not one.
 2. Name the defect's trigger and invariant before writing implementation. Map cross-donor differences: stronger behavior to preserve, deliberate policy differences to keep local, and unsupported behavior to refuse.
 3. Port the original regression and expected behavior. Add an independent oracle and a plausible wrong implementation where the original test is insensitive. Do not replace all original cases with one representative example.
 4. Establish the test's sensitivity. A historical fixed donor may already pass its original test; do not damage the donor or demand that it fail. Use an owned wrong implementation/control, or the unimplemented destination, and show the intended assertion fails after valid setup. Restore the valid twin.
