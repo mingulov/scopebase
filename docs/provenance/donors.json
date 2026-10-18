@@ -7505,14 +7505,19 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-abi/src/kcrypto_agg.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            133,
+            161
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -7836,16 +7841,37 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/tests/kcrypto_who.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            862,
+            888
+          ],
+          [
+            890,
+            902
+          ],
+          [
+            904,
+            917
+          ],
+          [
+            919,
+            930
+          ],
+          [
+            932,
+            954
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -8104,16 +8130,25 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/evidence/integrity.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            172,
+            191
+          ],
+          [
+            235,
+            259
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12721,14 +12756,23 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/capture.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1504,
+            1515
+          ],
+          [
+            8881,
+            8890
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13258,6 +13302,10 @@
           [
             145,
             152
+          ],
+          [
+            300,
+            348
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -15773,6 +15821,10 @@
           [
             121,
             126
+          ],
+          [
+            520,
+            554
           ],
           [
             604,

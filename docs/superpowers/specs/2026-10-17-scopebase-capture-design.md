@@ -150,18 +150,26 @@ Byte-array IDs reject all-zero as an absent binding marker; numeric channel/clai
 // counter.rs
 pub enum CounterPolicy { Monotonic, Saturating { maximum: u64 }, Modulo { width: u8 } }
 pub struct Sample<U: Unit> { /* source, channel, policy, interval, value */ }
-pub struct AdvanceBound<U: Unit> { /* independently asserted upper advance */ }
+pub struct AdvanceBound<U: Unit> { /* owned baseline/current samples and asserted maximum */ }
+#[non_exhaustive]
 pub enum Delta<U: Unit> { Exact(Count<U>), AtLeast(Count<U>), Unknown(DeltaUnknown) }
+#[non_exhaustive]
 pub enum DeltaUnknown { MissingBaseline, ResetOrWrap, PartialRead, Saturated, UnboundedWrap }
 impl<U: Unit> Sample<U> {
     pub fn new(source: SourceRef, channel: ChannelId, policy: CounterPolicy,
                interval: TimeInterval, value: Count<U>) -> Result<Self, ContractError>;
     pub fn source(&self) -> &SourceRef;
+    pub fn channel(&self) -> ChannelId;
+    pub fn policy(&self) -> CounterPolicy;
     pub fn value(&self) -> Count<U>;
     pub fn interval(&self) -> &TimeInterval;
 }
 impl<U: Unit> AdvanceBound<U> {
-    pub fn new(source: SourceRef, maximum: Count<U>) -> Self;
+    pub fn new(baseline: &Sample<U>, current: &Sample<U>, maximum: Count<U>)
+        -> Result<Self, ContractError>;
+    pub fn baseline(&self) -> &Sample<U>;
+    pub fn current(&self) -> &Sample<U>;
+    pub fn maximum(&self) -> Count<U>;
 }
 pub fn sample_delta<U: Unit>(baseline: Option<&Sample<U>>, current: &Sample<U>,
     bound: Option<&AdvanceBound<U>>) -> Result<Delta<U>, ContractError>;
@@ -170,6 +178,7 @@ pub enum LossKind {
     Discovery, Transport, KernelNonexecution, Attribution,
     QueueOverflow, MalformedInput, DiagnosticTruncation,
 }
+#[non_exhaustive]
 pub enum LossMagnitude<U: Unit> {
     Exact(Count<U>), AtLeast(Count<U>), Unknown,
 }
@@ -206,9 +215,38 @@ pub fn check_conservation<U: Unit>(total: Count<U>, disjoint_parts: &[Count<U>])
     -> Result<(), ContractError>;
 ```
 
-Sample comparison requires identical epoch, binding, channel, policy/width and clock domain; nonoverlapping ordered observation intervals are required for an exact delta. Epoch/binding changes return `DomainMismatch`, rather than silently applying a new baseline. Overlapping/partial reads return `Unknown(PartialRead)`. Monotonic decrease is `Unknown(ResetOrWrap)`. Saturating counters return exact differences only while both values are below the maximum; reaching the maximum yields the observed difference as `AtLeast`, baseline already at maximum gives `Unknown(Saturated)`. Width is 1–64, values fit it, maximum is nonzero, and 64-bit modulus uses checked `u128` internals. Modulo delta is exact only when a same-source independently asserted maximum advance is strictly less than the modulus, the unique modular difference is ≤ that bound, and adapter contract rules out reset; otherwise it is `Unknown(UnboundedWrap)` or `InvalidSample` for contradictory evidence. An advance bound is caller evidence, not a timer-derived truth. No elapsed-time estimate alone can rule out wraps/resets.
+All fields of these structs are private. `Sample::new` first validates policy configuration (saturating maximum nonzero; modulo width 1–64), then its value (saturating value ≤ maximum; modulo value < 2^width using u128). Failures are `InvalidSample`; Monotonic accepts every u64. A sample requires an actual valid observation and clock interval; an adapter must not manufacture a sample from a missing current value, missing clock or cached previous sample.
 
-`CappedLossSignal` rejects zero cap or observed > cap. It is separate from `LossMagnitude<U>` so a capped channel cannot masquerade as exact event loss. `fold_capped_signals` folds diagnostic bytes saturating at the declared cap, never wraps. No severity count or “lost total” is synthesized across channels.
+**Same context** means full `SourceRef` equality, including capture, producer, epoch ordinal, binding and origin, plus channel, complete policy and clock domain equality. Interval ticks and sampled values are separate exact-pair fields. `AdvanceBound::new` checks same context first (`DomainMismatch`), then Modulo policy (`InvalidSample`), then current.start ≥ baseline.start (`InvalidSample`). It owns clones of both samples and the independently supplied maximum, without allocation or retained borrows. Forward overlap and every maximum from zero to u64::MAX are admitted. Construction performs no modular-difference calculation or maximum-versus-residue validation.
+
+The bound asserts that this exact pair spans no reset and at most the independently supplied advance. It prevents accidental reuse with a different pair; it cannot verify the producer assertion or distinguish repeated real observations with identical caller metadata. Equal-by-value cloned pairs may reuse it. A different pair needs a new assertion even when the same external numerical limit applies. Never derive the bound from the observed residue, the library's result or elapsed time alone. Its stored baseline never replaces the explicit optional baseline argument.
+
+`sample_delta` has the following fixed validation order:
+
+1. If a bound is supplied, compare actual current with its retained current: differing context returns `DomainMismatch`; differing interval ticks/value returns `InvalidSample`.
+2. Missing explicit baseline returns `Unknown(MissingBaseline)`, even with a matching bound.
+3. Require actual baseline/current same context, otherwise `DomainMismatch`.
+4. If bounded, require actual baseline equals the retained baseline by value, otherwise `InvalidSample`. Its context is already equal by the earlier checks.
+5. A current start before baseline start returns `InvalidSample`; otherwise a current start before baseline end returns `Unknown(PartialRead)`. End equality is ordered; identical zero-duration intervals are allowed.
+6. Apply the policy outcomes below. A non-Modulo actual current cannot match a valid bound; no silent bound-ignore branch exists.
+
+| Policy after context and interval checks | Result |
+|---|---|
+| Monotonic current ≥ baseline | `Exact(current - baseline)` |
+| Monotonic decrease | `Unknown(ResetOrWrap)` |
+| Saturating decrease, including from maximum | `Unknown(ResetOrWrap)` |
+| Saturating baseline == current == maximum | `Unknown(Saturated)` |
+| Saturating baseline < maximum and current == maximum | `AtLeast(current - baseline)` |
+| Saturating baseline ≤ current < maximum | `Exact(current - baseline)` |
+| Modulo without bound, or bound ≥ modulus | `Unknown(UnboundedWrap)` |
+| Modulo bound < modulus and residue > bound | `InvalidSample` |
+| Modulo bound < modulus and residue ≤ bound | `Exact(residue)` |
+
+The modulo residue is `(current + modulus - baseline) % modulus` in u128, including modulus 2^64. Zero bound admits only residue zero; u64::MAX is below the width64 modulus. No result converts unknown loss to zero.
+
+`CounterPolicy`, `DeltaUnknown` and `LossKind` implement Debug/Clone/Copy/PartialEq/Eq. Sample, AdvanceBound, Delta, LossMagnitude and LossFact implement Debug/Clone/PartialEq/Eq under only `U: Unit`, without additional marker trait bounds; they need not implement Copy. CappedLossSignal implements Debug/Clone/PartialEq/Eq. Delta, DeltaUnknown and LossMagnitude are non-exhaustive outcomes; CounterPolicy/LossKind are exhaustive input vocabulary for this increment. Debug retains SourceRef redaction. No default, setter, implicit delta-to-loss conversion or signal-to-event conversion is added.
+
+`LossFact::new` retains every valid source/channel/kind/magnitude combination and returns Ok; each kind permits any sealed unit and Exact(0), AtLeast(0) or Unknown. Kind neither implies a unit nor classifies an activity counter automatically. `CappedLossSignal` rejects zero cap or observed > cap. `fold_capped_signals` rejects cap0 even for an empty slice and any lane > cap, including a late lane after the accumulator reaches cap. Empty valid-cap input returns zero. Fold saturates at the declared cap without wrapping, allocation or an imposed input-length limit; callers admit slice length. Work is O(n), extra memory O(1); constructors/comparisons use fixed-size O(1) metadata. No severity count or “lost total” is synthesized across channels. See [D10's CP03 decisions](2026-10-18-scopebase-decisions.md#cp03-counter-and-loss-rulings) for rationale and later task boundaries.
 
 `ScopePartition::new` and `check_conservation` return `ConservationMismatch` when checked parts do not equal the declared total. `check_conservation` verifies arithmetic only; disjointness and shared physical provenance remain an explicit adapter assertion checked by independent fixtures. Ring delivery categories are records, not kernel operation loss. Details and independent counters for the same physical work are alternative observations, not disjoint addends. Missing operands cannot be supplied as default zero.
 
