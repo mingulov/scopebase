@@ -63,3 +63,30 @@ the implementation or installed-delivery obligations.
 | CP-R18 | Explicit bounds, failure atomicity, panic/trait and concurrency contracts | T02/T04; G03–G05/G07/G09/G10/G18/G22 | CP02–CP13 |
 
 CP01 additionally preserves F02–F06, Q01–Q06, T01/T07, G19/G20 and UC14 as package/provenance/delivery obligations. H03, H13–H15, H17/H18 and H23–H27 keep their canonical meanings. No H, UC or G identifier is renumbered. Pure models, emitted objects, live producer checks and installed consumers remain separate evidence tiers.
+
+## CP03 bounded counter and loss increment
+
+The candidate adds the following concrete mappings alongside the retained CP01
+inventory and CP02 representation work. The bounded package tests are runnable;
+this table does not close a whole H family or capture/runtime profile. Source
+scope is the immutable [CP03 admission](../../provenance/admissions/2026-10-18-cp03-counters.json)
+and [D10/C1–C6](../../superpowers/specs/2026-10-18-scopebase-decisions.md#cp03-counter-and-loss-rulings).
+
+| Mechanism and defect | Delivered API/test oracle | Bad control and preservation boundary |
+|---|---|---|
+| O `drops_delta`: absent baseline must not become measured zero. | `counter::sample_delta`; literal None→13 unknown,10→13 exact3,10→10 exact0. | Missing-as-zero and stored-bound-baseline substitution fail assertions. Missing current/clock remains adapter-owned; no fabricated Sample. Decreases tighten O's saturating subtraction to ResetOrWrap. |
+| NEW exact-pair generic counter protocol: context replacement, overlap and unbounded modulo cannot establish exact change. | `Sample`/`AdvanceBound`/`Delta`; every context field, endpoint and value has a valid wrong-pair input and a coherent new-bound twin. Independent4,352-case mathematical enumeration and 4,352-case literal-transition walk; 256 no-bound pairs; literal 64-bit modulus and saturation rows. | Individual context/pair omissions, wrap subtraction, contradictory/equal bounds, extra wrap, wrong64-bit modulus and ignored read windows fail reached assertions. Bound construction retains explicit independently supplied/no-reset assertions; it cannot establish producer authority. |
+| K `kattrloss_fold` and selected WHO vectors: independent CPU/program diagnostic lanes must sum and cap without wrapping. | `fold_capped_signals`/`CappedLossSignal`; `[1,1]`,300-attempt pre-capped input, saturated lane, four CPU lanes, three program lanes and `[254,4,0]`; all 5,625,215 valid pairs use independent wide-sum expectations. | Wrapping/max/hardcoded-cap and hidden-invalid-late-lane controls. Every byte lane is validated. Full-map producer/storage/ABI and live partition are CP04/BP02/BP07, not replaced here. |
+| O source/unit/loss distinction and K independent saturation vectors. | `LossFact<U>` retains all 7 kinds × 7 units × 5 magnitudes. Exact0/AtLeast0/Unknown remain distinct; loss1/activity999 and queue40+2 stay separate. | Unknown→0, attribution diagnostic255→exact omissions, lower-bound exactification and source/channel/kind erasure fail assertions. UI refuses mixed counter units and signal-as-event-loss at the intended E0308 argument; valid twins compile. CP06 retains persistent/once-only feed ownership. |
+
+`counter_windows` and `diagnostic_lanes` are separately executable API examples
+and external-client inputs. They use synthetic values through production APIs;
+CP11's real donor-shaped applications and CP13's installed operator route remain
+required. The delivered mutation tool edits disposable copies only, retains exact
+source/patch/compiler/test/restored-twin records and never counts compile or setup
+failure as a semantic kill. Required archive/compiler/feature checks bind actual
+extracted bytes; their controller acceptance is separate from this candidate map.
+
+Donor duplicates remain. Retirement requires a named real consumer bound to the
+ScopeBase version/features, the original producer/application regression and
+package conformance, retaining product policy and same or stronger behavior.

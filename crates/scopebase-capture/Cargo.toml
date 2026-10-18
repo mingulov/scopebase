@@ -8,7 +8,7 @@ license = "Apache-2.0"
 publish = false
 build = false
 readme = "README.md"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/lib.rs", "src/domain.rs", "src/error.rs", "src/quantity.rs", "src/conservation.rs", "src/time.rs", "tests/package_boundary.rs", "tests/support/check_package_boundary.py", "tests/domain_quantity.rs", "tests/time_domains.rs", "tests/ui/count_units_do_not_mix.rs", "tests/ui/count_units_match.rs", "tests/ui/sealed_unit.rs", "tests/ui/private_capture_id.rs"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/lib.rs", "src/domain.rs", "src/error.rs", "src/quantity.rs", "src/conservation.rs", "src/time.rs", "tests/package_boundary.rs", "tests/support/check_package_boundary.py", "tests/domain_quantity.rs", "tests/time_domains.rs", "tests/ui/count_units_do_not_mix.rs", "tests/ui/count_units_match.rs", "tests/ui/sealed_unit.rs", "tests/ui/private_capture_id.rs", "src/counter.rs", "src/loss.rs", "tests/counter_deltas.rs", "tests/loss_units.rs", "tests/ui/counter_units_do_not_mix.rs", "tests/ui/signal_is_not_event_loss.rs", "tests/ui/cp03_units_match.rs", "tests/support/check_cp03_controls.py", "examples/counter_windows.rs", "examples/diagnostic_lanes.rs"]
 
 [features]
 default = []

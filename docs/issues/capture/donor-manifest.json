@@ -1423,5 +1423,343 @@
       "owner": "NX02/BP06",
       "exit_criterion": "Select exact bridge/backend/toolchain closure, preserve ownership/staging regressions and qualify actual consumed native bundle; no Rust capture dependency."
     }
-  ]
+  ],
+  "cp03_increment": {
+    "task": "CP03",
+    "status": "IMPLEMENTED_CANDIDATE_UNREVIEWED",
+    "admission": "docs/provenance/admissions/2026-10-18-cp03-counters.json",
+    "admission_sha256": "d1c3a040f5ec492be692f10021b0667568d5e904028953a513397d563eec1098",
+    "sources": [
+      {
+        "source_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+        "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+        "file_sha256": "a244c36b2aee95c8ad5439296aa27a5c6c8131c21bbf763c459a7fe407d43130",
+        "slices": [
+          {
+            "lines": [
+              133,
+              161
+            ],
+            "symbol": "KATTRLOSS_SLOTS/KATTRLOSS_CAP/kattrloss_fold",
+            "sha256": "ddb6cf1bd1fdf3306be771216ad3741632da6f3a7cd45ec05d14770f51607256"
+          }
+        ],
+        "disposition": "ADAPT",
+        "destination": "src/loss.rs::fold_capped_signals",
+        "copy_scopes": [
+          [
+            133,
+            161
+          ]
+        ]
+      },
+      {
+        "source_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+        "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+        "file_sha256": "f671271ae2a5348052d9f3bd97334ff8ae9d10fe0541c1158f95bc28fc032ea1",
+        "slices": [
+          {
+            "lines": [
+              740,
+              773
+            ],
+            "symbol": "SimAttrLoss",
+            "sha256": "f852ed07019fed6d6e6fe7194f11d9ea0c182feca75de1cf0ca8b1741097a97f"
+          },
+          {
+            "lines": [
+              783,
+              833
+            ],
+            "symbol": "who_loss_survives_full_identity_map",
+            "sha256": "67a7df311d9514e7cee0abea31ab696e7c70f7689944b2e44d2a0fc32b0ecb29"
+          },
+          {
+            "lines": [
+              835,
+              860
+            ],
+            "symbol": "who_loss_below_capacity_control",
+            "sha256": "708acd57f63287519a1d5e601c25e6095a9e55f72566f036602e1f6ab80229d3"
+          },
+          {
+            "lines": [
+              862,
+              888
+            ],
+            "symbol": "who_loss_already_nonzero_control",
+            "sha256": "e79e9d1bfbf0066c7d4d5143ea9616bfb4b2d1c909b9ff4bd1227b019a4163be"
+          },
+          {
+            "lines": [
+              890,
+              902
+            ],
+            "symbol": "who_loss_repeated_failures_saturate_at_cap",
+            "sha256": "52b08c5a4007171a6b313f342704ab1a3bdb185a852e313a50e76f9bc0e74463"
+          },
+          {
+            "lines": [
+              904,
+              917
+            ],
+            "symbol": "who_loss_saturated_lane_stays_capped",
+            "sha256": "cac5c104adea4b3364e6f2237ce5c4670c2d066f7fe6114eea4cff0990b9726a"
+          },
+          {
+            "lines": [
+              919,
+              930
+            ],
+            "symbol": "who_loss_cross_cpu_failures_fold",
+            "sha256": "b75f58934643f95b63d074cb5d1b92676ef6db7b6c058730f2f41f4beb101c11"
+          },
+          {
+            "lines": [
+              932,
+              954
+            ],
+            "symbol": "who_loss_cross_program_failures_fold",
+            "sha256": "f9a56e1778c25e811099c04af37ebe5cfa86b129e56bfc47e3554285cab4c91e"
+          }
+        ],
+        "disposition": "VECTORS_ONLY",
+        "destination": "tests/loss_units.rs",
+        "copy_scopes": [
+          [
+            862,
+            888
+          ],
+          [
+            890,
+            902
+          ],
+          [
+            904,
+            917
+          ],
+          [
+            919,
+            930
+          ],
+          [
+            932,
+            954
+          ]
+        ]
+      },
+      {
+        "source_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+        "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+        "file_sha256": "b2a240db667f552ca09bdf0faaedf9cec87976d6f4d184d8f1a33e952e9cfa13",
+        "slices": [
+          {
+            "lines": [
+              8,
+              44
+            ],
+            "symbol": "IntegritySummary distinct counters",
+            "sha256": "12815a2c45e78ae12ae726d23554055dbbc9a3540c33de78459b30033405cd81"
+          },
+          {
+            "lines": [
+              47,
+              96
+            ],
+            "symbol": "saturating_add/rollup",
+            "sha256": "00dfc14c3bf449101a1a96f93e2f6e72ed70a67323504f18091197be113d50ef"
+          },
+          {
+            "lines": [
+              148,
+              191
+            ],
+            "symbol": "saturating_add regression vectors",
+            "sha256": "fd76ca374b11b74c39ff62b02e95a01b9602b05f815ff8bc90f38f7c1ccee0a0"
+          },
+          {
+            "lines": [
+              235,
+              259
+            ],
+            "symbol": "rollup saturation and empty regressions",
+            "sha256": "132ec53f1a95498e376c415c50b1678aa075ab380e12b97b06fa08654aa7e0c1"
+          }
+        ],
+        "disposition": "VECTORS_ONLY",
+        "destination": "tests/counter_deltas.rs + tests/loss_units.rs",
+        "copy_scopes": [
+          [
+            172,
+            191
+          ],
+          [
+            235,
+            259
+          ]
+        ]
+      },
+      {
+        "source_id": "O:src/capture.rs",
+        "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+        "file_sha256": "711ab0956d62a50fb1b07792557d4030e521c209b9ea19778b8b650d164705ac",
+        "slices": [
+          {
+            "lines": [
+              1410,
+              1447
+            ],
+            "symbol": "SeqState::observe contract/counterexample",
+            "sha256": "c63c380daf816fa9916e2aa3fde72dc2b8c10c749ef3e7578a223be36a70a4ae"
+          },
+          {
+            "lines": [
+              1504,
+              1515
+            ],
+            "symbol": "drops_delta",
+            "sha256": "e1a2c82f2700af1d1153d882af16a9efc8017fd67b268d8d6d01028a5095e6d2"
+          },
+          {
+            "lines": [
+              8881,
+              8890
+            ],
+            "symbol": "kernel_drops_delta_folds_blindness",
+            "sha256": "28d4d39a89e8751a7da416701f0ef23c4396cbb9737bf29d32920a4d14878581"
+          }
+        ],
+        "disposition": "ADAPT",
+        "destination": "src/counter.rs::sample_delta + tests/counter_deltas.rs",
+        "copy_scopes": [
+          [
+            1504,
+            1515
+          ],
+          [
+            8881,
+            8890
+          ]
+        ]
+      },
+      {
+        "source_id": "O:src/evidence.rs",
+        "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+        "file_sha256": "49c206bbc60389713903939e1dc9f4c4dc2e9463f596eb769ccb9afe40b7d6a9",
+        "slices": [
+          {
+            "lines": [
+              300,
+              348
+            ],
+            "symbol": "CounterKind/CounterUnits/CounterSource/GapCounter::forces_partial",
+            "sha256": "6df66297cd1dca7477f763c3eab79948e664e37009407c89004a0e3b68b66cb8"
+          }
+        ],
+        "disposition": "ADAPT",
+        "destination": "src/loss.rs::LossFact/LossMagnitude",
+        "copy_scopes": [
+          [
+            300,
+            348
+          ]
+        ]
+      },
+      {
+        "source_id": "O:tests/evidence_model.rs",
+        "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+        "file_sha256": "e1d7af0513904ce62e69e759de2e496acb54c73a823120bd7f6e9524bbcb49ea",
+        "slices": [
+          {
+            "lines": [
+              520,
+              554
+            ],
+            "symbol": "loss_vs_activity_counters",
+            "sha256": "7ff8a340a3f5dcdaeddcc992571b486310542d8d89dbed013316f7ed2daf1cec"
+          }
+        ],
+        "disposition": "VECTORS_ONLY",
+        "destination": "tests/loss_units.rs",
+        "copy_scopes": [
+          [
+            520,
+            554
+          ]
+        ]
+      },
+      {
+        "source_id": "P:src/first_use_probe.rs",
+        "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+        "file_sha256": "a66f52d27e04354fc21f545c6225bfc6becfa4dbe00f9bf4375f091b62629f62",
+        "slices": [
+          {
+            "lines": [
+              79,
+              85
+            ],
+            "symbol": "Fact::DiscoveryLoss fields",
+            "sha256": "8b2b853735ca14caef9735b0244375eb021381bae5ba810b11e429ef064c4462"
+          },
+          {
+            "lines": [
+              504,
+              551
+            ],
+            "symbol": "discovery_loss/discovery_loss_with",
+            "sha256": "2cdec1fd760c36b427bb460e5010a036048d21898924e394d20e3c59bc3c696a"
+          }
+        ],
+        "disposition": "REFERENCE_ONLY",
+        "destination": "Sample source/read interval design; BP07 live producer ownership",
+        "copy_scopes": []
+      },
+      {
+        "source_id": "P:src/first_use_probe/tests.rs",
+        "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+        "file_sha256": "0fae93068a59febf2bc85b648eb9c43ee0e1cf59c0e1f3d8686f4da3ddec559f",
+        "slices": [
+          {
+            "lines": [
+              304,
+              338
+            ],
+            "symbol": "discovery_loss_sampling_is_inert_without_a_probe_and_reads_each_boundary_once",
+            "sha256": "7662809a01552e27cc1aece5ff2ae5ef16d91a9fa56f6817fc5d9735af6b3e2a"
+          },
+          {
+            "lines": [
+              340,
+              356
+            ],
+            "symbol": "discovery_loss_missing_reads_and_clocks_remain_explicit_unknowns",
+            "sha256": "6727aabc3f2e9791286e547809f0011ab24d157efc256cbaae68ddd8d11db206"
+          },
+          {
+            "lines": [
+              358,
+              375
+            ],
+            "symbol": "discovery_loss_samples_keep_different_producer_domains_separate",
+            "sha256": "15a2a7d134e0ad657082fc593f1e041f013b646908f165eb9772c2cfcf0eb161"
+          }
+        ],
+        "disposition": "REFERENCE_ONLY",
+        "destination": "Sample invalid/missing evidence and domain design; BP07 producer regressions",
+        "copy_scopes": []
+      }
+    ],
+    "new_mechanisms": [
+      "width-generic checked Sample/AdvanceBound/Delta protocol and independently generated pure oracles under C1\u2013C4"
+    ],
+    "later_gates": [
+      "CP04 full-map host model",
+      "BP02/BP07 producer ABI/storage/live baseline",
+      "CP06 persistent/once-only facts",
+      "CP10 replay",
+      "CP11 real application adapters",
+      "CP13 installed conformance"
+    ],
+    "retirement": "Only after named real consumer migration, exact version/features and original application/producer regression plus package conformance. No donor duplicate removed."
+  }
 }

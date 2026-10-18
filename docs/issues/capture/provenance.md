@@ -102,3 +102,43 @@ wiring; CP11 independently useful consumers and CP13/TT installed conformance
 remain open. Required unavailable cells are NOT_RUN, never inherited PASS.
 Package boundary acceptance does not qualify CP02–CP13 runtime behavior, mapped
 images, native delivery, producer settlement, a product migration or publication.
+
+## CP03 selected adaptations and NEW protocol
+
+The immutable [CP03 admission](../../provenance/admissions/2026-10-18-cp03-counters.json)
+extends six K/O source scopes under OWNER-2026-10-18. Historical
+GPL-3.0-or-later labels remain recorded independently of the Apache-2.0 owned
+userspace destination. Existing CP02 scopes/receipt hashes remain unchanged.
+No third-party implementation, target source, shared-target license or Aya
+option is added by this pure increment. The derived register's `cp03_increment`
+records selected whole-file and slice hashes without rewriting CP01 history.
+
+ADAPT K `kattrloss_fold`133–161 retains independent capped accumulation. CP03's
+byte protocol additionally refuses invalid lanes, checking every lane after cap.
+Selected WHO862–954 vectors retain nonzero accumulation, repeated-attempt cap,
+already-capped stability and CPU/program separation; these are pure pre-capped
+host observations, not producer/full-map execution. K integrity172–191/235–259
+contributes saturation/queue/empty vectors; whole rollup, shared feeds and the
+application integrity summary remain outside CP03.
+
+ADAPT O `drops_delta`1504–1515/8881–8890 retains unknown-versus-known-zero baseline
+semantics. The ratified generic protocol explicitly strengthens decreasing
+values to ResetOrWrap instead of saturating subtraction. O evidence300–348 and
+evidence_model520–554 retain source/unit/classification and loss-versus-activity
+separation without copying product finalizers, schemas or Completeness policy.
+
+NEW `Sample`/`AdvanceBound`/`Delta` supplies the specification's width-generic,
+unit-safe, exact-owned-pair assertion: selected donors do not contain this
+mechanism. Root-ratified C1–C4 fix its complete metadata, constructor/refusal order,
+strict independent modulus bound and generic trait behavior. Two independently
+generated finite counter populations and literal 64-bit rows check it; neither
+oracle calls the production comparison or uses its expected result.
+
+P first-use source remains supplemental reference only: no code or vectors are
+copied and no clean-at-HEAD/intake claim is inferred. Its actual-read/read-window
+and missing-value requirements constrain adapters owned by BP07. O SeqState's
+half-range/first-sighting policy is also reference only and is not imported.
+Actual producer acquisition, full identity-map storage, persistent rollup,
+CP11 real applications and CP13 installed conformance remain separate open work.
+The worker supplies private source-to-final-destination receipt drafts; root owns
+canonical port receipts and independent acceptance.

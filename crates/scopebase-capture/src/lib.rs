@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Pure checked capture values: caller domains, same-unit counts and intervals.
+//! Pure capture values: caller domains, typed counts, counter windows and loss.
 //!
 //! No clock reads, ID generation, effects or authority are acquired. `json`
 //! retains optional dependency wiring only; it adds no serialization here.
@@ -18,6 +18,8 @@
 //! let _ = Count::<Events>::new(2).checked_add(Count::<Records>::new(3));
 //! ```
 pub mod conservation;
+pub mod counter;
+pub mod loss;
 pub mod domain;
 pub mod error;
 pub mod quantity;
