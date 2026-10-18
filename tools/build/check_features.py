@@ -77,15 +77,24 @@ def run_member(ex, member, matrix_root, policy_only):
     prefix = member['id']; original = Path(matrix_root)/member['manifest']
     grant=None
     source_digest=None
-    copied = ex.output/'subjects'/prefix
+    product = member['role']=='product'
+    copied = ex.output/'subjects'/prefix/('subject' if product else '')
+    source_lock = copied.parent/'Cargo.lock' if product else copied/'Cargo.lock'
+    archive_lock = None
+    def workspace(root, child):
+        root.mkdir(parents=True,exist_ok=True)
+        boundary=root/'Cargo.toml'
+        boundary.write_text('[workspace]\nresolver = "2"\nmembers = '+json.dumps([child])+'\n')
+        ex.report['staged_inputs'].append({'kind':'staging-workspace','path':str(boundary),'sha256':p.sha(boundary)})
     def prepare(r):
         nonlocal grant,source_digest,original
         original=p.relative(matrix_root,member['manifest'])
         grant=p.original_grant(original.parent,'fixture:'+prefix,ex.matrix['approved_build_inputs'])
         source_digest=grant['sha256']
         p.inspect_manifest(original)
-        p.check_licenses(original.parent,member['license_files'],member['notice_entries'])
+        p.check_licenses(original.parent,member['license_files'],member['notice_entries'],member['role'])
         check_notices(member,ex.staging)
+        if product: workspace(copied.parent,copied.name)
         p.source_copy(original.parent,copied)
         r['input_sha256'] = source_digest
         r['observed'] = {'source':str(original),'copied_source_sha256':p.tree_digest(copied)}
@@ -97,27 +106,35 @@ def run_member(ex, member, matrix_root, policy_only):
         nonlocal grant
         args=['generate-lockfile','--offline']
         if any(v['path']=='Cargo.lock' for v in grant['original_files']): args.append('--locked')
-        ex.command(r,msrv,copied/'Cargo.toml',args,packaging_target)
+        if product and (copied/'Cargo.lock').is_file(): shutil.copyfile(copied/'Cargo.lock',source_lock)
+        ex.command(r,msrv,copied/'Cargo.toml',args,packaging_target,lock_path=source_lock)
+        if product:
+            shutil.copyfile(source_lock,copied/'Cargo.lock')
+            ex.report['staged_inputs'].append({'kind':'staging-lock-mapping','workspace_lock':str(source_lock),'package_lock':str(copied/'Cargo.lock'),'sha256':p.sha(source_lock)})
         grant=p.copied_mapping(grant,copied)
         trusted_original[copied/'Cargo.toml']=grant
         p.record_transformation(ex,grant,copied)
     ex.step(prefix+'-lock',lock)
-    source_metadata=ex.step(prefix+'-admit',lambda r:p.metadata_admission(ex,r,msrv,copied/'Cargo.toml',packaging_target,member['allowed_dependencies'],trusted_original,member['denied_packages'],member['supported_unions'][0] if member['supported_unions'] else member['minimal'],False))
+    source_metadata=ex.step(prefix+'-admit',lambda r:p.metadata_admission(ex,r,msrv,copied/'Cargo.toml',packaging_target,member['allowed_dependencies'],trusted_original,member['denied_packages'],member['supported_unions'][0] if member['supported_unions'] else member['minimal'],False,lock_path=source_lock))
     def package(r,t):
-        result = ex.command(r,t,copied/'Cargo.toml',['package','--list','--offline','--locked','--allow-dirty'],packaging_target)
+        result = ex.command(r,t,copied/'Cargo.toml',['package','--list','--offline','--locked','--allow-dirty'],packaging_target,lock_path=source_lock)
         observed = p.stdout(result).splitlines()
         p.package_files(observed,member['package_files']); r['observed'] = {'files':observed}
     for package_toolchain in ex.matrix['toolchains']:
         ex.step(prefix+'-package-list-'+package_toolchain['id'],lambda r,t=package_toolchain:package(r,t))
-    ex.step(prefix+'-package',lambda r:ex.command(r,msrv,copied/'Cargo.toml',['package','--no-verify','--offline','--locked','--allow-dirty'],packaging_target))
+    ex.step(prefix+'-package',lambda r:ex.command(r,msrv,copied/'Cargo.toml',['package','--no-verify','--offline','--locked','--allow-dirty'],packaging_target,lock_path=source_lock))
     package_info = next(v for v in source_metadata['packages'] if Path(v['manifest_path'])==copied/'Cargo.toml')
     archive = packaging_target/'package'/(package_info['name']+'-'+package_info['version']+'.crate')
     unpacked = None
     def unpack(r):
-        nonlocal unpacked
+        nonlocal unpacked,archive_lock
         unpacked = p.safe_unpack(archive,ex.output/'unpacked'/prefix,package_info['name']+'-'+package_info['version'])
+        archive_lock=unpacked.parent/'Cargo.lock'
+        workspace(unpacked.parent,unpacked.name)
+        shutil.copyfile(unpacked/'Cargo.lock',archive_lock)
+        ex.report['staged_inputs'].append({'kind':'staging-lock-mapping','workspace_lock':str(archive_lock),'package_lock':str(unpacked/'Cargo.lock'),'sha256':p.sha(archive_lock)})
         p.package_files([v['path'] for v in p.tree_records(unpacked)],member['package_files'])
-        p.check_licenses(unpacked,member['license_files'],member['notice_entries'])
+        p.check_licenses(unpacked,member['license_files'],member['notice_entries'],member['role'])
         p.inspect_manifest(unpacked/'Cargo.toml')
         p.archive_mapping(grant,copied,unpacked,archive,member['package_files'])
         r['input_sha256'] = p.sha(archive)
@@ -125,7 +142,7 @@ def run_member(ex, member, matrix_root, policy_only):
     ex.step(prefix+'-archive',unpack)
     trusted_subject={}
     def normalized_metadata(r):
-        result=ex.command(r,msrv,unpacked/'Cargo.toml',['metadata','--offline','--locked','--no-deps','--format-version','1'],packaging_target)
+        result=ex.command(r,msrv,unpacked/'Cargo.toml',['metadata','--offline','--locked','--no-deps','--format-version','1'],packaging_target,lock_path=archive_lock)
         semantics=p.verify_package_semantics(source_metadata,copied/'Cargo.toml',json.loads(p.stdout(result)),unpacked/'Cargo.toml')
         identity=p.archive_mapping(grant,copied,unpacked,archive,member['package_files'])
         identity['metadata_semantics_sha256']=semantics
@@ -152,10 +169,10 @@ def run_member(ex, member, matrix_root, policy_only):
                 ex.step(cell+'-admit',metadata)
                 if policy_only: continue
                 ex.step(cell+'-check',lambda r:ex.command(r,t,workspace/'Cargo.toml',['check','--offline','--locked','--all-targets'],target,budget=budget))
-                ex.step(cell+'-test',lambda r:ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target,features,defaults,budget=budget))
+                ex.step(cell+'-test',lambda r:ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target,features,defaults,budget=budget,lock_path=archive_lock))
                 def doctest(r):
-                    result = ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--doc'],target,features,defaults,'DOCTEST_FAILED',budget=budget)
-                    if member['role']=='fixture' and not re.search(r'test result: ok\. [1-9][0-9]* passed',p.stdout(result)):
+                    result = ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--doc'],target,features,defaults,'DOCTEST_FAILED',budget=budget,lock_path=archive_lock)
+                    if not re.search(r'test result: ok\. [1-9][0-9]* passed',p.stdout(result)):
                         raise p.PolicyError('DOCTEST_MISSING')
                 ex.step(cell+'-doc',doctest)
                 for client in clients:
@@ -206,7 +223,8 @@ def main(argv=None):
         for t in m['toolchains']:
             ex.report['toolchains'].append(ex.step('identity-'+t['id'],lambda r:p.toolchain_info(t,output,ex)))
             def root_metadata(r):
-                result=ex.command(r,t,manifest,['metadata','--offline','--no-deps','--format-version','1'],output/'root-target')
+                args=['metadata','--offline','--locked','--format-version','1','--filter-platform',p.HOST] if m['members'] else ['metadata','--offline','--no-deps','--format-version','1']
+                result=ex.command(r,t,manifest,args,output/'root-target')
                 metadata=json.loads(p.stdout(result)); actual={str(Path(v['manifest_path']).resolve()) for v in metadata['packages'] if v['id'] in metadata['workspace_members']}
                 declared={str(p.relative(matrix_path.parent,v['manifest']).resolve()) for v in m['members']}
                 if actual != declared: raise p.PolicyError('UNREGISTERED_MEMBER',detail={'actual_count':len(actual),'registered_count':len(declared)})

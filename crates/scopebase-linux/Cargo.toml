@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-linux"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+description = "ScopeBase Linux package boundary; runtime capabilities are not implemented"
+publish = false
+readme = "README.md"
+build = false
+include = ["Cargo.toml", "README.md", "src/lib.rs", "tests/traits.rs", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
+
+[features]
+default = []
+process = []
+mapping = ["process"]
+supervision = ["process"]
+walk = []

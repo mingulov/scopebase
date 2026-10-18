@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [workspace]
-members = []
-default-members = []
+members = ["crates/scopebase-linux"]
+default-members = ["crates/scopebase-linux"]
 resolver = "2"
 exclude = ["tests/package-policy/fixtures/*", "tests/package-policy/probes/*"]
 
