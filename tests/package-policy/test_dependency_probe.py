@@ -323,3 +323,128 @@ class CompilerCellBoundsTests(unittest.TestCase):
                 dependency_probe.accept_refusal(second,root/'Cargo.lock',policy.sha(root/'Cargo.lock'),'E0624','type_by_id',root)
             self.assertEqual(error.exception.status,'BLOCKED')
             with self.assertRaisesRegex(policy.PolicyError,'TIMEOUT'): budget.remaining()
+
+
+class PostLaunchEvidenceTests(unittest.TestCase):
+    """Actual short owned children; injected collection faults are report tier."""
+    def owned_output(self):
+        temporary=tempfile.TemporaryDirectory(prefix='sb02-rr2-process-')
+        temporary._finalizer.detach()  # Retain reports/logs as job-owned evidence.
+        return Path(temporary.name)
+
+    def test_RR2_postprocess_errors_retain_the_already_attached_result(self):
+        for fault in ('io','policy'):
+            with self.subTest(fault=fault):
+                root=self.owned_output(); path=ROOT/'tests/package-policy/matrix.json'
+                ex=policy.Execution('check_features',path,json.loads(path.read_text()),root)
+                ex.reserve('owned-process'); ex.reserve('unreached')
+                def action(r):
+                    result=policy.run([sys.executable,'-c','print("completed")'],root,{'PATH':'/usr/bin:/bin'},root/'child')
+                    ex.attach(r,result); policy.succeeded(result)
+                    if fault=='policy': raise policy.PolicyError('LOCK_CHANGED')
+                    raise OSError('owned post-command I/O fault')
+                with self.assertRaises(policy.PolicyError) as error: ex.step('owned-process',action)
+                ex.abort(error.exception,root/'report.json')
+                failed=[r for r in ex.report['rows'] if r['status']=='FAIL']
+                self.assertEqual([r['id'] for r in failed],['owned-process'])
+                observed=failed[0]['observed']
+                self.assertEqual((observed['exit_code'],observed['cleanup']),(0,'complete'))
+                self.assertIsNotNone(observed['process_group'])
+                self.assertEqual(observed['logs']['stdout']['sha256'],policy.sha(root/'child.stdout'))
+                if fault=='io': self.assertEqual(observed['errors'][-1]['stage'],'postprocess')
+
+    def test_RR2_postlaunch_faults_keep_process_log_and_retirement_facts(self):
+        import contextlib, os, signal, subprocess
+        from unittest.mock import patch
+        for fault in ('selector','read','write','wait','close','hash','stat','unresolved'):
+            with self.subTest(fault=fault):
+                root=self.owned_output(); matrix_path=ROOT/'tests/package-policy/matrix.json'
+                matrix=json.loads(matrix_path.read_text())
+                ex=policy.Execution('check_features',matrix_path,matrix,root)
+                ex.reserve('owned-process'); ex.reserve('unreached')
+                real_popen=subprocess.Popen; real_read=os.read; real_killpg=os.killpg
+                real_open=Path.open; real_stat=Path.stat; real_sha=policy.sha; real_wait=subprocess.Popen.wait
+                children=[]; fired=[]
+                def launch(*a,**kw):
+                    child=real_popen(*a,**kw); children.append(child); return child
+                def fail_read(fd,size):
+                    if children and fd in (children[0].stdout.fileno(),children[0].stderr.fileno()):
+                        fired.append('read'); raise OSError('owned read fault')
+                    return real_read(fd,size)
+                class Log:
+                    def __init__(self,stream): self.stream=stream
+                    def __getattr__(self,name): return getattr(self.stream,name)
+                    def write(self,data):
+                        if fault=='write':
+                            self.stream.write(data[:3]); fired.append('write'); raise OSError('owned write fault')
+                        return self.stream.write(data)
+                    def close(self):
+                        self.stream.close()
+                        if fault=='close': fired.append('close'); raise OSError('owned close fault')
+                def open_log(path,mode='r',*a,**kw):
+                    stream=real_open(path,mode,*a,**kw)
+                    return Log(stream) if mode=='xb' and path.suffix=='.stdout' else stream
+                def fail_wait(child,*a,**kw):
+                    if not fired: fired.append('wait'); raise OSError('owned wait fault')
+                    return real_wait(child,*a,**kw)
+                def fail_hash(path):
+                    if Path(path).suffix=='.stdout': fired.append('hash'); raise OSError('owned hash fault')
+                    return real_sha(path)
+                def fail_stat(path,*a,**kw):
+                    if path.suffix=='.stdout': fired.append('stat'); raise OSError('owned stat fault')
+                    return real_stat(path,*a,**kw)
+                def uncertain_group(group,sig):
+                    if sig==0: fired.append('group-check'); raise OSError('owned group observation fault')
+                    return real_killpg(group,sig)
+                argv=[sys.executable,'-c','import time; print("payload",flush=True); time.sleep(.1)']
+                try:
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(patch.object(policy.subprocess,'Popen',side_effect=launch))
+                        if fault in ('selector','unresolved'):
+                            stack.enter_context(patch.object(policy.selectors.DefaultSelector,'select',side_effect=OSError('owned selector fault')))
+                        if fault=='read': stack.enter_context(patch.object(policy.os,'read',side_effect=fail_read))
+                        if fault in ('write','close'): stack.enter_context(patch.object(Path,'open',open_log))
+                        if fault=='wait': stack.enter_context(patch.object(real_popen,'wait',fail_wait))
+                        if fault=='hash': stack.enter_context(patch.object(policy,'sha',side_effect=fail_hash))
+                        if fault=='stat': stack.enter_context(patch.object(Path,'stat',fail_stat))
+                        if fault=='unresolved': stack.enter_context(patch.object(policy.os,'killpg',side_effect=uncertain_group))
+                        def action(r):
+                            result=policy.run(argv,root,{'PATH':'/usr/bin:/bin'},root/'child',timeout=1)
+                            ex.attach(r,result); policy.succeeded(result)
+                        with self.assertRaises(policy.PolicyError) as error: ex.step('owned-process',action)
+                        ex.abort(error.exception,root/'report.json')
+                    data=json.loads((root/'report.json').read_text())
+                    failed=[r for r in data['rows'] if r['status'] in ('FAIL','BLOCKED')]
+                    self.assertEqual([r['id'] for r in failed],['owned-process'])
+                    owner=failed[0]; observed=owner['observed']
+                    self.assertEqual(owner['command'],argv); self.assertEqual(owner['cwd'],str(root))
+                    self.assertEqual(observed['process_group'],children[0].pid)
+                    self.assertIsNotNone(observed['exit_code'])
+                    self.assertTrue(observed['errors'])
+                    self.assertEqual(observed['reason_code'],'INTERNAL_ERROR')
+                    self.assertEqual(owner['cleanup'],'unresolved' if fault in ('unresolved','close') else 'complete')
+                    if fault=='unresolved':
+                        self.assertEqual(owner['reason_code'],'CLEANUP_UNRESOLVED')
+                        self.assertEqual(observed['owner'],str(root))
+                        self.assertTrue(any(e['stage']=='group-check' for e in observed['errors']))
+                        self.assertTrue(any(e['stage']=='collect' for e in observed['errors']))
+                    for name,entry in owner['logs'].items():
+                        path=Path(entry['path'])
+                        if fault=='stat' and name=='stdout': self.assertIsNone(entry['bytes'])
+                        else: self.assertEqual(entry['bytes'],path.stat().st_size)
+                        if fault=='hash' and name=='stdout': self.assertIsNone(entry['sha256'])
+                        else: self.assertEqual(entry['sha256'],real_sha(path))
+                    untouched=next(r for r in data['rows'] if r['id']=='unreached')
+                    self.assertEqual((untouched['status'],untouched['cleanup'],untouched['command']),('NOT_RUN','not_started',None))
+                    if fault not in ('selector','unresolved'): self.assertTrue(fired)
+                    self.assertIsNotNone(children[0].poll())
+                    with self.assertRaises(ProcessLookupError): real_killpg(children[0].pid,0)
+                finally:
+                    # Only children actually launched by this control are owned.
+                    # Independently retire them even when an assertion fails.
+                    for child in children:
+                        try: real_killpg(child.pid,signal.SIGKILL)
+                        except ProcessLookupError: pass
+                        real_wait(child,timeout=2)
+                        for stream in (child.stdout,child.stderr):
+                            if stream and not stream.closed: stream.close()

@@ -510,71 +510,89 @@ def clean_env(output, toolchain, target):
 
 
 def run(argv, cwd, env, logs, timeout=600):
-    """Capture bounded logs, retire our process group, retain cleanup uncertainty."""
+    """Capture bounded logs and retain launch/retirement facts on I/O errors."""
     logs = Path(logs); logs.parent.mkdir(parents=True, exist_ok=True)
     paths = {n: logs.with_suffix('.' + n) for n in ('stdout','stderr')}
-    start = time.monotonic(); cleanup = 'complete'; reason = None
-    counts = {n: 0 for n in paths}
-    outputs = {n: p.open('xb') for n, p in paths.items()}
-    proc = None
+    start=time.monotonic(); reason=None; errors=[]; outputs={}; proc=None; select=None
+    counts={n:0 for n in paths}; code=None; retired=False; resources_closed=True
+    def error(stage, exception):
+        nonlocal reason
+        errors.append({'stage':stage,'exception':type(exception).__name__,
+                       'message':str(exception)[:512],'errno':getattr(exception,'errno',None)})
+        if reason is None: reason='INTERRUPTED' if isinstance(exception,KeyboardInterrupt) else 'INTERNAL_ERROR'
+    def kill():
+        try: os.killpg(proc.pid,signal.SIGKILL)
+        except ProcessLookupError: pass
+        except BaseException as exception: error('group-kill',exception)
     try:
-        proc = subprocess.Popen([str(v) for v in argv], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-        select = selectors.DefaultSelector()
+        for name,path in paths.items(): outputs[name]=path.open('xb')
+        proc=subprocess.Popen([str(v) for v in argv],cwd=cwd,env=env,stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+        select=selectors.DefaultSelector()
         for name in paths:
-            stream = getattr(proc, name); os.set_blocking(stream.fileno(), False)
-            select.register(stream, selectors.EVENT_READ, name)
-        deadline = start + timeout
+            stream=getattr(proc,name); os.set_blocking(stream.fileno(),False)
+            select.register(stream,selectors.EVENT_READ,name)
+        deadline=start+timeout
         while select.get_map():
-            if time.monotonic() >= deadline:
-                reason = 'TIMEOUT'; break
-            for key, _ in select.select(min(.1, max(0, deadline-time.monotonic()))):
-                data = os.read(key.fileobj.fileno(), 65536)
+            if time.monotonic()>=deadline:
+                reason='TIMEOUT'; break
+            for key,_ in select.select(min(.1,max(0,deadline-time.monotonic()))):
+                data=os.read(key.fileobj.fileno(),65536)
                 if not data:
                     select.unregister(key.fileobj); key.fileobj.close(); continue
-                name = key.data
-                remaining = MAX_LOG - counts[name]
-                outputs[name].write(data[:remaining]); counts[name] += min(len(data), remaining)
-                if len(data) > remaining:
-                    reason = 'LOG_BOUND'; break
-            if reason:
-                break
-        select.close()
-        if reason:
-            try: os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
-        try: code = proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            code = None; cleanup = 'unresolved'
-        # A returned direct child cannot certify surviving descendants retired.
-        try:
-            os.killpg(proc.pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            try: os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
-            cleanup = 'unresolved'
-        for stream in (proc.stdout, proc.stderr):
-            if not stream.closed: stream.close()
-    except BaseException as error:
-        if proc is not None:
-            try: os.killpg(proc.pid,signal.SIGKILL)
-            except ProcessLookupError: pass
-            try: proc.wait(timeout=2)
-            except subprocess.TimeoutExpired: cleanup='unresolved'
-            for stream in (proc.stdout,proc.stderr):
-                if stream and not stream.closed: stream.close()
-        if isinstance(error,KeyboardInterrupt):
-            reason='INTERRUPTED'; code=proc.returncode if proc else None
-        else:
-            raise
+                name=key.data; remaining=MAX_LOG-counts[name]; chunk=data[:remaining]
+                written=outputs[name].write(chunk)
+                if written!=len(chunk): raise OSError('short log write')
+                counts[name]+=written
+                if len(data)>remaining:
+                    reason='LOG_BOUND'; break
+            if reason: break
+    except BaseException as exception:
+        # Before launch there is no child custody to invent. Close any newly
+        # opened files below, and propagate the original setup failure.
+        if proc is None: raise
+        error('collect',exception)
     finally:
-        for stream in outputs.values(): stream.close()
-    return {'exit_code': code, 'reason_code': reason, 'cleanup': cleanup,
-            'duration_ms': round((time.monotonic()-start)*1000), 'command': [str(a) for a in argv],
-            'cwd': str(cwd), 'process_group': proc.pid if proc else None,
-            'logs': {n: {'path': str(p), 'sha256': sha(p), 'bytes': counts[n]} for n,p in paths.items()}}
+        if proc is not None:
+            if reason: kill()
+            try: code=proc.wait(timeout=2)
+            except BaseException as exception:
+                error('wait',exception); kill()
+                try: code=proc.wait(timeout=2)
+                except BaseException as retry: error('wait-after-kill',retry)
+            # Reaping the direct child cannot certify surviving descendants.
+            try: os.killpg(proc.pid,0)
+            except ProcessLookupError: retired=code is not None
+            except BaseException as exception:
+                error('group-check',exception); kill()
+            else: kill()
+            if code is None: code=proc.returncode
+        if select is not None:
+            try: select.close()
+            except BaseException as exception:
+                error('selector-close',exception); resources_closed=False
+        if proc is not None:
+            for stream in (proc.stdout,proc.stderr):
+                try:
+                    if stream and not stream.closed: stream.close()
+                except BaseException as exception:
+                    error('pipe-close',exception); resources_closed=False
+        for stream in outputs.values():
+            try: stream.close()
+            except BaseException as exception:
+                error('log-close',exception); resources_closed=False
+    captured={}
+    for name,path in paths.items():
+        entry={'path':str(path),'sha256':None,'bytes':None}
+        try: entry['bytes']=path.stat().st_size
+        except BaseException as exception: error('log-stat-'+name,exception)
+        try: entry['sha256']=sha(path)
+        except BaseException as exception: error('log-hash-'+name,exception)
+        captured[name]=entry
+    return {'exit_code':code,'reason_code':reason,
+            'cleanup':'complete' if retired and resources_closed else 'unresolved',
+            'duration_ms':round((time.monotonic()-start)*1000),'command':[str(a) for a in argv],
+            'cwd':str(cwd),'process_group':proc.pid,'logs':captured,'errors':errors}
 
 
 def stdout(result):
@@ -881,6 +899,7 @@ class Execution:
                                                            env={'PATH':'/usr/bin:/bin','GIT_NO_LAZY_FETCH':'1'}, text=True).strip(),
                        'toolchains':[], 'rows':[], 'summary':None, 'product_qualification':False}
         self.by_id = {}
+        self.process_results = {}
         self.staging = None
         self.reserve('tool-error',role='tool',phase='unowned-error',required=False)
 
@@ -898,6 +917,9 @@ class Execution:
         except PolicyError as e:
             if getattr(e,'recorded_by',None) is self: raise
             e.recorded_by=self
+            result=self.process_results.get(ident)
+            if result is not None and not (isinstance(e.detail,dict) and 'cleanup' in e.detail):
+                e.detail={**result,'policy_detail':e.detail}
             r.update(status=e.status,reason_code=e.code,fit='UNKNOWN',observed=e.detail)
             if isinstance(e.detail,dict) and 'cleanup' in e.detail:
                 self.attach(r,e.detail)
@@ -905,18 +927,26 @@ class Execution:
         except (InputError, tomllib.TOMLDecodeError):
             raise
         except Exception as e:
-            r.update(status='FAIL',reason_code='INTERNAL_ERROR',observed={'exception':type(e).__name__})
-            failure=PolicyError('INTERNAL_ERROR')
+            result=self.process_results.get(ident)
+            detail={'exception':type(e).__name__} if result is None else {
+                **result,'reason_code':result.get('reason_code') or 'INTERNAL_ERROR',
+                'errors':result.get('errors',[])+[{'stage':'postprocess','exception':type(e).__name__,'message':str(e)[:512]}]}
+            code='CLEANUP_UNRESOLVED' if result and result['cleanup']=='unresolved' else 'INTERNAL_ERROR'
+            status='BLOCKED' if code=='CLEANUP_UNRESOLVED' else 'FAIL'
+            r.update(status=status,reason_code=code,observed=detail)
+            if result: self.attach(r,detail)
+            failure=PolicyError(code,status,detail)
             failure.recorded_by=self
             raise failure from e
         finally:
             r['duration_ms'] = round((time.monotonic()-start)*1000)
 
     def attach(self,r,result):
+        self.process_results[r['id']]=result
         for key in ('command','cwd','logs','duration_ms','cleanup'):
             r[key] = result[key]
         if result.get('process_group') and result['cleanup'] == 'unresolved':
-            r['observed'] = {'process_group':result['process_group'],'owner':str(self.output)}
+            r['observed'] = {**result,'owner':str(self.output)}
 
     def command(self, r, t, manifest, arguments, target, features=(), defaults=True, failure='CARGO_FAILED', extra_env=None, budget=None):
         env = clean_env(self.output,t,target)
@@ -933,6 +963,9 @@ class Execution:
         result = run(argv,Path(manifest).parent,env,self.output/'logs'/r['id'],timeout=timeout)
         if budget: budget.complete(result)
         self.attach(r,result)
+        # Incomplete collection/cleanup has priority over any interpretation of
+        # partial diagnostics or post-command lock/log processing.
+        if result['reason_code'] or result['cleanup']=='unresolved': succeeded(result,failure)
         r['lock_sha256'] = sha(lock) if lock.is_file() else None
         if '--locked' in arguments and before_lock != r['lock_sha256']:
             raise PolicyError('LOCK_CHANGED')
@@ -1019,6 +1052,7 @@ def fixture_inventory(root):
 def original_grant(root, source, approved):
     records=fixture_inventory(root); value=fixture_digest(root)
     info=inspect_manifest(Path(root)/'Cargo.toml'); package=info['data']['package']
+    manifest_surface(info['data'])
     macro=info['data'].get('lib',{}).get('proc-macro',False)
     if info['build_script'] or macro:
         grant=next((r for r in approved if (r['name'],r['version'],r['source'])==(package['name'],package['version'],source)),None)
@@ -1069,16 +1103,66 @@ def archive_mapping(grant,copied,unpacked,archive,allowed):
             'archive_sha256':sha(archive),'normalized_manifest_sha256':records['Cargo.toml']}
 
 
+def manifest_surface(data):
+    """Bound the subject/archive mapping to fields Cargo metadata can verify.
+
+    This is an admission list, not a manifest normalizer. Unsupported compilation
+    controls require a future explicit mapping contract before they can execute.
+    """
+    package_fields={'name','version','authors','edition','rust-version','description','documentation',
+                    'readme','homepage','repository','license','license-file','keywords','categories',
+                    'build','links','exclude','include','publish','metadata','default-run','resolver',
+                    'autolib','autobins','autoexamples','autotests','autobenches'}
+    dependency_tables={'dependencies','dev-dependencies','build-dependencies'}
+    target_tables={'lib','bin','example','test','bench'}
+    target_fields={'name','path','edition','crate-type','proc-macro','required-features','test','doctest','doc'}
+    dependency_fields={'version','package','optional','default-features','features','registry','registry-index','path'}
+    def supported(condition):
+        if not condition: raise PolicyError('MANIFEST_SURFACE_UNSUPPORTED','BLOCKED')
+    supported(set(data)<=({'package','workspace','features','target','lints','badges'}|dependency_tables|target_tables))
+    supported(isinstance(data.get('package'),dict) and set(data['package'])<=package_fields)
+    # A standalone empty workspace may disappear in Cargo's archive. Inheritance,
+    # workspace resolver/defaults, profiles and unstable fields are not admitted.
+    supported(data.get('workspace',{})=={})
+    def dependencies(tables):
+        supported(isinstance(tables,dict) and set(tables)<=dependency_tables)
+        for table in tables.values():
+            supported(isinstance(table,dict))
+            for dependency in table.values():
+                supported(isinstance(dependency,str) or (isinstance(dependency,dict) and set(dependency)<=dependency_fields))
+    dependencies({k:data[k] for k in dependency_tables if k in data})
+    supported(isinstance(data.get('target',{}),dict))
+    for tables in data.get('target',{}).values(): dependencies(tables)
+    for name in target_tables:
+        targets=[data[name]] if name=='lib' and name in data else data.get(name,[])
+        supported(isinstance(targets,list))
+        for target in targets: supported(isinstance(target,dict) and set(target)<=target_fields)
+    # Metadata resolves target discovery/build paths and effective defaults. It
+    # does not expose these packaging/resolver/lint tables, so require equality.
+    return {'package':{k:data['package'].get(k) for k in ('include','exclude','resolver')},
+            'lints':data.get('lints',{}),'badges':data.get('badges',{})}
+
+
 def package_semantics(metadata,manifest):
-    """Compare Cargo's effective metadata, rather than reimplement normalization."""
+    """Compare whole Cargo metadata plus the explicitly admitted raw surface."""
     manifest=Path(manifest).resolve(); root=manifest.parent
     package=next(v for v in metadata['packages'] if Path(v['manifest_path']).resolve()==manifest)
-    fields=('name','version','edition','rust_version','license','links','publish','default_run','metadata')
-    result={k:package.get(k) for k in fields}
+    # Only opaque package identity and its owned-root manifest path relocate.
+    # Keep all other keys, including new Cargo metadata, rather than dropping
+    # build-visible values such as CARGO_PKG_AUTHORS/DESCRIPTION/README.
+    result={k:v for k,v in package.items() if k not in ('id','manifest_path')}
+    def local_path(value):
+        if value is None: return None
+        # Relative package strings are build-visible (for example README and
+        # ./README need not be interchangeable to an approved build script).
+        if not Path(value).is_absolute(): return value
+        return str(Path(value).resolve().relative_to(root))
+    for key in ('readme','license_file'):
+        if key in result: result[key]=local_path(result[key])
     result['features']={k:sorted(v) for k,v in package['features'].items()}
-    result['dependencies']=sorted([{k:d.get(k) for k in ('name','source','req','kind','optional','uses_default_features','features','target','rename','registry')} for d in package['dependencies']],key=lambda d:compact(d))
-    result['targets']=sorted([{**{k:t.get(k) for k in ('name','kind','crate_types','edition','doctest','test','doc','required-features')},
-                               'src_path':str(Path(t['src_path']).resolve().relative_to(root))} for t in package['targets']],key=lambda t:compact(t))
+    result['dependencies']=sorted(package['dependencies'],key=compact)
+    result['targets']=sorted([{**t,'src_path':local_path(t['src_path'])} for t in package['targets']],key=compact)
+    result['manifest_surface']=manifest_surface(tomllib.loads(manifest.read_text()))
     return result
 
 

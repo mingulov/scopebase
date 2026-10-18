@@ -85,6 +85,36 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
             policy.check_licenses(self.subject, licenses, entries)
 
+    def test_RR2_complete_metadata_projection_and_explicit_manifest_surface(self):
+        import copy
+        other=self.root/'relocated'; other.mkdir(); (other/'src').mkdir()
+        normalized=other/'Cargo.toml'; normalized.write_text(self.base+'autolib=false\nreadme=false\n[lib]\npath="src/lib.rs"\n')
+        def metadata(root):
+            return {'packages':[dict(id=str(root),manifest_path=str(root/'Cargo.toml'),name='subject',version='0.1.0',
+                authors=['approved'],description='description',homepage='homepage',repository='repository',license='Apache-2.0',
+                license_file=None,readme=None,rust_version='1.88.0',documentation='docs',keywords=['key'],categories=['category'],
+                source=None,edition='2021',links=None,default_run=None,publish=[],metadata={},features={},dependencies=[],
+                targets=[dict(name='subject',kind=['lib'],crate_types=['lib'],edition='2021',doc=True,doctest=True,test=True,src_path=str(root/'src/lib.rs'))])]}
+        original=metadata(self.subject); changed=metadata(other)
+        policy.verify_package_semantics(original,self.manifest,changed,normalized)
+        # Projection/report units, separate from the actual Cargo authors control.
+        for key in ('authors','description','homepage','repository','license','license_file','readme','rust_version','documentation','keywords','categories'):
+            mutant=copy.deepcopy(changed); mutant['packages'][0][key]=['changed'] if key in ('authors','keywords','categories') else 'changed'
+            with self.subTest(field=key),self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED'):
+                policy.verify_package_semantics(original,self.manifest,mutant,normalized)
+        for key in ('readme','license_file'):
+            left=copy.deepcopy(original); right=copy.deepcopy(changed)
+            left['packages'][0][key]='./LICENSE'; right['packages'][0][key]='LICENSE'
+            with self.subTest(relative_string=key),self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED'):
+                policy.verify_package_semantics(left,self.manifest,right,normalized)
+        normalized.write_text(self.base+'include=["src/lib.rs"]\n')
+        with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED'):
+            policy.verify_package_semantics(original,self.manifest,changed,normalized)
+        for surface in ('[profile.dev]\nopt-level=1\n','[lib]\nharness=false\n','[package.unrecognized]\nx=true\n','[workspace]\nresolver="2"\n','[dependencies]\nx={version="1",artifact="bin"}\n'):
+            self.manifest.write_text(self.base+surface)
+            with self.subTest(surface=surface),self.assertRaisesRegex(policy.PolicyError,'MANIFEST_SURFACE_UNSUPPORTED'):
+                policy.original_grant(self.subject,'fixture:subject',[])
+
 
 if __name__ == '__main__':
     unittest.main()
@@ -124,13 +154,14 @@ class RealCargoControls(unittest.TestCase):
         p = self.root/(str(self.counter)+'-'+name); p.mkdir()
         return p
 
-    def cargo(self, source, arguments, output, name, env_extra=None):
+    def cargo(self, source, arguments, output, name, env_extra=None, toolchain=None):
         import subprocess
-        env = policy.clean_env(output,self.t,output/'target')
+        t=toolchain or self.t
+        env = policy.clean_env(output,t,output/'target')
         if env_extra: env.update(env_extra)
         import os
         shared_root = Path(os.environ['XDG_RUNTIME_DIR'])/'scopebase-locks' if os.environ.get('XDG_RUNTIME_DIR') else Path.home()/'.cache/scopebase/locks'
-        argv = [str(ROOT/'bin/scopebase-build'),'--lock-root',str(shared_root),'--',str(Path(self.t['root'])/'bin/cargo'),*arguments,'--manifest-path',str(source/'Cargo.toml')]
+        argv = [str(ROOT/'bin/scopebase-build'),'--lock-root',str(shared_root),'--',str(Path(t['root'])/'bin/cargo'),*arguments,'--manifest-path',str(source/'Cargo.toml')]
         result = policy.run(argv,source,env,output/name)
         return result
 
@@ -346,9 +377,9 @@ class RealCargoControls(unittest.TestCase):
             output=self.directory('approved-cli-'+str(original_lock)); inputs=output/'input'; inputs.mkdir()
             shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
             source=inputs/'fixtures/feature_subject'; manifest=source/'Cargo.toml'
-            manifest.write_text(manifest.read_text().replace('include = [','include = ["build.rs", "helper.inc", '))
+            manifest.write_text(manifest.read_text().replace('[package]','[package]\nauthors=["approved"]').replace('include = [','include = ["build.rs", "helper.inc", '))
             (source/'build.rs').write_text('include!("helper.inc");\n')
-            (source/'helper.inc').write_text('fn main() { std::fs::write(std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("approved-marker"), "executed").unwrap(); }\n')
+            (source/'helper.inc').write_text('fn main() { let author=std::env::var("CARGO_PKG_AUTHORS").unwrap(); let marker=if author=="approved" { "approved-marker" } else { "changed-metadata-marker" }; std::fs::write(std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join(marker), author).unwrap(); }\n')
             if original_lock:
                 seed=output/'seed'; seed.mkdir(); policy.stage_inputs(self.inputs,seed)
                 policy.succeeded(self.cargo(source,['generate-lockfile','--offline'],seed,'original-lock'))
@@ -366,7 +397,7 @@ class RealCargoControls(unittest.TestCase):
                 for t in matrix['toolchains']:
                     markers=list((run/'targets/feature-subject'/mode/t['id']).rglob('approved-marker'))
                     self.assertTrue(markers,(original_lock,mode,t['id']))
-                    self.assertTrue(all(p.read_text()=='executed' for p in markers))
+                    self.assertTrue(all(p.read_text()=='approved' for p in markers))
             transformations=[r for r in data['staged_inputs'] if r['kind']=='fixture-transformation']
             self.assertTrue(transformations)
             self.assertTrue(all(r['original_source_sha256']==grant['sha256'] for r in transformations))
@@ -400,20 +431,52 @@ class RealCargoControls(unittest.TestCase):
             original_md=json.loads(Path(next(r for r in data['rows'] if r['id']=='feature-subject-admit')['logs']['stdout']['path']).read_text())
             archive=Path(next(r for r in data['rows'] if r['id']=='feature-subject-archive')['observed']['archive'])
             packaged=run/'unpacked/feature-subject/sb02-feature-subject-0.1.0'
-            for mutation in ('helper','support','build','dependency','feature'):
+            for mutation in ('helper','support','build','dependency','feature','authors'):
                 mutated=output/('archive-'+mutation); shutil.copytree(packaged,mutated)
                 changed=mutated/'Cargo.toml'
                 if mutation=='helper': (mutated/'helper.inc').write_text('fn main() { panic!("unapproved"); }')
                 elif mutation=='support': (mutated/'added-helper.inc').write_text('unapproved support')
                 elif mutation=='build': changed.write_text(changed.read_text().replace('build = "build.rs"','build = "helper.inc"'))
                 elif mutation=='dependency': changed.write_text(changed.read_text().replace('default-features = false','default-features = true',1))
-                else: changed.write_text(changed.read_text().replace('default = []','default = ["json"]'))
+                elif mutation=='feature': changed.write_text(changed.read_text().replace('default = []','default = ["json"]'))
+                else: changed.write_text(changed.read_text().replace('authors = ["approved"]','authors = ["changed"]').replace('    "approved",','    "changed",'))
+                if mutation=='authors':
+                    import tarfile
+                    mutant_archive=output/'authors-only.crate'
+                    with tarfile.open(mutant_archive,'w:gz') as tar:
+                        for file in sorted(mutated.rglob('*')):
+                            if file.is_file(): tar.add(file,arcname='sb02-feature-subject-0.1.0/'+file.relative_to(mutated).as_posix(),recursive=False)
+                    mutated=policy.safe_unpack(mutant_archive,output/'authors-unpacked','sb02-feature-subject-0.1.0')
+                    policy.archive_mapping(copied_identity,run/'subjects/feature-subject',mutated,mutant_archive,member['package_files'])
+                    authors_control=dict(original_source_sha256=original_identity['sha256'],
+                        original_lock_sha256=copied_identity['original_lock_sha256'],
+                        generated_lock_sha256=copied_identity['generated_lock_sha256'],archive_sha256=policy.sha(mutant_archive),
+                        original_manifest_sha256=policy.sha(source/'Cargo.toml'),normalized_manifest_sha256=policy.sha(mutated/'Cargo.toml'),
+                        known_bad_runs=[],semantic_refusals=[])
+                    # Deliberately bypass the semantic gate in a separate owned
+                    # target to prove the unchanged script's changed branch is
+                    # capable. This is the known-bad policy control, not admission.
+                    for t in matrix['toolchains']:
+                        bad=output/('authors-known-bad-'+t['id']); bad.mkdir()
+                        policy.stage_inputs(self.inputs,bad)
+                        result=self.cargo(mutated,['check','--offline','--locked','--no-default-features'],bad,'changed-author-check',toolchain=t)
+                        policy.succeeded(result)
+                        changed_markers=list((bad/'target').rglob('changed-metadata-marker'))
+                        self.assertTrue(changed_markers)
+                        self.assertTrue(all(p.read_text()=='changed' for p in changed_markers))
+                        authors_control['known_bad_runs'].append(dict(toolchain=t['id'],result=result,changed_markers=[str(p) for p in changed_markers]))
                 if mutation in ('helper','support'):
                     with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SOURCE_CHANGED|UNEXPECTED_PACKAGE_FILE'):
                         policy.archive_mapping(copied_identity,run/'subjects/feature-subject',mutated,archive,member['package_files'])
                 else:
-                    result=self.cargo(mutated,['metadata','--offline','--locked','--no-deps','--format-version','1'],run,'mutant-metadata-'+mutation)
-                    policy.succeeded(result)
-                    with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED'):
-                        policy.verify_package_semantics(original_md,run/'subjects/feature-subject/Cargo.toml',json.loads(policy.stdout(result)),mutated/'Cargo.toml')
+                    for t in matrix['toolchains'] if mutation=='authors' else [self.t]:
+                        result=self.cargo(mutated,['metadata','--offline','--locked','--no-deps','--format-version','1'],run,'mutant-metadata-'+mutation+'-'+t['id'],toolchain=t)
+                        policy.succeeded(result)
+                        with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED') as rejection:
+                            policy.verify_package_semantics(original_md,run/'subjects/feature-subject/Cargo.toml',json.loads(policy.stdout(result)),mutated/'Cargo.toml')
+                        if mutation=='authors': authors_control['semantic_refusals'].append(dict(toolchain=t['id'],code=rejection.exception.code,result=result))
+                if mutation=='authors':
+                    authors_control['production_changed_markers']=[str(p) for p in (run/'targets').rglob('changed-metadata-marker')]
+                    (output/'authors-only-evidence.json').write_text(json.dumps(authors_control,indent=2)+'\n')
                 self.assertFalse(marker.exists())
+                self.assertFalse(list((run/'targets').rglob('changed-metadata-marker')))
