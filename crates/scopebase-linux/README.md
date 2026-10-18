@@ -1,6 +1,6 @@
 # scopebase-linux
 
-ScopeBase `0.1.0` supplies retained readable regular-file acquisition and descriptor stat observations on Linux. This is the LX02 acquisition increment. Reads, mapping association, process APIs, developer conformance adapters, installed operator clients and supported conformance profiles remain later work.
+ScopeBase `0.1.0` supplies retained readable regular-file acquisition and descriptor stat observations on Linux. This includes the LX02 acquisition increment and LX04 cooperative control primitives. Reads, mapping association, process APIs, developer conformance adapters, installed operator clients and supported conformance profiles remain later work.
 
 ```rust
 use scopebase_linux::file::{HeldFile, ProcFdResolver, SymlinkPolicy};
@@ -37,3 +37,72 @@ Selected source preservation: P at `2c2713e66292b0d2688508a25f79e813ae823d81`, `
 | O `h4_t2_pin_open_retries_bounded_then_fails` | Its bounded 1/2/3-attempt, last-error retry remains O application policy; ScopeBase makes one attempt and preserves the first errno |
 
 Real host fixtures, model conversion/fault seams, actual compiler diagnostics and later kernel/installed/profile qualification are separate evidence tiers. Acquisition success does not qualify `held-file-v1` or `mapped-image-v1`.
+
+`control::{CancelToken, MonotonicDeadline, OperationControl}` provides explicit
+shared cancellation and opaque process-local absolute deadlines. Clone shares
+the token and copies the deadline; dropping a handle never resets or signals it.
+`OperationControl::new` consumes a token handle, so clone first to retain the
+ability to cancel. `unlimited` has a fresh token and no deadline; operation
+numeric/resource limits still apply. These primitives add no control argument
+to the existing acquisition APIs.
+
+```rust
+use scopebase_linux::control::{CancelToken, MonotonicDeadline, OperationControl};
+use std::time::Duration;
+let token = CancelToken::new();
+let deadline = MonotonicDeadline::after(Duration::from_secs(1))?;
+let control = OperationControl::new(Some(deadline), token.clone());
+token.cancel();
+# Ok::<(), scopebase_linux::error::LinuxError>(())
+```
+
+A deadline uses one `Instant::now` and checked addition. Zero duration is valid
+and expired at equality. Overflow returns `ConfigureControl / InvalidInput`,
+with no source, zero effects/charges, cleanup `NotNeeded` and descriptor flags
+`NotAttempted`. There is no raw timestamp/Instant conversion or public clock
+injection. The clock domain follows platform `Instant`, including its suspension
+behavior; it promises no CLOCK_BOOTTIME or wall-clock equivalence.
+
+The private operation checkpoint checks cancellation first, querying the clock
+only for an uncancelled deadline. Generic controls have no shared first-stop
+latch: separate invocations observe the current reason. A collection adapter
+owns any collection-wide terminal policy. Cancellation after the final atomic
+load can coexist with success and is observed at a later checkpoint. The token
+uses Release/Acquire but supplies no arbitrary application-data publication,
+fairness or notification-latency guarantee.
+
+Operation owners check before effects and publication, record successful effects
+and incurred charges before post-call checks, and preserve actual syscall errors
+as primary even when cancellation races. The consuming private error bridge
+moves actual metadata unchanged; it never refunds work or invents cleanup.
+Cancellation discards unpublished payload while the owner retains resources
+through its own cleanup/partial-effect protocol. The control owns no worker and
+cannot interrupt an inner blocking read, open, close or other syscall, nor prove
+retirement. It performs no explicit I/O, allocation, sleep, lock or background
+work at checkpoints; `Instant::now` may enter the kernel and has no hard duration
+bound. Clock/configuration queries are excluded from operational syscall charges.
+Token construction has ordinary allocator failure/abort limitations. Control
+Drop releases only Rust handles and supplies no wait/kill/reap/unmap/cleanup proof.
+
+Run `cargo test --test controls` and `cargo test --lib` from delivered package
+source, along with the acquisition/trait/doctest commands above. Private model
+fixtures exercise entry/post-read/publication checks, exact incurred metadata,
+clock boundaries, panic/poison and failed-errno precedence. C10's release gate
+signals inside its model `Read` method. C11 uses a real UnixStream pre-read
+handshake, which does not prove kernel syscall entry. Each blocking fixture uses
+an owned outer-watchdog subprocess, releases/joins on success and fails on
+watchdog expiry after killing/reaping its exact child. They neither implement
+nor qualify HeldFile reads, regular-file blocking, traversal, mapping or native
+retirement. Source and archive UI fixtures retain the existing authority negatives
+and add controls' private construction/checkpoint, absent clock injection and
+numeric-deadline refusals, with a separate positive control client.
+
+LX04 adapts frozen P `inventory_cgroup.rs::CollectionControl` cancellation and
+scan read/publication boundaries and O `args.rs::deadline_at` checked addition
+and `target.rs::run_under_control` cancellation-first preflight. Captured heads
+and historical licenses are the P/O pins above; the owner's Apache-2.0 host
+grant covers the explicitly admitted slices. Full P collection latching and
+traversal regressions stay with LX10; O abandoned-worker fail-fast behavior stays
+application-local. LX03 owns real HeldFile read integration and numerical byte/
+work ceilings; LX06/LX09 own unresolved mapping/child custody; LX11/LX12 retain
+standalone/installed conformance qualification.

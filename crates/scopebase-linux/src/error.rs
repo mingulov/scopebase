@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Structured acquisition errors. Diagnostic formatting omits raw source text.
+//! Structured acquisition and control errors. Diagnostic formatting omits raw source text.
 use std::{fmt, io};
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -8,6 +8,7 @@ pub enum Stage {
     AcquirePath,
     ValidateFile,
     ReopenHeld,
+    ConfigureControl,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -22,6 +23,8 @@ pub enum Reason {
     WrongContext,
     Malformed,
     Inconclusive,
+    Cancelled,
+    Deadline,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]

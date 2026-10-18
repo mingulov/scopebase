@@ -578,7 +578,7 @@ mod tests {
     // Tests share one real process FD table. Serialize these fixtures so a freed
     // number cannot be recycled by another test before its exact close oracle.
     // This mutex coordinates fixtures only; syscall seams remain per-invocation.
-    static FD_TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use crate::FD_TABLE;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     struct Fixture(std::path::PathBuf);
     impl Fixture {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Retained regular-file acquisition and descriptor stat observations.
+//! Retained file acquisition, descriptor stat observations and cooperative controls.
 //!
 //! Acquisition only: reads, mappings, processes and conformance profiles remain
 //! later work. Host target x86_64-unknown-linux-gnu, edition 2021, MSRV 1.88.0.
@@ -12,6 +12,13 @@
 //! ```
 #[cfg(not(target_os = "linux"))]
 compile_error!("scopebase-linux requires Linux");
+pub mod control;
 pub mod error;
 pub mod file;
 pub mod identity;
+
+// Unit fixtures which inspect retired numeric slots must coordinate every
+// competing descriptor allocation in this test process. This is not runtime
+// library state; subprocesses exec a fresh test executable before taking it.
+#[cfg(test)]
+pub(crate) static FD_TABLE: std::sync::Mutex<()> = std::sync::Mutex::new(());

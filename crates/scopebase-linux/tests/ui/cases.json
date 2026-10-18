@@ -133,6 +133,34 @@
       "code": "E0505",
       "contains": "cannot move out",
       "line": 6
+    },
+    {
+      "id": "control_construct_private",
+      "source": "tests/ui/control_construct_private.rs",
+      "code": "E0451",
+      "contains": "field",
+      "line": 4
+    },
+    {
+      "id": "control_inject_clock",
+      "source": "tests/ui/control_inject_clock.rs",
+      "code": "E0599",
+      "contains": "with_clock",
+      "line": 4
+    },
+    {
+      "id": "control_checkpoint_private",
+      "source": "tests/ui/control_checkpoint_private.rs",
+      "code": "E0624",
+      "contains": "checkpoint",
+      "line": 4
+    },
+    {
+      "id": "control_numeric_deadline",
+      "source": "tests/ui/control_numeric_deadline.rs",
+      "code": "E0308",
+      "contains": "mismatched types",
+      "line": 4
     }
   ]
 }
