@@ -171,6 +171,48 @@ The normative [TT02 engine addendum](2026-10-18-scopebase-tt02-engine.md) fixes 
 
 Acceptance requires independent modulo enumeration and a separately generated transition-table population, literal width64/saturation rows, wrong-pair controls for every retained field, complete diagnostic validation, semantic mutants with restored twins, exact primary unit-refusal diagnostics and actual source/archive consumers on both pinned compilers. A control that only fails setup or crashes does not establish the intended defect detection.
 
+### CP04 insertion provenance rulings
+
+**Status:** SETTLED for implementation, 2026-10-18. Controller ratifies Astra P1-P5 plus S1-S2 in the [exact CP04 contract](2026-10-18-scopebase-cp04-insertion.md). These refine D10 without adding task IDs, requirements or qualified profiles. The contract includes complete required tests, delivered fixture schema, actual source/archive consumers and helper routing. The private architecture and supplement hashes are retained there.
+
+#### P1. Exact counts and explicit saturated lanes
+
+Keep `ProvenanceLane::new(LaneIdentity<I>, Count<U>) -> Self` as an exact-count constructor, including `Count::new(u64::MAX)`. Add `ProvenanceLane::saturated(LaneIdentity<I>) -> Self`. Store a private discriminated exact/saturated count state. Add payload-free `ContractError::SaturatedCount`. An explicit saturated lane cannot yield an exact fold, even when its identity marker is secondary or its cap would be zero. There is no automatic numerical cap inference in the generic constructor. The saturated constructor intentionally stores neither a cap nor a lower bound: this API only answers whether an exact total is justified, and returns no partial result. Callers needing bounds retain their original observation separately.
+
+The KryProbe-shaped fixture adapter converts **every** raw `calls == u64::MAX` to `saturated`, including the owner and secondary lanes. All smaller raw words become exact counts. In this donor protocol, `MAX` is not an exact lane value. Exact generic callers can legitimately supply that value. A sum `(MAX-1)+1` succeeds in both generic and donor-shaped paths; `(MAX-1)+2` overflows. This is an explicit ADAPT of the donor sentinel into a typed distinction, not deletion of the original refusal.
+
+Alternatives rejected: (a) reject `Count::MAX` everywhere, which weakens CP02 exact counts; (b) accept all raw donor values as exact, which erases saturation; (c) make the sole constructor accept a new public count-state enum, which breaks the already planned exact constructor and adds a type without additional capability; (d) infer saturation from a global policy or mutable option, which makes the same input's meaning depend on ambient state. The two constructors supply the missing mechanism with a smaller public surface. No wire decoder is added here.
+
+#### P2. Cardinality, failure ordering and identity cost
+
+First pass: inspect marker variants only, return `ConflictingProvenance` immediately upon the second owner; if no owner remains after the pass, return `MissingProvenance` (including empty input). Equal payloads never deduplicate owners. Do not call `I::eq`, inspect values for zero, clone identities or perform count arithmetic during this pass.
+
+Second pass: walk original slice order. At each lane, return `SaturatedCount` for its explicit saturated state, otherwise checked-add its exact count and return `ArithmeticOverflow` on failure. Thus overflow in a prefix precedes saturation later in the slice; an earlier saturated lane precedes later overflow. This preserves the donor's left-to-right second pass while making its formerly undifferentiated refusal visible. Reordering a valid all-exact population preserves success/total; reordering differently malformed lanes may change the first count error by design. Owner cardinality always precedes both count errors.
+
+After both passes succeed, clone the unique owner's payload exactly once into `InsertionFold`. Keep the specified `I: Eq + Clone` bound for this task, but folding performs **zero Eq calls**. The Eq bound is a public eligibility constraint, not an algorithmic justification to compare owners. All zero-valued identities and a uniquely marked zero-activity owner are valid. A result is insertion provenance asserted by the caller, not evidence that an insertion occurred in a kernel.
+
+#### P3. Full-map and migration helpers are shipped test fixtures
+
+Adapt `PcpuWho` and the selected full-map `Sim*` mechanisms into package `tests/support/cp04_model.rs`. They are reusable package test source, not public library exports or a universal table/producer policy. A local identity-gate table, local finite attribution table, independent preallocated diagnostic slots, and independent aggregate counts remain separate. Existing-key hits at capacity must succeed; new keys refuse without mutation. A wrong lazy diagnostic entry in a full gate reproduces the historical loss hole.
+
+Retain donor-shaped fields and assertions only as necessary in the fixture: insertion identity tuple, latest display fields, local first/last stamps and raw saturating tally. Production folds only identity plus exact total. Test fixtures may demonstrate that the latest display changes while the original identity remains; no generic timestamp/latest-writer reducer is exported. Distinct program/CPU slots in the fixture illustrate independent storage but do not qualify real program ordinals, CPU geometry, writer exclusion, reentry, wire layout or a loadable BPF object.
+
+The historical 256-entry identity gate / 2048-entry attribution population and below-capacity 128-entry twin remain alongside the plan's five-operation capacity-one/capacity-five pair. New small cases supplement the original defect population. A preexisting signal254 plus four failures becomes255, never an exact omitted-event count. CP03's shipped capped fold is called; it is not reimplemented in the model.
+
+#### P4. New value types, traits and disclosure
+
+Implement the already specified `ObservedIdentity<I>` and `IdentityUnknown` value vocabulary in `provenance.rs`. Known zero is known; explicit unknown reasons stay explicit. Equality of two Unknown values is equality of their reason only and cannot make them a joinable identity. No unknown-to-default key conversion or generation tracker is added (CP05).
+
+All identity-bearing Debug implementations redact payloads and require no `I: Debug`. Generic wrapper trait implementations require only the corresponding payload trait and `U: Unit`, never `U: Clone`, `U: Eq` or `U: Debug`. Fold success costs two linear traversals plus one caller-defined clone; rejected input performs no payload clone or equality. A clone may allocate, block, panic or have caller-defined effects; ScopeBase neither catches it nor promises bounded payload bytes/time. This refines broad 'pure/no effects' wording to describe library-owned operations honestly. Structural wrapper sizes are fixed; indirect payload allocations belong to the caller. Auto Send/Sync follows actual fields, without manual unsafe implementations.
+
+#### P5. Source and completion boundaries
+
+Only the named frozen KryProbe source at `d153f3aaf9a3931337b47c9e1b046c692da55083` is selected. Source inspection matched both full-file hashes and all four controller ranges. Narrow proposed copy scopes and reference-only portions are in `source-selection.json`. Existing grants cover other portions and must not be stretched. Root admitted the twelve selected scopes in the [immutable CP04 snapshot](../../provenance/admissions/2026-10-18-cp04-insertion.json), preserving earlier scopes and the existing owner authorization. Historical GPL-3.0-or-later observations remain; destination host/test/data terms are Apache-2.0. No target/BPF/shared-source grant follows.
+
+Two independently wired packaged API consumers exercise different caller reducers and units, with separately locked external builds against the source and actual archive. They establish this increment's usable API boundaries. They do not close CP11's three donor-shaped application adapters, CP13's installed conformance route, UC14 or a full capture profile. Source/archive semantic controls and previous CP02/CP03 evidence remain separately bound.
+
+S1 explicitly limits unwind preservation to library-owned wrapper/count fields; arbitrary caller Clone effects can remain. S2 makes the new helper's wrapper optional and explicit, with direct pinned Cargo as its standalone default. Coordinated cells use the wrapper, and one actual archive campaign under one outer lease proves the portable route. Existing CP03 helper portability remains TT07/CP13 work without repeating accepted unchanged production controls.
+
 ## D11 — Existing dependencies plus narrow adapters
 
 **Status:** SETTLED approach; exact versions/APIs are PREDECESSOR SB02/BP01 outputs.

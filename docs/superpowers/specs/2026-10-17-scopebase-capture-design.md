@@ -254,13 +254,16 @@ The modulo residue is `(current + modulus - baseline) % modulus` in u128, includ
 
 ```rust
 // provenance.rs
+#[non_exhaustive]
 pub enum ObservedIdentity<I> { Known(I), Unknown(IdentityUnknown) }
+#[non_exhaustive]
 pub enum IdentityUnknown { NotObserved, Ambiguous, Exhausted }
 pub enum LaneIdentity<I> { InsertionOwner(I), Secondary }
 pub struct ProvenanceLane<I, U: Unit> { /* identity marker, count */ }
 pub struct InsertionFold<I, U: Unit> { /* frozen identity and total */ }
 impl<I, U: Unit> ProvenanceLane<I, U> {
     pub fn new(identity: LaneIdentity<I>, count: Count<U>) -> Self;
+    pub fn saturated(identity: LaneIdentity<I>) -> Self;
 }
 impl<I, U: Unit> InsertionFold<I, U> {
     pub fn identity(&self) -> &I;
@@ -303,7 +306,7 @@ impl StateEdge {
 pub fn validate_sweep_order(edges: &[StateEdge]) -> Result<SweepProof, ContractError>;
 ```
 
-Insertion fold requires exactly one owner even if two owner payloads happen to be equal; no owner is `MissingProvenance`, multiple owners are `ConflictingProvenance`. Secondary lanes may carry positive counts but no identity, and counts are checked across every lane. Zero-valued identity fields are ordinary payloads. This primitive does not overwrite a product's separate latest-task display fields or validate a producer's wire size.
+Insertion fold first requires exactly one owner even if two owner payloads happen to be equal; no owner is `MissingProvenance`, multiple owners are `ConflictingProvenance`. This marker pass performs no count arithmetic, payload equality or clone. Then scan counts in lane order: explicit saturation returns the new payload-free `SaturatedCount`; exact checked addition returns `ArithmeticOverflow` at its first overflowing prefix. Only success clones the unique identity once. `new` accepts every exact Count, including MAX; `saturated` retains the marker without inventing an exact count or lower bound. Donor raw MAX maps to saturated, while smaller exact lanes may legitimately sum to MAX. Secondary lanes may carry positive counts and a unique owner may have zero count. Zero-valued identity fields are ordinary payloads. The [exact CP04 contract](2026-10-18-scopebase-cp04-insertion.md) freezes traits, redacted Debug, caller Clone effects, full-map fixtures, strict delivered vectors and all affected checks. This primitive does not overwrite a product's latest-task display fields or validate wire layout; [P1–P5 and S1–S2](2026-10-18-scopebase-decisions.md#cp04-insertion-provenance-rulings) record why.
 
 `ObservedIdentity::Unknown` cannot be used as one shared `ObjectKey`. Applications retain explicit nonjoinable observations with their own event IDs instead. No generic lifetime tracker infers that an allocation proves prior retirement; trackers and cookie allocation stay local. Adapters implement bounded tombstone/retired-key retention, and on eviction they return unknown continuity instead of reusing provenance. `next_generation` refuses u64 max. Matching includes epoch and generation; an old completion cannot match a new allocation with the same raw key.
 

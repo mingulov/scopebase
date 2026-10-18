@@ -183,6 +183,8 @@ The [typed fixture failure amendment](../specs/2026-10-18-scopebase-tt02-fixture
 
 **Done:** Users can run shipped checks against named subjects without source workspaces. A standalone tool result does not silently qualify another application's embedded version.
 
+The accepted CP03 control helper currently requires a repository build wrapper. TT07/CP13 must deliver and verify its standalone archive route with explicit tools/offline prerequisites and no hidden checkout dependency. Preserve earlier receipts and rerun only affected delivery/control paths. CP04 avoids this coupling through its explicit optional-wrapper contract and an additional direct archive campaign; that proof does not replace the installed operator route.
+
 ### TT08: Causal CI selection and safe parallel scheduling
 
 **Depends on:** TT01–TT02, initial runnable component tasks; integrates TT04–TT07 as they become available. **Requirements:** TT-R11–TT-R12, TT-R14; T05/G19/G21.

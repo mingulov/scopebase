@@ -7463,7 +7463,8 @@
           "BP07",
           "BP08",
           "CP09",
-          "NX05"
+          "NX05",
+          "CP04"
         ]
       },
       "license": {
@@ -7518,6 +7519,30 @@
           [
             133,
             161
+          ],
+          [
+            825,
+            837
+          ],
+          [
+            842,
+            846
+          ],
+          [
+            857,
+            861
+          ],
+          [
+            1153,
+            1191
+          ],
+          [
+            1193,
+            1200
+          ],
+          [
+            1208,
+            1240
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -7801,7 +7826,8 @@
         "tasks": [
           "BP02",
           "BP07",
-          "NX05"
+          "NX05",
+          "CP04"
         ]
       },
       "license": {
@@ -7849,10 +7875,34 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "VECTORS_ONLY",
+        "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
+          [
+            448,
+            523
+          ],
+          [
+            531,
+            692
+          ],
+          [
+            700,
+            702
+          ],
+          [
+            704,
+            731
+          ],
+          [
+            738,
+            780
+          ],
+          [
+            782,
+            859
+          ],
           [
             862,
             888
@@ -7875,7 +7925,7 @@
           ]
         ],
         "ownership_basis": "USER_OWNED",
-        "artifact_role": "data-document",
+        "artifact_role": "host",
         "destination_license": "Apache-2.0",
         "authorization_ref": "OWNER-2026-10-18",
         "third_party_terms": [],

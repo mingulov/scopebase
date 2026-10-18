@@ -7772,6 +7772,34 @@
         "OV27",
         "H33"
       ]
+    },
+    {
+      "date": "2026-10-18",
+      "spec": "docs/superpowers/specs/2026-10-18-scopebase-cp04-insertion.md",
+      "decisions": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "task_ids": [
+        "CP04"
+      ],
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "readiness_prerequisites": [
+        "Accepted CP02 and CP03",
+        "Twelve exact source scopes under immutable CP04 admission; historical grants preserved",
+        "Astra P1-P5 and S1-S2 ratified; immutable dispatch binds final canonical inputs"
+      ],
+      "acceptance_boundary": "Host insertion fold and shipped migration/full-map models only; exact candidate source/archive controls and independent review required. BP02/BP07 real decoder/producer, CP10 replay, CP11 applications and CP13 installed conformance remain open.",
+      "preserved_source_obligations": [
+        "H15",
+        "H17",
+        "B01",
+        "B08",
+        "UC14",
+        "G18",
+        "G19",
+        "G20",
+        "G22"
+      ]
     }
   ]
 }
