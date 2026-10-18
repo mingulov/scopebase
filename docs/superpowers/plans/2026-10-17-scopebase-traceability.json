@@ -284,7 +284,7 @@
       "anchor": "bp01-freeze-bpf-boundaries-and-issue-provenance",
       "lane": "bpf",
       "milestone": "M3",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "SB01",
         "SB02",
@@ -297,7 +297,11 @@
         "BP-R13",
         "TC-R10"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "c0d35832d4012f83de24e07f97dd4030654d049d",
+        "evidence_record": "docs/reviews/2026-10-18-bp01-foundation.md"
+      }
     },
     {
       "id": "BP02",
@@ -1142,7 +1146,7 @@
       "anchor": "lx04-cooperative-deadlinecancellation-and-structured-effect-handling",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "LX01"
       ],
@@ -1154,7 +1158,11 @@
         "LX-R14",
         "LX-R15"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "b832dcab35fb520e4535436ca1e936230b3cc457",
+        "evidence_record": "docs/reviews/2026-10-18-lx04-controls.md"
+      }
     },
     {
       "id": "LX05",

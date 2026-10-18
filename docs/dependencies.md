@@ -1,6 +1,6 @@
 # ScopeBase dependencies and build policy
 
-Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. The product workspace now contains `scopebase-linux`, `scopebase-capture` and `scopebase-testkit`; [TODO](../TODO.md) records the accepted implementation scope. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern implementation.
+Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. The product workspace now contains `scopebase-linux`, `scopebase-capture`, `scopebase-testkit` and `scopebase-bpf`; [TODO](../TODO.md) records the accepted implementation scope. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern implementation.
 
 ## Evaluated toolchains and source identity
 
@@ -22,6 +22,12 @@ Rustix archive SHA256 is `891efababe418670775f199f0d233d84843c227a0949a883ce15b3
 Nix 0.31.3, defaults off `fs,uio`, passed the same regular-file seam and checked i64 MAX/MAX+1 conversion with a wrapping-cast control. It remains a comparator; there is no demonstrated reason to require a second syscall layer. Goblin 0.10.7, defaults off `std,elf32,elf64,endian_fd`, passed the ELF fixtures but has a larger exercised closure including derive machinery; it remains a comparator. Reserve object 0.37.3/libc choices remain inactive without a concrete requirement. The separately admitted sha2 prerequisite below serves TT02 artifact binding. A digest never becomes physical-file identity.
 
 Rustix's separate `std,fs,process` trial only typed the pidfd function; it never invoked it. Add `process` when LX08 consumes it, without universal mm/event/linux_latest expansion. LX02 owns held-file acquisition/flags/errors, LX03 positional full-read accounting, LX04 cooperative control and LX08 actual observation/birth/epoch semantics. The ELF preference supports concrete consumers: TC05/TC06 own applicable BPF-object/ELF/relocation transformations, while LX13 keeps product ELF/export parsing and cache policy local. LX05 is strict maps/mount parsing; this selection does not invent a shared ELF resolver package.
+
+## TT02 artifact hashing prerequisite
+
+The [bounded SHA-256 admission](reviews/2026-10-18-sha256-admission.md) selects exact `sha2 = { version = "=0.11.0", default-features = false }` for TT02 artifact hashing. The eight-package host closure is sha2 0.11.0, digest 0.11.3, block-buffer 0.12.1, crypto-common 0.2.2, hybrid-array 0.4.15, typenum 1.20.1, cfg-if 1.0.5 and cpufeatures 0.3.1. Sha2 resolves no features; digest resolves default/block-api and typenum const-generics. No new build-script/proc-macro approval follows. Original dual-license notices remain while Apache-2.0 is selected.
+
+The independent known-answer and compiled omitted-update/restored controls pass on both pinned compilers. The root selected probe has 18 PASS rows across two of 24 declared cells, with unchanged probes explicitly omitted. The new source inventory preserves the original 46 records and adds seven; original receipts remain intact. Previously admitted libc 0.2.191 occurs only in the all-target lock for this probe, outside its actual x86_64 closure. This does not qualify other CPU/backend paths or a TT02 implementation. Product members consume the new inventory only when they actually declare the dependency.
 
 ## Concrete gaps and owning exits
 

@@ -4,7 +4,7 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values and TT01 versioned registry are accepted within their recorded scopes. The active M0–M6 goal continues with BP01 root integration, LX04 critical review and TT02 architecture/dependency preparation. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values, TT01 versioned registry, BP01 host foundation and LX04 cooperative controls are accepted within their recorded scopes. The active M0–M6 goal continues with TT02, CP03 and LX03 contract preparation; the exact SHA-256 dependency prerequisite is accepted. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
@@ -61,7 +61,7 @@ python3 -m unittest discover -s tests/package-policy -p 'test_*.py' -v
 git diff --check
 ```
 
-These commands test development tooling, including SB02 package build-policy checks and dependency/compiler/feature probes. The root Cargo workspace now contains `scopebase-linux`, `scopebase-capture` and `scopebase-testkit`. The final combined package matrix at 6b225d1 reports 134 PASS rows (133 required) over 16 declared compiler/configuration cells. It covers held-file acquisition, pure capture values and bounded registry/profile selection; complete runtime/conformance profiles and kernel behavior remain unqualified. A normal downstream Cargo test does not automatically run dependency tests. See [dependency policy and probe results](docs/dependencies.md) for the recorded probe scope.
+These commands test development tooling, including SB02 package build-policy checks and dependency/compiler/feature probes. The root Cargo workspace now contains `scopebase-linux`, `scopebase-capture`, `scopebase-testkit` and `scopebase-bpf`. The TT01 integration at 6b225d1 passed all sixteen then-declared cells. BP01 at c0d3583 passed four affected cells (42 PASS rows); LX04 at b832dca passed six (56 PASS rows). The current twenty-cell matrix was not rerun in full. These checks cover the accepted bounded APIs; complete runtime/conformance profiles and kernel behavior remain unqualified. A normal downstream Cargo test does not automatically run dependency tests. See [dependency policy and probe results](docs/dependencies.md) for the recorded probe scope.
 
 For a deliberate full package-matrix rerun, coordinate the shared build slot and assign `SCOPEBASE_RUN` a fresh run-specific path under the private job root outside this worktree. This is the current supported `check_features.py` invocation; it creates its output directory and writes its report at the supplied paths:
 
@@ -74,7 +74,7 @@ bin/scopebase-build -- python3 tools/build/check_features.py \
   --report "${SCOPEBASE_RUN}-report.json"
 ```
 
-The current 134-row receipt is recorded in the TT01 acceptance record and `.scopebase/controller/tt01-integration-20261018/`. Earlier LX02/CP02 receipts remain historical. This example is not evidence of another run.
+The historical complete 134-row receipt is recorded in the TT01 acceptance record. Latest affected receipts are in the BP01/LX04 acceptance records and `.scopebase/controller/{bp01,lx04}-integration-20261018/`. This example is not evidence of another run.
 
 ## Recovery and continuation
 

@@ -269,7 +269,7 @@
   ],
   "preservation_map": {
     "path": "docs/provenance/ports/LX04-preservation-20261018.md",
-    "sha256": "ae8545728e5f7ce35fafbeceb399bd7fe337399be7e7ff2134f8dc2f93ed4792"
+    "sha256": "d954ad88c5339bb3b7ce54efbc4ec6da4c8dfbef671817cb958996e47c041b15"
   },
   "supersedes": null
 }
