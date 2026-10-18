@@ -20,6 +20,7 @@ import time
 import tomllib
 
 MAX_JSON = 1024 * 1024
+MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_REPORT = 16 * 1024 * 1024
 MAX_LOG = 4 * 1024 * 1024
 REGISTRY = 'registry+https://github.com/rust-lang/crates.io-index'
@@ -1086,7 +1087,7 @@ def source_copy(source, destination):
     source = Path(source)
     inspect_config_ancestors(source)
     records = tree_records(source)
-    if sum((source/r['path']).stat().st_size for r in records) > MAX_JSON:
+    if sum((source/r['path']).stat().st_size for r in records) > MAX_SOURCE_BYTES:
         raise InputError('FIXTURE_BYTE_BOUND')
     if any(set(PurePosixPath(r['path']).parts) & {'target','.git','.cargo'} for r in records):
         raise InputError('GENERATED_SOURCE_INPUT')
