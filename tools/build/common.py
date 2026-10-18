@@ -476,27 +476,63 @@ def check_licenses(root, licenses, notices, role='fixture'):
                 check_hash(p, f['sha256'], 'LICENSE_TEXT_MISMATCH')
 
 
-def rust_refusal(output, code, contains, source_root=None):
+def rust_refusal(output, code, contains, source_root=None, *, expected_primary=None):
+    """Match a compiler diagnostic, optionally at an exact owned source line.
+
+    Without an expected location, retain PP09's legacy source-text check.
+    This predicate does not validate command retirement, lock or cleanup facts;
+    callers must retain those checks through Execution/accept_refusal.
+    """
+    root = Path(source_root).resolve() if source_root is not None else None
+    expected_file = None
+    expected_line = None
+    if expected_primary is not None:
+        if root is None or not isinstance(expected_primary, tuple) or len(expected_primary) != 2:
+            return False
+        name, expected_line = expected_primary
+        if not isinstance(name, str) or type(expected_line) is not int or expected_line <= 0:
+            return False
+        path = Path(name)
+        if path.is_absolute() or not name or '..' in path.parts:
+            return False
+        expected_file = (root / path).resolve()
+        if not expected_file.is_relative_to(root) or not expected_file.is_file():
+            return False
+        try:
+            if expected_line > len(expected_file.read_text().splitlines()):
+                return False
+        except (OSError, UnicodeError):
+            return False
     for line in output.splitlines():
         try:
             obj = json.loads(line)
             msg = obj.get('message', {})
             spans = msg.get('spans', [])
-            if (obj.get('reason') == 'compiler-message' and (msg.get('code') or {}).get('code') == code
-                    and contains in msg.get('message', '') and any(s.get('is_primary') and s.get('file_name','').endswith('.rs') for s in spans)):
-                if source_root is not None:
-                    found=False
-                    root=Path(source_root).resolve()
-                    for span in spans:
-                        file=Path(span.get('file_name',''))
-                        if not file.is_absolute(): file=root/file
-                        if span.get('is_primary') and file.resolve().is_relative_to(root) and file.is_file():
-                            lines=file.read_text().splitlines()
-                            line=span.get('line_start',0)
-                            if 0 < line <= len(lines) and contains in lines[line-1]: found=True
-                    if not found: continue
-                return True
-        except (ValueError, TypeError, AttributeError):
+            if (obj.get('reason') != 'compiler-message' or (msg.get('code') or {}).get('code') != code
+                    or contains not in msg.get('message', '')):
+                continue
+            for span in spans:
+                if not span.get('is_primary') or not span.get('file_name', '').endswith('.rs'):
+                    continue
+                if root is None:
+                    return True
+                file = Path(span['file_name'])
+                if not file.is_absolute():
+                    file = root / file
+                file = file.resolve()
+                if not file.is_relative_to(root) or not file.is_file():
+                    continue
+                number = span.get('line_start', 0)
+                if type(number) is not int or number <= 0:
+                    continue
+                if expected_file is not None:
+                    if file == expected_file and number == expected_line:
+                        return True
+                else:
+                    lines = file.read_text().splitlines()
+                    if number <= len(lines) and contains in lines[number-1]:
+                        return True
+        except (ValueError, TypeError, AttributeError, OSError, UnicodeError):
             continue
     return False
 

@@ -782,3 +782,65 @@ class ProductPolicyControls(unittest.TestCase):
         import check_features,contextlib,io
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(check_features.main(['--manifest',str(inputs/'Cargo.toml'),'--matrix',str(inputs/'matrix.json'),'--output-dir',str(cell/'escaped'),'--report',str(cell/'escaped.json')]),2)
+
+
+class ExactRustRefusalTests(unittest.TestCase):
+    """Parser evidence: exact diagnostics must refer to the owned fixture line."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'src').mkdir()
+        self.file = self.root / 'src/main.rs'
+        self.file.write_text('fn main() {\n    takes_events(records);\n}\n')
+
+    def diagnostic(self, *, file='src/main.rs', line=2, code='E0308', message='mismatched types', primary=True):
+        return json.dumps({'reason':'compiler-message', 'message':{'code':{'code':code},
+            'message':message, 'spans':[{'file_name':file, 'line_start':line, 'is_primary':primary}]}})
+
+    def refusal(self, output, **kwargs):
+        return policy.rust_refusal(output, 'E0308', 'mismatched types', self.root,
+                                   expected_primary=kwargs.get('expected', ('src/main.rs', 2)))
+
+    def test_exact_diagnostic_does_not_require_message_words_in_source(self):
+        self.assertTrue(self.refusal(self.diagnostic()))
+        self.assertTrue(self.refusal(self.diagnostic(file=str(self.file))))
+        self.assertFalse(policy.rust_refusal(self.diagnostic(), 'E0308', 'mismatched types', self.root))
+
+    def test_wrong_code_message_line_file_or_secondary_span_is_rejected(self):
+        other = self.root / 'src/other.rs'; other.write_text(self.file.read_text())
+        for kw in ({'code':'E0599'}, {'message':'other'}, {'line':1}, {'file':'src/other.rs'}, {'primary':False}):
+            with self.subTest(kw=kw):
+                self.assertFalse(self.refusal(self.diagnostic(**kw)))
+        self.assertFalse(self.refusal(''))
+
+    def test_expected_location_must_be_owned_real_and_in_bounds(self):
+        outside = self.root.parent / (self.root.name + '-outside.rs')
+        outside.write_text(self.file.read_text()); self.addCleanup(outside.unlink)
+        (self.root / 'src/escape.rs').symlink_to(outside)
+        for expected in ((str(self.file),2), ('../main.rs',2), ('src/escape.rs',2),
+                         ('src/absent.rs',2), ('src/main.rs',0), ('src/main.rs',-1),
+                         ('src/main.rs',True), ('src/main.rs',2.0), ('src/main.rs',4),
+                         ('src/main.rs',), ('src/main.rs',2,3), 'src/main.rs'):
+            with self.subTest(expected=expected):
+                self.assertFalse(self.refusal(self.diagnostic(), expected=expected))
+        self.assertFalse(policy.rust_refusal(self.diagnostic(), 'E0308', 'mismatched types',
+                                            expected_primary=('src/main.rs',2)))
+
+    def test_unowned_reported_path_and_malformed_spans_are_rejected(self):
+        outside = self.root.parent / (self.root.name + '-outside.rs')
+        outside.write_text(self.file.read_text()); self.addCleanup(outside.unlink)
+        for file in (str(outside), '../' + outside.name):
+            self.assertFalse(self.refusal(self.diagnostic(file=file)))
+        for line in (True, 2.0, '2', None, -1):
+            self.assertFalse(self.refusal(self.diagnostic(line=line)))
+        for output in ('null', '[]', '{"message": null}', '{"reason":"compiler-message","message":{"code":{"code":"E0308"},"message":"mismatched types","spans":[null]}}'):
+            self.assertFalse(self.refusal(output))
+
+    def test_legacy_refusal_behavior_and_diagnostic_selection_are_preserved(self):
+        self.file.write_text('fn main() {\n    // legacy token\n}\n')
+        output = self.diagnostic(message='legacy token')
+        self.assertTrue(policy.rust_refusal(output, 'E0308', 'legacy token', self.root))
+        self.assertTrue(policy.rust_refusal(output, 'E0308', 'legacy token'))
+        self.assertFalse(policy.rust_refusal(output, 'E0308', 'absent', self.root))
+        self.assertTrue(self.refusal(self.diagnostic(line=1) + '\n' + self.diagnostic()))
