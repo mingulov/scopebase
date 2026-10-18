@@ -4,7 +4,7 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values, CP03 counter/loss protocols, TT01 versioned registry, BP01 host foundation LX04 cooperative controls LX03 bounded reads and CP04 insertion provenance are accepted within their recorded scopes. The active M0–M6 goal continues with TT02 review repairs, BP02 native qualification and LX05 parser implementation; the exact SHA-256 dependency prerequisite is accepted. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values, CP03 counter/loss protocols, TT01 versioned registry, BP01 host foundation LX04 cooperative controls LX03 bounded reads and CP04 insertion provenance are accepted within their recorded scopes. The M0–M6 goal is paused for transfer; [handoff](handoff.md#resume-here) records the TT02 repaired candidate/partial matrix, BP02 staged native candidate and LX05 parser candidate/fuzz gates. Resume those existing candidates when the user resumes development. The exact SHA-256 dependency prerequisite is accepted. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
@@ -24,6 +24,23 @@ The machine-readable [policy](orchestration/policy.json) is local project policy
 Default to at most three independent implementation lanes and one heavy build slot. Actual capacity, overlapping interfaces and available reviewers may reduce this. One writer owns every worktree and shared file set. Reviewers use a pinned source checkout/package and remain read-only; the worker never creates its own approving reviewer.
 
 Freeze shared task inputs for each assignment. New jobs use a clean immutable detached controller checkout as their origin, plus exact copied expert inputs, so unrelated integration can proceed without changing their bindings. Finish candidates and their reviews against those original inputs; integrate accepted progress and required canonical amendments together. A necessary interface amendment explicitly invalidates affected assignments; record the amendment and prepare fresh bindings rather than bypassing a mismatch. Unrelated source changes outside the bound inputs do not justify repeating completed checks.
+
+### Explicit access-program routing
+
+Model and access program are separate dispatch inputs. The 2026-10-18 runtime checks verified `gpt-6-sol` with `daybreak_blue` and `gpt-6.1-sol` with `standard`. A Daybreak alias without the program field failed400; Sol6.1 native workers inheriting Blue failed403 before executing work. The collaboration tool currently exposes model/effort but no program selector. Do not repeatedly retry that rejected combination or infer working runtime access from the Security plugin's separate account advisory. Preserve the existing login and global configuration.
+
+For the user's requested bounded Daybreak review, use a fresh CLI invocation with explicit model, effort, program, read-only sandbox and a frozen prompt. For ordinary Sol implementation/review, explicitly select `standard` and the required existing model/effort. Read actual `codex exec --help` when the installed interface changes. The verified CLI shape is:
+
+```sh
+codex exec --ephemeral --json --ignore-user-config \
+  --model gpt-6-sol --cyber-access-program daybreak_blue \
+  -c 'model_reasoning_effort="max"' -c 'approval_policy="never"' \
+  --cd /home/user/src/m/bpfscope --sandbox read-only \
+  --output-last-message /absolute/private-review/final.txt \
+  - < /absolute/private-review/prompt.md
+```
+
+The controller supplies fresh private output paths and retains launch, completion and final-result records. Shell redirection here consumes the frozen prompt. Ordinary Sol6.1 uses `--model gpt-6.1-sol --cyber-access-program standard`. Preserve task file ownership, explicit resource routing and independent review even when using the CLI instead of the native dispatcher. `--ignore-user-config` does not isolate authentication or suppress repository instructions. Ephemeral sessions need explicit retained output; a started turn or interrupted stream is not a review disposition. Current `.scopebase/controller/{bp02-daybreak-review,lx05-solmax-review}-20261018/prompt.md` files preserve the bounded interrupted review scopes.
 
 ## Starting from the user's goal
 
@@ -70,7 +87,8 @@ For a deliberate full package-matrix rerun, coordinate the shared build slot and
 
 ```sh
 SCOPEBASE_RUN=/home/user/src/m/bpfscope/.scopebase/jobs/foundation-check-$(date -u +%Y%m%dT%H%M%SZ)
-bin/scopebase-build -- python3 tools/build/check_features.py \
+/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build \
+  -- python3 tools/build/check_features.py \
   --manifest Cargo.toml \
   --matrix package-policy.json \
   --output-dir "${SCOPEBASE_RUN}-output" \

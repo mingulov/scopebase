@@ -30,11 +30,15 @@
 
 ## Current custody and acceptance
 
+The original repair pass below is historical. Its SB01/SB02/SB03 and later foundation repairs are now accepted within the scopes in [TODO](../../../TODO.md). At the 2026-10-18 transfer checkpoint, thirteen tasks are accepted; TT02 candidate `e7de8916`, staged BP02 on `c2a6e6c` and LX05 candidate `e86ff68a` remain in progress. The goal is paused for transfer. Use the single [handoff](../../../handoff.md#resume-here) for the exact candidates, stop receipts, remaining checks and access-program routing; [transfer evidence](../../reviews/2026-10-18-scopebase-transfer.md) does not accept these tasks. No renewed source inventory, re-login or packet redesign is needed to continue those three existing assignments.
+
+### Historical repair-intake baseline
+
 Main contains the accepted development helpers at `bbcad0d9b52d8cb607ca7d1d6e120823e7c169b9`, with 70 setup-tool tests at the reviewed implementation bytes. Those tests are not ScopeBase library tests.
 
 SB01 candidate `8417beead68a03ecaff361d0d76da5f38c09820f` remains **unaccepted** in `.worktrees/sb01-intake`; its integration copy is on `feat/m0-foundations` in `.worktrees/m0-integration`. Independent comparison preserved 124 source observations, eight authorities, two dirty inputs, original regression candidates and all 178 obligation mappings. Review nevertheless found a real lazy-fetch mutation and unvalidated nested family/regression references. Its historical compulsory-GPL destination policy is superseded by D03 and must be amended before use.
 
-The separate progress-check candidate `ca9169a7a8da866e2a00503e93a81087d04a782e` has independent PASS but is not product acceptance. Preserve all worktrees/reports/evidence. The authoritative goal remains M0–M6; the current user steering is to improve this plan before continuing implementation.
+The separate progress-check candidate `ca9169a7a8da866e2a00503e93a81087d04a782e` had independent PASS but was not product acceptance. These paragraphs describe the starting repair state, not current instructions to redo completed work. Preserve all worktrees/reports/evidence and consult the current checkpoint above.
 
 ## Repair intake validation
 

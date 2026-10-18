@@ -16,6 +16,8 @@ The user requires deep, proactive gap analysis, preservation of hard-won fixes, 
 
 ## Where to start
 
+- [Current transfer checkpoint](handoff.md#resume-here) and [transfer record](docs/reviews/2026-10-18-scopebase-transfer.md): the product goal is paused for transfer. Thirteen tasks remain accepted; TT02/BP02/LX05 candidates are preserved with explicit remaining gates. Follow the user's resume instruction before new product execution; do not repeat donor intake or unchanged campaigns. [Explicit access-program routing](DEVELOPMENT.md#explicit-access-program-routing) prevents the observed Daybreak/model dispatch failures.
+
 - [LX05 parser contract](docs/superpowers/specs/2026-10-18-scopebase-lx05-proc-contract.md) and [verification plan](docs/superpowers/plans/2026-10-18-scopebase-lx05-verification.md): frozen maps/mountinfo grammar, source preservation, bounds and delivered parser checks; runtime identity remains with its later owners.
 
 - [Decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), and [repair plan / all task routes](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md): mandatory WHAT/WHY decisions, source slices, stop rules and task origins. Read before dispatch or implementation; source inventory and dependency readiness alone do not make a packet ready.

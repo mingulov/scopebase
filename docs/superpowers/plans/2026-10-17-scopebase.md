@@ -10,6 +10,8 @@
 
 **Spec:** [Project specification](../specs/2026-10-17-scopebase-design.md), plus its five subsystem specifications. [Traceability registry](2026-10-17-scopebase-traceability.json) maps every source obligation to tasks. [Root TODO](../../../TODO.md) is the current execution ledger; research TODO remains the source inventory.
 
+**2026-10-18 transfer checkpoint:** The product goal is paused for an orderly transfer. Thirteen of86 tasks are accepted; TT02/BP02/LX05 have preserved candidates and70 tasks remain planned. The single [handoff](../../../handoff.md#resume-here) gives exact source/evidence/command references, root-only integration work and safe parallel restart lanes. The [transfer record](../../reviews/2026-10-18-scopebase-transfer.md) keeps interrupted work incomplete. The checklists below remain normative acceptance requirements; they do not override current TODO/registry states or justify repeating accepted foundations.
+
 ## Global Constraints
 
 - Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.

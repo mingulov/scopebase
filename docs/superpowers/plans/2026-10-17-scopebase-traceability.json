@@ -320,7 +320,16 @@
         "BP-R09",
         "BP-R14"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "execution": {
+        "job_id": "bp02-maps-20261018",
+        "base_commit": "c2a6e6c88448fae77c998f5d80b69efae97d1eab",
+        "checkpoint": "PAUSED_FOR_TRANSFER_STAGED_CANDIDATE",
+        "candidate_index": ".scopebase/jobs/bp02-maps-20261018/evidence/candidate-final-index.json",
+        "candidate_index_sha256": "adb9beb22ab298dd9d32fce6eb5a10e768526298940b04f82e48fdf5d9650154",
+        "handoff": "handoff.md#bp02-exact-continuation",
+        "qualification": "NOT_EVALUATED"
+      }
     },
     {
       "id": "BP03",
@@ -1198,7 +1207,15 @@
       "requirements": [
         "LX-R07"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "execution": {
+        "job_id": "lx05-proc-20261018",
+        "base_commit": "1b50923eaa0651801ae963e4a0562bb6c7a3bda0",
+        "candidate_commit": "e86ff68aff788fad4396dcfb8f8f33013bc2a103",
+        "checkpoint": "PAUSED_FOR_TRANSFER_REVIEW_AND_FUZZ_PENDING",
+        "handoff": "handoff.md#lx05-exact-continuation",
+        "qualification": "NOT_EVALUATED"
+      }
     },
     {
       "id": "LX06",
@@ -2026,6 +2043,13 @@
       "execution": {
         "job_id": "tt02-engine-20261018",
         "base_commit": "4c4e170b57b04c918bf84e167695034f0f6233f4",
+        "candidate_commit": "e7de89165765d295a1e0519436daeb64de1ae8f8",
+        "checkpoint": "PAUSED_FOR_TRANSFER_PARTIAL_MATRIX",
+        "passed_required_rows": 40,
+        "required_rows": 64,
+        "pause_receipt": ".scopebase/jobs/tt02-engine-20261018/evidence/pause-handoff-20261018.json",
+        "pause_receipt_sha256": "68148d95e48c0bb8c64884495477a8ecf38a3b4a34c8dd7d4cf0d9abd73ce5ff",
+        "handoff": "handoff.md#tt02-exact-continuation",
         "role": "implementer",
         "model": "gpt-6.1-sol",
         "reasoning_effort": "xhigh",
