@@ -4,17 +4,20 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
-The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values, CP03 counter/loss protocols, TT01 versioned registry, BP01 host foundation LX04 cooperative controls and LX03 bounded reads are accepted within their recorded scopes. The active M0–M6 goal continues with TT02/CP04 implementation and BP02 contract correction after independent task-identity review; the exact SHA-256 dependency prerequisite is accepted. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) govern every task. The plan repair, SB01/SB02/SB03/LX01/CP01 foundations, LX02 held-file acquisition, CP02 pure values, CP03 counter/loss protocols, TT01 versioned registry, BP01 host foundation LX04 cooperative controls and LX03 bounded reads are accepted within their recorded scopes. The active M0–M6 goal continues with TT02/CP04 candidate qualification and BP02 implementation after independent task-identity review; the exact SHA-256 dependency prerequisite is accepted. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
 
 | Role | Model / effort | Responsibility |
 |---|---|---|
 | Controller | Current root session | Select dependency-ready work, freeze scope, hold ledgers, rule on conflicts, integrate and verify |
 | Implementer | GPT-6.1-Sol high; xhigh for complex contracts | Port/adapt one reviewable task with tests and documentation |
-| Escalated implementer | Fresh GPT-6.1-Sol max, with recorded reason | Investigate an unresolved hard case, including after Astra consultation |
+| Escalated implementer | Fresh GPT-6.1-Sol max, with recorded reason | Investigate an unresolved hard case with a recorded reason |
 | Ordinary reviewer | Fresh GPT-6.1-Sol high/xhigh | Independent specification and code review |
-| Critical reviewer / architect | GPT-6-Astra high/xhigh | Authority, ownership, concurrency, unsafe/FFI, compiler/BPF and oracle/verdict review |
+| Critical reviewer / architect | Fresh GPT-6.1-Sol max, with recorded reason | Authority, ownership, concurrency, unsafe/FFI, compiler/BPF and oracle/verdict review |
+| Exceptional reviewer | GPT-6-Astra xhigh/max, rare and justified | Serious unresolved problem requiring additional consultation after Sol max investigation |
 | Mechanical worker | GPT-6-Luna medium/high | Bounded inventories, links and straightforward transformations |
 | Supplementary reviewer | Muse Spark1.3 max, Contributor on | Quick independent ideas and counterexamples; controller/Sol/Astra adjudicate findings |
+
+The user changed routing on 2026-10-18 to conserve the weekly Astra allowance. Sol max replaces routine Astra architecture/critical review. Record the concrete serious problem, prior Sol max work and need for additional consultation before exceptional Astra use; this is a controller decision within existing authorization, not a new permission loop. Preserve historical completed Astra reviews as evidence.
 
 The machine-readable [policy](orchestration/policy.json) is local project policy, not a global Codex configuration. Every native dispatch explicitly sets `model`, `reasoning_effort` and `fork_turns: none`. Check the current tool allowlist before dispatch. Availability failures are recorded; they never silently select a different model or downgrade a critical review. Native implementers are resumed for fixes. A Muse fix/review invocation is a fresh process with the prior report/rulings; no assumption that a headless session can resume.
 

@@ -33,25 +33,23 @@
     },
     "critical-reviewer": {
       "backend": "native",
-      "model": "gpt-6-astra",
-      "reasoning_effort": "xhigh",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "max",
       "allowed_efforts": [
-        "high",
-        "xhigh",
         "max"
       ],
-      "read_only": true
+      "read_only": true,
+      "reason_required": true
     },
     "architecture": {
       "backend": "native",
-      "model": "gpt-6-astra",
-      "reasoning_effort": "high",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "max",
       "allowed_efforts": [
-        "high",
-        "xhigh",
         "max"
       ],
-      "read_only": true
+      "read_only": true,
+      "reason_required": true
     },
     "mechanical": {
       "backend": "native",
@@ -72,6 +70,17 @@
       ],
       "contributor_mode": "on",
       "read_only": true
+    },
+    "exceptional-reviewer": {
+      "backend": "native",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "allowed_efforts": [
+        "xhigh",
+        "max"
+      ],
+      "read_only": true,
+      "reason_required": true
     }
   },
   "native_fork_turns": "none",

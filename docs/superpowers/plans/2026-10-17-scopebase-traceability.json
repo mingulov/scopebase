@@ -310,7 +310,7 @@
       "anchor": "bp02-checked-possible-cpu-map-geometry-and-abi-safe-lookup",
       "lane": "bpf",
       "milestone": "M3",
-      "status": "PLANNED",
+      "status": "IN_PROGRESS",
       "depends_on": [
         "BP01"
       ],

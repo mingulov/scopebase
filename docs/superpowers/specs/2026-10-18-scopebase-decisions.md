@@ -237,7 +237,7 @@ S1 explicitly limits unwind preservation to library-owned wrapper/count fields; 
 
 **Status:** SETTLED by the user's plan-repair request. **Owners:** controller/expert reviewer.
 
-**What:** Use the task's exact source and interface packet. Sol high/xhigh can implement a bounded, specified port; Astra reviews architecture and critical invariants. Model escalation does not substitute for a complete packet. Luna handles mechanical work and Muse remains optional supplementary review.
+**What:** Use the task's exact source and interface packet. Sol high/xhigh can implement a bounded, specified port; Sol max reviews architecture and critical invariants. The user's 2026-10-18 quota instruction reserves Astra for rare serious unresolved problems after Sol max investigation, with the need recorded before exceptional dispatch. Model escalation does not substitute for a complete packet. Luna handles mechanical work and Muse remains optional supplementary review.
 
 **Why:** A capable executor still makes choices where a plan is silent. Leaving source, license, kernel, fallback or evidence policy unspecified transfers the architectural decision to the wrong role.
 

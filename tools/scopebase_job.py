@@ -27,8 +27,9 @@ ROLES = {
     'implementer': ('native', 'gpt-6.1-sol', False, {'high', 'xhigh'}),
     'implementer-escalated': ('native', 'gpt-6.1-sol', False, {'max'}),
     'reviewer': ('native', 'gpt-6.1-sol', True, {'high', 'xhigh'}),
-    'critical-reviewer': ('native', 'gpt-6-astra', True, {'high', 'xhigh', 'max'}),
-    'architecture': ('native', 'gpt-6-astra', True, {'high', 'xhigh', 'max'}),
+    'critical-reviewer': ('native', 'gpt-6.1-sol', True, {'max'}),
+    'architecture': ('native', 'gpt-6.1-sol', True, {'max'}),
+    'exceptional-reviewer': ('native', 'gpt-6-astra', True, {'xhigh', 'max'}),
     'mechanical': ('native', 'gpt-6-luna', False, {'medium', 'high'}),
     'muse-reviewer': ('muse', 'muse-spark-1.3', True, {'max'}),
 }
@@ -200,8 +201,8 @@ def policy(repo):
         require(isinstance(efforts, list) and efforts and all(isinstance(e, str) for e in efforts)
                 and set(efforts) <= allowed and entry.get('reasoning_effort') in efforts,
                 f'invalid policy efforts for role {name}')
-        if name == 'implementer-escalated':
-            require(entry.get('reason_required') is True, 'max escalation policy requires a reason')
+        if name in {'implementer-escalated', 'critical-reviewer', 'architecture', 'exceptional-reviewer'}:
+            require(entry.get('reason_required') is True, f'{name} policy requires a reason')
         if backend == 'muse':
             require(entry.get('contributor_mode') == 'on', 'Muse policy requires Contributor on')
     require(data.get('native_fork_turns') == 'none', 'native policy must use fresh context (fork_turns none)')

@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - At setup acceptance product requirements/tasks were 119/86 and open; the later TC-R10/H33 amendment raises requirements to 120. Setup remains a separate deliverable and does not qualify the new contract.
-- Sol high/xhigh implements; Sol max requires an escalation reason; Astra reviews critical contracts; Luna handles mechanical checks; Muse Spark1.3 max/Contributor on supplies supplementary readonly review.
+- Sol high/xhigh implements; Sol max handles architecture/critical review with a recorded reason. Astra is exceptional only for serious unresolved problems after Sol max investigation, conserving the user's weekly quota. Luna handles mechanical checks; Muse Spark1.3 max/Contributor on supplies supplementary readonly review.
 - One writer per worktree, explicit disjoint paths, one heavy build slot, immutable bases and private fresh evidence.
 - No tool installation, global config change, donor mutation, automatic model call, goal creation, merge, push or publication in helper commands.
 - Exactly one valid matching terminal plus a valid review report and process exit zero are required for successful Muse execution; no helper claims task acceptance.

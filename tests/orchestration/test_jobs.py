@@ -32,10 +32,15 @@ POLICY = {
                                  'read_only': False, 'reason_required': True},
         'reviewer': {'backend': 'native', 'model': 'gpt-6.1-sol',
                      'reasoning_effort': 'high', 'allowed_efforts': ['high', 'xhigh'], 'read_only': True},
-        'critical-reviewer': {'backend': 'native', 'model': 'gpt-6-astra',
-                              'reasoning_effort': 'xhigh', 'allowed_efforts': ['high', 'xhigh', 'max'], 'read_only': True},
-        'architecture': {'backend': 'native', 'model': 'gpt-6-astra',
-                         'reasoning_effort': 'high', 'allowed_efforts': ['high', 'xhigh', 'max'], 'read_only': True},
+        'critical-reviewer': {'backend': 'native', 'model': 'gpt-6.1-sol',
+                              'reasoning_effort': 'max', 'allowed_efforts': ['max'],
+                              'read_only': True, 'reason_required': True},
+        'architecture': {'backend': 'native', 'model': 'gpt-6.1-sol',
+                         'reasoning_effort': 'max', 'allowed_efforts': ['max'],
+                         'read_only': True, 'reason_required': True},
+        'exceptional-reviewer': {'backend': 'native', 'model': 'gpt-6-astra',
+                                 'reasoning_effort': 'xhigh', 'allowed_efforts': ['xhigh', 'max'],
+                                 'read_only': True, 'reason_required': True},
         'mechanical': {'backend': 'native', 'model': 'gpt-6-luna',
                        'reasoning_effort': 'medium', 'allowed_efforts': ['medium', 'high'], 'read_only': False},
         'muse-reviewer': {'backend': 'muse', 'model': 'muse-spark-1.3',
@@ -147,6 +152,35 @@ class JobTests(unittest.TestCase):
             self.assertEqual((Path(prepared['job']) / private).stat().st_mode & 0o777, 0o700)
         self.assertEqual(json.loads((self.repo / REGISTRY).read_text())['tasks'][0]['status'], 'PLANNED')
 
+    def test_default_critical_roles_use_sol_max(self):
+        for role in ('critical-reviewer', 'architecture'):
+            with self.subTest(role=role):
+                prepared = self.prepare(job=role, role=role, paths=(),
+                                        extra=('--reason', 'User-directed Sol max review to conserve Astra quota'))
+                dispatch = json.loads(Path(prepared['dispatch']).read_text())
+                self.assertEqual(dispatch['model'], 'gpt-6.1-sol')
+                self.assertEqual(dispatch['reasoning_effort'], 'max')
+                self.assertEqual(dispatch['fork_turns'], 'none')
+                manifest = json.loads(Path(prepared['manifest']).read_text())
+                self.assertTrue(manifest['read_only'])
+                self.assertEqual(manifest['allowed_paths'], [])
+
+    def test_astra_requires_explicit_exceptional_role_and_recorded_reason(self):
+        result = self.cli(*self.prepare_args(job='exceptional', role='exceptional-reviewer',
+                                            paths=()), ok=False)
+        self.assertIn('reason', result.stderr.lower())
+        self.assertFalse((self.repo / '.scopebase/jobs/exceptional').exists())
+        reason = 'Sol max could not resolve conflicting unsafe lifetime proofs; serious memory-safety issue'
+        prepared = self.prepare(job='exceptional', role='exceptional-reviewer', paths=(),
+                                extra=('--reason', reason))
+        dispatch = json.loads(Path(prepared['dispatch']).read_text())
+        manifest = json.loads(Path(prepared['manifest']).read_text())
+        self.assertEqual(dispatch['model'], 'gpt-6-astra')
+        self.assertEqual(dispatch['reasoning_effort'], 'xhigh')
+        self.assertTrue(manifest['read_only'])
+        self.assertEqual(manifest['allowed_paths'], [])
+        self.assertEqual(manifest['reason'], reason)
+
     def test_unknown_role_effort_and_max_without_reason_refuse(self):
         cases = [('unknown', (), 'role'), ('implementer', ('--effort', 'max'), 'effort'),
                  ('implementer-escalated', (), 'reason'),
@@ -195,7 +229,8 @@ class JobTests(unittest.TestCase):
     def test_missing_prerequisite_refuses_but_readonly_future_analysis_is_allowed(self):
         result = self.cli(*self.prepare_args(task='SB02'), ok=False)
         self.assertIn('prerequisite', result.stderr.lower())
-        future = self.prepare(task='SB02', role='critical-reviewer', paths=())
+        future = self.prepare(task='SB02', role='critical-reviewer', paths=(),
+                              extra=('--reason', 'Independent Sol max prerequisite review'))
         self.assertEqual(json.loads(Path(future['manifest']).read_text())['allowed_paths'], [])
         result = self.cli(*self.prepare_args(job='writer-review', role='reviewer'), ok=False)
         self.assertIn('read', result.stderr.lower())
