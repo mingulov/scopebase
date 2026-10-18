@@ -8,7 +8,7 @@ license = "Apache-2.0"
 publish = false
 build = false
 readme = "README.md"
-include = ["Cargo.toml", "src/lib.rs", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "tests/package_boundary.rs", "tests/support/check_package_boundary.py"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/lib.rs", "src/domain.rs", "src/error.rs", "src/quantity.rs", "src/conservation.rs", "src/time.rs", "tests/package_boundary.rs", "tests/support/check_package_boundary.py", "tests/domain_quantity.rs", "tests/time_domains.rs", "tests/ui/count_units_do_not_mix.rs", "tests/ui/count_units_match.rs", "tests/ui/sealed_unit.rs", "tests/ui/private_capture_id.rs"]
 
 [features]
 default = []
