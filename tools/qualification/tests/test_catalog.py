@@ -137,3 +137,33 @@ class CatalogTests(unittest.TestCase):
   b=copy.deepcopy(a);b['catalog_revision']=2;p=copy.deepcopy(a['profiles'][0]);p['id']='revision-fixture-v2';p['required_cases']=[];b['profiles'].append(p);c.baseline(check(b),check(a))
   old=read('registered');v=copy.deepcopy(old);v['catalog_revision']=2;v['cases'][0]['registration']['oracle']['revision']=2;v['cases'][0]['registration']['oracle']['sha256']='a'*64;c.baseline(check(v),check(old))
   self.assertNotEqual(v['cases'][0]['registration']['oracle'],old['cases'][0]['registration']['oracle'])
+ def test_frozen_mandatory_cases_and_transitive_extension_preserved(self):
+  old=read('revision-a');old['profiles'][0].update(definition_state='FROZEN',open_owners=[])
+  other=copy.deepcopy(old['cases'][0]);other['id']='H04.other';old['cases'].append(other)
+  old['profiles'][0]['required_cases'].append({'case_id':'H04.other','case_version':1,'when_extensions':[]})
+  frozen=check(old);self.assertEqual(len(c.select(frozen,'revision-fixture-v1')['required']),2)
+  reduced=copy.deepcopy(old);reduced['catalog_revision']=2;reduced['profiles'][0]['required_cases'].pop()
+  self.assertEqual(len(c.select(check(reduced),'revision-fixture-v1')['required']),1)
+  with self.assertRaisesRegex(c.CatalogInvalid,'BaselineSemantics'):c.baseline(check(reduced),frozen)
+  # Keep a nonempty frozen case closure in both twins; removing this extension
+  # must fail the baseline contract rather than empty/frozen setup validation.
+  old['extensions']=[{'id':'frozen-extra-v1','profile':'revision-fixture-v1','requires_profiles':[],'requires_tasks':['TT01'],'required_cases':[]}]
+  old['profiles'].append({'id':'frozen-join-v1','definition_state':'FROZEN','requires_profiles':['revision-fixture-v1'],'requires_extensions':['frozen-extra-v1'],'required_cases':[],'open_owners':[]})
+  old['profiles'].append({'id':'frozen-top-v1','definition_state':'FROZEN','requires_profiles':['frozen-join-v1'],'requires_extensions':[],'required_cases':[],'open_owners':[]})
+  frozen=check(old);self.assertEqual(c.select(frozen,'frozen-top-v1')['extensions'],['frozen-extra-v1'])
+  reduced=copy.deepcopy(old);reduced['catalog_revision']=2;reduced['profiles'][1]['requires_extensions']=[]
+  plan=c.select(check(reduced),'frozen-top-v1');self.assertTrue(plan['definition_complete']);self.assertEqual(len(plan['required']),2);self.assertEqual(plan['extensions'],[])
+  with self.assertRaisesRegex(c.CatalogInvalid,'BaselineSemantics'):c.baseline(check(reduced),frozen)
+ def test_frozen_revision_and_cell_semantics_and_changed_freeze_refused(self):
+  old=read('revision-a');old['profiles'][0].update(definition_state='FROZEN',open_owners=[]);frozen=check(old)
+  for mode in ['cell-tier','case-version']:
+   changed=copy.deepcopy(old);changed['catalog_revision']=2
+   if mode=='cell-tier':changed['cells'][0]['tier']='T2'
+   else:
+    revision=copy.deepcopy(changed['cases'][0]);revision['version']=2;changed['cases'].append(revision);changed['profiles'][0]['required_cases'][0]['case_version']=2
+   self.assertTrue(c.select(check(changed),'revision-fixture-v1')['definition_complete'])
+   with self.subTest(mode=mode):
+    with self.assertRaisesRegex(c.CatalogInvalid,'BaselineSemantics'):c.baseline(check(changed),frozen)
+  draft=read('revision-a');changed=copy.deepcopy(draft);changed['catalog_revision']=2;changed['profiles'][0].update(definition_state='FROZEN',open_owners=[]);changed['cases'][0]['required_cells'].append('revision-after')
+  self.assertTrue(c.select(check(changed),'revision-fixture-v1')['definition_complete'])
+  with self.assertRaisesRegex(c.CatalogInvalid,'BaselineSemantics'):c.baseline(check(changed),check(draft))
