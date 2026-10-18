@@ -4,7 +4,7 @@
 
 This is the specification, planning and research workspace for **ScopeBase**, reusable foundations from p11scope, KryProbe, OSSLscope and MemVeil/libbpf-mojo, including SDK and selective C/Mojo/MojoBPF interoperability. Package names use `scopebase-*`; they are not published or reserved by this work.
 
-The repository currently contains specifications, implementation plans, research and a backlog. It has no implemented shared library, Cargo workspace or qualified runtime suite. Do not describe a proposed command, catalog entry, donor test or historical receipt as an implemented or passing ScopeBase test.
+The repository currently contains specifications, implementation plans, research, a backlog and local development coordination tools. It has no implemented shared library, Cargo workspace or qualified runtime suite. Do not describe a proposed command, catalog entry, donor test or historical receipt as an implemented or passing ScopeBase test.
 
 The user's priorities are:
 
@@ -15,6 +15,8 @@ The user's priorities are:
 The user requires deep, proactive gap analysis, preservation of hard-won fixes, and tests that library users can run from the delivered package. A small file-handling pilot is an implementation increment; it does not complete the requested ready mapped-image capability.
 
 ## Where to start
+
+- [Development workflow](DEVELOPMENT.md), [current handoff](handoff.md) and [execution policy](orchestration/policy.json): controller/worker roles, model efforts, task/review preparation and restart custody. Product work follows the active thread goal; do not create a replacement goal or infer a budget.
 
 - [Root README](README.md), [project specification](docs/superpowers/specs/2026-10-17-scopebase-design.md) and [master plan](docs/superpowers/plans/2026-10-17-scopebase.md): current scope, contracts, completion levels and subsystem reading map.
 - [Root TODO](TODO.md): canonical execution ledger. [Traceability](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps every source obligation and plan dependency. The [research TODO](docs/research/2026-10-17-shared-libraries/TODO.md) remains the stable source inventory, not a competing progress ledger.
@@ -73,8 +75,10 @@ Add missing necessary work to TODO with the affected capability, dependency and 
 
 Use `rg` for source discovery. Batch independent reads; serialize mutations and dependent work. Give each agent disjoint file ownership and isolated build/evidence outputs. Shared privileged hosts/guests and heavy Cargo work require coordinated ownership; do not start live probes merely to make a research report look verified.
 
-When parallel work materially helps, use GPT-6.1-Sol for substantial investigation/implementation, GPT-6-Astra for architectural decisions and adversarial review, and GPT-6-Luna for bounded mechanical tasks, subject to available model names and the user's latest direction. Provide focused context and review their results; an agent's completion message is not verification.
+When parallel work materially helps, use GPT-6.1-Sol for substantial investigation/implementation, GPT-6-Astra for architectural decisions and adversarial review, and GPT-6-Luna for bounded mechanical tasks, subject to available model names and the user's latest direction. Sol high/xhigh is the implementation default; a fresh Sol max may handle a recorded hard-case escalation, including after unresolved Astra consultation. Muse Spark1.3 max/Contributor-on is a supplementary read-only ideas/review route; Sol/Astra/controller adjudicate its findings. Every native dispatch explicitly specifies model, effort and a fresh context. Provide focused context and review their results; an agent's completion message is not verification.
 
-For this documentation-only state, run `python3 tools/check_planning_docs.py` to check JSON parsing, local links/anchors, table structure, stable IDs, source pins, requirement/source coverage, task/profile dependency graphs and claim consistency. Its fixed counts/status guards describe the initial planning baseline; amend them explicitly when implementation changes that state. `git diff --check` helps with tracked changes but does not cover untracked new files; inspect those too. There is currently no Cargo/test command for a ScopeBase implementation. Once code exists, document its actual commands here rather than inventing them now.
+For the product planning baseline, run `python3 tools/check_planning_docs.py` to check JSON parsing, local links/anchors, table structure, stable IDs, source pins, requirement/source coverage, task/profile dependency graphs and claim consistency. Its fixed counts/status guards describe the initial planning baseline; amend them explicitly when implementation changes that state. `git diff --check` helps with tracked changes but does not cover untracked new files; inspect those too. Run `python3 -m unittest discover -s tests/orchestration -v` for the implemented coordination helpers. These are development-tool tests. There is currently no Cargo/test command for a ScopeBase library implementation. Once code exists, document its actual commands here rather than inventing them now.
 
 Save normative design/plan changes in `docs/superpowers/`, source findings in the research tree, and progress in root TODO. Keep traceability and navigation current. Reports must distinguish what was observed, inferred, proposed, unexecuted and still unknown. No external issue, message, publication or upstream submission follows automatically from finding a gap.
+
+The active goal authorizes M0–M6 development, preserving/porting donor fixes and improving APIs when behavior and edge cases remain covered. Add new necessary components as separately testable TODO work. Appropriate CI/CD and privileged local/kernel tests are permitted within owned, coordinated resources; required unavailable cells remain incomplete. Product migrations and external publication remain later.

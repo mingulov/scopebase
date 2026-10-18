@@ -1,5 +1,7 @@
 # ScopeBase
 
+Development is coordinated through [DEVELOPMENT.md](DEVELOPMENT.md) and the single current [handoff](handoff.md). Local helpers prepare isolated jobs, immutable reviews and cooperative build locks; supplementary [Muse reviews](orchestration/MUSE-ORCHESTRATION.md) remain independent of task acceptance.
+
 Start with the [project specification](docs/superpowers/specs/2026-10-17-scopebase-design.md), [complete implementation plan](docs/superpowers/plans/2026-10-17-scopebase.md), and [TODO](TODO.md). The master documents link all subsystem specifications and detailed plans. The [traceability registry](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) maps source requirements, tests, tasks and dependencies.
 
 ScopeBase covers independently usable Rust libraries, distributed tests and documentation; a small SDK with real host/live reference applications; and selective C/Mojo interoperability. Existing p11scope, OSSLscope, KryProbe, MemVeil and MojoBPF migrations are separately planned for later.
@@ -12,4 +14,4 @@ The study covers p11scope, KryProbe, OSSLscope, MemVeil/libbpf-mojo, and limited
 
 The [testing delivery plan](docs/research/2026-10-17-shared-libraries/testing-delivery-plan.md) follows an issue from reproducer through consumer migration and installed checks. Its [32-family regression catalog](docs/research/2026-10-17-shared-libraries/regression-catalog.json) records planned obligations, not executed results. Repository working instructions are in [AGENTS.md](AGENTS.md).
 
-This repository currently contains research and proposals. No shared library has been implemented or qualified by this study. The source workspaces were inspected without modification.
+This repository contains research, specifications and development coordination tools. No shared library has been implemented or qualified by the planning/setup work. The source workspaces were inspected without modification.

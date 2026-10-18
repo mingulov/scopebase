@@ -1,22 +1,102 @@
 {
   "schema_version": 1,
   "roles": {
-    "implementer": {"backend": "native", "model": "gpt-6.1-sol", "reasoning_effort": "high", "allowed_efforts": ["high", "xhigh"], "read_only": false},
-    "implementer-escalated": {"backend": "native", "model": "gpt-6.1-sol", "reasoning_effort": "max", "allowed_efforts": ["max"], "read_only": false, "reason_required": true},
-    "reviewer": {"backend": "native", "model": "gpt-6.1-sol", "reasoning_effort": "high", "allowed_efforts": ["high", "xhigh"], "read_only": true},
-    "critical-reviewer": {"backend": "native", "model": "gpt-6-astra", "reasoning_effort": "xhigh", "allowed_efforts": ["high", "xhigh", "max"], "read_only": true},
-    "architecture": {"backend": "native", "model": "gpt-6-astra", "reasoning_effort": "high", "allowed_efforts": ["high", "xhigh", "max"], "read_only": true},
-    "mechanical": {"backend": "native", "model": "gpt-6-luna", "reasoning_effort": "medium", "allowed_efforts": ["medium", "high"], "read_only": false},
-    "muse-reviewer": {"backend": "muse", "model": "muse-spark-1.3", "reasoning_effort": "max", "allowed_efforts": ["max"], "contributor_mode": "on", "read_only": true}
+    "implementer": {
+      "backend": "native",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "allowed_efforts": [
+        "high",
+        "xhigh"
+      ],
+      "read_only": false
+    },
+    "implementer-escalated": {
+      "backend": "native",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "max",
+      "allowed_efforts": [
+        "max"
+      ],
+      "read_only": false,
+      "reason_required": true
+    },
+    "reviewer": {
+      "backend": "native",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "allowed_efforts": [
+        "high",
+        "xhigh"
+      ],
+      "read_only": true
+    },
+    "critical-reviewer": {
+      "backend": "native",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "allowed_efforts": [
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "read_only": true
+    },
+    "architecture": {
+      "backend": "native",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "allowed_efforts": [
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "read_only": true
+    },
+    "mechanical": {
+      "backend": "native",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "medium",
+      "allowed_efforts": [
+        "medium",
+        "high"
+      ],
+      "read_only": false
+    },
+    "muse-reviewer": {
+      "backend": "muse",
+      "model": "muse-spark-1.3",
+      "reasoning_effort": "max",
+      "allowed_efforts": [
+        "max"
+      ],
+      "contributor_mode": "on",
+      "read_only": true
+    }
   },
   "native_fork_turns": "none",
   "max_independent_implementation_lanes": 3,
   "heavy_build_slots": 1,
   "muse_max_model_steps": 32,
   "muse_max_tool_output_bytes": 65536,
-  "critical_contracts": ["mapping identity", "cleanup accounting", "per-CPU geometry", "attachment retirement", "compiler descendant custody", "native ABI", "unsafe memory access", "concurrency and ordering", "conformance oracle and verdict"],
-  "worker_statuses": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"],
+  "critical_contracts": [
+    "mapping identity",
+    "cleanup accounting",
+    "per-CPU geometry",
+    "attachment retirement",
+    "compiler descendant custody",
+    "native ABI",
+    "unsafe memory access",
+    "concurrency and ordering",
+    "conformance oracle and verdict"
+  ],
+  "worker_statuses": [
+    "DONE",
+    "DONE_WITH_CONCERNS",
+    "BLOCKED",
+    "NEEDS_CONTEXT"
+  ],
   "completion_authority": "controller after independent review and exact-candidate verification",
   "external_publication": "separate user instruction",
-  "goal_status": "AWAITING_USER_GOAL"
+  "goal_requirement": "explicit user goal before product dispatch"
 }
