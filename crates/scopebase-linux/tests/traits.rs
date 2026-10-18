@@ -12,3 +12,12 @@ fn declared_feature_implications_hold() {
         "supervision requires process"
     );
 }
+
+#[test]
+fn owners_and_observations_are_send_sync() {
+    fn check<T: Send + Sync>() {}
+    check::<scopebase_linux::file::HeldFile>();
+    check::<scopebase_linux::file::ProcFdResolver>();
+    check::<scopebase_linux::identity::StatFileKey>();
+    check::<scopebase_linux::identity::StatObservation>();
+}

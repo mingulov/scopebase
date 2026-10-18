@@ -5,11 +5,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
 license = "Apache-2.0"
-description = "ScopeBase Linux package boundary; runtime capabilities are not implemented"
+description = "ScopeBase retained regular-file acquisition and descriptor observations"
 publish = false
 readme = "README.md"
 build = false
-include = ["Cargo.toml", "README.md", "src/lib.rs", "tests/traits.rs", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
+include = ["Cargo.toml", "README.md", "src/**", "tests/**", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
 
 [features]
 default = []
@@ -17,3 +17,10 @@ process = []
 mapping = ["process"]
 supervision = ["process"]
 walk = []
+
+[dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "pipe"] }
+
+[[example]]
+name = "fd_probe"
+path = "tests/support/fd_probe.rs"
