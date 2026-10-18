@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "LX04-20261018-controls",
+  "task_id": "LX04",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-lx04-controls.json",
+    "sha256": "e5fdea9b49993ac551b86a1ecf2e6171e8214e4e0166db45796abc088f12ed9a"
+  },
+  "mappings": [
+    {
+      "file_id": "P:src/scope/inventory_cgroup.rs",
+      "source_scope": [
+        [
+          21,
+          84
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "CancelToken::{new,cancel}",
+            "OperationControl::{new,checkpoint_using}"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "cancel_before_first_effect",
+            "deadline_equality_is_expired",
+            "cancel_race_has_a_checkpoint_boundary"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/scope/inventory_cgroup.rs",
+      "source_scope": [
+        [
+          1435,
+          1512
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "cancel_before_first_effect",
+            "expired_and_cancelled_prefers_cancel",
+            "deadline_after_read_before_publication_keeps_charge"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          233,
+          287
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "ControlStop::into_error"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "one_read",
+            "blocked_inner_read_is_not_claimed_interrupted",
+            "deadline_after_read_before_publication_keeps_charge"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          6432,
+          6502
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "one_read",
+            "blocked_inner_read_is_not_claimed_interrupted",
+            "deadline_after_read_before_publication_keeps_charge"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          7211,
+          7283
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "one_read",
+            "blocked_inner_read_is_not_claimed_interrupted",
+            "deadline_after_read_before_publication_keeps_charge"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/scan.rs",
+      "source_scope": [
+        [
+          8925,
+          8955
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "deadline_after_read_before_publication_keeps_charge"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/args.rs",
+      "source_scope": [
+        [
+          75,
+          78
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "MonotonicDeadline::after",
+            "deadline_after_at"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/cli_limits.rs",
+      "source_scope": [
+        [
+          136,
+          143
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "deadline_overflow_is_invalid_input"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/controls.rs",
+          "sha256": "b8b4ec6fc71f13cba3fe8f536c0df6f04cf408faa58a1903939b65a1ea161118",
+          "symbols": [
+            "deadline_overflow_is_invalid_input"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/target.rs",
+      "source_scope": [
+        [
+          866,
+          881
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "cancel_before_first_effect",
+            "expired_and_cancelled_prefers_cancel"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/target.rs",
+      "source_scope": [
+        [
+          1908,
+          1957
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/control.rs",
+          "sha256": "2544cc4900da2325a641f31f868b20d8e12ba8d563dd81151ca3eb3680d7eb2a",
+          "symbols": [
+            "OperationControl::checkpoint"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/control/tests.rs",
+          "sha256": "6b7e81b19673eef2f4cbebfa3e329910334fdbab7e8cf6cde42088bb9a8568c9",
+          "symbols": [
+            "cancel_before_first_effect",
+            "expired_and_cancelled_prefers_cancel"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/LX04-preservation-20261018.md",
+    "sha256": "ae8545728e5f7ce35fafbeceb399bd7fe337399be7e7ff2134f8dc2f93ed4792"
+  },
+  "supersedes": null
+}

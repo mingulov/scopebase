@@ -302,7 +302,15 @@
         "tests/ui/resolver_inner.rs",
         "tests/ui/resolver_private.rs",
         "tests/ui/resolver_raw.rs",
-        "tests/ui/stat_private.rs"
+        "tests/ui/stat_private.rs",
+        "src/control.rs",
+        "src/control/tests.rs",
+        "tests/controls.rs",
+        "tests/ui/control_checkpoint_private.rs",
+        "tests/ui/control_construct_private.rs",
+        "tests/ui/control_inject_clock.rs",
+        "tests/ui/control_numeric_deadline.rs",
+        "tests/ui/control_positive.rs"
       ],
       "role": "product",
       "supported_unions": [

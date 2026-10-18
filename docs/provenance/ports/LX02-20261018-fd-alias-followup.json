@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "LX02-20261018-fd-alias-followup",
+  "task_id": "LX02",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-first-ports.json",
+    "sha256": "1719bcab8a38ee88ac0419cb9b7d32ca58d9813042981fe001b214e5489557d6"
+  },
+  "mappings": [
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          177,
+          194
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "992fe7c0e3b6686f362fc13f33d00e9366a71041db296f7b4c289138a0ab0449",
+          "symbols": [
+            "HeldFile::open_with"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "source_scope": [
+        [
+          37,
+          57
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "992fe7c0e3b6686f362fc13f33d00e9366a71041db296f7b4c289138a0ab0449",
+          "symbols": [
+            "key",
+            "HeldFile::stat_with"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/identity.rs",
+          "sha256": "dce374ad116b4288265c7b744a98a6ee2896430082cf3aece6919f0ef94a84a5",
+          "symbols": [
+            "StatObservation::from_stat"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "source_scope": [
+        [
+          4057,
+          4071
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "992fe7c0e3b6686f362fc13f33d00e9366a71041db296f7b4c289138a0ab0449",
+          "symbols": [
+            "tests::fifo_trace_proves_no_data_open"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "rejects_fifo_before_read_open"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/discovery/identity.rs",
+      "source_scope": [
+        [
+          5195,
+          5241
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "retained_owner_and_same_bytes_different_inode",
+            "stat_tracks_held_descriptor"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "source_scope": [
+        [
+          205,
+          240
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "992fe7c0e3b6686f362fc13f33d00e9366a71041db296f7b4c289138a0ab0449",
+          "symbols": [
+            "HeldFile",
+            "HeldFile::open_with",
+            "HeldFile::stat_with"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/plan.rs",
+      "source_scope": [
+        [
+          1123,
+          1141
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "stat_tracks_held_descriptor",
+            "missing_input_returns_original_errno"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/count_deadline.rs",
+      "source_scope": [
+        [
+          551,
+          596
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/held_file.rs",
+          "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+          "symbols": [
+            "retained_owner_and_same_bytes_different_inode",
+            "final_drop_releases_original_fd_with_live_alias"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/fd_probe.rs",
+          "sha256": "3b423496bbb4558d069b4232a6e2c91a6d0d2ea8d5f32a3baf072856fc3c6ad2",
+          "symbols": [
+            "retirement_check"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/count_deadline.rs",
+      "source_scope": [
+        [
+          598,
+          665
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/file/held.rs",
+          "sha256": "992fe7c0e3b6686f362fc13f33d00e9366a71041db296f7b4c289138a0ab0449",
+          "symbols": [
+            "tests::open_holds_a_through_a_b_a_and_unlink"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/LX02-preservation-followup-20261018.md",
+    "sha256": "d5bc0aff35f1a8941d2c04a854510603414785e0cd385110e07b62f90ea02729"
+  },
+  "supersedes": {
+    "path": "docs/provenance/ports/LX02-20261018-initial.json",
+    "sha256": "58344283b677dba86b9cf36de75d5302fba47877176409cedfdeb18ea2091cd4"
+  }
+}
