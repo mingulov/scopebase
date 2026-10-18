@@ -304,6 +304,8 @@ def validate_matrix(path, kind):
     for c in entries:
         keys = ({'id','required','manifest','candidate','default_features','features','tier','assertions','expected_fit','availability','compile_refusals','allowed_dependencies','obligation_refs'} if kind == 'probe' else
                 {'id','manifest','role','minimal','default','supported_unions','clients','package_files','allowed_dependencies','license_files','notice_entries','denied_packages'})
+        if kind != 'probe' and isinstance(c, dict) and 'minimal_dependencies' in c:
+            keys = keys | {'minimal_dependencies'}
         exact(c, keys)
         if not isinstance(c['id'], str) or not IDENT.fullmatch(c['id']) or c['id'] in ids:
             raise InputError('SCHEMA_ID')
@@ -334,6 +336,10 @@ def validate_matrix(path, kind):
         else:
             if c['role'] not in ('fixture','product'):
                 raise InputError('SCHEMA_ROLE')
+            if 'minimal_dependencies' in c:
+                dependency_records(c['minimal_dependencies'])
+                if any(r not in c['allowed_dependencies'] for r in c['minimal_dependencies']):
+                    raise InputError('SCHEMA_MINIMAL_DEPENDENCIES')
             strings(c['minimal']); strings(c['default']); strings(c['package_files'], 1024, True); strings(c['denied_packages'], 128)
             if not isinstance(c['supported_unions'], list):
                 raise InputError('SCHEMA_UNIONS')

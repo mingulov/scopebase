@@ -1,10 +1,10 @@
 # ScopeBase dependencies and build policy
 
-Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. They guide concrete future consumers; they are not speculative root dependencies or an implemented shared library. The product workspace has zero members. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern later implementation.
+Status: **SB02 accepted**; see the [controller acceptance record](reviews/2026-10-18-sb02-foundation.md). The controller has ratified the initial syscall/ELF preferences below from executed experiments and independent review. The product workspace now contains `scopebase-linux` and `scopebase-capture`; [TODO](../TODO.md) records the accepted implementation scope. Tooling, source availability, dependency API evidence, donor ports, installed conformance and runtime qualification remain separate completion levels. The [ratified packet](superpowers/plans/2026-10-18-scopebase-sb02-packet.md), [decision register](superpowers/specs/2026-10-18-scopebase-decisions.md) and canonical component plans govern implementation.
 
 ## Evaluated toolchains and source identity
 
-The root virtual workspace explicitly has `members = []` and `default-members = []`, resolver 2, edition 2021, initial version 0.1.0 and proposed MSRV 1.88.0. `rust-toolchain.toml` pins 1.98.1. Both installed compiler roots are explicit matrix inputs; reports retain actual `rustc -Vv`, Cargo version and compiler/Cargo/rustdoc executable hashes. Empty-root metadata on both compilers confirms configuration only. No command installs a compiler, no root Cargo.lock was invented, and no product MSRV support follows automatically from dependency trials.
+The original SB02 virtual workspace had empty members/default-members, resolver 2, edition 2021, initial version 0.1.0 and MSRV 1.88.0. The current root manifests register the actual packages and their admitted lock. `rust-toolchain.toml` pins 1.98.1. Both installed compiler roots are explicit matrix inputs; reports retain actual `rustc -Vv`, Cargo version and compiler/Cargo/rustdoc executable hashes. Historical empty-root metadata confirms configuration only. No command installs a compiler, and product MSRV support requires that product's executed package checks.
 
 The original full probe candidate is `8fc5dcb9d659adc4790280a3693bde3dc6a3d6ca`, matrix SHA256 `0df659325a2fb9e6862fd1e1af0ed712451480d3ed2a6af7b3abff440c334740`. The immutable corrected input inventory is SHA256 `92e7804954e641f6a1071c05ea3cff03167453e7d63044b89fad9d5b4ea8bffe`. The later routing-only probe commit `eb4c77aa2e21719ca14f282968dcb5fa090c15c0`, matrix SHA256 `bf9235e6fb5c9ea8fd442ec7a3eea885b11f40db45418bcebbf56d3f02b8909c`, changes four obligation-reference arrays and README explanations; manifests, sources, assertions, features, approvals, locks and input closure are unchanged. Historical reports keep their original identities.
 
@@ -36,6 +36,18 @@ Rustix's separate `std,fs,process` trial only typed the pidfd function; it never
 Procfs's actual rustix feature union is `alloc,default,fs,param,process,std,system,thread`, broader than the direct `std,fs` declaration. Do not call it the minimal rustix closure. Btf-rs's byte API still brings memmap2 and derive; availability/approval does not authorize runtime mmap in a no-new-target-mappings profile. Its probe uses fixed byte slices. BTF probe lock SHA256 is `9e3f2573503ffd48d0cfd60a45cb1430c6d3a19e2e96e5e5ddef9871d00467fe`; the upstream tarball is `48c1914260f1bd31cc2b5ac5c68800009a14ecf06903aeacbbf6de49163bd323`, while the selected-source approval digest is `a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9`. These are different identities.
 
 ## Explicit acquisition, approval and transformation policy
+
+A feature-policy member may declare `minimal_dependencies`, an exact list of
+dependency records drawn unchanged from its existing `allowed_dependencies`.
+For every configuration whose selected subject features equal that member's
+minimal features, the observed registry dependency name/version/source set must
+match this list exactly. Missing or extra packages and changed versions/sources
+refuse; an empty list requires no registry dependencies. Source digests, build
+approvals, notices and denied-package checks still apply through ordinary
+admission. This supports a parser with mandatory Serde without inventing an
+optional feature. Members omitting the field retain the original empty-feature
+Serde leakage guard. The explicit list is a reviewed policy input, never
+generated from the observed Cargo result to make a failing check pass.
 
 The Python 3.11+ standard-library tools have the bounded interfaces:
 

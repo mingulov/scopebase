@@ -784,6 +784,83 @@ class ProductPolicyControls(unittest.TestCase):
             self.assertEqual(check_features.main(['--manifest',str(inputs/'Cargo.toml'),'--matrix',str(inputs/'matrix.json'),'--output-dir',str(cell/'escaped'),'--report',str(cell/'escaped.json')]),2)
 
 
+class MandatoryMinimalPolicyControl(ProductPolicyControls):
+    """One real archived consumer, with exact mandatory serde closure controls."""
+
+    # This narrow subclass uses the existing fixture setup, not unrelated cases.
+    test_product_member_stages_without_changing_approved_manifest = None
+    test_missing_and_stale_root_locks_refuse_unchanged_and_restored_twin_passes = None
+    test_product_requires_an_executed_doctest = None
+    test_product_source_refusals_precede_compilation = None
+
+    def test_mandatory_minimal_dependencies_use_exact_archive_metadata(self):
+        cell, inputs, source, matrix = self.product()
+        manifest = source / 'Cargo.toml'
+        manifest.write_text(manifest.read_text().replace('extra=[]\n', '') +
+            '[dependencies]\n'
+            'serde={version="=1.0.229",default-features=false,features=["std","derive"]}\n'
+            'serde_json={version="=1.0.151",default-features=false,features=["std"]}\n')
+        (source / 'src/lib.rs').write_text(
+            '//! ```\n//! assert_eq!(product_subject::value(), 42);\n//! ```\n'
+            '#[derive(serde::Deserialize)] struct Value { value: u64 }\n'
+            'pub fn value() -> u64 { serde_json::from_str::<Value>(r#"{"value":42}"#).unwrap().value }\n')
+        (inputs / 'client.rs').write_text('fn main() { assert_eq!(product_subject::value(), 42); }\n')
+        original = self.base['fixture_members'][0]
+        member = matrix['members'][0]
+        member['supported_unions'] = []
+        for client in member['clients']:
+            client['features'] = []
+        member['allowed_dependencies'] = original['allowed_dependencies']
+        member['minimal_dependencies'] = original['allowed_dependencies']
+        member['notice_entries'] = original['notice_entries']
+        matrix['approved_build_inputs'] = self.base['approved_build_inputs']
+        (source / 'THIRD-PARTY-NOTICES.md').write_text(
+            policy.PRODUCT_NOTICE_INTRO + '\n```json\n' +
+            json.dumps(member['notice_entries'], sort_keys=True) + '\n```\n')
+        # Existing fixture construction made a no-dependency lock. Deliberately
+        # regenerate for this changed manifest through the same admitted runner.
+        seed = cell / 'seed'
+        t = matrix['toolchains'][0]
+        result = policy.run([str(ROOT / 'bin/scopebase-build'), '--',
+            str(Path(t['root']) / 'bin/cargo'), 'generate-lockfile', '--offline',
+            '--manifest-path', str(inputs / 'Cargo.toml')], inputs,
+            policy.clean_env(seed, t, seed / 'target'), cell / 'mandatory-lock')
+        policy.succeeded(result)
+        (inputs / 'matrix.json').write_text(json.dumps(matrix))
+        valid = self.check(cell, inputs, 'mandatory-valid')
+        admits = [r for r in valid['rows'] if r['id'].endswith('-admit') and
+                  r['id'].startswith(('product-subject-minimal-', 'product-subject-default-'))]
+        self.assertEqual(len(admits), 4)
+        self.assertTrue(all(r['status'] == 'PASS' for r in admits))
+        self.assertEqual(len([r for r in valid['rows'] if '-run-' in r['id']]), 4)
+        # The expected closure comes from reviewed inputs, not Cargo's observed
+        # result. Removing one declared dependency must fail the intended gate.
+        member['minimal_dependencies'] = [r for r in original['allowed_dependencies']
+                                          if r['name'] != 'serde_json']
+        (inputs / 'matrix.json').write_text(json.dumps(matrix))
+        missing = self.check(cell, inputs, 'mandatory-missing', expected=1, policy_only=True)
+        failures = [r for r in missing['rows'] if r['status'] == 'FAIL']
+        self.assertEqual(len(failures), 4)
+        self.assertTrue(all(r['reason_code'] == 'MINIMAL_DEPENDENCY_MISMATCH' for r in failures))
+        del member['minimal_dependencies']
+        (inputs / 'matrix.json').write_text(json.dumps(matrix))
+        legacy = self.check(cell, inputs, 'mandatory-legacy', expected=1, policy_only=True)
+        failures = [r for r in legacy['rows'] if r['status'] == 'FAIL']
+        self.assertEqual(len(failures), 4)
+        self.assertTrue(all(r['reason_code'] == 'MINIMAL_FEATURE_LEAK' for r in failures))
+        member['minimal_dependencies'] = original['allowed_dependencies']
+        (inputs / 'matrix.json').write_text(json.dumps(matrix))
+        restored = self.check(cell, inputs, 'mandatory-restored', expected=3, policy_only=True)
+        restored_admits = [r for r in restored['rows'] if r['id'].endswith('-admit') and
+                           r['id'].startswith(('product-subject-minimal-', 'product-subject-default-'))]
+        self.assertEqual(len(restored_admits), 4)
+        self.assertTrue(all(r['status'] == 'PASS' for r in restored_admits))
+        self.assertEqual(restored['summary']['counts']['FAIL'], 0)
+        self.assertEqual(restored['summary']['counts']['BLOCKED'], 0)
+        self.assertEqual(restored['summary']['counts']['NOT_RUN'], 16)
+        self.assertFalse(restored['summary']['full_matrix_complete'])
+
+
 class ExactRustRefusalTests(unittest.TestCase):
     """Parser evidence: exact diagnostics must refer to the owned fixture line."""
     def setUp(self):

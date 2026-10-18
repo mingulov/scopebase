@@ -19,7 +19,7 @@ def configurations(member):
         ('union-'+str(i),False,features) for i,features in enumerate(member['supported_unions'])]
 
 
-def assert_subject(metadata, subject_name, wanted_features, minimal=False):
+def assert_subject(metadata, subject_name, wanted_features, minimal=False, *, minimal_dependencies=None):
     subjects = [v for v in metadata['packages'] if v['name'] == subject_name]
     if len(subjects) != 1 or subjects[0]['version'] != '0.1.0' or subjects[0]['source'] is not None:
         raise p.PolicyError('SUBJECT_IDENTITY_MISMATCH')
@@ -27,8 +27,17 @@ def assert_subject(metadata, subject_name, wanted_features, minimal=False):
     actual = set(node['features']) - {'default'}
     if actual != set(wanted_features):
         raise p.PolicyError('FEATURE_UNION_MISMATCH',detail={'expected':wanted_features,'observed':node['features']})
-    if minimal and any(v['name'] in ('serde','serde_core','serde_json') for v in metadata['packages']):
-        raise p.PolicyError('MINIMAL_FEATURE_LEAK')
+    if minimal:
+        if minimal_dependencies is None:
+            if any(v['name'] in ('serde','serde_core','serde_json') for v in metadata['packages']):
+                raise p.PolicyError('MINIMAL_FEATURE_LEAK')
+        else:
+            expected = {(v['name'], v['version'], v['source']) for v in minimal_dependencies}
+            observed = [(v['name'], v['version'], v['source']) for v in metadata['packages']
+                        if v['source'] is not None]
+            if set(observed) != expected or len(observed) != len(expected):
+                raise p.PolicyError('MINIMAL_DEPENDENCY_MISMATCH',
+                                    detail={'expected': sorted(expected), 'observed': sorted(observed)})
     return subjects[0]
 
 
@@ -163,7 +172,10 @@ def run_member(ex, member, matrix_root, policy_only):
             def metadata(r):
                 p.check_hash(workspace/'Cargo.lock',lock_digest,'LOCK_CHANGED')
                 data = p.metadata_admission(ex,r,t,workspace/'Cargo.toml',target,member['allowed_dependencies'],trusted,member['denied_packages'],budget=budget)
-                assert_subject(data,package_info['name'],features,minimal=mode in ('minimal','default') and not features)
+                minimum = (set(features) == set(member['minimal']) if 'minimal_dependencies' in member
+                           else mode in ('minimal','default') and not features)
+                assert_subject(data,package_info['name'],features,minimal=minimum,
+                               minimal_dependencies=member.get('minimal_dependencies'))
                 r['observed'] = {'independent_lock':str(workspace/'Cargo.lock'),'subject_features':features,'client_count':len(clients)}
             try:
                 ex.step(cell+'-admit',metadata)
