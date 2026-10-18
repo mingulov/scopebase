@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,6 +86,35 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
             policy.check_licenses(self.subject, licenses, entries)
 
+    def test_product_notices_are_role_specific_and_keep_license_checks(self):
+        intro = 'ScopeBase package dependency notices. Dependency references are not bundled unless explicitly marked.'
+        notice = self.subject / 'THIRD-PARTY-NOTICES.md'
+        license_path = self.subject / 'LICENSE-APACHE'
+        license_path.write_bytes(b'approved license\n')
+        licenses = [dict(path='LICENSE-APACHE', sha256=hashlib.sha256(b'approved license\n').hexdigest())]
+        notice.write_text(intro + '\n```json\n[]\n```\n')
+        policy.check_licenses(self.subject, licenses, [], role='product')
+        with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
+            policy.check_licenses(self.subject, licenses, [])
+        notice.write_text(policy.NOTICE_INTRO + '\n```json\n[]\n```\n')
+        policy.check_licenses(self.subject, licenses, [])
+        with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
+            policy.check_licenses(self.subject, licenses, [], role='product')
+        with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_ROLE_UNKNOWN'):
+            policy.check_licenses(self.subject, licenses, [], role='other')
+        for body in ('[]', '[{}]', '[{"name":"one","name":"two"}]'):
+            notice.write_text(intro + '\n```json\n' + body + '\n```\n')
+            if body != '[]':
+                with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
+                    policy.check_licenses(self.subject, licenses, [], role='product')
+        notice.unlink()
+        with self.assertRaisesRegex(policy.PolicyError, 'NOTICE_INCOMPLETE'):
+            policy.check_licenses(self.subject, licenses, [], role='product')
+        notice.write_text(intro + '\n```json\n[]\n```\n')
+        license_path.write_bytes(b'changed')
+        with self.assertRaisesRegex(policy.PolicyError, 'LICENSE_TEXT_MISMATCH'):
+            policy.check_licenses(self.subject, licenses, [], role='product')
+
     def test_RR2_complete_metadata_projection_and_explicit_manifest_surface(self):
         import copy
         other=self.root/'relocated'; other.mkdir(); (other/'src').mkdir()
@@ -137,7 +167,7 @@ class RealCargoControls(unittest.TestCase):
         cls.positive = cls.root/'positive'
         cls.positive_report = cls.root/'positive.json'
         result = subprocess.run([str(ROOT/'bin/scopebase-build'),'--',sys.executable,
-            str(ROOT/'tools/build/check_features.py'),'--manifest',str(ROOT/'Cargo.toml'),
+            str(ROOT/'tools/build/check_features.py'),'--manifest',str(ROOT/'tests/package-policy/fixtures/empty-workspace/Cargo.toml'),
             '--matrix',str(ROOT/'tests/package-policy/matrix.json'),'--output-dir',str(cls.positive),
             '--report',str(cls.positive_report)],capture_output=True,text=True)
         if result.returncode:
@@ -389,7 +419,7 @@ class RealCargoControls(unittest.TestCase):
             matrix['approved_build_inputs'].append(grant)
             matrix_path=inputs/'matrix.json'; matrix_path.write_text(json.dumps(matrix))
             report=output/'report.json'; run=output/'run'
-            argv=[str(ROOT/'bin/scopebase-build'),'--',sys.executable,str(ROOT/'tools/build/check_features.py'),'--manifest',str(ROOT/'Cargo.toml'),'--matrix',str(matrix_path),'--output-dir',str(run),'--report',str(report)]
+            argv=[str(ROOT/'bin/scopebase-build'),'--',sys.executable,str(ROOT/'tools/build/check_features.py'),'--manifest',str(ROOT/'tests/package-policy/fixtures/empty-workspace/Cargo.toml'),'--matrix',str(matrix_path),'--output-dir',str(run),'--report',str(report)]
             result=subprocess.run(argv,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr+report.read_text())
             data=json.loads(report.read_text())
@@ -480,3 +510,134 @@ class RealCargoControls(unittest.TestCase):
                     (output/'authors-only-evidence.json').write_text(json.dumps(authors_control,indent=2)+'\n')
                 self.assertFalse(marker.exists())
                 self.assertFalse(list((run/'targets').rglob('changed-metadata-marker')))
+
+
+class ProductPolicyControls(unittest.TestCase):
+    """First-product lock custody and true workspace-member staging controls."""
+    @classmethod
+    def setUpClass(cls):
+        import os
+        product_output=Path(os.environ.get('SCOPEBASE_TEST_OUTPUT_ROOT',str(ROOT/'.scopebase/test-output')))
+        product_output.mkdir(parents=True,exist_ok=True)
+        cls.temp = tempfile.TemporaryDirectory(prefix='lx01-product-',dir=product_output)
+        cls.root = Path(cls.temp.name)
+        cls.temp._finalizer.detach()  # Retain command logs and controls for review.
+        cls.base = json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+        cls.counter = 0
+
+    def product(self):
+        import shutil
+        type(self).counter += 1
+        cell = self.root/str(self.counter); cell.mkdir()
+        inputs = cell/'input'; inputs.mkdir()
+        source = inputs/'subject'; (source/'src').mkdir(parents=True)
+        (source/'Cargo.toml').write_text('[package]\nname="product-subject"\nversion="0.1.0"\nedition="2021"\nrust-version="1.88.0"\nlicense="Apache-2.0"\nbuild=false\ninclude=["Cargo.toml","src/lib.rs","LICENSE-APACHE","THIRD-PARTY-NOTICES.md"]\n[features]\ndefault=[]\nextra=[]\n')
+        (source/'src/lib.rs').write_text('//! ```\n//! use product_subject as _;\n//! ```\n')
+        shutil.copyfile(ROOT/'LICENSE-APACHE',source/'LICENSE-APACHE')
+        (source/'THIRD-PARTY-NOTICES.md').write_text('ScopeBase package dependency notices. Dependency references are not bundled unless explicitly marked.\n```json\n[]\n```\n')
+        (inputs/'client.rs').write_text('use product_subject as _; fn main() {}\n')
+        (inputs/'Cargo.toml').write_text('[workspace]\nresolver="2"\nmembers=["subject"]\n')
+        matrix = json.loads(json.dumps(self.base)); matrix['fixture_members']=[]; matrix['approved_build_inputs']=[]
+        matrix['members']=[dict(id='product-subject',manifest='subject/Cargo.toml',role='product',minimal=[],default=[],supported_unions=[['extra']],clients=[dict(id='product-client',source='client.rs',default_features=False,features=['extra']),dict(id='product-other',source='client.rs',default_features=False,features=[])],package_files=['Cargo.toml','Cargo.toml.orig','Cargo.lock','src/lib.rs','LICENSE-APACHE','THIRD-PARTY-NOTICES.md'],allowed_dependencies=[],license_files=[dict(path='LICENSE-APACHE',sha256=policy.sha(ROOT/'LICENSE-APACHE'))],notice_entries=[],denied_packages=['aya','cc'])]
+        (inputs/'matrix.json').write_text(json.dumps(matrix))
+        seed=cell/'seed'; seed.mkdir(); policy.stage_inputs(matrix['cargo_inputs'],seed)
+        import subprocess
+        result=subprocess.run([str(ROOT/'bin/scopebase-build'),'--',str(Path(matrix['toolchains'][0]['root'])/'bin/cargo'),'generate-lockfile','--offline','--manifest-path',str(inputs/'Cargo.toml')],env=policy.clean_env(seed,matrix['toolchains'][0],seed/'target'),capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        return cell,inputs,source,matrix
+
+    def check(self,cell,inputs,label,expected=0,policy_only=False):
+        import subprocess
+        report=cell/(label+'.json')
+        argv=[str(ROOT/'bin/scopebase-build'),'--',sys.executable,str(ROOT/'tools/build/check_features.py'),'--manifest',str(inputs/'Cargo.toml'),'--matrix',str(inputs/'matrix.json'),'--output-dir',str(cell/label),'--report',str(report)]
+        if policy_only: argv.append('--policy-only')
+        result=subprocess.run(argv,capture_output=True,text=True)
+        data=json.loads(report.read_text()) if report.exists() else None
+        if expected == 0: self.assertEqual(result.returncode,0,result.stdout+result.stderr+str(data['summary'] if data else None))
+        else: self.assertNotEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIsNotNone(data,result.stderr)
+        return data
+
+    def test_product_member_stages_without_changing_approved_manifest(self):
+        cell,inputs,source,matrix=self.product()
+        before=policy.tree_digest(inputs)
+        data=self.check(cell,inputs,'valid',policy_only=False)
+        self.assertEqual(policy.tree_digest(inputs),before)
+        copied=cell/'valid/subjects/product-subject/subject'
+        self.assertEqual((copied/'Cargo.toml').read_bytes(),(source/'Cargo.toml').read_bytes())
+        self.assertNotIn('[workspace]',(copied/'Cargo.toml').read_text())
+        self.assertTrue((copied/'Cargo.lock').is_file())
+        self.assertFalse((source/'Cargo.lock').exists())
+        self.assertEqual(policy.sha(copied/'Cargo.lock'),policy.sha(copied.parent/'Cargo.lock'))
+        import subprocess
+        boundary=copied.parent/'Cargo.toml'; valid_boundary=boundary.read_bytes()
+        self.assertEqual(tomllib.loads(valid_boundary.decode())['workspace']['members'],['subject'])
+        boundary.unlink()
+        t=matrix['toolchains'][0]
+        argv=[str(ROOT/'bin/scopebase-build'),'--',str(Path(t['root'])/'bin/cargo'),'metadata','--offline','--locked','--no-deps','--format-version','1','--manifest-path',str(copied/'Cargo.toml')]
+        env=policy.clean_env(cell/'valid',t,cell/'bad-boundary-target')
+        bad=policy.run(argv,copied,env,cell/'no-boundary')
+        self.assertNotEqual(bad['exit_code'],0)
+        self.assertIn("believes it's in a workspace",Path(bad['logs']['stderr']['path']).read_text())
+        boundary.write_bytes(valid_boundary)
+        good=policy.run(argv,copied,env,cell/'restored-boundary')
+        policy.succeeded(good)
+        for row in data['rows']:
+            if row['id'].startswith('root-'):
+                self.assertIn('--locked',row['command'])
+                self.assertNotIn('--no-deps',row['command'])
+                self.assertIn('--filter-platform',row['command'])
+                self.assertEqual(row['lock_sha256_before'],row['lock_sha256'])
+                self.assertEqual(row['input_sha256'],row['input_sha256_after'])
+        unpacked=cell/'valid/unpacked/product-subject/product-subject-0.1.0'
+        (unpacked/'THIRD-PARTY-NOTICES.md').write_text(policy.NOTICE_INTRO+'\n```json\n[]\n```\n')
+        with self.assertRaisesRegex(policy.PolicyError,'NOTICE_INCOMPLETE'):
+            policy.check_licenses(unpacked,matrix['members'][0]['license_files'],[],role='product')
+
+    def test_missing_and_stale_root_locks_refuse_unchanged_and_restored_twin_passes(self):
+        cell,inputs,source,matrix=self.product()
+        lock=inputs/'Cargo.lock'; valid=lock.read_bytes()
+        for label,raw in (('missing',None),('stale',valid.replace(b'0.1.0',b'0.0.0'))):
+            if raw is None: lock.unlink()
+            else: lock.write_bytes(raw)
+            before=policy.tree_digest(inputs)
+            data=self.check(cell,inputs,label,expected=1)
+            self.assertEqual(policy.tree_digest(inputs),before)
+            for row in data['rows']:
+                if row['id'].startswith('root-') and row['command']:
+                    self.assertEqual(row['status'],'FAIL')
+                    self.assertIn('--locked',row['command'])
+                    self.assertNotIn('--no-deps',row['command'])
+                    self.assertEqual(row['lock_sha256_before'],row['lock_sha256'])
+                    self.assertEqual(row['input_sha256'],row['input_sha256_after'])
+            lock.write_bytes(valid)
+            self.check(cell,inputs,label+'-restored')
+
+    def test_product_requires_an_executed_doctest(self):
+        cell,inputs,source,matrix=self.product()
+        (source/'src/lib.rs').write_text('// no executable documentation\n')
+        data=self.check(cell,inputs,'no-doctest',expected=1)
+        docs=[r for r in data['rows'] if r['phase']=='doc']
+        self.assertEqual(len(docs),6)
+        self.assertTrue(all(r['reason_code']=='DOCTEST_MISSING' for r in docs))
+
+    def test_product_source_refusals_precede_compilation(self):
+        cell,inputs,source,matrix=self.product()
+        notice=source/'THIRD-PARTY-NOTICES.md'; original=notice.read_bytes()
+        notice.write_text(policy.NOTICE_INTRO+'\n```json\n[]\n```\n')
+        data=self.check(cell,inputs,'fixture-notice',expected=1)
+        self.assertEqual(next(r for r in data['rows'] if r['id']=='product-subject-source')['reason_code'],'NOTICE_INCOMPLETE')
+        notice.write_bytes(original)
+        manifest=source/'Cargo.toml'; baseline=manifest.read_text()
+        sibling=inputs/'sibling'; (sibling/'src').mkdir(parents=True)
+        (sibling/'Cargo.toml').write_text('[package]\nname="sibling"\nversion="0.1.0"\n')
+        (sibling/'src/lib.rs').write_text('')
+        manifest.write_text(baseline+'[dependencies]\nsibling={path="../sibling"}\n')
+        with self.assertRaisesRegex(policy.PolicyError,'EXTERNAL_PATH_DEPENDENCY'):
+            policy.inspect_manifest(manifest)
+        manifest.write_text(baseline)
+        matrix['members'][0]['manifest']='../elsewhere/Cargo.toml'
+        (inputs/'matrix.json').write_text(json.dumps(matrix))
+        import check_features,contextlib,io
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(check_features.main(['--manifest',str(inputs/'Cargo.toml'),'--matrix',str(inputs/'matrix.json'),'--output-dir',str(cell/'escaped'),'--report',str(cell/'escaped.json')]),2)

@@ -178,7 +178,7 @@ class FailureStageAttributionTests(unittest.TestCase):
                     path=inputs/(kind+'-'+mutation+'.json'); path.write_text(json.dumps(matrix))
                     report=root/(kind+'-'+mutation+'-report.json')
                     argv=[sys.executable,str(ROOT/'tools/build'/('check_features.py' if kind=='features' else 'dependency_probe.py')),'--matrix',str(path),'--output-dir',str(root/(kind+'-'+mutation+'-output')),'--report',str(report)]
-                    if kind=='features': argv.extend(['--manifest',str(ROOT/'Cargo.toml')])
+                    if kind=='features': argv.extend(['--manifest',str(ROOT/'tests/package-policy/fixtures/empty-workspace/Cargo.toml')])
                     result=subprocess.run(argv,capture_output=True,text=True)
                     self.assertEqual(result.returncode,exit_code,result.stdout+result.stderr)
                     rows=json.loads(report.read_text())['rows']
@@ -239,7 +239,7 @@ class ExplicitOwnerTests(unittest.TestCase):
                 for scenario in ('identity','preparation'):
                     report=root/(kind+'-'+scenario+'.json'); out=root/(kind+'-'+scenario)
                     args=['--matrix',str(path),'--output-dir',str(out),'--report',str(report)]
-                    if kind=='features': args+=['--manifest',str(ROOT/'Cargo.toml')]
+                    if kind=='features': args+=['--manifest',str(ROOT/'tests/package-policy/fixtures/empty-workspace/Cargo.toml')]
                     def identity(*a,**kw):
                         if scenario=='identity': raise policy.PolicyError('TOOLCHAIN_UNAVAILABLE','BLOCKED')
                         return {'id':a[0]['id']}

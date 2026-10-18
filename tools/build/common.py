@@ -25,6 +25,7 @@ MAX_LOG = 4 * 1024 * 1024
 REGISTRY = 'registry+https://github.com/rust-lang/crates.io-index'
 HOST = 'x86_64-unknown-linux-gnu'
 NOTICE_INTRO = 'SB02 checker fixture only; not published. Dependency references are not bundled unless explicitly marked.'
+PRODUCT_NOTICE_INTRO = 'ScopeBase package dependency notices. Dependency references are not bundled unless explicitly marked.'
 DIGEST = re.compile(r'[0-9a-f]{64}\Z')
 IDENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\Z')
 
@@ -442,7 +443,10 @@ def package_files(actual, allowed):
         raise PolicyError('UNEXPECTED_PACKAGE_FILE', detail={'extra': sorted(set(actual)-set(allowed)), 'missing': sorted(set(allowed)-set(actual))})
 
 
-def check_licenses(root, licenses, notices):
+def check_licenses(root, licenses, notices, role='fixture'):
+    intros = {'fixture': NOTICE_INTRO, 'product': PRODUCT_NOTICE_INTRO}
+    if role not in intros:
+        raise PolicyError('NOTICE_ROLE_UNKNOWN')
     root = Path(root)
     for r in licenses:
         path = relative(root, r['path'], False)
@@ -453,7 +457,7 @@ def check_licenses(root, licenses, notices):
     if not path.is_file():
         raise PolicyError('NOTICE_INCOMPLETE')
     raw = path.read_text()
-    match = re.fullmatch(re.escape(NOTICE_INTRO) + r'\n```json\n(.*?)\n```\n', raw, re.S)
+    match = re.fullmatch(re.escape(intros[role]) + r'\n```json\n(.*?)\n```\n', raw, re.S)
     if not match:
         raise PolicyError('NOTICE_INCOMPLETE')
     try:
@@ -948,27 +952,36 @@ class Execution:
         if result.get('process_group') and result['cleanup'] == 'unresolved':
             r['observed'] = {**result,'owner':str(self.output)}
 
-    def command(self, r, t, manifest, arguments, target, features=(), defaults=True, failure='CARGO_FAILED', extra_env=None, budget=None):
+    def command(self, r, t, manifest, arguments, target, features=(), defaults=True, failure='CARGO_FAILED', extra_env=None, budget=None, lock_path=None):
         env = clean_env(self.output,t,target)
         if extra_env: env.update(extra_env)
         argv = [Path(t['root'])/'bin/cargo', *arguments, '--manifest-path',manifest]
         if not defaults: argv.append('--no-default-features')
         if features: argv.extend(['--features',','.join(features)])
         r['input_sha256'] = tree_digest(Path(manifest).parent)
-        lock = Path(manifest).parent/'Cargo.lock'
+        lock = Path(lock_path) if lock_path is not None else Path(manifest).parent/'Cargo.lock'
         before_lock = sha(lock) if lock.is_file() else None
+        r['lock_sha256_before'] = before_lock
+        r['lock_path'] = str(lock)
         timeout=budget.remaining() if budget else 600
         if budget: r['expected']={'cell':budget.ident,'wall_budget_seconds':budget.seconds}
         r['command']=[str(a) for a in argv]; r['cwd']=str(Path(manifest).parent)
-        result = run(argv,Path(manifest).parent,env,self.output/'logs'/r['id'],timeout=timeout)
+        result = None
+        try:
+            result = run(argv,Path(manifest).parent,env,self.output/'logs'/r['id'],timeout=timeout)
+        finally:
+            if result is not None: self.attach(r,result)
+            r['lock_sha256'] = sha(lock) if lock.is_file() else None
+            r['input_sha256_after'] = tree_digest(Path(manifest).parent)
         if budget: budget.complete(result)
-        self.attach(r,result)
         # Incomplete collection/cleanup has priority over any interpretation of
         # partial diagnostics or post-command lock/log processing.
         if result['reason_code'] or result['cleanup']=='unresolved': succeeded(result,failure)
-        r['lock_sha256'] = sha(lock) if lock.is_file() else None
         if '--locked' in arguments and before_lock != r['lock_sha256']:
             raise PolicyError('LOCK_CHANGED')
+        diagnostic = Path(result['logs']['stderr']['path']).read_text(errors='replace')
+        if result['exit_code'] != 0 and '--locked' in arguments and 'needs to be updated' in diagnostic and '--locked' in diagnostic:
+            raise PolicyError('LOCK_REQUIRED', detail=result)
         if result['exit_code'] != 0 and ('offline' in Path(result['logs']['stderr']['path']).read_text(errors='replace').lower()) and arguments[0] in ('metadata','generate-lockfile'):
             raise PolicyError('OFFLINE_CLOSURE_INCOMPLETE','BLOCKED',result)
         succeeded(result,failure)
@@ -994,8 +1007,8 @@ class Execution:
         return self.report['summary']['exit_code']
 
 
-def metadata_admission(execution, r, t, manifest, target, allowed, trusted, denied=(), features=(), defaults=True, budget=None):
-    result = execution.command(r,t,manifest,['metadata','--offline','--locked','--format-version','1','--filter-platform',HOST],target,features,defaults,budget=budget)
+def metadata_admission(execution, r, t, manifest, target, allowed, trusted, denied=(), features=(), defaults=True, budget=None, lock_path=None):
+    result = execution.command(r,t,manifest,['metadata','--offline','--locked','--format-version','1','--filter-platform',HOST],target,features,defaults,budget=budget,lock_path=lock_path)
     try: data = json.loads(stdout(result),object_pairs_hook=pairs)
     except ValueError as e: raise PolicyError('METADATA_INVALID') from e
     resolved = admit(data,allowed,execution.matrix['approved_build_inputs'],execution.staging,trusted,denied)
