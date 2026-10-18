@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "sb02-probe-btf-rs"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+[workspace]
+[dependencies]
+btf-rs = { git = "https://github.com/retis-org/btf-rs", rev = "0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0", default-features = false }

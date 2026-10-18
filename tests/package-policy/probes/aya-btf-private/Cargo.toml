@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "sb02-refusal-aya-btf-private"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+[workspace]
+[dependencies]
+aya-obj = { version = "=0.3.0", default-features = false }
+object = { version = "=0.39.1", default-features = false, features = ["read_core", "elf", "std"] }
