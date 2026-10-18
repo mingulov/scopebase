@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 1,
+  "tasks": [
+    "TT01"
+  ],
+  "obligations": [
+    {
+      "kind": "regression_family",
+      "id": "H04",
+      "description": "Held fixture",
+      "owners": [
+        "TT01"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "H04",
+      "short_contract": "Held fixture",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        }
+      ]
+    }
+  ],
+  "cells": [
+    {
+      "id": "revision-before",
+      "tier": "T0",
+      "description": "Revision fixture before observation",
+      "binding": "LOGICAL_ONLY"
+    },
+    {
+      "id": "revision-after",
+      "tier": "T0",
+      "description": "Revision fixture after observation",
+      "binding": "LOGICAL_ONLY"
+    }
+  ],
+  "cases": [
+    {
+      "id": "H04.revision-fixture",
+      "family": "H04",
+      "version": 1,
+      "implementation_status": "REGISTERED_EXECUTABLE",
+      "owners": [
+        "TT01"
+      ],
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H04"
+        }
+      ],
+      "required_cells": [
+        "revision-before"
+      ],
+      "registration": {
+        "executable": {
+          "id": "artifact.executable",
+          "revision": 1,
+          "path": "artifacts/executable.txt",
+          "sha256": "ff42a09e250c404c6bebadf62a08f94abd2b2869cc9e055232fde7fec365bf69",
+          "entrypoint": "inspect.executable"
+        },
+        "fixture": {
+          "id": "artifact.fixture",
+          "revision": 1,
+          "path": "artifacts/fixture.txt",
+          "sha256": "c114c468d353d6df24f9b06f869c9e58d9d0c0e77273d15548e95a8a91b2d934",
+          "entrypoint": "inspect.fixture"
+        },
+        "oracle": {
+          "id": "artifact.oracle",
+          "revision": 1,
+          "path": "artifacts/oracle.txt",
+          "sha256": "418f52d8513be0295d9ac4bd363f17bb1c140af0c10e4ce0ac821e43710201d5",
+          "entrypoint": "inspect.oracle"
+        },
+        "bad_control": {
+          "id": "artifact.executable",
+          "revision": 1,
+          "path": "artifacts/executable.txt",
+          "sha256": "ff42a09e250c404c6bebadf62a08f94abd2b2869cc9e055232fde7fec365bf69",
+          "entrypoint": "inspect.executable"
+        },
+        "oracle_basis": "Literal independent sum of the two fixture integers is 5; this is harmless metadata.",
+        "control_assertion": "A wrong sum of 6 fails the equality with 5, after valid fixture setup."
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "id": "revision-fixture-v1",
+      "definition_state": "DRAFT",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H04.revision-fixture",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": [
+        "TT01"
+      ]
+    }
+  ],
+  "extensions": [
+    {
+      "id": "extension-v1",
+      "profile": "revision-fixture-v1",
+      "requires_profiles": [],
+      "requires_tasks": [
+        "TT01"
+      ],
+      "required_cases": []
+    }
+  ]
+}
