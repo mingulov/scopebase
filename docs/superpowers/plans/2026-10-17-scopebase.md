@@ -12,6 +12,10 @@
 
 ## Global Constraints
 
+- Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.
+- PORT/ADAPT preserves the identified donor mechanism, affected call sites, original regression, independent oracle and bad control together. NEW requires the recorded missing-mechanism reason and frozen design. Unresolved architecture, source, license, support or expected-result choices return NEEDS_DECISION; no fresh approximation or weaker gate.
+- Apply provisional Apache-2.0 userspace / GPL-2.0-only BPF / GPL-3.0-or-later application terms and the shared-source/third-party rules in D03–D04. Keep source SPDX, author authorization, actual target input option and kernel runtime declaration distinct.
+
 - Brand `ScopeBase`; package names `scopebase-*`; initial package version `0.1.0`.
 - Initial host target `x86_64-unknown-linux-gnu`, Rust edition 2021, proposed MSRV `1.88.0` requiring actual qualification.
 - Pure host packages do not invoke BPF/native toolchains, install tools or change process-global policy.
@@ -81,9 +85,11 @@ Interface changes require a short proposal naming downstream signatures/cases, c
 
 ### SB01: Source intake, licensing and contract ledger
 
-**Requirements:** SB-R01–SB-R03, SB-R05–SB-R09, SB-R17. **Depends on:** this specification. **Files:** create `docs/provenance/{donors.json,licenses.md,adoption-decisions.md}`, `docs/contracts/{interfaces.md,evidence.md}`, `docs/issues/README.md`, `tools/planning/check_traceability.py` and its tests; use the existing planning registry as input.
+**Requirements:** SB-R01–SB-R03, SB-R05–SB-R09, SB-R17, TC-R10. **Depends on:** this specification. **Files:** create `docs/provenance/{donors.json,licenses.md,adoption-decisions.md}`, `docs/contracts/{interfaces.md,evidence.md}`, `docs/issues/README.md`, `tools/planning/check_traceability.py` and its tests; use the existing planning registry as input.
 
 **Interfaces:** Donor record contains source repository/worktree, full commit, selected file paths/content hashes, WIP hashes, per-file license, source issue/test and intended contract. Public contract registry contains package/module/type signature, owner, consumers and version. These are provenance records, never runtime authority.
+
+**Required repair packet:** Follow [intake validation](2026-10-18-scopebase-plan-repair.md#repair-intake-validation): no implicit partial-clone fetch; validate every nested family/regression reference; distinguish source SPDX from owner-authorized destination grants. H33 is a new planned obligation, so preserve the original 32 family observations and add its separately attributed input. Freeze per-mechanism symbols/tests/destinations before dispatch; 124 observed files alone do not satisfy that step.
 
 - [ ] Verify selected donor refs/worktrees/dirty files read-only using their current instructions and existing inventories. Capture only relevant source/document deltas; never merge every branch or treat an old green result as current qualification.
 - [ ] Write invalid-ledger checks for missing SHA/license/owner, dangling H/G/UC/TODO IDs, source absent from selected tree and a current branch name substituted for immutable bytes. `python3 -m unittest discover -s tools/planning/tests` must detect each invalid fixture.
@@ -98,6 +104,10 @@ Interface changes require a short proposal naming downstream signatures/cases, c
 **Requirements:** SB-R03–SB-R04, SB-R12–SB-R15. **Depends on:** SB01. **Files:** create root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.gitignore`, `mise.toml` if used; `tools/build/{dependency_probe,check_features}.py`, `tests/package-policy/`, `docs/dependencies.md`. Component owners supply their own package manifests; the integration owner serializes workspace membership.
 
 **Interfaces:** `dependency_probe` records package/version/features/host toolchain and contract-fit tests; `check_features --manifest PATH --matrix PATH` builds independent external workspaces. No production dependency may point into a donor checkout.
+
+**Decision ownership:** SB02 executes the [concrete dependency packet](2026-10-18-scopebase-plan-repair.md#first-dependencyworkspace-packet). The controller/expert records the selected implementation, feature set, actual public APIs and target license options from probe evidence. A failed comparator is not permission to raise MSRV, replace a parser/loader or rewrite a donor. Missing target policy gates only the affected BPF payload, not unrelated host components.
+
+**TC-R10/H33 facet:** actual source/target dependency options and notices, distinct from source headers. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] Create scratch dependency probes for the actual rustix/nix/procfs/parser/backend candidates and required APIs. Run selected probes on Rust1.88.0 and pinned current stable. Missing MSRV support is a design/dependency decision, not silently raised policy.
 - [ ] Write feature-policy controls that introduce a sibling path dependency or BPF build invocation into a host-only package; the checker must reject them. Add a two-client feature-union workspace with independent lockfile.
@@ -142,6 +152,8 @@ Interface changes require a short proposal naming downstream signatures/cases, c
 **Requirements:** SB-R02–SB-R04, SB-R10–SB-R14. **Depends on:** selected component distributed-client tasks, TT07–TT09, RL01. **Files:** create `tools/release/{build_artifacts,verify_bundle}.py`, `packaging/{manifest-schema.json,allowlists/}`, `.github/workflows/package.yml`, `docs/releasing.md`.
 
 **Interfaces:** Bundle manifest names exact archive/library/binary/object/fixture identities, licenses, resolved build inputs and supported profile versions. Reproducibility means documented/pinned inputs and checked outputs; bit-for-bit claims require an actual repeated controlled build.
+
+**TC-R10/H33 facet:** archive/bundle notice and source/object/option manifest closure. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] Write archive/bundle negatives for missing fixture/license, leaked donor absolute dependency, mismatched final object, absent native SONAME dependency and different feature build using the same metadata.
 - [ ] Build from source archives in fresh workspaces, run minimal/default/union/MSRV/current and explicit doctests, then execute installed offline checks from read-only prefix.

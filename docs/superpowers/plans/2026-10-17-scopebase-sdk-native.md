@@ -12,6 +12,10 @@
 
 ## Global Constraints
 
+- Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.
+- PORT/ADAPT preserves the identified donor mechanism, affected call sites, original regression, independent oracle and bad control together. NEW requires the recorded missing-mechanism reason and frozen design. Unresolved architecture, source, license, support or expected-result choices return NEEDS_DECISION; no fresh approximation or weaker gate.
+- Apply provisional Apache-2.0 userspace / GPL-2.0-only BPF / GPL-3.0-or-later application terms and the shared-source/third-party rules in D03–D04. Keep source SPDX, author authorization, actual target input option and kernel runtime declaration distinct.
+
 - ScopeBase branding; proposed `scopebase-sdk` and selectively justified `scopebase-ffi` package names are not published/reserved.
 - Rust edition 2021; proposed MSRV 1.88.0, requiring actual qualification.
 - Initial package version 0.1.0 and target x86_64-unknown-linux-gnu; original-source license policy follows SB01 review.
@@ -188,6 +192,10 @@ trait ConformanceAdapter {
 **Dependencies:** NX01; SB01. **Requirements:** NX-R02/R07/R12. **Files:** create `docs/interop/{libbpf-mojo-inputs.md,object-contract.md,support-matrix.json}`, `interop/libbpf-mojo-conformance/inputs.json`.
 
 **Interfaces:** input register distinguishes consumed source/bundle, sibling main, joint candidate, refs/worktrees/WIP and selected-file deltas. Operation matrix separately records object parse/load, map kind/test-run, attach, ring, lifetime and installed C/Mojo route evidence.
+
+**Required decision:** Freeze actual consumed bridge symbols/compiler/ABI and classify host, target, shared and generated inputs under D03–D04/H33. Preserve Apache-2.0 WITH LLVM-exception where supplied; do not treat it as ordinary Apache or infer the exception from LLVM use. Decide already-fixed versus minimal overlay before NX03–NX06; no invented native API or second bridge.
+
+**TC-R10/H33 facet:** actual native/generated/shared input roles and original selected terms. Follow D03–D04; other facets remain with their named owners.
 
 - [ ] Refresh only selected remote source metadata read-only against the exact research pins, preserving uncommitted/untracked work and no fetching/reset/build/runtime operations. Record moving heads; do not freeze another owner's checkout.
 - [ ] Compare public headers/symbols/source to ownership/support prose and specifically detect buffer-statistics documentation drift. Audit actual MemVeil dependency inclusion of each fix rather than infer from sibling main.

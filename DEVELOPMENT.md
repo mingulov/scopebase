@@ -4,6 +4,8 @@ The controller follows the [master plan](docs/superpowers/plans/2026-10-17-scope
 
 ## Controller and worker roles
 
+The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) and [repair plan](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md) now govern every task. Current user steering is plan repair before more implementation. The expert/controller freezes source slices and architecture/license/kernel decisions before a bounded executor starts. Existing job preparation binds inputs; it does not check the new packet's semantic completeness.
+
 | Role | Model / effort | Responsibility |
 |---|---|---|
 | Controller | Current root session | Select dependency-ready work, freeze scope, hold ledgers, rule on conflicts, integrate and verify |
@@ -24,7 +26,7 @@ Freeze shared task inputs for each parallel wave. Finish the assigned candidates
 
 1. Read the active goal with the goal tool and refresh `handoff.md`; preserve the exact goal in `.scopebase/goal.md` for task preparation. This snapshot does not create or replace the tool's goal. No token budget is inferred.
 2. Run `bin/scopebase-job doctor --repo /absolute/repository`. It performs local checks only. Current product toolchains/environments must be admitted by their own tasks.
-3. Read the selected specification and task, then inspect its exact donor branches/worktrees/WIP read-only. Port the accepted implementation and regression together. Record file hashes, license and defect explanation; do not silently substitute a clean-room approximation for difficult existing behavior.
+3. Read the selected specification/task and applicable decisions, then inspect exact donor branches/worktrees/WIP read-only without lazy fetching. Fill the executor-contract table with source symbols/tests, destination API, origin, cross-donor differences, grants/target roles and independent oracle/control. The expert resolves choices before dispatch. Port the accepted mechanism/regression together; no fresh approximation or placeholder behavior. NEEDS_DECISION identifies the missing field and affected work.
 4. Select an allowed path set and prepare a job. Example for initial SB01, after a real goal file exists:
 
 ```sh
@@ -35,7 +37,7 @@ bin/scopebase-job prepare --repo /home/user/src/m/bpfscope \
   --write-path docs/issues --write-path tools/planning
 ```
 
-5. Read the generated brief/manifest/dispatch, check dependencies and ownership, then dispatch using the native agent tool. Preparation creates files and a worktree; it does not launch a worker. Give the worker only relevant source/specification context. Use its private TMPDIR, Cargo target and evidence directories.
+5. Read the generated brief/manifest/dispatch, attach the completed expert-reviewed packet and WHAT/WHY decisions, check dependencies and ownership, then dispatch using the native agent tool. Preparation creates files and a worktree; it does not launch a worker or enforce the new packet contract. Give the worker relevant exact source/specification context. Use private TMPDIR, Cargo target and evidence directories.
 6. Require an explicit worker report and independently inspect its commits/working tree. Generate `bin/scopebase-job review-package --repo /absolute/repository --job ID --head FULL_SHA`, then supply the immutable package, brief, report and candidate source to a fresh reviewer. A report's DONE does not accept the task.
 7. Record findings and rulings, send focused fixes to the owner, and review the changed range. Every fix commit receives a new immutable `job/reviews/FULL_SHA/` package; an old package is never overwritten. A real correctness or evidence-integrity defect stays blocking. Cosmetic debt has an owner and exit criterion; it cannot hide a structural flaw. Refresh the candidate binding after every changed byte.
 8. Run the causal affected checks on the final candidate, integrate only locally owned work, and update product TODO/traceability/handoff together. A local integration is distinct from external publication. After actual resource retirement and accepted or deliberately abandoned work, use `bin/scopebase-job reconcile --repo PATH --job ID --reason TEXT --evidence-file /absolute/controller-evidence.md --resources-retired` to release administrative writable ownership. The helper snapshots the evidence and preserves the manifest, checkout and reviews; it cannot infer that runtime resources are gone or accept the product task. Keep the claim while custody is unresolved.

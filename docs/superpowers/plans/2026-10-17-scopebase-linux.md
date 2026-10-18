@@ -12,7 +12,11 @@
 
 ## Global Constraints
 
-- Initial package version is 0.1.0. Rust edition 2021 and proposed host MSRV 1.88.0 are subject to foundation compile qualification. Original code follows the master MIT OR Apache-2.0 policy after SB01 review; imports retain actual licenses.
+- Follow the [decision register](../specs/2026-10-18-scopebase-decisions.md) and [executor contract](../specs/2026-10-18-scopebase-executor-contract.md). The [task-origin routes and concrete repair packets](2026-10-18-scopebase-plan-repair.md#task-origins-and-decision-routes) supplement this task; broad source groups are not dispatch-ready source selections.
+- PORT/ADAPT preserves the identified donor mechanism, affected call sites, original regression, independent oracle and bad control together. NEW requires the recorded missing-mechanism reason and frozen design. Unresolved architecture, source, license, support or expected-result choices return NEEDS_DECISION; no fresh approximation or weaker gate.
+- Apply provisional Apache-2.0 userspace / GPL-2.0-only BPF / GPL-3.0-or-later application terms and the shared-source/third-party rules in D03–D04. Keep source SPDX, author authorization, actual target input option and kernel runtime declaration distinct.
+
+- Initial package version is 0.1.0. Rust edition 2021 and proposed host MSRV 1.88.0 are subject to foundation compile qualification. User-owned userspace code follows the provisional Apache-2.0 policy in D03; historical donor SPDX and authorized destination terms remain distinct, with actual third-party terms retained.
 - Initial runtime qualification targets `x86_64-unknown-linux-gnu`; other targets are unsupported until added to the matrix with build and runtime evidence.
 - The named host qualification cells are Linux 5.15, Linux 6.12 and a pinned current control selected by SB02 before qualification; they do not establish a universal BPF floor.
 - `scopebase-linux` is a Linux-only Rust package. Its host-only default has no BPF, Aya, libbpf, LLVM, native-compiler, async-runtime or donor-application dependency.
@@ -69,7 +73,7 @@ Safe parallel lanes after LX02 freeze: LX03 read, LX04 controls, LX05 parser. LX
 
 - [ ] Read only selected donor files and refresh the study pins: P `crates/manifest/src/{identity.rs,maps.rs}`, `src/{process.rs,pidns.rs}`, `src/discovery/identity.rs`; O `src/{pin.rs,plan.rs,target.rs}` and relevant tests. Start from P `eb6bbe1df910a3cf40b6b7e8965cc65c69f203ae` and O `4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a`; record current heads, selected-file hashes/deltas and applicable WIP without changing donors. Record authors/license and retained regression provenance.
 - [ ] Compare rustix/nix descriptor operations, procfs parsing and cap-std/pathrs traversal against the named rejection/path/budget cases. Write a decision table of direct use, wrapper or narrow replacement and route exact dependency versions to SB02. Do not implement a new generic syscall/proc/path framework.
-- [ ] Create a failing external compile case importing `scopebase_linux::file::HeldFile` with no-default features, and an additive feature-union case combining mapping/supervision/walk without BPF tools in PATH. Expected initial failure is missing package/symbol; after this scaffold step only package/module import must pass, semantic tests remain red until their owner implements them.
+- [ ] Create a failing external compile case importing only `scopebase_linux` with no-default features, and an additive feature-union case combining mapping/supervision/walk without BPF tools in PATH. Expected initial failure is missing package; after this boundary step only crate import/features must pass. Do not export a placeholder HeldFile or no-op behavior: LX02 introduces the real authority type with its implementation and tests.
 - [ ] Add package docs stating profile boundaries, prospective MSRV and unsupported targets; verify `cargo check -p scopebase-linux --no-default-features` and SB02 feature-union build. Inspect dependency tree for BPF/compiler/build-script leakage.
 - [ ] Record scoped result, review source/licensing, and commit this task's package boundary and register; do not describe it as implemented file behavior.
 
@@ -163,6 +167,8 @@ Safe parallel lanes after LX02 freeze: LX03 read, LX04 controls, LX05 parser. LX
 **Files:** Create `src/process/{mod.rs,observation.rs,epoch.rs}`, `tests/process_observation.rs` and observation-control UI case.
 
 **Interfaces:** `ProcessObservation::{acquire(Pid,&ObserverEpoch,ProcLimits,&OperationControl),read_maps,read_mountinfo,verify_birth}` and `ObserverEpoch::new()`. Produces retained pidfd/proc/view/birth observation only; no signal/wait/adopt-child method. `ProcSnapshot::read_unpinned` is explicitly descriptive and cannot upgrade itself.
+
+**Mandatory source slice:** Include P `src/process.rs` and `src/pidns.rs`, O `src/pin.rs` and their actual process acquisition/death/birth/exec regressions; the coarse held-file group alone omitted these inputs. Freeze source symbols, destination methods and all rejection tests before implementation. D07 keeps observation/control and birth/exec distinct.
 
 - [ ] Add failing tricky-comm stat parsing, death-during-acquire, pidfd denial, namespace numbering mismatch, birth changed around proc open, zombie exit and retained-proc-does-not-freeze-exec tests. Owned fixture execs A→B→A while birth is constant; require no SameImage/atomic-mm statement.
 - [ ] Add UI attempt to signal/wait from ProcessObservation and model old-epoch/reused-PID history. Assert two new live epochs never compare equal and deserialized report IDs cannot construct an epoch/proof.

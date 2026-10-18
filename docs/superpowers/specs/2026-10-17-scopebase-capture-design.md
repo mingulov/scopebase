@@ -1,5 +1,6 @@
 # ScopeBase capture and provenance design
 
+Normative 2026-10-18 amendment: [decisions and reasons](2026-10-18-scopebase-decisions.md), [executor contract](2026-10-18-scopebase-executor-contract.md), and [task-origin / repair plan](../plans/2026-10-18-scopebase-plan-repair.md). Porting and task readiness follow these amendments; no new implementation or support claim follows.
 Date: 2026-10-17. Status: complete proposed subsystem specification for review and later implementation. Nothing in this document describes an implemented ScopeBase package, a passing check, a product integration or a live authority. The proposed Rust package is `scopebase-capture`; ScopeBase is the brand, and registry availability/licensing are separate publication decisions.
 
 ## Purpose and boundaries
@@ -42,7 +43,7 @@ Full references: [KryProbe](../../research/2026-10-17-shared-libraries/kryprobe.
 - A count bound is not a retained-byte, peak-memory, time, syscall-interruptibility or native-cleanup bound.
 - Product migrations are LATER; standalone ScopeBase consumers and real donor-shaped adapters qualify this package without implying product integration.
 
-Initial package version is `0.1.0`; initial qualified host target is `x86_64-unknown-linux-gnu` and little-endian. Alternate byte-order/width fixtures exercise pure decoding semantics, without advertising Arm, musl or cross-host runtime support. Additional supported host targets require explicit cells under the master specification. New original host code follows the proposed `MIT OR Apache-2.0` policy only after SB01 provenance review; imported code/fixtures retain their actual notices.
+Initial package version is `0.1.0`; initial qualified host target is `x86_64-unknown-linux-gnu` and little-endian. Alternate byte-order/width fixtures exercise pure decoding semantics, without advertising Arm, musl or cross-host runtime support. Additional supported host targets require explicit cells under the master specification. User-owned userspace source follows the provisional Apache-2.0 policy in [D03](2026-10-18-scopebase-decisions.md#d03--license-by-code-ownership-and-actual-build-destination). Preserve historical source observations, author authorization and actual third-party terms separately; no project MIT option is introduced.
 
 MSRV 1.88.0 is a proposed supported floor to test during implementation, not an observed build result. Dependencies must resolve on it; a dependency requiring more Rust is rejected or deliberately changes this contract before release. Initial pre-1.0 coordinated releases require exact capture/testkit contract-major compatibility; changing meaning, required evidence or Rust API incompatibly increments the minor version. Patch changes cannot reinterpret an existing fixture verdict. MSRV changes are documented minor changes.
 

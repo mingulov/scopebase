@@ -1,5 +1,6 @@
 # ScopeBase testing and conformance specification
 
+Normative 2026-10-18 amendment: [decisions and reasons](2026-10-18-scopebase-decisions.md), [executor contract](2026-10-18-scopebase-executor-contract.md), and [task-origin / repair plan](../plans/2026-10-18-scopebase-plan-repair.md). Porting and task readiness follow these amendments; no new implementation or support claim follows.
 Date: 2026-10-17. Status: proposed implementation contract. No runner, fixture, crate or passing ScopeBase runtime result exists yet. The [project specification](2026-10-17-scopebase-design.md) defines scope and completion levels. The [testing plan](../plans/2026-10-17-scopebase-testing.md) implements this document.
 
 ## Required outcome
@@ -12,7 +13,7 @@ Product migration is later. Package qualification uses real independently built 
 
 | ID | Requirement | Acceptance criterion |
 |---|---|---|
-| TT-R01 | Version and trace every contract/case/fixture/profile. | H01–H32, UC01–UC14, G01–G23 and all research TODO items resolve to implementation/disposition tasks. Selected families expand into named subcases with exact donor/WIP pins, oracle, control and required cells. |
+| TT-R01 | Version and trace every contract/case/fixture/profile. | H01–H33, UC01–UC14, G01–G23 and all research TODO items resolve to implementation/disposition tasks. Selected families expand into named subcases with exact donor/WIP pins, oracle, control and required cells. |
 | TT-R02 | Bind results to the actual subject. | A deliberately different crate version, feature union, backend, executable, BPF object or fixture prevents qualification. Testkit cannot silently exercise its own separately resolved production dependency. |
 | TT-R03 | Separate production observations from expected truth. | Independent fixture/workload/model expectations are fixed or recorded through their own causal channel before comparison. A constant-success/wrong-domain/wrong-value implementation fails its named assertion. |
 | TT-R04 | Fix required coverage before environment discovery. | Missing/denied/untriggered required cells remain incomplete; removing a required case or positive population cannot turn a profile green. |
