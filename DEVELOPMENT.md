@@ -18,6 +18,8 @@ The machine-readable [policy](orchestration/policy.json) is local project policy
 
 Default to at most three independent implementation lanes and one heavy build slot. Actual capacity, overlapping interfaces and available reviewers may reduce this. One writer owns every worktree and shared file set. Reviewers use a pinned source checkout/package and remain read-only; the worker never creates its own approving reviewer.
 
+Freeze shared task inputs for each parallel wave. Finish the assigned candidates and their reviews before changing the registry, policy, shared specifications or AGENTS inputs bound into their manifests. Integrate the accepted wave and its progress metadata together. A necessary interface amendment explicitly invalidates affected assignments; record the amendment and prepare fresh bindings rather than bypassing a mismatch. Unrelated source changes outside the bound inputs do not justify repeating completed checks.
+
 ## Starting from the user's goal
 
 1. Read the active goal with the goal tool and refresh `handoff.md`; preserve the exact goal in `.scopebase/goal.md` for task preparation. This snapshot does not create or replace the tool's goal. No token budget is inferred.
