@@ -94,6 +94,18 @@ Date: 2026-10-18. This register records what an executor must preserve, why the 
 
 **Executor rule:** No destructor-only success claim, ownerless partial effect, close-as-release substitution or process-wide handler/policy change. Preserve active identity/owner assertions; final resource counts alone can hide replacement.
 
+### LX03-R1 clarification under D08
+
+**Status:** SETTLED by root controller ratification on 2026-10-18. **Owners:** LX03 and controller; D01/D07/D09/D11–D14 continue to apply. This adds no decision/task/requirement ID or dependency edge.
+
+**What:** Freeze the exact [LX03 read contract](2026-10-18-scopebase-lx03-read-contract.md): ReadObservations/ReadCharges/LimitKind and ResourceCharges::read signatures, three fixed non-read calls and `u64::MAX-3` headroom, initial-length+1 admission/reservation, requested/granted/retained capacities, syscall/control/EINTR ordering, EOF/final metadata, private seams and R01–R15. Every refusal keeps consumed charges and zero retained payload. Existing non-read ResourceCharges literals and the old LX04 erase-context mutation template gain only mechanical `read:None` initialization under serialized ownership; retain all prior no-refund assertions. New in-crate fixtures allocating FDs retain accepted `crate::FD_TABLE` through owner close and worker join/child reap, with no child-thread reacquisition while the guarding parent joins. Preserve ordinary parallel harness execution and the actual FD-reuse repair; this is no production lock.
+
+**Why:** A caller must distinguish work already spent and transient granted capacity from currently retained storage. Primary failed-syscall evidence and retry bounds must coexist without erasing LX04's accepted precedence. Before/after metadata cannot create an immutable snapshot or reconstruct live ownership. Source slices, original regressions, independent oracles/mutants and actual shipped consumers preserve the donor repairs and make changed bytes reviewable.
+
+**Risk and limit:** An allocator may transiently overgrant before refusal; Arc/allocator abort, blocking syscall, Drop, scheduling, RSS and atomic-content bounds are not guaranteed. Matching metadata can miss torn same-size writes. A final successful checkpoint does not retract publication after later cancellation. Retained-capacity snapshots across cloned aliases are not additive pool accounting. Private seams do not establish installed/operator/kernel/filesystem support. Required full-profile and later delivery gates remain open; no implementation/test status, source grant or historical acceptance is changed by this ruling.
+
+**Executor rule:** Follow the exact addendum rather than choosing a new API, reader/backend, error winner or weaker regression. Preserve actual P/O mechanism correspondence and the existing owner/control tests. Root binds immutable source admission and job inputs before implementation, then independently validates candidate-bound tests and selected-port receipt before accepting only this increment.
+
 ## D09 — Test truth is independent and delivered to users
 
 **Status:** SETTLED. **Owners:** domain case owners and TT01–TT10.

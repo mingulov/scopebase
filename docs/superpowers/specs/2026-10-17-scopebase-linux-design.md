@@ -107,24 +107,69 @@ Ordinary replacement/unmount/overmount of the ambient `/proc` pathname does not 
 ## Positional reads and resource contracts
 
 ```rust
+// scopebase_linux::file
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ReadLimits {
     pub max_bytes: u64,
     pub max_read_calls: u64,
     pub max_buffer_capacity: usize,
 }
-pub struct FileRead { /* private Arc<Vec<u8>>, before/after stats, charges */ }
+// No Default. Fields are explicit caller limits.
+impl HeldFile {
+    pub fn read_all(&self, limits: ReadLimits,
+                    control: &OperationControl) -> Result<FileRead, LinuxError>;
+}
+#[derive(Clone)]
+pub struct FileRead { /* private data:Arc<Vec<u8>>, observations, charges */ }
 impl FileRead {
     pub fn bytes(&self) -> &[u8];
     pub fn observations(&self) -> &ReadObservations;
     pub fn charges(&self) -> ReadCharges;
 }
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct ReadObservations { /* private before, after:StatObservation */ }
+impl ReadObservations {
+    pub fn before(&self) -> StatObservation;
+    pub fn after(&self) -> StatObservation;
+    pub fn content_snapshot(&self) -> ContentSnapshot;
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ContentSnapshot { NotProven }
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct ReadCharges {
+    /* crate-visible only: read_calls:u64, bytes_read:u64,
+       requested_capacity:usize, granted_capacity:usize, retained_capacity:usize */
+}
+impl ReadCharges {
+    pub fn read_calls(&self) -> u64;
+    pub fn bytes_read(&self) -> u64;
+    pub fn requested_capacity(&self) -> usize;
+    pub fn granted_capacity(&self) -> usize;
+    pub fn retained_capacity(&self) -> usize;
+}
+// scopebase_linux::error
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum LimitKind { InputBytes, ReadCalls, BufferCapacity }
+// Add Stage::ReadFile and Reason::{Allocation,LimitExceeded(LimitKind)}.
+impl ResourceCharges {
+    pub fn read(&self) -> Option<ReadCharges>;
+}
 ```
 
-FileRead is cheaply Clone and shares one allocation; it has no mutable payload access. The backing Vec is never exposed. The allocation strategy is fixed: try-reserve exactly the validated initial length plus one sentinel byte, reject capacity above max_buffer_capacity after reserve before use, and read directly into initialized storage. The documentation reports requested working capacity, actual granted capacity and retained capacity. Vec allocator over-allocation and allocator metadata are outside the requested-capacity ceiling; a strict process-RSS bound is not advertised. The conservative requested payload bound is one max_buffer_capacity reservation per live read, plus fixed metadata and Arc control storage; actual allocator-granted capacity is separately accounted and can transiently exceed a request before refusal. Concurrent reads and retained results add their independently charged capacities. A strict granted-allocation/RSS ceiling is not advertised. No Vec-to-Arc-slice payload copy is introduced. `try_reserve_exact` failure returns Allocation; allocation aborts in Arc/control metadata or foreign allocators are not claimed recoverable.
+`ReadCharges` lives in file/read.rs and is re-exported through file/mod.rs; error.rs can refer to `crate::file::ReadCharges`. Existing ResourceCharges gains `pub(crate) read: Option<ReadCharges>`. All existing construction sites use None, including LX04 tests; read_all always supplies Some. This introduces no recursive layout or public constructor. Existing getters/enum attributes stay unchanged. FileRead, ReadObservations and ReadCharges use fixed-label bounded custom Debug; errors preserve their 256-ASCII-byte bound even with nested LimitKind. FileRead/ReadLimits/ReadObservations/ReadCharges/ContentSnapshot are Send+Sync. FileRead cloning shares allocation; observations and quantitative charge copies do not acquire runtime authority.
 
-Before allocating: check cancellation/deadline, fstat regular/readable object, nonnegative representable size, `size <= max_bytes`, checked `size+1 <= max_buffer_capacity` and nonzero max_read_calls. Bytes read use `pread`/FileExt::read_at from logical offset zero. Short positive reads advance only the local checked offset. Each attempted syscall, including EINTR, consumes one work unit. No individual call requests more than the remaining validated size plus one sentinel byte, and no call requests more than 64 KiB. EOF before the initial size is ChangedSource; a byte beyond that size is ChangedSource, or LimitExceeded if it crosses max_bytes. A final EOF probe is required unless size itself reaches an already observed positive sentinel refusal. Empty regular files succeed only after the EOF probe and matching final metadata. Final stat compares descriptor identity, size, mtime and ctime; disagreement rejects and no partial payload is returned. Same-size concurrent mutation with restored metadata remains unproven; successful bytes are bytes observed during an interval, possibly torn, not an immutable snapshot. No hashes are used as physical identity.
 
-Bytes/work counts include actual calls even on failure; errors expose charges so callers do not silently refund work. Public production reads have no arbitrary reader trait. Development scripted sources live in testkit/internal tests and return separately tagged model observations; they cannot instantiate HeldFile, MapRangeProof or Linux provenance. Safe adapter responses exceeding requested extent, backwards offsets, invalid lengths or impossible charges are rejected structurally before indexing/allocation. A coherently lying model retains model provenance.
+The ratified [LX03 read-contract addendum](2026-10-18-scopebase-lx03-read-contract.md) fixes the exact execution order, private seams, source preservation and R01–R15 tests. Read admission, all refusal winners and consumed resource history follow that addendum; an executor does not infer the missing choices from these signatures.
+
+`max_bytes=0` is valid. `max_read_calls=0`, `max_read_calls>u64::MAX-3` or zero buffer capacity refuses InvalidInput before any syscall/allocation, after the entry checkpoint. Exactly three non-read calls (initial fstat, F_GETFL, final fstat) need that u64 headroom; attempts and completed operations are exact, never saturated or refunded. Reads start at local offset zero using rustix pread, preserve the shared open-description cursor, request at most 65536 bytes and the remaining initial size plus one sentinel, and count every attempted pread including EOF/EINTR. Successful publication requires actual EOF at the initial size and matching final held-descriptor identity/length/mtime/ctime. No partial bytes are returned on refusal.
+
+One `Vec::new().try_reserve_exact(initial_size+1)` follows all checked u64/usize/isize/signed-offset admission checks. Report requested, allocator-granted and retained capacities separately; reject overgrant before initialization/read, without hiding its transient allocation. Initialization uses at most 65536-byte chunks and no second payload scratch buffer. FileRead cheaply clones one `Arc<Vec<u8>>` without a Vec-to-Arc-slice copy or shrink. Every error retains historical work/bytes/requested/granted charges and reports retained capacity zero; no strict RSS/granted-allocation or recoverable Arc-allocation promise follows.
+
+Successful syscall effects/bytes are recorded before the post-call checkpoint and its stop wins before interpreting that successful result. A failed syscall preserves its primary errno/classification. An interrupted pread is charged once; a stop at its post-call checkpoint returns Inconclusive with original EINTR, while permitted continuation retries only through the next checkpoint/work admission. Work exhaustion there returns LimitExceeded(ReadCalls), source None. Initial/final fstat and F_GETFL EINTR are terminal. The final publication checkpoint occurs after Arc construction and metadata validation; subsequent cancellation does not retract success.
+
+Read observations and quantitative charges create no runtime authority. Even matching metadata yields `ContentSnapshot::NotProven`; bytes may be torn by same-size/restored-metadata mutation. FileRead retains no HeldFile, proof, map, attachment owner or authority to reread. Borrow the original HeldFile throughout the call and never close or replace it on read failure. Cleanup NotNeeded describes no newly acquired native resource, not a native-retirement receipt. Cooperative cancellation never interrupts a blocked syscall or abandons a worker.
 
 ## Controls, errors and effects
 
@@ -142,7 +187,7 @@ Stage, Reason, CleanupDisposition and DescriptorFlagEffect are Copy/Clone/Eq/Par
 
 The following complete planned inventory binds the documentation registry, not the set already implemented by LX02. Stage variants cover ConfigureControl, ResolveProc, AcquirePath, ValidateFile, ReopenHeld, ReadFile, ReadProc, ParseMaps, ParseMounts, Calibrate, AssociateRange, AcquireProcess, SpawnChild, SignalChild, WaitChild, RetireMapping and Walk. Reason variants cover InvalidInput, NonRegular, Unreadable, Denied, Unavailable, Disappeared, ChangedSource, WrongContext, Malformed, Inconclusive, LimitExceeded(LimitKind), Allocation, Cancelled, Deadline, AlreadyWaited, IntegrationConflict and CleanupUnresolved.
 
-EffectSummary has private fields and getters taking `&self`: `attempted_operations()->u64`, `completed_operations()->u64`, `target_mappings_created()->u64`, `target_mappings_retired()->u64`, `cleanup()->CleanupDisposition`, `descriptor_flags()->DescriptorFlagEffect`. Initial cleanup variants are NotNeeded/Complete; mapping/child owners later add Unresolved(ResourceId) with the actual failure wrapper retaining typed custody. DescriptorFlagEffect variants are NotAttempted/Unchanged/CloexecSet/Unknown with the adoption meanings above. ResourceCharges has private fields and getters taking `&self`: `syscall_attempts()->u64`, `fd_acquisitions()->u64`, `peak_new_fds()->u64`. Later read/mapping/supervision work adds its real charge fields before exporting that behavior. Supporting structs have bounded Debug; no public constructors manufacture charges or effect evidence.
+EffectSummary has private fields and getters taking `&self`: `attempted_operations()->u64`, `completed_operations()->u64`, `target_mappings_created()->u64`, `target_mappings_retired()->u64`, `cleanup()->CleanupDisposition`, `descriptor_flags()->DescriptorFlagEffect`. Initial cleanup variants are NotNeeded/Complete; mapping/child owners later add Unresolved(ResourceId) with the actual failure wrapper retaining typed custody. DescriptorFlagEffect variants are NotAttempted/Unchanged/CloexecSet/Unknown with the adoption meanings above. ResourceCharges has private fields and getters taking `&self`: `syscall_attempts()->u64`, `fd_acquisitions()->u64`, `peak_new_fds()->u64`. LX03 adds `read()->Option<ReadCharges>` with the exact [read contract](2026-10-18-scopebase-lx03-read-contract.md#public-api-frozen-by-lx03-r1): None for all existing non-read operations and Some for every read_all failure, including zero-effect refusal. Mapping/supervision work adds its real charge fields before exporting that behavior. Supporting structs have bounded Debug; no public constructors manufacture charges or effect evidence.
 
 Each explicit open/openat/fstat/fstatfs/readlinkat/fcntl/pipe2 attempt increments attempted_operations and syscall_attempts immediately before the call. Success increments completed_operations even if a later semantic predicate refuses. Each std::process::id query increments attempted/completed operations once but not syscall_attempts; std implementation details are outside the explicit-syscall counter. No EINTR retry. Successful pipe2 counts one completed operation and two acquired FDs; successful open counts one FD. Peak counts simultaneously owned newly acquired FDs in this call, excluding the borrowed resolver and submitted/held File. Failed syscalls acquire zero. Releasing temporaries does not refund counts; pure checks/formatting add none.
 

@@ -709,6 +709,14 @@
           [
             177,
             194
+          ],
+          [
+            271,
+            315
+          ],
+          [
+            720,
+            741
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -12201,6 +12209,14 @@
             240
           ],
           [
+            287,
+            292
+          ],
+          [
+            334,
+            417
+          ],
+          [
             1123,
             1141
           ]
@@ -12761,6 +12777,14 @@
           [
             1504,
             1515
+          ],
+          [
+            4403,
+            4418
+          ],
+          [
+            4546,
+            4584
           ],
           [
             8881,
@@ -14242,14 +14266,23 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/site_identity.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1149,
+            1355
+          ],
+          [
+            1381,
+            1399
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15168,14 +15201,19 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/capture_controller.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            7486,
+            7604
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -22915,8 +22953,16 @@
             287
           ],
           [
+            1200,
+            1233
+          ],
+          [
             6432,
             6502
+          ],
+          [
+            6504,
+            6514
           ],
           [
             7211,
