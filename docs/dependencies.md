@@ -76,6 +76,14 @@ A logical compiler cell is a probe/compiler pair, refusal/compiler pair, or feat
 
 The prior validator's nonempty **outer** supported-union list restriction was removed explicitly. `supported_unions:[]` means a member advertises only minimal/default modes and no additional union profile, for example a primitive without additive features. It does not invent a fake union or establish two production consumers. The frozen SB02 matrix is unchanged: its `[["json"]]` profile and decimal/JSON clients remain mandatory, with all six compiler cells in its denominator. Schema acceptance cannot authorize removing those task-required rows.
 
+A member without supported unions may declare one or two package clients. A
+member with a supported union must retain two clients whose combined features
+match that union. The clients array remains required and bounded; ordinary
+client field, source and identifier validation still applies. This permits a
+foundation's single boundary client without manufacturing a second consumer.
+Task-specific independent-consumer and package-readiness requirements remain
+mandatory at their own acceptance gates.
+
 Each cell shares one monotonic **600-second** wall budget across sequential Cargo phases, including refusal metadata/direct compilation. At most one owned process group runs at a time. Setup/lock/archive/root-metadata commands have separate bounded individual deadlines and are not charged ambiguously to both compilers. An emitted diagnostic cannot certify a refusal stopped by timeout, log bound, interruption or unresolved cleanup. Commands preserve locked-input checks before/after execution. Timeout and cleanup/reaping outcome stay distinct; there is no guaranteed interruption of uninterruptible syscalls or compiler RSS bound.
 
 Separate limits remain 4 MiB per stdout/stderr log, 1 MiB configuration/generated semantic fixtures, 32 features per cell and 16 MiB reports. Reports are exclusive atomic JSON; logs are referenced by hash. Exit0 applies to the requested tool scope only: inspect scope, fit, decisions_required, omitted IDs and product_qualification:false. Required FAIL uses1, malformed input2, required unavailable/NOT_RUN/unresolved execution3. Executed GAPs still need the recorded domain decisions.

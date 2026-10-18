@@ -349,7 +349,9 @@ def validate_matrix(path, kind):
                 key=tuple(sorted(union))
                 if key in union_keys: raise InputError('SCHEMA_DUPLICATE_UNION')
                 union_keys.add(key)
-            if len(c['clients']) != 2:
+            if (not isinstance(c['clients'], list)
+                    or len(c['clients']) not in (1, 2)
+                    or (c['supported_unions'] and len(c['clients']) != 2)):
                 raise InputError('SCHEMA_CLIENTS')
             client_ids = set()
             for client in c['clients']:
