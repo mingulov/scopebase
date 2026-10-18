@@ -580,11 +580,17 @@ def verify_local_sources(ledger, source_roots):
                 unavailable.append({'code': 'GIT_INSPECTION_UNAVAILABLE', 'context': ident})
                 continue
             probe = git(root, 'cat-file', '-t', donor['commit'])
-            if probe.returncode or probe.stdout.strip() != b'commit':
+            if probe.returncode:
                 unavailable.append({'code': 'COMMIT_UNAVAILABLE', 'context': ident})
                 continue
+            if probe.stdout.strip() != b'commit':
+                errors.append({'code': 'GIT_SOURCE_COMMIT', 'context': ident})
+                continue
             tree = git(root, 'rev-parse', donor['commit'] + '^{tree}')
-            if tree.returncode or tree.stdout.decode().strip() != donor['tree']:
+            if tree.returncode:
+                unavailable.append({'code': 'TREE_SOURCE_UNAVAILABLE', 'context': ident})
+                continue
+            if tree.stdout.decode().strip() != donor['tree']:
                 errors.append({'code': 'GIT_SOURCE_TREE', 'context': ident})
                 continue
             for record in (f for f in ledger['files'] if f['donor'] == ident):

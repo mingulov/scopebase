@@ -141,17 +141,28 @@ class IntakeValidationTests(IntakeFixture, unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)['source_verification'], 'VERIFIED_SELECTED_SOURCES')
 
     def test_promised_blob_is_incomplete_without_fetch(self):
+        blob_id = self.git('rev-parse', 'HEAD:owner.rs').strip()
+        self.assert_promised_object_is_incomplete('blob:none', blob_id, 'BLOB_SOURCE_UNAVAILABLE')
+
+    def test_promised_root_tree_is_incomplete_without_fetch(self):
+        self.assert_promised_object_is_incomplete('tree:0', self.tree, 'TREE_SOURCE_UNAVAILABLE')
+
+    def assert_promised_object_is_incomplete(self, filter_spec, missing_oid, expected_code):
         # Removing --no-lazy-fetch must expose an actual transport/store effect.
         twin = self.run_check('--verify-local-sources')
         self.assertEqual(twin.returncode, 0, twin.stdout + twin.stderr)
+        self.assertEqual(json.loads(twin.stdout)['source_verification'], 'VERIFIED_SELECTED_SOURCES')
         self.git('config', 'uploadpack.allowFilter', 'true')
         partial = self.root / 'partial'
-        subprocess.run(['git', 'clone', '--filter=blob:none', '--no-checkout',
+        subprocess.run(['git', 'clone', '--filter=' + filter_spec, '--no-checkout',
                         self.repo.as_uri(), str(partial)], check=True, capture_output=True)
-        blob_id = self.git('rev-parse', 'HEAD:owner.rs').strip()
+        commit_probe = subprocess.run(['git', '--no-lazy-fetch', '-C', str(partial),
+                                       'cat-file', '-t', self.commit], capture_output=True)
+        self.assertEqual(commit_probe.returncode, 0, commit_probe.stderr)
+        self.assertEqual(commit_probe.stdout.strip(), b'commit')
         probe = subprocess.run(['git', '--no-lazy-fetch', '-C', str(partial),
-                                'cat-file', '-e', blob_id], capture_output=True)
-        self.assertNotEqual(probe.returncode, 0, 'control requires a truly absent promised blob')
+                                'cat-file', '-e', missing_oid], capture_output=True)
+        self.assertNotEqual(probe.returncode, 0, 'control requires a truly absent promised object')
         sentinel = self.root / 'transport-invoked'
         transport = self.root / 'upload-pack'
         transport.write_text('#!/bin/sh\nprintf invoked > "' + str(sentinel) +
@@ -171,7 +182,9 @@ class IntakeValidationTests(IntakeFixture, unittest.TestCase):
         result = self.run_check('--verify-local-sources')
         with self.subTest(assertion='incomplete'):
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-            self.assertEqual(json.loads(result.stdout)['source_verification'], 'INCOMPLETE')
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload['source_verification'], 'INCOMPLETE')
+            self.assertIn(expected_code, {e['code'] for e in payload['unavailable']}, payload)
         with self.subTest(assertion='transport never invoked'):
             self.assertFalse(sentinel.exists())
         with self.subTest(assertion='object store unchanged'):
@@ -179,6 +192,30 @@ class IntakeValidationTests(IntakeFixture, unittest.TestCase):
         with self.subTest(assertion='checkout unchanged'):
             self.assertEqual({p: h for p, h in snapshot(partial).items()
                               if not p.startswith('.git/objects/')}, checkout_before)
+
+    def test_available_noncommit_object_is_invalid_source_identity(self):
+        twin = self.run_check('--verify-local-sources')
+        self.assertEqual(twin.returncode, 0, twin.stdout + twin.stderr)
+        blob_id = self.git('rev-parse', 'HEAD:owner.rs').strip()
+        for object_id, object_type in ((self.tree, 'tree'), (blob_id, 'blob')):
+            with self.subTest(object_type=object_type):
+                self.assertEqual(self.git('cat-file', '-t', object_id).strip(), object_type)
+                self.ledger['donors'][0]['commit'] = object_id
+                self.ledger['files'][0]['commit'] = object_id
+                self.assert_invalid('GIT_SOURCE_COMMIT', '--verify-local-sources')
+
+    def test_missing_commit_object_is_incomplete(self):
+        self.ledger['donors'][0]['commit'] = '0' * 40
+        self.ledger['files'][0]['commit'] = '0' * 40
+        result = self.run_check('--verify-local-sources')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['source_verification'], 'INCOMPLETE')
+        self.assertIn('COMMIT_UNAVAILABLE', {e['code'] for e in payload['unavailable']}, payload)
+
+    def test_available_resolved_tree_mismatch_is_invalid(self):
+        self.ledger['donors'][0]['tree'] = '0' * 40
+        self.assert_invalid('GIT_SOURCE_TREE', '--verify-local-sources')
 
     def test_catalog_json_is_the_authoritative_family_inventory(self):
         (self.root / 'catalog.json').write_text(json.dumps({'cases': [{'id': 'H01'}]}))
