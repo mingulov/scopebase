@@ -182,7 +182,7 @@ class FailureStageAttributionTests(unittest.TestCase):
                     result=subprocess.run(argv,capture_output=True,text=True)
                     self.assertEqual(result.returncode,exit_code,result.stdout+result.stderr)
                     rows=json.loads(report.read_text())['rows']
-                    active=[r for r in rows if r['status']!='NOT_RUN']
+                    active=[r for r in rows if r['status'] in ('FAIL','BLOCKED')]
                     self.assertEqual([(r['id'],r['status'],r['reason_code']) for r in active],[('inputs',status,code)])
                     self.assertTrue(all(r['command'] is None and r['cleanup']=='not_started' for r in rows))
 
@@ -213,3 +213,113 @@ class RefusalCompletionTests(unittest.TestCase):
             lock.write_text('changed lock\n')
             with self.assertRaisesRegex(policy.PolicyError,'LOCK_CHANGED'):
                 probe.accept_refusal(result,lock,lock_sha,'E0624','type_by_id',root)
+
+class ExplicitOwnerTests(unittest.TestCase):
+    def test_F2_missing_compiler_and_later_prepare_error_have_distinct_owners(self):
+        import check_features,dependency_probe,shutil
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); inputs=root/'input'; inputs.mkdir()
+            shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
+            base=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            for kind,module in (('features',check_features),('probe',dependency_probe)):
+                matrix=copy.deepcopy(base)
+                if kind=='features':
+                    matrix['fixture_members']=[{**copy.deepcopy(base['fixture_members'][0]),'id':name} for name in ('one','two')]
+                else:
+                    del matrix['fixture_members']; del matrix['members']; cases=[]
+                    record=base['fixture_members'][0]['allowed_dependencies'][0]
+                    for name in ('one','two'):
+                        source=inputs/name; (source/'src').mkdir(parents=True,exist_ok=True)
+                        (source/'Cargo.toml').write_text('[package]\nname="'+name+'"\nversion="0.1.0"\n[workspace]\n[dependencies]\nitoa={version="=1.0.18",default-features=false,features=[]}\n')
+                        (source/'src/lib.rs').write_text('#[test] fn literal() {}')
+                        cases.append(dict(id=name,required=True,manifest=name+'/Cargo.toml',candidate={k:record[k] for k in ('name','version','source','sha256')},default_features=False,features=[],tier='host_semantic',assertions=['literal'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02']))
+                    matrix['cases']=cases
+                path=inputs/(kind+'.json'); path.write_text(json.dumps(matrix))
+                for scenario in ('identity','preparation'):
+                    report=root/(kind+'-'+scenario+'.json'); out=root/(kind+'-'+scenario)
+                    args=['--matrix',str(path),'--output-dir',str(out),'--report',str(report)]
+                    if kind=='features': args+=['--manifest',str(ROOT/'Cargo.toml')]
+                    def identity(*a,**kw):
+                        if scenario=='identity': raise policy.PolicyError('TOOLCHAIN_UNAVAILABLE','BLOCKED')
+                        return {'id':a[0]['id']}
+                    def preparation(*a,**kw):
+                        name=a[1]['id'] if kind=='probe' else Path(a[1]).name
+                        if name=='one': raise policy.PolicyError('POLICY_REJECTED')
+                        raise OSError('owned injected preparation I/O failure')
+                    # Fault injection is restricted to report-unit boundaries.
+                    # No simulated command or result is API/compile evidence.
+                    def command(ex,r,t,manifest,arguments,target,*a,**kw):
+                        log=out/(r['id']+'.json'); log.write_text('{"packages":[],"workspace_members":[]}')
+                        return {'logs':{'stdout':{'path':str(log)}}}
+                    with patch.object(policy,'stage_inputs',return_value={'packages':[],'staged_inputs':[]}),patch.object(policy,'toolchain_info',side_effect=identity),patch.object(policy.Execution,'command',command),patch.object(check_features,'check_notices'),patch.object(policy,'source_copy',side_effect=preparation),patch.object(dependency_probe,'prepare_case',side_effect=preparation):
+                        code=module.main(args)
+                    data=json.loads(report.read_text()); failed=[r for r in data['rows'] if r['status'] in ('FAIL','BLOCKED')]
+                    if scenario=='identity':
+                        self.assertEqual(code,3)
+                        self.assertEqual([(r['id'],r['toolchain'],r['reason_code']) for r in failed],[('identity-msrv','msrv','TOOLCHAIN_UNAVAILABLE')])
+                    else:
+                        self.assertEqual(code,1)
+                        suffix='source' if kind=='features' else 'prepare'
+                        self.assertEqual([(r['id'],r['reason_code']) for r in failed],[('one-'+suffix,'POLICY_REJECTED'),('two-'+suffix,'INTERNAL_ERROR')])
+                    self.assertTrue(all(r['command'] is None and r['cleanup']=='not_started' for r in data['rows'] if r['status']=='NOT_RUN'))
+
+class CompilerCellBoundsTests(unittest.TestCase):
+    def test_F3_expanded_configuration_and_refusal_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); base=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            # Safe path resolution uses the actual immutable fixture inputs.
+            path=ROOT/'tests/package-policy/matrix.json'
+            def validate(matrix,kind):
+                from unittest.mock import patch
+                with patch.object(policy,'read_json',return_value=matrix): return policy.validate_matrix(path,kind)
+            fixture=base['fixture_members'][0]
+            for n,wanted in ((32,128),(33,132)):
+                m=copy.deepcopy(base); m['fixture_members']=[{**copy.deepcopy(fixture),'id':'m'+str(i),'supported_unions':[]} for i in range(n)]
+                if wanted<=128: validate(m,'features')
+                else:
+                    with self.assertRaisesRegex(policy.InputError,'CELL_BOUND'): validate(m,'features')
+            m=copy.deepcopy(base); m['fixture_members'][0]['supported_unions']=[['json'],['json']]
+            with self.assertRaisesRegex(policy.InputError,'DUPLICATE_UNION'): validate(m,'features')
+            record=fixture['allowed_dependencies'][0]
+            case=dict(id='a',required=False,manifest='fixtures/feature_subject/Cargo.toml',candidate={k:record[k] for k in ('name','version','source','sha256')},default_features=False,features=[],tier='compile',assertions=['check'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02'])
+            for count in (63,64):
+                m={k:copy.deepcopy(v) for k,v in base.items() if k not in ('members','fixture_members')}
+                c=copy.deepcopy(case); c['compile_refusals']=[dict(id='r'+str(i),manifest=c['manifest'],diagnostic_code='E0624',diagnostic_contains='method',positive_case='a') for i in range(count)]
+                m['cases']=[c]
+                if count==63: validate(m,'probe')
+                else:
+                    with self.assertRaisesRegex(policy.InputError,'CELL_BOUND'): validate(m,'probe')
+            import dependency_probe
+            from unittest.mock import patch
+            with patch.object(policy,'read_json',return_value=m),patch.object(policy,'stage_inputs') as stage:
+                result=dependency_probe.main(['--matrix',str(path),'--output-dir',str(root/'oversized'),'--report',str(root/'oversized.json'),'--case','a'])
+                self.assertEqual(result,2); stage.assert_not_called()
+            m['cases'][0]['compile_refusals']=m['cases'][0]['compile_refusals'][:1]*2
+            with self.assertRaisesRegex(policy.InputError,'REFUSAL_ID'): validate(m,'probe')
+            m['cases'][0]['compile_refusals'][0]['id']='../bad'
+            with self.assertRaisesRegex(policy.InputError,'REFUSAL_ID'): validate(m,'probe')
+            # Case/refusal stem alias must fail before row creation/staging.
+            a=copy.deepcopy(case); a['compile_refusals']=[dict(id='b',manifest=a['manifest'],diagnostic_code='E0624',diagnostic_contains='method',positive_case='a')]
+            b={**copy.deepcopy(case),'id':'a-b'}; m['cases']=[a,b]
+            with self.assertRaisesRegex(policy.InputError,'ROW_ID_COLLISION'): validate(m,'probe')
+
+    def test_F3_two_short_processes_share_one_elapsed_budget(self):
+        import dependency_probe
+        self.assertTrue(hasattr(policy,'CellBudget'),'shared compiler-cell budget is absent')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); budget=policy.CellBudget('owned-two-phase',seconds=.35)
+            first=policy.run([sys.executable,'-c','import time; time.sleep(.2)'],root,{'PATH':'/usr/bin:/bin'},root/'first',timeout=budget.remaining())
+            budget.complete(first); policy.succeeded(first)
+            diagnostic=dict(reason='compiler-message',message=dict(code=dict(code='E0624'),message='method `type_by_id` is private',spans=[dict(file_name='src/lib.rs',line_start=1,is_primary=True)]))
+            code='import time; print('+repr(json.dumps(diagnostic))+',flush=True); time.sleep(.2)'
+            second=policy.run([sys.executable,'-c',code],root,{'PATH':'/usr/bin:/bin'},root/'second',timeout=budget.remaining())
+            budget.complete(second)
+            self.assertEqual(second['reason_code'],'TIMEOUT')
+            self.assertEqual(second['cleanup'],'complete')
+            self.assertIn('E0624',policy.stdout(second))
+            (root/'Cargo.lock').write_text('lock'); (root/'src').mkdir(); (root/'src/lib.rs').write_text('btf.type_by_id(1);')
+            with self.assertRaisesRegex(policy.PolicyError,'TIMEOUT') as error:
+                dependency_probe.accept_refusal(second,root/'Cargo.lock',policy.sha(root/'Cargo.lock'),'E0624','type_by_id',root)
+            self.assertEqual(error.exception.status,'BLOCKED')
+            with self.assertRaisesRegex(policy.PolicyError,'TIMEOUT'): budget.remaining()

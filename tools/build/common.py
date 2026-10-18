@@ -297,7 +297,7 @@ def validate_matrix(path, kind):
     if kind != 'probe' and any(not isinstance(m[k],list) for k in ('fixture_members','members')):
         raise InputError('SCHEMA_MEMBERS')
     entries = m['cases'] if kind == 'probe' else m['fixture_members'] + m['members']
-    if not isinstance(entries, list) or not entries or len(entries) * 2 > 128:
+    if not isinstance(entries, list) or not entries:
         raise InputError('SCHEMA_CELL_BOUND')
     ids = set()
     for c in entries:
@@ -322,19 +322,26 @@ def validate_matrix(path, kind):
                 raise InputError('SCHEMA_READY_DIGEST')
             if not isinstance(c['compile_refusals'], list):
                 raise InputError('SCHEMA_REFUSALS')
+            refusal_ids=set()
             for r in c['compile_refusals']:
                 exact(r, {'id','manifest','diagnostic_code','diagnostic_contains','positive_case'})
                 for k in r:
                     text(r[k])
+                if not IDENT.fullmatch(r['id']) or r['id'] in refusal_ids: raise InputError('SCHEMA_REFUSAL_ID')
+                refusal_ids.add(r['id'])
                 relative(Path(path).parent, r['manifest'],False)
         else:
             if c['role'] not in ('fixture','product'):
                 raise InputError('SCHEMA_ROLE')
             strings(c['minimal']); strings(c['default']); strings(c['package_files'], 1024, True); strings(c['denied_packages'], 128)
-            if not isinstance(c['supported_unions'], list) or not c['supported_unions']:
+            if not isinstance(c['supported_unions'], list):
                 raise InputError('SCHEMA_UNIONS')
+            union_keys=set()
             for union in c['supported_unions']:
                 strings(union, nonempty=True)
+                key=tuple(sorted(union))
+                if key in union_keys: raise InputError('SCHEMA_DUPLICATE_UNION')
+                union_keys.add(key)
             if len(c['clients']) != 2:
                 raise InputError('SCHEMA_CLIENTS')
             client_ids = set()
@@ -364,6 +371,7 @@ def validate_matrix(path, kind):
     else:
         if any(c['role'] != 'fixture' for c in m['fixture_members']) or any(c['role'] != 'product' for c in m['members']):
             raise InputError('SCHEMA_MEMBER_ROLE')
+    validate_expansion(m,kind)
     return m
 
 
@@ -581,15 +589,21 @@ def succeeded(result, code='CARGO_FAILED'):
         raise PolicyError(result['reason_code'] or code,status,result)
 
 
-def toolchain_info(t, output):
+def toolchain_info(t, output, execution=None):
     root = Path(t['root'])
     for tool in ('cargo','rustc','rustdoc'):
         if not (root / 'bin' / tool).is_file():
             raise PolicyError('TOOLCHAIN_UNAVAILABLE', 'BLOCKED')
     env = clean_env(output, t, Path(output) / 'identity-target')
-    rust = run([root / 'bin/rustc','-Vv'], output, env, Path(output)/('identity-'+t['id']+'-rustc'))
-    cargo = run([root / 'bin/cargo','--version'], output, env, Path(output)/('identity-'+t['id']+'-cargo'))
-    succeeded(rust); succeeded(cargo)
+    def inspect(tool,arguments):
+        def action(r):
+            result=run([root/'bin'/tool,*arguments],output,env,Path(output)/('identity-'+t['id']+'-'+tool))
+            if execution: execution.attach(r,result)
+            succeeded(result)
+            return result
+        return execution.step('identity-'+t['id']+'-'+tool,action) if execution else action(None)
+    rust=inspect('rustc',['-Vv'])
+    cargo=inspect('cargo',['--version'])
     if not stdout(rust).startswith('rustc ' + t['version'] + ' ') or not stdout(cargo).startswith('cargo ' + t['version'] + ' '):
         raise PolicyError('TOOLCHAIN_CHANGED')
     return {**t, 'rustc_vv': stdout(rust).strip(), 'cargo_version': stdout(cargo).strip(),
@@ -843,8 +857,8 @@ def admit(metadata, allowed, approved, staging, trusted, denied=()):
                 raise PolicyError('APPROVAL_REQUIRED', 'BLOCKED')
             if grant['sha256'] != package_sha:
                 raise PolicyError('APPROVED_INPUT_CHANGED')
-            if str(manifest) in trust and fixture_digest(manifest.parent) != package_sha:
-                raise PolicyError('APPROVED_INPUT_CHANGED')
+            if str(manifest) in trust:
+                verify_trusted_mapping(identity,manifest.parent)
             if grant['build_script'] != script:
                 raise PolicyError('APPROVED_BUILD_TARGET_CHANGED')
             if macro and script_targets and not ('proc-macro' in grant['reason'] and 'build' in grant['reason']):
@@ -868,6 +882,7 @@ class Execution:
                        'toolchains':[], 'rows':[], 'summary':None, 'product_qualification':False}
         self.by_id = {}
         self.staging = None
+        self.reserve('tool-error',role='tool',phase='unowned-error',required=False)
 
     def reserve(self, ident, role='probe', toolchain=None, phase='input', required=True):
         if ident in self.by_id: raise InputError('DUPLICATE_ROW')
@@ -881,6 +896,8 @@ class Execution:
             r.update(status='PASS', fit=fit, reason_code='ASSERTIONS_MET', cleanup='complete')
             return value
         except PolicyError as e:
+            if getattr(e,'recorded_by',None) is self: raise
+            e.recorded_by=self
             r.update(status=e.status,reason_code=e.code,fit='UNKNOWN',observed=e.detail)
             if isinstance(e.detail,dict) and 'cleanup' in e.detail:
                 self.attach(r,e.detail)
@@ -889,7 +906,9 @@ class Execution:
             raise
         except Exception as e:
             r.update(status='FAIL',reason_code='INTERNAL_ERROR',observed={'exception':type(e).__name__})
-            raise PolicyError('INTERNAL_ERROR') from e
+            failure=PolicyError('INTERNAL_ERROR')
+            failure.recorded_by=self
+            raise failure from e
         finally:
             r['duration_ms'] = round((time.monotonic()-start)*1000)
 
@@ -899,7 +918,7 @@ class Execution:
         if result.get('process_group') and result['cleanup'] == 'unresolved':
             r['observed'] = {'process_group':result['process_group'],'owner':str(self.output)}
 
-    def command(self, r, t, manifest, arguments, target, features=(), defaults=True, failure='CARGO_FAILED', extra_env=None):
+    def command(self, r, t, manifest, arguments, target, features=(), defaults=True, failure='CARGO_FAILED', extra_env=None, budget=None):
         env = clean_env(self.output,t,target)
         if extra_env: env.update(extra_env)
         argv = [Path(t['root'])/'bin/cargo', *arguments, '--manifest-path',manifest]
@@ -908,8 +927,11 @@ class Execution:
         r['input_sha256'] = tree_digest(Path(manifest).parent)
         lock = Path(manifest).parent/'Cargo.lock'
         before_lock = sha(lock) if lock.is_file() else None
+        timeout=budget.remaining() if budget else 600
+        if budget: r['expected']={'cell':budget.ident,'wall_budget_seconds':budget.seconds}
         r['command']=[str(a) for a in argv]; r['cwd']=str(Path(manifest).parent)
-        result = run(argv,Path(manifest).parent,env,self.output/'logs'/r['id'])
+        result = run(argv,Path(manifest).parent,env,self.output/'logs'/r['id'],timeout=timeout)
+        if budget: budget.complete(result)
         self.attach(r,result)
         r['lock_sha256'] = sha(lock) if lock.is_file() else None
         if '--locked' in arguments and before_lock != r['lock_sha256']:
@@ -919,16 +941,28 @@ class Execution:
         succeeded(result,failure)
         return result
 
+    def abort(self,error,report_path):
+        if getattr(error,'recorded_by',None) is not self:
+            r=self.by_id['tool-error']
+            r.update(required=True,status=getattr(error,'status','FAIL'),reason_code=getattr(error,'code','INTERNAL_ERROR'),observed={'exception':type(error).__name__})
+        return self.finish(report_path)
+
     def finish(self, report_path):
+        guard=self.by_id['tool-error']
+        if guard['status']=='NOT_RUN': guard.update(status='PASS',fit='NOT_APPLICABLE',reason_code='NO_UNOWNED_ERROR')
         self.report['summary'] = summarize(self.report['rows'],list(self.by_id),self.omitted)
+        kind='probe' if self.report['tool']=='dependency_probe' else 'features'
+        declared=validate_expansion(self.matrix,kind)
+        selected=declared if kind=='features' else len(self.matrix['toolchains'])*sum(1+len(c['compile_refusals']) for c in self.matrix['cases'] if c['id']+'-source' in self.by_id)
+        self.report['summary'].update(declared_compiler_cells=declared,selected_compiler_cells=selected)
         atomic_json(report_path,self.report)
         print(json.dumps({'report':str(Path(report_path).absolute()),'status':self.report['summary']['status'],
                           'counts':self.report['summary']['counts']},separators=(',',':')))
         return self.report['summary']['exit_code']
 
 
-def metadata_admission(execution, r, t, manifest, target, allowed, trusted, denied=(), features=(), defaults=True):
-    result = execution.command(r,t,manifest,['metadata','--offline','--locked','--format-version','1','--filter-platform',HOST],target,features,defaults)
+def metadata_admission(execution, r, t, manifest, target, allowed, trusted, denied=(), features=(), defaults=True, budget=None):
+    result = execution.command(r,t,manifest,['metadata','--offline','--locked','--format-version','1','--filter-platform',HOST],target,features,defaults,budget=budget)
     try: data = json.loads(stdout(result),object_pairs_hook=pairs)
     except ValueError as e: raise PolicyError('METADATA_INVALID') from e
     resolved = admit(data,allowed,execution.matrix['approved_build_inputs'],execution.staging,trusted,denied)
@@ -974,3 +1008,143 @@ def validate_report_target(path, sources):
         raise InputError('REPORT_INSIDE_SOURCE')
     if path.parent.exists() and path.parent.stat().st_uid != os.getuid():
         raise InputError('REPORT_NOT_OWNED')
+
+
+def fixture_inventory(root):
+    records=tree_records(root)
+    if any(r['kind']!='file' for r in records): raise InputError('FIXTURE_SYMLINK')
+    return [{'path':r['path'],'sha256':r['sha256']} for r in records]
+
+
+def original_grant(root, source, approved):
+    records=fixture_inventory(root); value=fixture_digest(root)
+    info=inspect_manifest(Path(root)/'Cargo.toml'); package=info['data']['package']
+    macro=info['data'].get('lib',{}).get('proc-macro',False)
+    if info['build_script'] or macro:
+        grant=next((r for r in approved if (r['name'],r['version'],r['source'])==(package['name'],package['version'],source)),None)
+        if grant is None: raise PolicyError('APPROVAL_REQUIRED','BLOCKED')
+        if grant['sha256']!=value: raise PolicyError('APPROVED_INPUT_CHANGED')
+        if grant['build_script']!=info['build_script']: raise PolicyError('APPROVED_BUILD_TARGET_CHANGED')
+    return {'source':source,'sha256':value,'original_root':str(root),'original_files':records}
+
+
+def verify_original(grant):
+    if fixture_inventory(grant['original_root'])!=grant['original_files'] or hash_value(grant['original_files'])!=grant['sha256']:
+        raise PolicyError('APPROVED_INPUT_CHANGED')
+
+
+def copied_mapping(grant, root):
+    verify_original(grant)
+    original={r['path']:r['sha256'] for r in grant['original_files']}
+    actual={r['path']:r['sha256'] for r in fixture_inventory(root)}
+    if set(actual)-set(original) != ({'Cargo.lock'} if 'Cargo.lock' not in original else set()):
+        raise PolicyError('APPROVED_INPUT_CHANGED')
+    if any(actual.get(name)!=digest for name,digest in original.items()):
+        raise PolicyError('APPROVED_INPUT_CHANGED')
+    return {**grant,'mapped_files':fixture_inventory(root),'original_lock_sha256':original.get('Cargo.lock'),
+            'generated_lock_sha256':actual.get('Cargo.lock'),'mapping':'copied-source'}
+
+
+def verify_trusted_mapping(identity,root):
+    if 'mapped_files' not in identity:
+        if fixture_digest(root)!=identity['sha256']: raise PolicyError('APPROVED_INPUT_CHANGED')
+        return
+    verify_original(identity)
+    if fixture_inventory(root)!=identity['mapped_files']: raise PolicyError('APPROVED_INPUT_CHANGED')
+
+
+def archive_mapping(grant,copied,unpacked,archive,allowed):
+    verify_trusted_mapping(grant,copied)
+    records={r['path']:r['sha256'] for r in fixture_inventory(unpacked)}
+    original={r['path']:r['sha256'] for r in grant['original_files']}
+    package_files(list(records),allowed)
+    if records.get('Cargo.toml.orig')!=original['Cargo.toml']: raise PolicyError('ARCHIVE_MANIFEST_CHANGED')
+    if records.get('Cargo.lock')!=grant['generated_lock_sha256']: raise PolicyError('ARCHIVE_LOCK_CHANGED')
+    generated={'Cargo.toml','Cargo.toml.orig','Cargo.lock'}
+    for name,value in records.items():
+        if name not in generated and original.get(name)!=value: raise PolicyError('ARCHIVE_SOURCE_CHANGED')
+    # No unspecified generated file, including VCS metadata, acquires authority.
+    # The present copied fixture roots deliberately have no VCS metadata.
+    return {**grant,'mapped_files':fixture_inventory(unpacked),'mapping':'cargo-archive',
+            'archive_sha256':sha(archive),'normalized_manifest_sha256':records['Cargo.toml']}
+
+
+def package_semantics(metadata,manifest):
+    """Compare Cargo's effective metadata, rather than reimplement normalization."""
+    manifest=Path(manifest).resolve(); root=manifest.parent
+    package=next(v for v in metadata['packages'] if Path(v['manifest_path']).resolve()==manifest)
+    fields=('name','version','edition','rust_version','license','links','publish','default_run','metadata')
+    result={k:package.get(k) for k in fields}
+    result['features']={k:sorted(v) for k,v in package['features'].items()}
+    result['dependencies']=sorted([{k:d.get(k) for k in ('name','source','req','kind','optional','uses_default_features','features','target','rename','registry')} for d in package['dependencies']],key=lambda d:compact(d))
+    result['targets']=sorted([{**{k:t.get(k) for k in ('name','kind','crate_types','edition','doctest','test','doc','required-features')},
+                               'src_path':str(Path(t['src_path']).resolve().relative_to(root))} for t in package['targets']],key=lambda t:compact(t))
+    return result
+
+
+def record_transformation(ex,identity,root):
+    record={'kind':'fixture-transformation','mapping':identity['mapping'],'path':str(root),
+            'original_source_sha256':identity['sha256'],'original_files':identity['original_files'],
+            'original_lock_sha256':identity['original_lock_sha256'],'generated_lock_sha256':identity['generated_lock_sha256'],
+            'mapped_source_sha256':hash_value(identity['mapped_files'])}
+    if 'metadata_semantics_sha256' in identity: record['metadata_semantics_sha256']=identity['metadata_semantics_sha256']
+    for name in ('archive_sha256','normalized_manifest_sha256'):
+        if name in identity: record[name]=identity[name]
+    ex.report['staged_inputs'].append(record)
+
+
+def probe_case_row_ids(case,toolchains):
+    prefix=case['id']; ids=[prefix+'-source',prefix+'-prepare']
+    ids += [prefix+'-'+t['id']+'-'+phase for t in toolchains for phase in ('admit','check','test','doc')]
+    for refusal in case['compile_refusals']:
+        stem=prefix+'-'+refusal['id']; ids += [stem+'-prepare',stem+'-lock']
+        ids += [stem+'-'+t['id']+'-'+phase for t in toolchains for phase in ('admit','refusal')]
+    return ids
+
+
+def validate_expansion(matrix,kind):
+    toolchains=matrix['toolchains']
+    ids=['tool-error','inputs']+['identity-'+t['id']+suffix for t in toolchains for suffix in ('','-rustc','-cargo')]
+    if kind=='probe':
+        cells=len(toolchains)*sum(1+len(c['compile_refusals']) for c in matrix['cases'])
+        for case in matrix['cases']: ids += probe_case_row_ids(case,toolchains)
+    else:
+        entries=matrix['fixture_members']+matrix['members']
+        cells=len(toolchains)*sum(2+len(m['supported_unions']) for m in entries)
+        ids += ['root-'+t['id'] for t in toolchains]
+        for member in entries:
+            prefix=member['id']
+            ids += [prefix+'-'+phase for phase in ('source','lock','admit','package-list-msrv','package-list-current','package','archive','archive-metadata')]
+            for mode in ['minimal','default']+['union-'+str(i) for i in range(len(member['supported_unions']))]:
+                stem=prefix+'-'+mode; ids += [stem+'-prepare',stem+'-lock']
+                clients=member['clients'] if mode.startswith('union-') else member['clients'][:1]
+                ids += [stem+'-'+t['id']+'-'+phase for t in toolchains for phase in ['admit','check','test','doc']+['run-'+c['id'] for c in clients]]
+    if cells>128: raise InputError('SCHEMA_CELL_BOUND')
+    if len(ids)!=len(set(ids)) or any(len(ident.encode())>240 for ident in ids):
+        raise InputError('SCHEMA_ROW_ID_COLLISION_OR_BOUND')
+    return cells
+
+
+class CellBudget:
+    """One monotonic wall deadline across the sequential phases of one cell."""
+    def __init__(self,ident,seconds=600,clock=None):
+        self.ident=ident; self.seconds=seconds; self.clock=clock or time.monotonic
+        self.started=self.clock(); self.deadline=self.started+seconds
+
+    def remaining(self):
+        value=self.deadline-self.clock()
+        if value<=0:
+            raise PolicyError('TIMEOUT','BLOCKED',{'cell':self.ident,'budget_seconds':self.seconds,'elapsed_ms':round((self.clock()-self.started)*1000)})
+        return value
+
+    def complete(self,result):
+        if self.clock()>=self.deadline and result['reason_code'] is None:
+            result['reason_code']='TIMEOUT'
+
+
+def verify_package_semantics(original,original_manifest,normalized,normalized_manifest):
+    expected=package_semantics(original,original_manifest)
+    actual=package_semantics(normalized,normalized_manifest)
+    if actual!=expected:
+        raise PolicyError('ARCHIVE_SEMANTICS_CHANGED',detail={'expected':expected,'observed':actual})
+    return hash_value(actual)

@@ -74,10 +74,15 @@ def check_notices(member, staging):
 
 
 def run_member(ex, member, matrix_root, policy_only):
-    prefix = member['id']; original = p.relative(matrix_root,member['manifest'])
-    source_digest = p.fixture_digest(original.parent)
+    prefix = member['id']; original = Path(matrix_root)/member['manifest']
+    grant=None
+    source_digest=None
     copied = ex.output/'subjects'/prefix
     def prepare(r):
+        nonlocal grant,source_digest,original
+        original=p.relative(matrix_root,member['manifest'])
+        grant=p.original_grant(original.parent,'fixture:'+prefix,ex.matrix['approved_build_inputs'])
+        source_digest=grant['sha256']
         p.inspect_manifest(original)
         p.check_licenses(original.parent,member['license_files'],member['notice_entries'])
         check_notices(member,ex.staging)
@@ -86,10 +91,18 @@ def run_member(ex, member, matrix_root, policy_only):
         r['observed'] = {'source':str(original),'copied_source_sha256':p.tree_digest(copied)}
     ex.step(prefix+'-source',prepare)
     msrv = ex.matrix['toolchains'][0]
-    trusted_original = {copied/'Cargo.toml':{'source':'fixture:'+prefix,'sha256':source_digest}}
+    trusted_original = {}
     packaging_target = ex.output/'targets'/prefix/'package'
-    ex.step(prefix+'-lock',lambda r:ex.command(r,msrv,copied/'Cargo.toml',['generate-lockfile','--offline'],packaging_target))
-    ex.step(prefix+'-admit',lambda r:p.metadata_admission(ex,r,msrv,copied/'Cargo.toml',packaging_target,member['allowed_dependencies'],trusted_original,member['denied_packages'],member['supported_unions'][0],False))
+    def lock(r):
+        nonlocal grant
+        args=['generate-lockfile','--offline']
+        if any(v['path']=='Cargo.lock' for v in grant['original_files']): args.append('--locked')
+        ex.command(r,msrv,copied/'Cargo.toml',args,packaging_target)
+        grant=p.copied_mapping(grant,copied)
+        trusted_original[copied/'Cargo.toml']=grant
+        p.record_transformation(ex,grant,copied)
+    ex.step(prefix+'-lock',lock)
+    source_metadata=ex.step(prefix+'-admit',lambda r:p.metadata_admission(ex,r,msrv,copied/'Cargo.toml',packaging_target,member['allowed_dependencies'],trusted_original,member['denied_packages'],member['supported_unions'][0] if member['supported_unions'] else member['minimal'],False))
     def package(r,t):
         result = ex.command(r,t,copied/'Cargo.toml',['package','--list','--offline','--locked','--allow-dirty'],packaging_target)
         observed = p.stdout(result).splitlines()
@@ -97,7 +110,7 @@ def run_member(ex, member, matrix_root, policy_only):
     for package_toolchain in ex.matrix['toolchains']:
         ex.step(prefix+'-package-list-'+package_toolchain['id'],lambda r,t=package_toolchain:package(r,t))
     ex.step(prefix+'-package',lambda r:ex.command(r,msrv,copied/'Cargo.toml',['package','--no-verify','--offline','--locked','--allow-dirty'],packaging_target))
-    package_info = tomllib.loads((copied/'Cargo.toml').read_text())['package']
+    package_info = next(v for v in source_metadata['packages'] if Path(v['manifest_path'])==copied/'Cargo.toml')
     archive = packaging_target/'package'/(package_info['name']+'-'+package_info['version']+'.crate')
     unpacked = None
     def unpack(r):
@@ -105,45 +118,49 @@ def run_member(ex, member, matrix_root, policy_only):
         unpacked = p.safe_unpack(archive,ex.output/'unpacked'/prefix,package_info['name']+'-'+package_info['version'])
         p.package_files([v['path'] for v in p.tree_records(unpacked)],member['package_files'])
         p.check_licenses(unpacked,member['license_files'],member['notice_entries'])
-        normalized = p.inspect_manifest(unpacked/'Cargo.toml')
-        original_data = p.inspect_manifest(copied/'Cargo.toml')
-        if normalized['build_script'] != original_data['build_script']:
-            raise p.PolicyError('ARCHIVE_EXECUTABLE_CHANGED')
-        executable_files=[v['path'] for v in p.tree_records(copied) if v['kind']=='file' and (v['path'].endswith('.rs') or v['path']==original_data['build_script'])]
-        for name in executable_files:
-            if not (unpacked/name).is_file() or p.sha(unpacked/name) != p.sha(copied/name):
-                raise p.PolicyError('ARCHIVE_EXECUTABLE_CHANGED')
+        p.inspect_manifest(unpacked/'Cargo.toml')
+        p.archive_mapping(grant,copied,unpacked,archive,member['package_files'])
         r['input_sha256'] = p.sha(archive)
         r['observed'] = {'archive':str(archive),'unpacked':str(unpacked),'archive_verification':'no-verify; explicit downstream stages follow'}
     ex.step(prefix+'-archive',unpack)
-    trusted_subject = {unpacked/'Cargo.toml':{'source':'fixture:'+prefix,'sha256':source_digest}}
+    trusted_subject={}
+    def normalized_metadata(r):
+        result=ex.command(r,msrv,unpacked/'Cargo.toml',['metadata','--offline','--locked','--no-deps','--format-version','1'],packaging_target)
+        semantics=p.verify_package_semantics(source_metadata,copied/'Cargo.toml',json.loads(p.stdout(result)),unpacked/'Cargo.toml')
+        identity=p.archive_mapping(grant,copied,unpacked,archive,member['package_files'])
+        identity['metadata_semantics_sha256']=semantics
+        trusted_subject[unpacked/'Cargo.toml']=identity
+        p.record_transformation(ex,identity,unpacked)
+    ex.step(prefix+'-archive-metadata',normalized_metadata)
     for mode,defaults,features in configurations(member):
         workspace = ex.output/'clients'/prefix/mode
-        trusted,clients = generate_clients(workspace,member,unpacked,matrix_root,mode)
+        trusted,clients = ex.step(prefix+'-'+mode+'-prepare',lambda r:generate_clients(workspace,member,unpacked,matrix_root,mode))
         trusted.update(trusted_subject)
         stem = prefix+'-'+mode
-        ex.step(stem+'-lock',lambda r:ex.command(r,msrv,workspace/'Cargo.toml',['generate-lockfile','--offline'],ex.output/'unused-target'))
-        lock_digest = p.sha(workspace/'Cargo.lock')
+        def client_lock(r):
+            ex.command(r,msrv,workspace/'Cargo.toml',['generate-lockfile','--offline'],ex.output/'unused-target')
+            return p.sha(workspace/'Cargo.lock')
+        lock_digest=ex.step(stem+'-lock',client_lock)
         for t in ex.matrix['toolchains']:
-            cell = stem+'-'+t['id']; target = ex.output/'targets'/prefix/mode/t['id']
+            cell = stem+'-'+t['id']; budget=p.CellBudget(cell); target = ex.output/'targets'/prefix/mode/t['id']
             def metadata(r):
                 p.check_hash(workspace/'Cargo.lock',lock_digest,'LOCK_CHANGED')
-                data = p.metadata_admission(ex,r,t,workspace/'Cargo.toml',target,member['allowed_dependencies'],trusted,member['denied_packages'])
+                data = p.metadata_admission(ex,r,t,workspace/'Cargo.toml',target,member['allowed_dependencies'],trusted,member['denied_packages'],budget=budget)
                 assert_subject(data,package_info['name'],features,minimal=mode in ('minimal','default') and not features)
                 r['observed'] = {'independent_lock':str(workspace/'Cargo.lock'),'subject_features':features,'client_count':len(clients)}
             try:
                 ex.step(cell+'-admit',metadata)
                 if policy_only: continue
-                ex.step(cell+'-check',lambda r:ex.command(r,t,workspace/'Cargo.toml',['check','--offline','--locked','--all-targets'],target))
-                ex.step(cell+'-test',lambda r:ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target,features,defaults))
+                ex.step(cell+'-check',lambda r:ex.command(r,t,workspace/'Cargo.toml',['check','--offline','--locked','--all-targets'],target,budget=budget))
+                ex.step(cell+'-test',lambda r:ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target,features,defaults,budget=budget))
                 def doctest(r):
-                    result = ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--doc'],target,features,defaults,'DOCTEST_FAILED')
+                    result = ex.command(r,t,unpacked/'Cargo.toml',['test','--offline','--locked','--doc'],target,features,defaults,'DOCTEST_FAILED',budget=budget)
                     if member['role']=='fixture' and not re.search(r'test result: ok\. [1-9][0-9]* passed',p.stdout(result)):
                         raise p.PolicyError('DOCTEST_MISSING')
                 ex.step(cell+'-doc',doctest)
                 for client in clients:
                     client_name = 'sb02-'+mode+'-'+client['id']
-                    ex.step(cell+'-run-'+client['id'],lambda r,name=client_name:ex.command(r,t,workspace/'Cargo.toml',['run','--offline','--locked','--package',name],target))
+                    ex.step(cell+'-run-'+client['id'],lambda r,name=client_name:ex.command(r,t,workspace/'Cargo.toml',['run','--offline','--locked','--package',name],target,budget=budget))
             except p.PolicyError:
                 continue
 
@@ -169,12 +186,16 @@ def main(argv=None):
         # actual fixture/probe source trees; do not treat root config as source.
         ex=p.Execution('check_features',matrix_path,m,output,manifest)
         ex.reserve('inputs',phase='staging')
+        for t in m['toolchains']:
+            for suffix in ('','-rustc','-cargo'):
+                ex.reserve('identity-'+t['id']+suffix,role='configuration',toolchain=t['id'],phase='identity'+suffix)
         for t in m['toolchains']: ex.reserve('root-'+t['id'],role='configuration',toolchain=t['id'],phase='metadata')
         for member in members:
             prefix=member['id']
-            for phase in ('source','lock','admit','package-list-msrv','package-list-current','package','archive'):
+            for phase in ('source','lock','admit','package-list-msrv','package-list-current','package','archive','archive-metadata'):
                 ex.reserve(prefix+'-'+phase,member['role'],phase=phase)
             for mode,_,_ in configurations(member):
+                ex.reserve(prefix+'-'+mode+'-prepare',member['role'],phase='prepare')
                 ex.reserve(prefix+'-'+mode+'-lock',member['role'],phase='lock')
                 for t in m['toolchains']:
                     stem=prefix+'-'+mode+'-'+t['id']
@@ -183,7 +204,7 @@ def main(argv=None):
         ex.staging=ex.step('inputs',lambda r:p.stage_inputs(m['cargo_inputs'],output))
         ex.report['staged_inputs']=ex.staging['staged_inputs']
         for t in m['toolchains']:
-            ex.report['toolchains'].append(p.toolchain_info(t,output))
+            ex.report['toolchains'].append(ex.step('identity-'+t['id'],lambda r:p.toolchain_info(t,output,ex)))
             def root_metadata(r):
                 result=ex.command(r,t,manifest,['metadata','--offline','--no-deps','--format-version','1'],output/'root-target')
                 metadata=json.loads(p.stdout(result)); actual={str(Path(v['manifest_path']).resolve()) for v in metadata['packages'] if v['id'] in metadata['workspace_members']}
@@ -200,22 +221,11 @@ def main(argv=None):
     except p.InputError as e:
         print(str(e)[:1024],file=sys.stderr); return 2
     except (p.PolicyError,OSError,tomllib.TOMLDecodeError) as e:
-        if ex:
-            # A failed step already records its owning row. Never copy that
-            # failure into an unreached stage merely to produce a report.
-            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
-                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-                if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
-            return ex.finish(args.report)
+        if ex: return ex.abort(e,args.report)
         print(str(e)[:1024],file=sys.stderr); return 3 if isinstance(e,p.PolicyError) and e.status=='BLOCKED' else 2
-
     except Exception as error:
         print('INTERNAL_ERROR: '+type(error).__name__,file=sys.stderr)
-        if ex:
-            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
-                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-                if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
-            return ex.finish(args.report)
+        if ex: return ex.abort(error,args.report)
         return 1
 
 

@@ -87,7 +87,7 @@ def prepare_case(ex,case,matrix_root,negative=False,manifest_override=None):
         return source,trusted
     lock=acquisition_lock(raw,ex.staging,btf)
     shutil.copyfile(lock,source/'Cargo.lock')
-    return source,trusted
+    return source,trusted,p.sha(source/'Cargo.lock')
 
 
 def verify_candidate(metadata,case,staging):
@@ -111,29 +111,28 @@ def verify_candidate(metadata,case,staging):
 def run_case(ex,case,matrix_root,positive_states):
     if case['availability']=='pending_acquisition':
         raise p.PolicyError('SOURCE_UNAVAILABLE','BLOCKED')
-    source,trusted=prepare_case(ex,case,matrix_root)
-    lock_sha=p.sha(source/'Cargo.lock')
+    source,trusted,lock_sha=ex.step(case['id']+'-prepare',lambda r:prepare_case(ex,case,matrix_root))
     for t in ex.matrix['toolchains']:
-        stem=case['id']+'-'+t['id']; target=ex.output/'targets'/case['id']/t['id']
+        stem=case['id']+'-'+t['id']; budget=p.CellBudget(stem); target=ex.output/'targets'/case['id']/t['id']
         try:
             def metadata(r):
                 p.check_hash(source/'Cargo.lock',lock_sha,'LOCK_CHANGED')
-                data=p.metadata_admission(ex,r,t,source/'Cargo.toml',target,case['allowed_dependencies'],trusted)
+                data=p.metadata_admission(ex,r,t,source/'Cargo.toml',target,case['allowed_dependencies'],trusted,budget=budget)
                 r['observed']=verify_candidate(data,case,ex.staging)
             ex.step(stem+'-admit',metadata)
-            ex.step(stem+'-check',lambda r:ex.command(r,t,source/'Cargo.toml',['check','--offline','--locked','--all-targets'],target))
+            ex.step(stem+'-check',lambda r:ex.command(r,t,source/'Cargo.toml',['check','--offline','--locked','--all-targets'],target,budget=budget))
             positive_states.add((case['id'],t['id']))
             def tests(r):
-                result=ex.command(r,t,source/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target)
+                result=ex.command(r,t,source/'Cargo.toml',['test','--offline','--locked','--lib','--tests'],target,budget=budget)
                 output=p.stdout(result)
                 missing=[name for name in case['assertions'] if not re.search(r'^test '+re.escape(name)+r' \.\.\. ok$',output,re.M)]
                 if missing: raise p.PolicyError('ASSERTION_NOT_EXECUTED',detail={'missing':missing})
-                r['expected']={'assertions':case['assertions']}
+                r['expected']={**(r['expected'] or {}),'assertions':case['assertions']}
                 r['observed']={'assertions_executed':case['assertions'],'tier':case['tier'],
                                'effectful_api_calls':'typed only; fixture source is the reviewed execution authority'}
             fit='GAP' if case['expected_fit'] in ('GAP','OBSERVE') else 'SATISFIED'
             ex.step(stem+'-test',tests,fit)
-            ex.step(stem+'-doc',lambda r:ex.command(r,t,source/'Cargo.toml',['test','--offline','--locked','--doc'],target))
+            ex.step(stem+'-doc',lambda r:ex.command(r,t,source/'Cargo.toml',['test','--offline','--locked','--doc'],target,budget=budget))
         except p.PolicyError:
             continue
 
@@ -154,28 +153,33 @@ def run_refusal(ex,case,refusal,matrix_root,positive_states):
     # Use its own copied source and independent offline lock. Preserve public
     # positive build separately from the expected diagnostic result.
     negative=dict(case,id=case['id']+'-'+refusal['id'])
-    source,trusted=prepare_case(ex,negative,matrix_root,True,refusal['manifest'])
+    source,trusted=ex.step(negative['id']+'-prepare',lambda r:prepare_case(ex,negative,matrix_root,True,refusal['manifest']))
     msrv=ex.matrix['toolchains'][0]; stem=negative['id']
-    ex.step(stem+'-lock',lambda r:ex.command(r,msrv,source/'Cargo.toml',['generate-lockfile','--offline'],ex.output/'unused-target'))
-    lock_sha=p.sha(source/'Cargo.lock')
+    def refusal_lock(r):
+        ex.command(r,msrv,source/'Cargo.toml',['generate-lockfile','--offline'],ex.output/'unused-target')
+        return p.sha(source/'Cargo.lock')
+    lock_sha=ex.step(stem+'-lock',refusal_lock)
     for t in ex.matrix['toolchains']:
-        ident=stem+'-'+t['id']; target=ex.output/'targets'/stem/t['id']
+        ident=stem+'-'+t['id']; budget=p.CellBudget(ident); target=ex.output/'targets'/stem/t['id']
         try:
             def setup(r):
                 if (refusal['positive_case'],t['id']) not in positive_states:
                     raise p.PolicyError('POSITIVE_CONTROL_INCOMPLETE','BLOCKED')
                 p.check_hash(source/'Cargo.lock',lock_sha,'LOCK_CHANGED')
-                data=p.metadata_admission(ex,r,t,source/'Cargo.toml',target,case['allowed_dependencies'],trusted)
+                data=p.metadata_admission(ex,r,t,source/'Cargo.toml',target,case['allowed_dependencies'],trusted,budget=budget)
                 r['observed']=verify_candidate(data,case,ex.staging)
                 return data
             ex.step(ident+'-admit',setup)
             def check(r):
                 p.check_hash(source/'Cargo.lock',lock_sha,'LOCK_CHANGED')
                 argv=[Path(t['root'])/'bin/cargo','check','--offline','--locked','--all-targets','--message-format','json','--manifest-path',source/'Cargo.toml']
-                result=p.run(argv,source,p.clean_env(ex.output,t,target),ex.output/'logs'/r['id'])
+                timeout=budget.remaining()
+                r['expected']={'cell':budget.ident,'wall_budget_seconds':budget.seconds}
+                result=p.run(argv,source,p.clean_env(ex.output,t,target),ex.output/'logs'/r['id'],timeout=timeout)
+                budget.complete(result)
                 ex.attach(r,result); r['input_sha256']=p.tree_digest(source); r['lock_sha256']=p.sha(source/'Cargo.lock')
                 accept_refusal(result,source/'Cargo.lock',lock_sha,refusal['diagnostic_code'],refusal['diagnostic_contains'],source)
-                r['expected']={'code':refusal['diagnostic_code'],'contains':refusal['diagnostic_contains'],'positive_case':refusal['positive_case']}
+                r['expected']={**(r['expected'] or {}),'code':refusal['diagnostic_code'],'contains':refusal['diagnostic_contains'],'positive_case':refusal['positive_case']}
                 r['observed']={'intended_diagnostic':True,'positive_build':True}
             ex.step(ident+'-refusal',check,'GAP')
         except p.PolicyError: continue
@@ -193,32 +197,29 @@ def main(argv=None):
         all_cases=matrix['cases']; known={c['id'] for c in all_cases}
         if set(args.case)-known or len(set(args.case))!=len(args.case): raise p.InputError('UNKNOWN_OR_DUPLICATE_CASE')
         cases=[c for c in all_cases if not args.case or c['id'] in args.case]
-        omitted=[]
-        for c in all_cases:
-            if c in cases or not c['required']: continue
-            omitted.append(c['id']+'-source')
-            omitted.extend(c['id']+'-'+t['id']+'-'+phase for t in matrix['toolchains'] for phase in ('admit','check','test','doc'))
-            for refusal in c['compile_refusals']:
-                stem=c['id']+'-'+refusal['id']; omitted.append(stem+'-lock')
-                omitted.extend(stem+'-'+t['id']+'-'+phase for t in matrix['toolchains'] for phase in ('admit','refusal'))
+        omitted=[ident for c in all_cases if c not in cases and c['required'] for ident in p.probe_case_row_ids(c,matrix['toolchains'])]
         sources=[path.parent,*[p.relative(path.parent,c['manifest'],False).parent for c in cases]]
         p.validate_report_target(args.report,sources)
         output=p.fresh_output(args.output_dir,sources)
         ex=p.Execution('dependency_probe',path,matrix,output,scope='selected_cases' if args.case else 'full',omitted=omitted)
         ex.reserve('inputs',phase='staging')
+        for t in matrix['toolchains']:
+            for suffix in ('','-rustc','-cargo'):
+                ex.reserve('identity-'+t['id']+suffix,role='configuration',toolchain=t['id'],phase='identity'+suffix)
         for case in cases:
             ex.reserve(case['id']+'-source',required=case['required'],phase='source')
+            ex.reserve(case['id']+'-prepare',required=case['required'],phase='prepare')
             for t in matrix['toolchains']:
                 for phase in ('admit','check','test','doc'):
                     ex.reserve(case['id']+'-'+t['id']+'-'+phase,toolchain=t['id'],phase=phase,required=case['required'])
             for refusal in case['compile_refusals']:
-                stem=case['id']+'-'+refusal['id']; ex.reserve(stem+'-lock',phase='lock',required=case['required'])
+                stem=case['id']+'-'+refusal['id']; ex.reserve(stem+'-prepare',phase='prepare',required=case['required']); ex.reserve(stem+'-lock',phase='lock',required=case['required'])
                 for t in matrix['toolchains']:
                     for phase in ('admit','refusal'):
                         ex.reserve(stem+'-'+t['id']+'-'+phase,toolchain=t['id'],phase=phase,required=case['required'])
         ex.staging=ex.step('inputs',lambda r:p.stage_inputs(matrix['cargo_inputs'],output))
         ex.report['staged_inputs']=ex.staging['staged_inputs']
-        for t in matrix['toolchains']: ex.report['toolchains'].append(p.toolchain_info(t,output))
+        for t in matrix['toolchains']: ex.report['toolchains'].append(ex.step('identity-'+t['id'],lambda r:p.toolchain_info(t,output,ex)))
         positives=set()
         for case in cases:
             try:
@@ -230,36 +231,22 @@ def main(argv=None):
                     r['observed']={'available_storage_bytes':shutil.disk_usage(output).free,'manifest_sha256':p.sha(manifest)}
                 ex.step(case['id']+'-source',source)
                 run_case(ex,case,path.parent,positives)
-            except p.PolicyError as error:
-                # A preparation failure belongs to the source stage rather than
-                # disappearing into later NOT_RUN rows.
-                r=ex.by_id[case['id']+'-source']
-                if r['status']=='PASS': r.update(status=error.status,reason_code=error.code,fit='UNKNOWN')
+            except p.PolicyError:
+                continue
         for case in cases:
             for refusal in case['compile_refusals']:
                 try: run_refusal(ex,case,refusal,path.parent,positives)
-                except p.PolicyError as error:
-                    ex.by_id[case['id']+'-'+refusal['id']+'-lock'].update(status=error.status,reason_code=error.code)
+                except p.PolicyError:
+                    continue
         return ex.finish(args.report)
     except p.InputError as e:
         print(str(e)[:1024],file=sys.stderr); return 2
     except (p.PolicyError,OSError,tomllib.TOMLDecodeError) as e:
-        if ex:
-            # A failed step already records its owning row. Never copy that
-            # failure into an unreached stage merely to produce a report.
-            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
-                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-                if active: active.update(status=getattr(e,'status','FAIL'),reason_code=getattr(e,'code','INTERNAL_ERROR'))
-            return ex.finish(args.report)
+        if ex: return ex.abort(e,args.report)
         print(str(e)[:1024],file=sys.stderr); return 3 if isinstance(e,p.PolicyError) and e.status=='BLOCKED' else 2
-
     except Exception as error:
         print('INTERNAL_ERROR: '+type(error).__name__,file=sys.stderr)
-        if ex:
-            if not any(r['status'] in ('FAIL','BLOCKED') for r in ex.report['rows']):
-                active=next((r for r in ex.report['rows'] if r['status']=='NOT_RUN'),None)
-                if active: active.update(status='FAIL',reason_code='INTERNAL_ERROR')
-            return ex.finish(args.report)
+        if ex: return ex.abort(error,args.report)
         return 1
 
 

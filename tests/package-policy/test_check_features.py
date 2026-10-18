@@ -339,3 +339,81 @@ class RealCargoControls(unittest.TestCase):
             self.assertTrue(all(r['status']=='PASS' for r in actual))
             if selection: self.assertTrue(data['summary']['omitted_required_ids'])
             else: self.assertTrue(any(r['reason_code']=='SOURCE_UNAVAILABLE' for r in data['rows']))
+
+    def test_F1_approved_script_traverses_cli_lock_and_archive_without_new_grant(self):
+        import shutil,subprocess
+        for original_lock in (False,True):
+            output=self.directory('approved-cli-'+str(original_lock)); inputs=output/'input'; inputs.mkdir()
+            shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
+            source=inputs/'fixtures/feature_subject'; manifest=source/'Cargo.toml'
+            manifest.write_text(manifest.read_text().replace('include = [','include = ["build.rs", "helper.inc", '))
+            (source/'build.rs').write_text('include!("helper.inc");\n')
+            (source/'helper.inc').write_text('fn main() { std::fs::write(std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("approved-marker"), "executed").unwrap(); }\n')
+            if original_lock:
+                seed=output/'seed'; seed.mkdir(); policy.stage_inputs(self.inputs,seed)
+                policy.succeeded(self.cargo(source,['generate-lockfile','--offline'],seed,'original-lock'))
+            matrix=json.loads(json.dumps(self.matrix)); member=matrix['fixture_members'][0]
+            member['package_files']+=['build.rs','helper.inc']
+            grant=dict(name='sb02-feature-subject',version='0.1.0',source='fixture:feature-subject',sha256=policy.fixture_digest(source),build_script='build.rs',reason='Inspected include helper writes only an OUT_DIR marker')
+            matrix['approved_build_inputs'].append(grant)
+            matrix_path=inputs/'matrix.json'; matrix_path.write_text(json.dumps(matrix))
+            report=output/'report.json'; run=output/'run'
+            argv=[str(ROOT/'bin/scopebase-build'),'--',sys.executable,str(ROOT/'tools/build/check_features.py'),'--manifest',str(ROOT/'Cargo.toml'),'--matrix',str(matrix_path),'--output-dir',str(run),'--report',str(report)]
+            result=subprocess.run(argv,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr+report.read_text())
+            data=json.loads(report.read_text())
+            for mode in ('minimal','default','union-0'):
+                for t in matrix['toolchains']:
+                    markers=list((run/'targets/feature-subject'/mode/t['id']).rglob('approved-marker'))
+                    self.assertTrue(markers,(original_lock,mode,t['id']))
+                    self.assertTrue(all(p.read_text()=='executed' for p in markers))
+            transformations=[r for r in data['staged_inputs'] if r['kind']=='fixture-transformation']
+            self.assertTrue(transformations)
+            self.assertTrue(all(r['original_source_sha256']==grant['sha256'] for r in transformations))
+            self.assertEqual(transformations[0]['original_lock_sha256'],policy.sha(source/'Cargo.lock') if original_lock else None)
+            # A capable fake command is never reached by stale original grants.
+            fake=output/'fake-bpf-tool'; marker=output/'bad-marker'
+            fake.write_text('#!/usr/bin/python3\nfrom pathlib import Path\nPath('+repr(str(marker))+').write_text("executed")\n'); fake.chmod(0o700)
+            subprocess.run([str(fake)],check=True); marker.unlink()
+            baseline={p.relative_to(source):p.read_bytes() for p in source.rglob('*') if p.is_file()}
+            for mutation in ('helper','added','target','dependency','feature'):
+                for p in source.rglob('*'):
+                    if p.is_file() and p.relative_to(source) not in baseline: p.unlink()
+                for p,raw in baseline.items(): (source/p).write_bytes(raw)
+                if mutation=='helper': (source/'helper.inc').write_text('fn main() { std::process::Command::new('+json.dumps(str(fake))+').status().unwrap(); }')
+                elif mutation=='added': (source/'added-support.rs').write_text('fn evil() {}')
+                elif mutation=='target': manifest.write_text(manifest.read_text().replace('[package]','[package]\nbuild="other.rs"')); (source/'other.rs').write_text('fn main() {}')
+                elif mutation=='dependency': manifest.write_text(manifest.read_text().replace('features = ["std"]','features = ["std", "derive"]',1))
+                else: manifest.write_text(manifest.read_text().replace('default = []','default = ["json"]'))
+                mutant_report=output/(mutation+'.json')
+                badargv=argv.copy(); badargv[badargv.index(str(run))]=str(output/mutation); badargv[badargv.index(str(report))]=str(mutant_report)
+                bad=subprocess.run(badargv,capture_output=True,text=True)
+                self.assertEqual(bad.returncode,1,bad.stdout+bad.stderr)
+                self.assertFalse(marker.exists())
+                self.assertTrue(any(r['reason_code']=='APPROVED_INPUT_CHANGED' for r in json.loads(mutant_report.read_text())['rows']))
+
+            for p in source.rglob('*'):
+                if p.is_file() and p.relative_to(source) not in baseline: p.unlink()
+            for p,raw in baseline.items(): (source/p).write_bytes(raw)
+            original_identity=policy.original_grant(source,'fixture:feature-subject',matrix['approved_build_inputs'])
+            copied_identity=policy.copied_mapping(original_identity,run/'subjects/feature-subject')
+            original_md=json.loads(Path(next(r for r in data['rows'] if r['id']=='feature-subject-admit')['logs']['stdout']['path']).read_text())
+            archive=Path(next(r for r in data['rows'] if r['id']=='feature-subject-archive')['observed']['archive'])
+            packaged=run/'unpacked/feature-subject/sb02-feature-subject-0.1.0'
+            for mutation in ('helper','support','build','dependency','feature'):
+                mutated=output/('archive-'+mutation); shutil.copytree(packaged,mutated)
+                changed=mutated/'Cargo.toml'
+                if mutation=='helper': (mutated/'helper.inc').write_text('fn main() { panic!("unapproved"); }')
+                elif mutation=='support': (mutated/'added-helper.inc').write_text('unapproved support')
+                elif mutation=='build': changed.write_text(changed.read_text().replace('build = "build.rs"','build = "helper.inc"'))
+                elif mutation=='dependency': changed.write_text(changed.read_text().replace('default-features = false','default-features = true',1))
+                else: changed.write_text(changed.read_text().replace('default = []','default = ["json"]'))
+                if mutation in ('helper','support'):
+                    with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SOURCE_CHANGED|UNEXPECTED_PACKAGE_FILE'):
+                        policy.archive_mapping(copied_identity,run/'subjects/feature-subject',mutated,archive,member['package_files'])
+                else:
+                    result=self.cargo(mutated,['metadata','--offline','--locked','--no-deps','--format-version','1'],run,'mutant-metadata-'+mutation)
+                    policy.succeeded(result)
+                    with self.assertRaisesRegex(policy.PolicyError,'ARCHIVE_SEMANTICS_CHANGED'):
+                        policy.verify_package_semantics(original_md,run/'subjects/feature-subject/Cargo.toml',json.loads(policy.stdout(result)),mutated/'Cargo.toml')
+                self.assertFalse(marker.exists())
