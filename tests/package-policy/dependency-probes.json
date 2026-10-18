@@ -2,8 +2,8 @@
   "schema_version": 1,
   "host": "x86_64-unknown-linux-gnu",
   "cargo_inputs": {
-    "inventory": "/home/user/src/m/bpfscope/.scopebase/jobs/sb02-api-probes-20261018/evidence/acquisition-v2/source-inventory.json",
-    "sha256": "92e7804954e641f6a1071c05ea3cff03167453e7d63044b89fad9d5b4ea8bffe"
+    "inventory": "/home/user/src/m/bpfscope/.scopebase/jobs/tt02-sha256-admission-20261018/evidence/acquisition-v2/source-inventory-v3.json",
+    "sha256": "f069051c436afb9c21a1dfd6d92426f404b7a53280e0ac79d627d3661717d16f"
   },
   "approved_build_inputs": [
     {
@@ -1115,6 +1115,90 @@
         "SB02",
         "CP10"
       ]
+    },
+    {
+      "allowed_dependencies": [
+        {
+          "name": "block-buffer",
+          "role": "host-rust",
+          "sha256": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.12.1"
+        },
+        {
+          "name": "cfg-if",
+          "role": "host-rust",
+          "sha256": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "1.0.5"
+        },
+        {
+          "name": "cpufeatures",
+          "role": "host-rust",
+          "sha256": "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.3.1"
+        },
+        {
+          "name": "crypto-common",
+          "role": "host-rust",
+          "sha256": "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.2.2"
+        },
+        {
+          "name": "digest",
+          "role": "host-rust",
+          "sha256": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.11.3"
+        },
+        {
+          "name": "hybrid-array",
+          "role": "host-rust",
+          "sha256": "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.4.15"
+        },
+        {
+          "name": "sha2",
+          "role": "host-rust",
+          "sha256": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.11.0"
+        },
+        {
+          "name": "typenum",
+          "role": "host-rust",
+          "sha256": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "1.20.1"
+        }
+      ],
+      "assertions": [
+        "tests::fixed_one_shot_vectors",
+        "tests::incremental_boundary_vectors",
+        "tests::omitted_update_control_and_restored_twin"
+      ],
+      "availability": "ready",
+      "candidate": {
+        "name": "sha2",
+        "sha256": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.11.0"
+      },
+      "compile_refusals": [],
+      "default_features": false,
+      "expected_fit": "SATISFIED",
+      "features": [],
+      "id": "sha2-sha256",
+      "manifest": "probes/sha2-sha256/Cargo.toml",
+      "obligation_refs": [
+        "SB02",
+        "TT02"
+      ],
+      "required": true,
+      "tier": "host_semantic"
     }
   ]
 }
