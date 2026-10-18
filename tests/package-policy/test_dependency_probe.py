@@ -1,0 +1,450 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Strict input/report and frozen-source controls; no Cargo subprocess doubles."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'tools' / 'build'))
+try:
+    import common as policy
+except ImportError:
+    policy = None
+
+
+class InputPolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.assertIsNotNone(policy, 'the bounded build-policy implementation is absent')
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_duplicate_json_and_unknown_fields_are_errors(self):
+        p = self.root / 'x.json'
+        p.write_text('{"schema_version":1,"schema_version":1}')
+        with self.assertRaisesRegex(policy.InputError, 'DUPLICATE_KEY'):
+            policy.read_json(p)
+        with self.assertRaisesRegex(policy.InputError, 'SCHEMA'):
+            policy.exact({'x': 1, 'extra': 2}, {'x'})
+
+    def test_safe_paths_reject_traversal_and_existing_symlink_escape(self):
+        (self.root / 'okay').write_text('yes')
+        self.assertEqual(policy.relative(self.root, 'okay'), self.root / 'okay')
+        for text in ('../other', '/etc/passwd', 'a/../okay'):
+            with self.assertRaisesRegex(policy.InputError, 'PATH'):
+                policy.relative(self.root, text)
+        (self.root / 'escape').symlink_to('/etc')
+        with self.assertRaisesRegex(policy.InputError, 'PATH'):
+            policy.relative(self.root, 'escape/passwd')
+
+    def test_required_rows_cannot_disappear_or_duplicate(self):
+        rows = [policy.row('one', required=True), policy.row('two', required=True)]
+        for r in rows:
+            r.update(status='PASS', cleanup='complete')
+        self.assertEqual(policy.summarize(rows, ['one', 'two'])['status'], 'PASS')
+        for status in ('BLOCKED', 'NOT_RUN'):
+            changed = copy.deepcopy(rows)
+            changed[1]['status'] = status
+            self.assertEqual(policy.summarize(changed, ['one', 'two'])['exit_code'], 3)
+        with self.assertRaisesRegex(policy.InputError, 'MISSING_ROW'):
+            policy.summarize(rows[:1], ['one', 'two'])
+        with self.assertRaisesRegex(policy.InputError, 'DUPLICATE_ROW'):
+            policy.summarize(rows + rows[:1], ['one', 'two'])
+        rows[0]['status'] = 'FAIL'
+        rows[1]['status'] = 'BLOCKED'
+        summary = policy.summarize(rows, ['one', 'two'])
+        self.assertEqual(summary['exit_code'], 1)
+        self.assertEqual(summary['counts']['BLOCKED'], 1)
+
+    def test_selected_cases_never_claim_full_matrix(self):
+        r = policy.row('one'); r.update(status='PASS', cleanup='complete')
+        summary = policy.summarize([r], ['one'], omitted=['two'])
+        self.assertFalse(summary['full_matrix_complete'])
+        self.assertEqual(summary['omitted_required_ids'], ['two'])
+
+    def test_whole_tree_hash_detects_included_helper_and_added_file(self):
+        (self.root / 'build.rs').write_text('include!("helper.rs");')
+        (self.root / 'helper.rs').write_text('fn main() {}')
+        original = policy.tree_digest(self.root)
+        (self.root / 'helper.rs').write_text('fn main() { panic!("wrong"); }')
+        self.assertNotEqual(original, policy.tree_digest(self.root))
+        (self.root / 'extra').write_text('new')
+        self.assertNotEqual(original, policy.tree_digest(self.root))
+
+    def test_new_outputs_reject_reuse_symlinks_and_source_containment(self):
+        out = self.root / 'out'
+        policy.fresh_output(out, [self.root / 'input'])
+        (out / 'receipt').write_text('old success')
+        with self.assertRaisesRegex(policy.InputError, 'OUTPUT'):
+            policy.fresh_output(out, [])
+        with self.assertRaisesRegex(policy.InputError, 'OUTPUT'):
+            policy.fresh_output(self.root / 'input' / 'out', [self.root / 'input'])
+
+    def test_compile_refusal_requires_positive_and_intended_rust_diagnostic(self):
+        diagnostic = {'message': {'code': {'code': 'E0624'}, 'message': 'method `type_by_id` is private',
+                      'spans': [{'file_name': 'src/lib.rs', 'line_start': 4, 'is_primary': True}]}}
+        text = json.dumps({'reason': 'compiler-message', **diagnostic})
+        self.assertTrue(policy.rust_refusal(text, 'E0624', 'type_by_id'))
+        self.assertFalse(policy.rust_refusal('failed to download dependency', 'E0624', 'type_by_id'))
+        self.assertFalse(policy.rust_refusal(text.replace('E0624', 'E0432'), 'E0624', 'type_by_id'))
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+class StagingTests(unittest.TestCase):
+    def test_changed_cargo_vendor_tree_is_not_availability_or_permission(self):
+        self.assertIsNotNone(policy)
+        self.assertTrue(hasattr(policy, 'stage_inputs'), 'immutable vendor staging is absent')
+
+    def test_btf_mapping_relocates_only_the_exact_reviewed_git_edge(self):
+        self.assertIsNotNone(policy)
+        self.assertTrue(hasattr(policy, 'map_btf_manifest'), 'controlled BTF manifest mapping is absent')
+        raw = '''[package]\nname="trial"\nversion="0.1.0"\n[dependencies]\nbtf-rs={git="https://github.com/retis-org/btf-rs",rev="0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",default-features=false,features=[]}\n'''
+        rewritten = policy.map_btf_manifest(raw, '/owned/staged/btf-rs')
+        import tomllib
+        dep = tomllib.loads(rewritten)['dependencies']['btf-rs']
+        self.assertEqual(dep, {'path': '/owned/staged/btf-rs', 'default-features': False, 'features': []})
+        for old, new in (('retis-org','wrong-org'), ('0a5838','1a5838')):
+            with self.assertRaisesRegex(policy.PolicyError, 'SOURCE_MAPPING'):
+                policy.map_btf_manifest(raw.replace(old, new), '/owned/staged/btf-rs')
+
+class ProcessAndSchemaTests(unittest.TestCase):
+    def test_timeout_reaps_owned_child_and_preserves_bounded_logs(self):
+        import os
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            result=policy.run([sys.executable,'-c','import time; print("started",flush=True); time.sleep(30)'],root,{'PATH':'/usr/bin:/bin'},root/'timeout',timeout=.05)
+            self.assertEqual(result['reason_code'],'TIMEOUT')
+            self.assertEqual(result['cleanup'],'complete')
+            self.assertIn('started',policy.stdout(result))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(result['process_group'],0)
+
+    def test_malformed_nested_schema_is_input_error(self):
+        base=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+        for key in ('members','fixture_members','approved_build_inputs','toolchains'):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                changed=copy.deepcopy(base); changed[key]=17
+                path=Path(tmp)/'matrix.json'; path.write_text(json.dumps(changed))
+                with self.assertRaises(policy.InputError):
+                    policy.validate_matrix(path,'features')
+
+class BtfLockMappingTests(unittest.TestCase):
+    def test_acquisition_matching_preserves_every_nonpath_field(self):
+        import dependency_probe as probe
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); bundle=root/'bundle'; package=bundle/'btf-rs'; package.mkdir(parents=True)
+            manifest=package/'Cargo.toml'; manifest.write_text('[package]\nname="btf-rs"\nversion="2.0.0"\n')
+            files=[dict(path='btf-rs/Cargo.toml',kind='file',sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),link_target=None)]
+            entry=dict(root=package,bundle=dict(files=files,packages=[dict(name='btf-rs',manifest='btf-rs/Cargo.toml')]))
+            canonical='[package]\nname="probe"\nversion="0.1.0"\n[dependencies]\nbtf-rs={git="'+policy.BTF_URL+'",rev="'+policy.BTF_REV+'",default-features=false,features=[]}\nitoa={version="=1.0.18"}\n'
+            acquired=root/'Cargo.toml'; acquired.write_text(policy.map_btf_manifest(canonical,package))
+            lock=root/'Cargo.lock'
+            # This unit tests manifest binding only. No subprocess/lock contents
+            # are used as Cargo execution evidence.
+            staging=dict(inventory=dict(cargo_vendor=dict(acquisition_locks=[dict(manifest=str(acquired),lock=str(lock))])))
+            self.assertEqual(probe.acquisition_lock(canonical,staging,entry),lock)
+            mutants=[canonical.replace('retis-org','wrong-org'),canonical.replace(policy.BTF_REV,'f'*40),canonical.replace('name="probe"','name="other"'),canonical.replace('features=[]','features=["elf"]'),canonical.replace('=1.0.18','=1.0.17')]
+            for changed in mutants:
+                with self.subTest(changed=changed),self.assertRaisesRegex(policy.PolicyError,'ACQUISITION_LOCK_UNAVAILABLE'):
+                    probe.acquisition_lock(changed,staging,entry)
+
+class FailureStageAttributionTests(unittest.TestCase):
+    def test_only_input_stage_owns_missing_or_changed_inventory_failure(self):
+        import subprocess
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); inputs=root/'inputs'; inputs.mkdir()
+            shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
+            probe=inputs/'probe'; (probe/'src').mkdir(parents=True)
+            (probe/'Cargo.toml').write_text('[package]\nname="synthetic"\nversion="0.1.0"\nedition="2021"\n[workspace]\n[dependencies]\nitoa={version="=1.0.18",default-features=false,features=[]}\n')
+            (probe/'src/lib.rs').write_text('#[test] fn literal() { assert_eq!(1,1); }')
+            original=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            for kind in ('features','probe'):
+                for mutation,exit_code,code,status in (('missing',3,'SOURCE_UNAVAILABLE','BLOCKED'),('changed',1,'INPUT_CHANGED','FAIL')):
+                    matrix=copy.deepcopy(original)
+                    if kind=='probe':
+                        del matrix['fixture_members']; del matrix['members']
+                        record=original['fixture_members'][0]['allowed_dependencies'][0]
+                        candidate={k:record[k] for k in ('name','version','source','sha256')}
+                        matrix['cases']=[dict(id='synthetic',required=True,manifest='probe/Cargo.toml',candidate=candidate,default_features=False,features=[],tier='host_semantic',assertions=['literal'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02'])]
+                    if mutation=='missing': matrix['cargo_inputs']['inventory']=str(root/'absent-inventory.json')
+                    else: matrix['cargo_inputs']['sha256']='0'*64
+                    path=inputs/(kind+'-'+mutation+'.json'); path.write_text(json.dumps(matrix))
+                    report=root/(kind+'-'+mutation+'-report.json')
+                    argv=[sys.executable,str(ROOT/'tools/build'/('check_features.py' if kind=='features' else 'dependency_probe.py')),'--matrix',str(path),'--output-dir',str(root/(kind+'-'+mutation+'-output')),'--report',str(report)]
+                    if kind=='features': argv.extend(['--manifest',str(ROOT/'Cargo.toml')])
+                    result=subprocess.run(argv,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,exit_code,result.stdout+result.stderr)
+                    rows=json.loads(report.read_text())['rows']
+                    active=[r for r in rows if r['status'] in ('FAIL','BLOCKED')]
+                    self.assertEqual([(r['id'],r['status'],r['reason_code']) for r in active],[('inputs',status,code)])
+                    self.assertTrue(all(r['command'] is None and r['cleanup']=='not_started' for r in rows))
+
+
+class RefusalCompletionTests(unittest.TestCase):
+    def test_diagnostic_cannot_certify_timeout_log_bound_or_interruption(self):
+        import dependency_probe as probe
+        self.assertTrue(hasattr(probe,'accept_refusal'), 'refusal completion predicate is absent')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); source=root/'src'; source.mkdir()
+            (source/'lib.rs').write_text('fn check() { btf.type_by_id(1); }\n')
+            lock=root/'Cargo.lock'; lock.write_text('frozen lock\n'); lock_sha=policy.sha(lock)
+            diagnostic=dict(reason='compiler-message',message=dict(code=dict(code='E0624'),message='method `type_by_id` is private',spans=[dict(file_name=str(source/'lib.rs'),line_start=1,is_primary=True)]))
+            log=root/'diagnostics'; log.write_text(json.dumps(diagnostic)+'\n')
+            # This is a report predicate unit, not a fabricated Rust/Cargo run.
+            result=dict(cleanup='complete',exit_code=101,reason_code=None,logs=dict(stdout=dict(path=str(log))))
+            probe.accept_refusal(result,lock,lock_sha,'E0624','type_by_id',root)
+            for reason in ('TIMEOUT','LOG_BOUND','INTERRUPTED'):
+                changed={**result,'reason_code':reason}
+                with self.subTest(reason=reason):
+                    with self.assertRaises(policy.PolicyError) as error:
+                        probe.accept_refusal(changed,lock,lock_sha,'E0624','type_by_id',root)
+                    self.assertEqual((error.exception.status,error.exception.code),('BLOCKED',reason))
+            with self.assertRaisesRegex(policy.PolicyError,'CLEANUP_UNRESOLVED'):
+                probe.accept_refusal({**result,'cleanup':'unresolved'},lock,lock_sha,'E0624','type_by_id',root)
+            with self.assertRaisesRegex(policy.PolicyError,'REFUSAL_INCOMPLETE'):
+                probe.accept_refusal({**result,'exit_code':None},lock,lock_sha,'E0624','type_by_id',root)
+            lock.write_text('changed lock\n')
+            with self.assertRaisesRegex(policy.PolicyError,'LOCK_CHANGED'):
+                probe.accept_refusal(result,lock,lock_sha,'E0624','type_by_id',root)
+
+class ExplicitOwnerTests(unittest.TestCase):
+    def test_F2_missing_compiler_and_later_prepare_error_have_distinct_owners(self):
+        import check_features,dependency_probe,shutil
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); inputs=root/'input'; inputs.mkdir()
+            shutil.copytree(ROOT/'tests/package-policy/fixtures',inputs/'fixtures')
+            base=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            for kind,module in (('features',check_features),('probe',dependency_probe)):
+                matrix=copy.deepcopy(base)
+                if kind=='features':
+                    matrix['fixture_members']=[{**copy.deepcopy(base['fixture_members'][0]),'id':name} for name in ('one','two')]
+                else:
+                    del matrix['fixture_members']; del matrix['members']; cases=[]
+                    record=base['fixture_members'][0]['allowed_dependencies'][0]
+                    for name in ('one','two'):
+                        source=inputs/name; (source/'src').mkdir(parents=True,exist_ok=True)
+                        (source/'Cargo.toml').write_text('[package]\nname="'+name+'"\nversion="0.1.0"\n[workspace]\n[dependencies]\nitoa={version="=1.0.18",default-features=false,features=[]}\n')
+                        (source/'src/lib.rs').write_text('#[test] fn literal() {}')
+                        cases.append(dict(id=name,required=True,manifest=name+'/Cargo.toml',candidate={k:record[k] for k in ('name','version','source','sha256')},default_features=False,features=[],tier='host_semantic',assertions=['literal'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02']))
+                    matrix['cases']=cases
+                path=inputs/(kind+'.json'); path.write_text(json.dumps(matrix))
+                for scenario in ('identity','preparation'):
+                    report=root/(kind+'-'+scenario+'.json'); out=root/(kind+'-'+scenario)
+                    args=['--matrix',str(path),'--output-dir',str(out),'--report',str(report)]
+                    if kind=='features': args+=['--manifest',str(ROOT/'Cargo.toml')]
+                    def identity(*a,**kw):
+                        if scenario=='identity': raise policy.PolicyError('TOOLCHAIN_UNAVAILABLE','BLOCKED')
+                        return {'id':a[0]['id']}
+                    def preparation(*a,**kw):
+                        name=a[1]['id'] if kind=='probe' else Path(a[1]).name
+                        if name=='one': raise policy.PolicyError('POLICY_REJECTED')
+                        raise OSError('owned injected preparation I/O failure')
+                    # Fault injection is restricted to report-unit boundaries.
+                    # No simulated command or result is API/compile evidence.
+                    def command(ex,r,t,manifest,arguments,target,*a,**kw):
+                        log=out/(r['id']+'.json'); log.write_text('{"packages":[],"workspace_members":[]}')
+                        return {'logs':{'stdout':{'path':str(log)}}}
+                    with patch.object(policy,'stage_inputs',return_value={'packages':[],'staged_inputs':[]}),patch.object(policy,'toolchain_info',side_effect=identity),patch.object(policy.Execution,'command',command),patch.object(check_features,'check_notices'),patch.object(policy,'source_copy',side_effect=preparation),patch.object(dependency_probe,'prepare_case',side_effect=preparation):
+                        code=module.main(args)
+                    data=json.loads(report.read_text()); failed=[r for r in data['rows'] if r['status'] in ('FAIL','BLOCKED')]
+                    if scenario=='identity':
+                        self.assertEqual(code,3)
+                        self.assertEqual([(r['id'],r['toolchain'],r['reason_code']) for r in failed],[('identity-msrv','msrv','TOOLCHAIN_UNAVAILABLE')])
+                    else:
+                        self.assertEqual(code,1)
+                        suffix='source' if kind=='features' else 'prepare'
+                        self.assertEqual([(r['id'],r['reason_code']) for r in failed],[('one-'+suffix,'POLICY_REJECTED'),('two-'+suffix,'INTERNAL_ERROR')])
+                    self.assertTrue(all(r['command'] is None and r['cleanup']=='not_started' for r in data['rows'] if r['status']=='NOT_RUN'))
+
+class CompilerCellBoundsTests(unittest.TestCase):
+    def test_F3_expanded_configuration_and_refusal_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); base=json.loads((ROOT/'tests/package-policy/matrix.json').read_text())
+            # Safe path resolution uses the actual immutable fixture inputs.
+            path=ROOT/'tests/package-policy/matrix.json'
+            def validate(matrix,kind):
+                from unittest.mock import patch
+                with patch.object(policy,'read_json',return_value=matrix): return policy.validate_matrix(path,kind)
+            fixture=base['fixture_members'][0]
+            for n,wanted in ((32,128),(33,132)):
+                m=copy.deepcopy(base); m['fixture_members']=[{**copy.deepcopy(fixture),'id':'m'+str(i),'supported_unions':[]} for i in range(n)]
+                if wanted<=128: validate(m,'features')
+                else:
+                    with self.assertRaisesRegex(policy.InputError,'CELL_BOUND'): validate(m,'features')
+            m=copy.deepcopy(base); m['fixture_members'][0]['supported_unions']=[['json'],['json']]
+            with self.assertRaisesRegex(policy.InputError,'DUPLICATE_UNION'): validate(m,'features')
+            record=fixture['allowed_dependencies'][0]
+            case=dict(id='a',required=False,manifest='fixtures/feature_subject/Cargo.toml',candidate={k:record[k] for k in ('name','version','source','sha256')},default_features=False,features=[],tier='compile',assertions=['check'],expected_fit='SATISFIED',availability='ready',compile_refusals=[],allowed_dependencies=[record],obligation_refs=['SB02'])
+            for count in (63,64):
+                m={k:copy.deepcopy(v) for k,v in base.items() if k not in ('members','fixture_members')}
+                c=copy.deepcopy(case); c['compile_refusals']=[dict(id='r'+str(i),manifest=c['manifest'],diagnostic_code='E0624',diagnostic_contains='method',positive_case='a') for i in range(count)]
+                m['cases']=[c]
+                if count==63: validate(m,'probe')
+                else:
+                    with self.assertRaisesRegex(policy.InputError,'CELL_BOUND'): validate(m,'probe')
+            import dependency_probe
+            from unittest.mock import patch
+            with patch.object(policy,'read_json',return_value=m),patch.object(policy,'stage_inputs') as stage:
+                result=dependency_probe.main(['--matrix',str(path),'--output-dir',str(root/'oversized'),'--report',str(root/'oversized.json'),'--case','a'])
+                self.assertEqual(result,2); stage.assert_not_called()
+            m['cases'][0]['compile_refusals']=m['cases'][0]['compile_refusals'][:1]*2
+            with self.assertRaisesRegex(policy.InputError,'REFUSAL_ID'): validate(m,'probe')
+            m['cases'][0]['compile_refusals'][0]['id']='../bad'
+            with self.assertRaisesRegex(policy.InputError,'REFUSAL_ID'): validate(m,'probe')
+            # Case/refusal stem alias must fail before row creation/staging.
+            a=copy.deepcopy(case); a['compile_refusals']=[dict(id='b',manifest=a['manifest'],diagnostic_code='E0624',diagnostic_contains='method',positive_case='a')]
+            b={**copy.deepcopy(case),'id':'a-b'}; m['cases']=[a,b]
+            with self.assertRaisesRegex(policy.InputError,'ROW_ID_COLLISION'): validate(m,'probe')
+
+    def test_F3_two_short_processes_share_one_elapsed_budget(self):
+        import dependency_probe
+        self.assertTrue(hasattr(policy,'CellBudget'),'shared compiler-cell budget is absent')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); budget=policy.CellBudget('owned-two-phase',seconds=.35)
+            first=policy.run([sys.executable,'-c','import time; time.sleep(.2)'],root,{'PATH':'/usr/bin:/bin'},root/'first',timeout=budget.remaining())
+            budget.complete(first); policy.succeeded(first)
+            diagnostic=dict(reason='compiler-message',message=dict(code=dict(code='E0624'),message='method `type_by_id` is private',spans=[dict(file_name='src/lib.rs',line_start=1,is_primary=True)]))
+            code='import time; print('+repr(json.dumps(diagnostic))+',flush=True); time.sleep(.2)'
+            second=policy.run([sys.executable,'-c',code],root,{'PATH':'/usr/bin:/bin'},root/'second',timeout=budget.remaining())
+            budget.complete(second)
+            self.assertEqual(second['reason_code'],'TIMEOUT')
+            self.assertEqual(second['cleanup'],'complete')
+            self.assertIn('E0624',policy.stdout(second))
+            (root/'Cargo.lock').write_text('lock'); (root/'src').mkdir(); (root/'src/lib.rs').write_text('btf.type_by_id(1);')
+            with self.assertRaisesRegex(policy.PolicyError,'TIMEOUT') as error:
+                dependency_probe.accept_refusal(second,root/'Cargo.lock',policy.sha(root/'Cargo.lock'),'E0624','type_by_id',root)
+            self.assertEqual(error.exception.status,'BLOCKED')
+            with self.assertRaisesRegex(policy.PolicyError,'TIMEOUT'): budget.remaining()
+
+
+class PostLaunchEvidenceTests(unittest.TestCase):
+    """Actual short owned children; injected collection faults are report tier."""
+    def owned_output(self):
+        temporary=tempfile.TemporaryDirectory(prefix='sb02-rr2-process-')
+        temporary._finalizer.detach()  # Retain reports/logs as job-owned evidence.
+        return Path(temporary.name)
+
+    def test_RR2_postprocess_errors_retain_the_already_attached_result(self):
+        for fault in ('io','policy'):
+            with self.subTest(fault=fault):
+                root=self.owned_output(); path=ROOT/'tests/package-policy/matrix.json'
+                ex=policy.Execution('check_features',path,json.loads(path.read_text()),root)
+                ex.reserve('owned-process'); ex.reserve('unreached')
+                def action(r):
+                    result=policy.run([sys.executable,'-c','print("completed")'],root,{'PATH':'/usr/bin:/bin'},root/'child')
+                    ex.attach(r,result); policy.succeeded(result)
+                    if fault=='policy': raise policy.PolicyError('LOCK_CHANGED')
+                    raise OSError('owned post-command I/O fault')
+                with self.assertRaises(policy.PolicyError) as error: ex.step('owned-process',action)
+                ex.abort(error.exception,root/'report.json')
+                failed=[r for r in ex.report['rows'] if r['status']=='FAIL']
+                self.assertEqual([r['id'] for r in failed],['owned-process'])
+                observed=failed[0]['observed']
+                self.assertEqual((observed['exit_code'],observed['cleanup']),(0,'complete'))
+                self.assertIsNotNone(observed['process_group'])
+                self.assertEqual(observed['logs']['stdout']['sha256'],policy.sha(root/'child.stdout'))
+                if fault=='io': self.assertEqual(observed['errors'][-1]['stage'],'postprocess')
+
+    def test_RR2_postlaunch_faults_keep_process_log_and_retirement_facts(self):
+        import contextlib, os, signal, subprocess
+        from unittest.mock import patch
+        for fault in ('selector','read','write','wait','close','hash','stat','unresolved'):
+            with self.subTest(fault=fault):
+                root=self.owned_output(); matrix_path=ROOT/'tests/package-policy/matrix.json'
+                matrix=json.loads(matrix_path.read_text())
+                ex=policy.Execution('check_features',matrix_path,matrix,root)
+                ex.reserve('owned-process'); ex.reserve('unreached')
+                real_popen=subprocess.Popen; real_read=os.read; real_killpg=os.killpg
+                real_open=Path.open; real_stat=Path.stat; real_sha=policy.sha; real_wait=subprocess.Popen.wait
+                children=[]; fired=[]
+                def launch(*a,**kw):
+                    child=real_popen(*a,**kw); children.append(child); return child
+                def fail_read(fd,size):
+                    if children and fd in (children[0].stdout.fileno(),children[0].stderr.fileno()):
+                        fired.append('read'); raise OSError('owned read fault')
+                    return real_read(fd,size)
+                class Log:
+                    def __init__(self,stream): self.stream=stream
+                    def __getattr__(self,name): return getattr(self.stream,name)
+                    def write(self,data):
+                        if fault=='write':
+                            self.stream.write(data[:3]); fired.append('write'); raise OSError('owned write fault')
+                        return self.stream.write(data)
+                    def close(self):
+                        self.stream.close()
+                        if fault=='close': fired.append('close'); raise OSError('owned close fault')
+                def open_log(path,mode='r',*a,**kw):
+                    stream=real_open(path,mode,*a,**kw)
+                    return Log(stream) if mode=='xb' and path.suffix=='.stdout' else stream
+                def fail_wait(child,*a,**kw):
+                    if not fired: fired.append('wait'); raise OSError('owned wait fault')
+                    return real_wait(child,*a,**kw)
+                def fail_hash(path):
+                    if Path(path).suffix=='.stdout': fired.append('hash'); raise OSError('owned hash fault')
+                    return real_sha(path)
+                def fail_stat(path,*a,**kw):
+                    if path.suffix=='.stdout': fired.append('stat'); raise OSError('owned stat fault')
+                    return real_stat(path,*a,**kw)
+                def uncertain_group(group,sig):
+                    if sig==0: fired.append('group-check'); raise OSError('owned group observation fault')
+                    return real_killpg(group,sig)
+                argv=[sys.executable,'-c','import time; print("payload",flush=True); time.sleep(.1)']
+                try:
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(patch.object(policy.subprocess,'Popen',side_effect=launch))
+                        if fault in ('selector','unresolved'):
+                            stack.enter_context(patch.object(policy.selectors.DefaultSelector,'select',side_effect=OSError('owned selector fault')))
+                        if fault=='read': stack.enter_context(patch.object(policy.os,'read',side_effect=fail_read))
+                        if fault in ('write','close'): stack.enter_context(patch.object(Path,'open',open_log))
+                        if fault=='wait': stack.enter_context(patch.object(real_popen,'wait',fail_wait))
+                        if fault=='hash': stack.enter_context(patch.object(policy,'sha',side_effect=fail_hash))
+                        if fault=='stat': stack.enter_context(patch.object(Path,'stat',fail_stat))
+                        if fault=='unresolved': stack.enter_context(patch.object(policy.os,'killpg',side_effect=uncertain_group))
+                        def action(r):
+                            result=policy.run(argv,root,{'PATH':'/usr/bin:/bin'},root/'child',timeout=1)
+                            ex.attach(r,result); policy.succeeded(result)
+                        with self.assertRaises(policy.PolicyError) as error: ex.step('owned-process',action)
+                        ex.abort(error.exception,root/'report.json')
+                    data=json.loads((root/'report.json').read_text())
+                    failed=[r for r in data['rows'] if r['status'] in ('FAIL','BLOCKED')]
+                    self.assertEqual([r['id'] for r in failed],['owned-process'])
+                    owner=failed[0]; observed=owner['observed']
+                    self.assertEqual(owner['command'],argv); self.assertEqual(owner['cwd'],str(root))
+                    self.assertEqual(observed['process_group'],children[0].pid)
+                    self.assertIsNotNone(observed['exit_code'])
+                    self.assertTrue(observed['errors'])
+                    self.assertEqual(observed['reason_code'],'INTERNAL_ERROR')
+                    self.assertEqual(owner['cleanup'],'unresolved' if fault in ('unresolved','close') else 'complete')
+                    if fault=='unresolved':
+                        self.assertEqual(owner['reason_code'],'CLEANUP_UNRESOLVED')
+                        self.assertEqual(observed['owner'],str(root))
+                        self.assertTrue(any(e['stage']=='group-check' for e in observed['errors']))
+                        self.assertTrue(any(e['stage']=='collect' for e in observed['errors']))
+                    for name,entry in owner['logs'].items():
+                        path=Path(entry['path'])
+                        if fault=='stat' and name=='stdout': self.assertIsNone(entry['bytes'])
+                        else: self.assertEqual(entry['bytes'],path.stat().st_size)
+                        if fault=='hash' and name=='stdout': self.assertIsNone(entry['sha256'])
+                        else: self.assertEqual(entry['sha256'],real_sha(path))
+                    untouched=next(r for r in data['rows'] if r['id']=='unreached')
+                    self.assertEqual((untouched['status'],untouched['cleanup'],untouched['command']),('NOT_RUN','not_started',None))
+                    if fault not in ('selector','unresolved'): self.assertTrue(fired)
+                    self.assertIsNotNone(children[0].poll())
+                    with self.assertRaises(ProcessLookupError): real_killpg(children[0].pid,0)
+                finally:
+                    # Only children actually launched by this control are owned.
+                    # Independently retire them even when an assertion fails.
+                    for child in children:
+                        try: real_killpg(child.pid,signal.SIGKILL)
+                        except ProcessLookupError: pass
+                        real_wait(child,timeout=2)
+                        for stream in (child.stdout,child.stderr):
+                            if stream and not stream.closed: stream.close()
