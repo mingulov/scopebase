@@ -1,0 +1,169 @@
+{
+  "kind": "PRIVATE_BP03_LITERAL_PROFILE_BRIDGE_PROPOSAL",
+  "status": "PLANNED_NOT_RUN",
+  "case_id": "H22.model-profile-bridge",
+  "revision": 1,
+  "cases": [
+    {
+      "id": "to-small",
+      "operation": "to-testkit-profile",
+      "input_id": "a",
+      "input_ascii": "a\n",
+      "expected_bytes_ascii": "ok:a"
+    },
+    {
+      "id": "from-small",
+      "operation": "from-testkit-profile",
+      "input_id": "a",
+      "input_ascii": "a\n",
+      "expected_bytes_ascii": "ok:a"
+    },
+    {
+      "id": "to-lower-punctuation",
+      "operation": "to-testkit-profile",
+      "input_id": "abc-01._",
+      "input_ascii": "abc-01._\n",
+      "expected_bytes_ascii": "ok:abc-01._"
+    },
+    {
+      "id": "from-lower-punctuation",
+      "operation": "from-testkit-profile",
+      "input_id": "abc-01._",
+      "input_ascii": "abc-01._\n",
+      "expected_bytes_ascii": "ok:abc-01._"
+    },
+    {
+      "id": "to-64",
+      "operation": "to-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "ok:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "from-64",
+      "operation": "from-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "ok:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "to-65",
+      "operation": "to-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "receiving-id-error"
+    },
+    {
+      "id": "from-65",
+      "operation": "from-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-128",
+      "operation": "to-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "receiving-id-error"
+    },
+    {
+      "id": "from-128",
+      "operation": "from-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-129",
+      "operation": "to-testkit-profile",
+      "input_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_ascii": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-slash",
+      "operation": "to-testkit-profile",
+      "input_id": "a/b",
+      "input_ascii": "a/b\n",
+      "expected_bytes_ascii": "receiving-id-error"
+    },
+    {
+      "id": "from-slash",
+      "operation": "from-testkit-profile",
+      "input_id": "a/b",
+      "input_ascii": "a/b\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-uppercase",
+      "operation": "to-testkit-profile",
+      "input_id": "Abc",
+      "input_ascii": "Abc\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "from-uppercase",
+      "operation": "from-testkit-profile",
+      "input_id": "Abc",
+      "input_ascii": "Abc\n",
+      "expected_bytes_ascii": "receiving-id-error"
+    },
+    {
+      "id": "to-empty",
+      "operation": "to-testkit-profile",
+      "input_id": "",
+      "input_ascii": "\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "from-empty",
+      "operation": "from-testkit-profile",
+      "input_id": "",
+      "input_ascii": "\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-first-dot",
+      "operation": "to-testkit-profile",
+      "input_id": ".abc",
+      "input_ascii": ".abc\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "from-first-dot",
+      "operation": "from-testkit-profile",
+      "input_id": ".abc",
+      "input_ascii": ".abc\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-nonascii",
+      "operation": "to-testkit-profile",
+      "input_id": "\u00e5",
+      "input_ascii": "\u00e5\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "from-nonascii",
+      "operation": "from-testkit-profile",
+      "input_id": "\u00e5",
+      "input_ascii": "\u00e5\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "to-space",
+      "operation": "to-testkit-profile",
+      "input_id": "a b",
+      "input_ascii": "a b\n",
+      "expected_bytes_ascii": "source-id-error"
+    },
+    {
+      "id": "from-space",
+      "operation": "from-testkit-profile",
+      "input_id": "a b",
+      "input_ascii": "a b\n",
+      "expected_bytes_ascii": "source-id-error"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# Private proposal fragment; preserve all accepted TT01/TT02 declarations.
+[features]
+bpf-host = ["dep:scopebase-bpf"]
+bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
+
+[dependencies]
+scopebase-bpf = { version = "=0.1.0", path = "../scopebase-bpf", default-features = false, optional = true }
+
+[[test]]
+name = "bpf_host"
+path = "tests/bpf_host.rs"
+required-features = ["bpf-host"]

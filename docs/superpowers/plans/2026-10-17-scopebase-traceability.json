@@ -2074,7 +2074,12 @@
       "acceptance": {
         "subject_commit": "04a47f052a7a5783eeaa4e7b81b60be367dc3555",
         "reviewed_candidate_commit": "0a88ef4517541a5317f46c308b80bb74f35aaba4",
-        "evidence_record": "docs/reviews/2026-10-22-tt02-engine.md"
+        "evidence_record": "docs/reviews/2026-10-22-tt02-engine.md",
+        "maintenance": {
+          "subject_commit": "2921606362b8d6eaed15a4c190e0c0623f7d0912",
+          "reviewed_candidate_commit": "309190e01c977b481519abe4ed94a29dbea6ba61",
+          "evidence_record": "docs/reviews/2026-10-22-tt02-fixture-borrow.md"
+        }
       }
     },
     {

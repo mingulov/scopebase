@@ -1,0 +1,26 @@
+# Private proposal fragment; merge only into the bound accepted BP02 manifest.
+# Preserve package/include/cfg dependencies and every inherited target.
+# Append fixtures/capability-v1/** to package.include; do not replace that array.
+[features]
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
+
+[[test]]
+name = "capability"
+path = "tests/capability.rs"
+
+[[test]]
+name = "capability_json"
+path = "tests/capability_json.rs"
+required-features = ["json"]
+
+[[example]]
+name = "capability_cache"
+path = "examples/capability_cache.rs"
+
+[[example]]
+name = "filter_assessment"
+path = "examples/filter_assessment.rs"

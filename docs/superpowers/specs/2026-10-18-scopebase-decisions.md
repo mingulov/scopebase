@@ -281,3 +281,7 @@ The K lifetime repair is `2b59c24db0d4ce176980a2858a66001636a5f75e`; `e529862ea8
 **Why:** A source inventory, structural checker, model report or tested coordinator can be correct while the requested library capability is absent.
 
 **Executor rule:** No product completion from scaffolding, declared case counts, setup-tool tests or current-kernel loading. Preserve the original requirements, 86 tasks and existing H/G/UC identities; TC-R10/H33 append the explicit license boundary, giving 120 requirements and 33 families. Add necessary work with an owner, dependency and exit criterion; do not silently omit it or invent another framework to postpone the first port.
+
+### BP03 descriptive host rulings
+
+Root ratified the exact independently reviewed r2 [host contract](2026-10-22-scopebase-bp03-host.md) and [verification plan](../plans/2026-10-22-scopebase-bp03-verification.md). All eight choices and R1–R4 repairs are normative: complete filter truth, move-only bounded observations with explicit Arc sharing, restricted JSON prepayment/errors, explicit adapter Limits/RunLimits composition, literal-ledger limits, separate descriptive domains and complete inherited-manifest/client/cell/tool/cache delivery. Their finite seeds/templates ship under bp03-host. This is descriptive/model design only; actual execution bindings, implementation, full BP03 native/operator/profile qualification and selected-port receipts remain open.
