@@ -1,31 +1,50 @@
 # TT03 developer delivery, paths and concrete recipes
 
-**Ratified delivery design / unavailable today / NOT_RUN.** These are exact future file
+**PROPOSED narrow delivery amendment / unavailable today / NOT_RUN.**
+The unchanged driver/binder/native rules below retain r4 predecessor scope.
+New materialization/source selection is specified in
+[materializer-contract.md](materializer-contract.md),
+[closed field contract](materializer-contract.json),
+[command DAG](materializer-command-dag.json),
+[controls](materializer-controls.json) and
+[source selection](materializer-source-selection.json). These are exact future file
 and command interfaces; actual C7 product binding remains UNBOUND. They do not claim delivered
 binaries, features, a registered profile or an executed package test. Bind actual
 manifests/locks/artifact hashes before dispatch; commands must never silently
 substitute a different testkit or Linux library.
 
 Canonical shipped files are under `crates/scopebase-testkit/tests/fixtures/linux/`
-(already within the testkit package include tree):
+(the include glob does not prove actual archive membership):
 
 ```text
 README.md
-worker/Cargo.toml
+worker/Cargo.toml.in
+worker/LICENSE-APACHE
+worker/THIRD-PARTY-NOTICES.md
 worker/Cargo.lock
 worker/src/main.rs
 worker/src/lib.rs
 worker/src/protocol.rs
 worker/src/bin/image_b.rs
-driver/Cargo.toml
+driver/Cargo.toml.in
+driver/LICENSE-APACHE
+driver/THIRD-PARTY-NOTICES.md
 driver/Cargo.lock
 driver/src/main.rs
+materialize.py
+test_materialize.py
 bind_run.py
 oracle.py
 test_oracle.py
 corpus/{header,body,invocation,handover,raw,snapshot,outer,input,controls}/*.json
 catalog/core-v1.json
 ```
+
+The archive has no actual nested Cargo.toml. The external inventory companion
+and its caller-supplied digest ship beside the archive. Strict materialization
+copies the whole verified package to OUTPUT/subject-testkit and creates only the
+two literal manifests there; every frozen lock remains required and unchanged.
+The generated tree is not repackaged as the original archive.
 
 Worker is a standalone explicitly built package with bins
 `scopebase-fixture-a` and `scopebase-fixture-b`, distinct compiled image markers
@@ -113,25 +132,51 @@ binding; the reached30s runner route's <=120s driver outer deadline cannot reset
 TT02's execution/retirement clock. Every normal constructor/runner/error route
 collects original cleanup truth before semantic assertions.
 
-From an **extracted delivered testkit archive**, after offline dependency closure
-was separately provisioned and with task-specific absolute paths already set:
+From an **extracted delivered testkit archive**, independently verify the
+actual archive/companion bindings, provision the offline closure separately and
+retain exclusive source/output ownership. Run the strict explicit materializer
+before any archive worker/driver build:
 
 ```sh
-cargo +1.88.0 build --locked --offline --manifest-path tests/fixtures/linux/worker/Cargo.toml --release --bins --target-dir "$tt03_worker_target"
-cargo +1.88.0 build --locked --offline --manifest-path tests/fixtures/linux/driver/Cargo.toml --release --bin scopebase-linux-fixture-check --target-dir "$tt03_driver_target"
-python3 -m unittest discover -s tests/fixtures/linux -p test_oracle.py -v
-python3 tests/fixtures/linux/bind_run.py --catalog "$tt03_catalog" --image-a "$tt03_image_a" --image-b "$tt03_image_b" --consumer "$tt03_driver" --fixture-inputs "$tt03_inputs" --output "$tt03_binding_root"
+python3 "$tt03_extracted/tests/fixtures/linux/materialize.py" --package-root "$tt03_extracted" --inventory "$tt03_inventory" --inventory-sha256 "$tt03_inventory_sha256" --output "$tt03_materialized_root"
+```
+
+Require normal zero completion, COMPLETE at
+`$tt03_materialized_root/materialize-report.json`, its externally recorded digest
+and independent immediate full map/template/lock recheck. Define `tt03_subject`
+as exactly `$tt03_materialized_root/subject-testkit`. Then:
+
+```sh
+cargo +1.88.0 build --locked --offline --manifest-path "$tt03_subject/tests/fixtures/linux/worker/Cargo.toml" --release --bins --target-dir "$tt03_worker_target"
+cargo +1.88.0 build --locked --offline --manifest-path "$tt03_subject/tests/fixtures/linux/driver/Cargo.toml" --release --bin scopebase-linux-fixture-check --target-dir "$tt03_driver_target"
+python3 -m unittest discover -s "$tt03_subject/tests/fixtures/linux" -p test_oracle.py -v
+python3 "$tt03_subject/tests/fixtures/linux/bind_run.py" --catalog "$tt03_catalog" --image-a "$tt03_image_a" --image-b "$tt03_image_b" --consumer "$tt03_driver" --fixture-inputs "$tt03_inputs" --output "$tt03_binding_root"
 "$tt03_driver" --catalog "$tt03_catalog" --contract "$tt03_contract" --fixture-manifest "$tt03_manifest" --image-a "$tt03_image_a" --image-b "$tt03_image_b" --fixture-root "$tt03_fixture_root" --output "$tt03_output" --execution-ms "$tt03_execution_ms"
 ```
 
-Every variable must be an explicit nonempty absolute path/value in the actual
-controller command manifest. The examples are not executable in this checkout
-today because future source/CLI/feature artifacts do not exist. On the shared
-maintainer host each Cargo/native command is additionally routed through
+Repeat locked metadata/builds on 1.98.1 with separate target/result roots and the
+same reviewed frozen workspace locks. Independent consumer keeps the original
+sealed `U/materialized-testkit` unchanged and uses the distinct sibling
+`U/consumer-assembly/{consumer,subject-linux,consumer-assembly-report.json}`.
+Its own manifest uses `../../materialized-testkit/subject-testkit` and
+`../subject-linux`; the delivered closed `verify-consumer` mode checks original
+materialization identities plus the real consumer/Linux descriptor and receipt.
+The exact CLI, shared bounds and first-lock presence/absence maps are in
+materializer-contract.md/json. No unknown siblings enter the sealed root.
+The complete bootstrap/package/inventory/materialize/control/recheck/build/native
+order is frozen in materializer-command-dag.json; these examples are not that
+execution manifest. First locks are generated only by the separate root-owned
+source bootstrap, never by a delivered missing-lock exception.
+
+Every variable must be explicit and nonempty; paths are absolute. Actual source,
+archive, companion, tools/cache, locks, outputs/resources and bindings remain
+UNBOUND; none of these absent commands can execute in this checkout today. On
+the shared maintainer host each Cargo/resolver/native command uses the frozen
+absolute wrapper
 `/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build`
-with its actual resource declaration and fresh outside-worktree targets/results;
-private HOME never changes that lock root. The portable archive user uses their
-own declared isolated resources; no dependency on the maintainer wrapper is shipped.
+and common explicit lease, pinned absolute tools, fresh outside-worktree targets/
+results and separately admitted native resources. Portable users declare their
+own isolated resources; no maintainer wrapper path is a shipped dependency.
 
 Actual source gates are proposed `cargo test --locked -p scopebase-testkit
 --features linux-fixtures --test fixture_protocol` and the separately authored

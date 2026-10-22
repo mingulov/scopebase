@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_MATERIALIZER_REQUIRED_CONTROLS",
+  "status": "R2_REQUIRED_CONTROLS_ALL_PRODUCT_NOT_RUN",
+  "local_ids_only_no_new_H_or_P_or_F": true,
+  "cases": [
+    {
+      "id": "C7DEL-M01",
+      "population": "Exact valid actual archive-derived subject",
+      "oracle": "Full independent entry/hash/topology map and two byte-identical generated manifests; source unchanged; COMPLETE/0.",
+      "active_bad_control": "A mutant omitting a copy/generation/check must fail exact membership or bytes after valid setup.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M02",
+      "population": "Wrong independently supplied inventory digest",
+      "oracle": "INVENTORY_ANCHOR at INVENTORY_READ before output, INPUT_REFUSED/2.",
+      "active_bad_control": "Change exactly one raw sidecar byte while preserving valid JSON; retain original expected digest.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M03",
+      "population": "Duplicate/unknown field, wrong version, number, depth and UTF-8 classes",
+      "oracle": "INVENTORY_SCHEMA/SCHEMA before output for each independent literal.",
+      "active_bad_control": "A skip-unknown/last-duplicate/float-as-integer/permissive decoder fails intended strict schema assertion, not setup.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M04",
+      "population": "Missing and extra regular file or directory",
+      "oracle": "SOURCE_ENUMERATE/MEMBERSHIP before output; exact prefix closure.",
+      "active_bad_control": "Fresh valid source twin, then one removed/extra member; extra scan stops at ceiling+1.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M05",
+      "population": "Same-length changed source bytes",
+      "oracle": "SOURCE_VERIFY/DIGEST before output; no size-only acceptance.",
+      "active_bad_control": "Change a non-manifest source file after copying the positive population and retain its original inventory anchor.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M06",
+      "population": "Missing and changed frozen workspace locks",
+      "oracle": "Missing lock membership or explicit LOCK predicate; changed bytes DIGEST, before output; no resolver call.",
+      "active_bad_control": "Separate worker and driver cases; archive-root lock cannot substitute, even if renamed or equal length.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M07",
+      "population": "Changed literal template",
+      "oracle": "SOURCE_VERIFY/DIGEST before output for anchored expected bytes.",
+      "active_bad_control": "Change template only, retaining original expected digest; valid twin genuinely materializes both manifests.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M08",
+      "population": "Matching-hash wrong subject/topology/defaults/build/targets/dependency path",
+      "oracle": "TOPOLOGY_VERIFY/TOPOLOGY before output for every independently constructed admitted negative inventory.",
+      "active_bad_control": "Recompute the negative companion and supply its deliberate test anchor so the semantic validator is reached; wrong ../../../.., wrong version, worker testkit edge, build=true or automatic target discovery cannot pass only on hashes.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M09",
+      "population": "Relative/absolute/dot/parent/empty/control/backslash/prefix collision path classes",
+      "oracle": "SCHEMA/PATH or prefix-membership predicate before output.",
+      "active_bad_control": "Each literal differs in exactly the intended path feature; no path normalization silently repairs it.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M10",
+      "population": "Source/inventory/parent symlink; source hardlink/FIFO/nonregular",
+      "oracle": "No-follow held descriptor KIND/PATH/OWNERSHIP predicate before output.",
+      "active_bad_control": "Use real local filesystem fixtures and reached operation; no native fixture child or privileged setup.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M11",
+      "population": "Source/output equality and ancestor/descendant/identity overlap",
+      "oracle": "PREFLIGHT/OVERLAP before output.",
+      "active_bad_control": "Matching lexical and held-identity aliases are separate negative populations; preexisting original tree remains unchanged.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M12",
+      "population": "Existing empty and nonempty output",
+      "oracle": "OUTPUT_RESERVE/EXISTING_OUTPUT, INPUT_REFUSED/2; preexisting sentinel and tree unchanged.",
+      "active_bad_control": "Separate actual empty/nonempty roots; no merging or auto-cleaning.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M13",
+      "population": "Reached source write or directory/file rebind during copying",
+      "oracle": "PARTIAL/3 after exclusive output reservation, observed identity/bytes mismatch, completed/uncertain map retained.",
+      "active_bad_control": "Controlled injection between actual preflight/copy/recheck stages; the test demonstrates detection of that observed race, not hostile same-user atomicity.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M14",
+      "population": "Reached copy/read/short-write/open/stat/close failure",
+      "oracle": "PARTIAL/3 after at least one real completed copied entry and one intended failing operation; original stage/errno preserved.",
+      "active_bad_control": "Test-only in-process filesystem call injection, no public fault CLI; no retry of consumed close or recursive deletion.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M15",
+      "population": "Reached generated-manifest write failure",
+      "oracle": "PARTIAL/3 with all copied entry mappings, exact generated VERIFIED/NOT_ATTEMPTED/UNCERTAIN states.",
+      "active_bad_control": "Actual valid copy first, then one generated write fails; generated and original template/lock roles remain distinct.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M16",
+      "population": "Reached report write/close/publication failure",
+      "oracle": "Nonzero PARTIAL outer diagnostic and retained owned output; full surviving map unknown if report incomplete/absent.",
+      "active_bad_control": "Do not assert a fabricated published report; test collector record and absent/incomplete report alongside actual retained tree.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M17",
+      "population": "Bytes/work/descriptor/report/metadata/time boundaries",
+      "oracle": "Separate exact-boundary positive and +1/too-small refusal for each resource, with post-reservation partial counterparts where applicable.",
+      "active_bad_control": "Charge short writes/retries and repeated passes; finite iterable ceiling+1, one monotonic clock, no report truncation. Actual retained object size and peak RSS observed separately; no simulated outer kill is called a product bounded refusal.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M18",
+      "population": "Independent verify gate detects changed source/copy/template/generated file/lock/report/extra path",
+      "oracle": "Read-only checker nonzero at the intended digest/membership/topology/anchor predicate; no build action. Exact sealed root includes only subject-testkit and materialize-report.json; one added consumer/Linux/receipt sibling is a reached membership refusal.",
+      "active_bad_control": "Start from COMPLETE/0 and independent mapped-tree success, mutate one field/path per fresh tree; positive restored twin passes; report COMPLETE alone never authorizes.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M19",
+      "population": "Copied source stability and lock immutability across downstream commands",
+      "oracle": "Independent recheck before/after metadata/build validates source/copy/three lock roles; any write invalidates gate.",
+      "active_bad_control": "Actual Cargo build rows are separate C7 commands, never subprocesses inside Python delivery tests.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M20",
+      "population": "Actual nested-Cargo exclusion and restored template membership",
+      "oracle": "Both Cargo versions: reached negative loses intended worker/driver subtree and fails exact archive membership, restored positive includes every expected member.",
+      "active_bad_control": "Run package --list and actual package/extraction separately on controlled private copies; setup failure is not sensitivity evidence.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Required in fresh tree; original source hashes preserved before/after every control."
+    },
+    {
+      "id": "C7DEL-M21",
+      "population": "Legitimate separate consumer assembly and actual consumer/Linux bindings",
+      "oracle": "verify-consumer VERIFIED after original strict verify; exact sealed two-member root and sibling three-member assembly remain unchanged; all actual source/copy/manifest/own-lock/descriptor/receipt/live testkit identities match.",
+      "active_bad_control": "After valid original materialization and assembly, independently alter consumer bytes, Linux copy/source, manifest path, consumer lock, source identity, move/copy original testkit, or reforge receipt to foreign live IDs; each reaches intended digest/topology/identity/membership refusal. Extra sealed-root or assembly-root sibling refuses; restored valid twin passes.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Fresh intended valid setup/twin; original subject bytes and ownership remain preserved."
+    },
+    {
+      "id": "C7DEL-M22",
+      "population": "Reservation state survives when no filesystem report exists",
+      "oracle": "NOT_ATTEMPTED,false,null; KNOWN_EXISTING,false,nullable observed existing ID; CREATED_VERIFIED,true,original ID; CREATED_UNOPENED,true,null and ATTEMPT_UNCERTAIN,null,null remain distinct bounded terminal summaries. Original operation/stage/errno and secondary publication error stay separate.",
+      "active_bad_control": "Reach mkdir success then output-open EIO versus uncertain mkdir EIO with same stage/category/errno and null report/identity; removing or collapsing summary must fail exact diagnostic assertion. No report/cleanup or absence authority is fabricated; retain parent/entry custody and fresh valid twins.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Fresh intended valid setup/twin; original subject bytes and ownership remain preserved."
+    },
+    {
+      "id": "C7DEL-M23",
+      "population": "Independent root-only first-lock maps and unique origins",
+      "oracle": "Static map/order accepts deliberate unrelated new-lock absences; selected own lock alone is generated in its root; all three actual own locks/graphs precede freeze/package; strict delivery still needs all frozen locks.",
+      "active_bad_control": "Reintroduce required missing sibling seed/cycle, substitute candidate/testkit/Linux lock as own lock, copy before actual graph review, or add a strict missing-lock exception: intended map/origin/order/interface predicate rejects. This authoring model is not resolver/compiler evidence.",
+      "status": "NOT_RUN",
+      "restored_valid_twin": "Fresh intended valid setup/twin; original subject bytes and ownership remain preserved."
+    }
+  ],
+  "independence": "Literal expectations and stdlib hashlib/path membership comparator authored independently of materializer production validation; no same-codec/self-report oracle.",
+  "tests": "In-process materializer entrypoint and test-only filesystem/clock fault seams; no Cargo/compiler/native-fixture subprocess, mounts, credentials or remote work within Python delivery tests.",
+  "process_bounds": {
+    "test_output_budget_bytes": 8589934592,
+    "test_wait_allowance_ms": 900000,
+    "accounted_test_or_verify_metadata_bytes": 268435456,
+    "outer_process_memory_allowance_bytes": 536870912,
+    "max_materializer_invocations": 512,
+    "each_invocation_cooperative_ms": 120000,
+    "meaning": "Fixed harness envelope; preflight exact complete fixture/output footprint and expanded command roster. Use independent compact literal-filesystem fixtures for schema/resource faults, plus mandatory actual-archive positive and actual copy/lock/source controls. These are required future resource bindings, not available disk/lease observations. Outer wait/memory stop is incomplete, not semantic PASS."
+  },
+  "actual_leaf_count_and_source_hashes": null,
+  "native_qualification": false,
+  "test_mode_ids": [
+    "C7DEL-M01",
+    "C7DEL-M02",
+    "C7DEL-M03",
+    "C7DEL-M04",
+    "C7DEL-M05",
+    "C7DEL-M06",
+    "C7DEL-M07",
+    "C7DEL-M08",
+    "C7DEL-M09",
+    "C7DEL-M10",
+    "C7DEL-M11",
+    "C7DEL-M12",
+    "C7DEL-M13",
+    "C7DEL-M14",
+    "C7DEL-M15",
+    "C7DEL-M16",
+    "C7DEL-M17",
+    "C7DEL-M18",
+    "C7DEL-M21",
+    "C7DEL-M22"
+  ],
+  "outer_or_authoring_only_ids": [
+    "C7DEL-M19",
+    "C7DEL-M20",
+    "C7DEL-M23"
+  ]
+}

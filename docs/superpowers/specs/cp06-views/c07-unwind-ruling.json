@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "ROOT_CP06_C07_ASSERTION_CLARIFICATION",
+  "created_utc": "2026-10-22T11:09:09.017431+00:00",
+  "case_id": "CP06-C07",
+  "decision_id": "CP06-D7",
+  "canonical_spec_sha256": "74267930ef54b5a5c4e389225547250abee874307d57aaa916f8983495aeb3f9",
+  "canonical_source": "docs/superpowers/specs/2026-10-22-scopebase-cp06-views.md:160",
+  "root_source_inspection": "Versioned::apply returns Err((self,error)) on metadata refusal while the consumed Correction is ordinarily destroyed. Production does not catch payload Drop panic. No normal returned owner is promised after a destructor panic.",
+  "worker_reported_counterexample": "components-first-green-r2 replacement-panic branch recorded only replacement-panic, contradicting the test-added guaranteed-original-drop expectation. Root inspected source/contract; raw receipt verification remains part of final source review.",
+  "what": "Keep exact normal-return rejection/success/overflow owner and drop journals. In each single-destructor-panic probe assert intended panic propagates, no normal Result is delivered and that named panicking destructor runs once. Record any other owner disposal without requiring its occurrence/order on panic; reject impossible/double observations and keep only one panicking destructor per probe.",
+  "why": "Canonical D7/spec promise ordinary unwind behavior and expressly no normal returned owner/rollback after panic. Test must not add an unconditional other-owner retirement guarantee. Case support phrase ordinary unwind drops other owners is read subject to the explicit canonical can and no-return boundary.",
+  "cost_if_wrong": "Overasserting disposal would reject contract-valid consuming APIs; underasserting normal-return custody would hide real loss. Exact normal twins and named panic activity remain mandatory.",
+  "production_change_authorized": "NONE for this assertion correction",
+  "assertion_change_authorized": true,
+  "preserve": [
+    "CP06-C07 ID",
+    "All normal returned-owner/drop exact assertions",
+    "Exact rejected-payload destruction",
+    "Panic propagation and no production catch",
+    "No added T Clone/Eq/Debug bounds",
+    "Original failed trace and later restored/changed-assertion evidence"
+  ],
+  "new_product_guarantee": false,
+  "task_acceptance": false
+}

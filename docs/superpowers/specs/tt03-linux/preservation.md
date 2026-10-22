@@ -74,3 +74,23 @@ and keeps earlier lineages/evidence immutable. Duplicate retirement/migration is
 later: after the delivered fixture and actual independent users cover the same
 contracts, each donor owner decides its own migration; no donor mutation follows
 from this preparation.
+
+## Proposed first-increment facet selection and delivery amendment
+
+The exact original observations/pins/dispositions above remain preserved. The
+proposed [materializer-source-selection.json](materializer-source-selection.json)
+selects six ordinary-host facets, defers six denial/namespace facets and leaves
+the two admitted references plus the ungranted stopped-child reference uncopied.
+Fourteen inside-range observations are not fourteen selected copies. Exact
+selected subranges/hashes, excluded source context, independent oracle/control
+obligations and NEW missing-mechanism reasons are in that record. The existing
+admission does not list TT03 as consumer on the selected rows; root must adopt a
+narrow immutable task/subset supplement before selected port execution. No new
+grant or intake is asserted by this amendment, and no stopped-child or deferred
+denial/namespace coverage is relabelled ordinary-host preservation.
+
+The strict materializer/oracle are NEW delivery composition for the observed
+nested-Cargo exclusion, not a replacement for a complete donor process helper.
+Current destination bytes/selected-port receipts remain UNBOUND. Historical r4
+support and acceptance records bind only their original scopes; the new narrow
+amendment needs its own scoped review/root adoption. No task is accepted here.

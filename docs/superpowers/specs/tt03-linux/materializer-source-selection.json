@@ -1,0 +1,543 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_FIRST_INCREMENT_SOURCE_FACET_SELECTION",
+  "status": "PROPOSED_CONTROLLER_ADOPTION_REQUIRED_NO_PORT",
+  "existing_admission": {
+    "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+    "bytes": 966251,
+    "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+  },
+  "existing_admission_is_immutable": true,
+  "source_files": [
+    {
+      "file_id": "P:src/process.rs",
+      "checkout_id": "w003",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "relative_path": "src/process.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "full_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+      "size_bytes": 89140,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX09",
+      "admission_consumer_tasks": [
+        "LX09",
+        "LX10",
+        "LX11",
+        "LX08",
+        "LX06"
+      ]
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "checkout_id": "w003",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "relative_path": "src/pidns.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "full_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+      "size_bytes": 33975,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX08",
+      "admission_consumer_tasks": [
+        "LX08",
+        "LX06",
+        "LX09",
+        "LX10",
+        "LX11"
+      ]
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "checkout_id": "checkout-018",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21",
+      "relative_path": "tests/target_lifecycle.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/histories/repo-001/history.git",
+      "full_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+      "size_bytes": 125083,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX09",
+      "admission_consumer_tasks": [
+        "LX09",
+        "LX10",
+        "LX11",
+        "LX08",
+        "LX06"
+      ]
+    }
+  ],
+  "facets": [
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "ReapOnDrop destructor and owned child wrapper",
+      "line_start": 1945,
+      "line_end": 1967,
+      "sha256": "81b4bdd9b3d2974d2fd74a52eca2ef314fff96b06808cb54f5381f5796c06e27",
+      "reason": "Drop ignores errors and cannot certify retirement",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-01",
+      "original_disposition_preserved": "REFERENCE_ONLY",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "REFERENCE_ONLY",
+      "selected_ranges": [],
+      "selected_facet": "Preserve defect/context only; no copying or replacement qualification."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "deny_pidfd_open",
+      "line_start": 1972,
+      "line_end": 2025,
+      "sha256": "3097c3c25d0227dff33394da1b0881717cd8c29b66332f0122102cd46dcb2ccb",
+      "reason": "Preserve real x86_64 seccomp syscall denial with explicit isolated-only effects",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-02",
+      "original_disposition_preserved": "ADAPT_RECOMMENDED",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "thread_status_field",
+      "line_start": 2030,
+      "line_end": 2036,
+      "sha256": "4c5445614a43a7901b906996fe21dfb3f913167802ccafcdcbff89511dd2d208",
+      "reason": "Require bounded independent status/filter delta witness; not unbounded read_to_string",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-03",
+      "original_disposition_preserved": "ADAPT_RECOMMENDED",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "pidfd_denial_helper",
+      "line_start": 2054,
+      "line_end": 2180,
+      "sha256": "37ba83f068f3da55809dc8c7005a261296cd8cf14433d79d18c17fcc8dde742f",
+      "reason": "Preserve denial/live/zombie/reaped/no-authority phases; original permissive success not applicable to strict LX08",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-04",
+      "original_disposition_preserved": "ADAPT_APPLICABLE_FACETS",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "PidfdDenialHelper parent framing/channel/finish",
+      "line_start": 2185,
+      "line_end": 2339,
+      "sha256": "34b4bb0ad3843689bd47c890aef6cc5dbfb805ca629070a904548fb0d2c83481",
+      "reason": "Preserve causal phase pattern; replace unbounded thread/mpsc/stdout parsing and refreshed deadlines",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-05",
+      "original_disposition_preserved": "REFERENCE_ONLY",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "REFERENCE_ONLY",
+      "selected_ranges": [],
+      "selected_facet": "Preserve defect/context only; no copying or replacement qualification."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "exited_unreaped",
+      "line_start": 2343,
+      "line_end": 2367,
+      "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56",
+      "reason": "Independent original-owned-child WNOWAIT witness",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-06",
+      "original_disposition_preserved": "ADAPT_RECOMMENDED",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "ADAPT",
+      "selected_facet": "owned-child WNOWAIT witness",
+      "selected_ranges": [
+        {
+          "line_start": 2343,
+          "line_end": 2367,
+          "bytes": 1143,
+          "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56"
+        }
+      ],
+      "destination_contract": "parent original-owner phase oracle; rustix PidFd wait with WNOWAIT if accepted API supports it; no arbitrary numeric-PID/wait-any authority; EINTR charges/deadline",
+      "excluded_context": "unbounded EINTR loop and raw PID reacquisition are adapted to finite work/original-owner authority",
+      "preservation_evidence_contract": {
+        "positive": "P owned_live_zombie_reaped_are_distinct: original live child, actual terminal pidfd plus WNOWAIT unreaped, exact original-child reap and only then ECHILD; active B remains responsive.",
+        "independent_oracle": "Original parent-owned Child/pidfd and raw wait disposition, distinct from consumer output and bare numeric PID.",
+        "active_bad_control": "Remove WNOWAIT or substitute wait-any/B or accept unrecorded ECHILD as reap.",
+        "intended_assertion": "Exact original-owned-child nonreaping/phase/custody assertion fails after valid live setup.",
+        "adaptation_why": "Finite work/deadline and retained original authority replace unbounded EINTR/raw-number convenience without discarding the original nonreaping regression."
+      }
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "run_pidfd_denial_case",
+      "line_start": 2369,
+      "line_end": 2414,
+      "sha256": "b43df48f91e6b2f05a47a744325042b6fa2c2aa0fbb43617d2d6eac1d8067766",
+      "reason": "Preserve retained witness and exact phase order, not PID kill or destructor cleanup",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-07",
+      "original_disposition_preserved": "ADAPT_LIFECYCLE_ONLY",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "ADAPT_LIFECYCLE_ONLY",
+      "selected_facet": "original birth/pidfd, live/unreaped/exact-reap order",
+      "selected_ranges": [
+        {
+          "line_start": 2381,
+          "line_end": 2384,
+          "bytes": 262,
+          "sha256": "ec6e2831aed824b6e46b7586f872b042aa05e2cc86f35f30c5daca371fa8c434"
+        },
+        {
+          "line_start": 2388,
+          "line_end": 2392,
+          "bytes": 181,
+          "sha256": "524d127845b99bc3f0f56ad9d3e68ab1eca0f4be96da01444cb05e7eb2c5a953"
+        },
+        {
+          "line_start": 2396,
+          "line_end": 2400,
+          "bytes": 253,
+          "sha256": "e33a467ffecac019858e111921a718e98fcc313a5e43cc201a8b96503f9929ea"
+        },
+        {
+          "line_start": 2404,
+          "line_end": 2410,
+          "bytes": 282,
+          "sha256": "89e463ab87fa48ef4d8d07a24739181a7489887c6d4016141862d0975c2f8166"
+        }
+      ],
+      "destination_contract": "parent lifecycle schedule and literal oracle, exact original Child/pidfd; no denial helper or destructor copied",
+      "excluded_context": "ReapOnDrop/cat/denial helper commands/refreshed deadlines and helper ACK after target death are not copied",
+      "preservation_evidence_contract": {
+        "positive": "Same retained original birth/pidfd across real live -> zombie -> recorded reap, with independent target B and immutable phase ledger.",
+        "independent_oracle": "Parent real pidfd readiness, raw starttime/state and exact wait result; worker ACK cannot certify dead phases.",
+        "active_bad_control": "Treat terminal pidfd as completed reap, accept helper ACK as death witness, use a replacement Child or destructor-only cleanup.",
+        "intended_assertion": "Original phase order and cleanup/custody fail after actual original exit, not during helper setup.",
+        "adaptation_why": "Reuse the original lifecycle evidence sequence while retaining the r4 bounded framing/original-owner finalizer instead of copying the reference-only denial helper or destructor."
+      }
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "real_pidfd_denial_preserves_proc_identity_without_signal_authority",
+      "line_start": 2422,
+      "line_end": 2426,
+      "sha256": "97830fac2377bd3fde2b6fee590a832d32886530d3ddb41fd7b6935250b6e61a",
+      "reason": "Preserve both actual errno populations; strict destination refuses permissive fallback",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-08",
+      "original_disposition_preserved": "ADAPT_BEHAVIOR_DIFFERENCE",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "original_generation_state_distinguishes_exit_from_pid_reuse",
+      "line_start": 1555,
+      "line_end": 1617,
+      "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb",
+      "reason": "Same-birth zombie and transport-error counterexamples; no replacement authority",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-09",
+      "original_disposition_preserved": "ADAPT_ORACLE_FACETS",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "VECTORS_ONLY",
+      "selected_facet": "same-birth zombie and transport/permission/missing-birth counterexamples",
+      "selected_ranges": [
+        {
+          "line_start": 1555,
+          "line_end": 1617,
+          "bytes": 2148,
+          "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb"
+        }
+      ],
+      "destination_contract": "independent literal phase/oracle vectors; no production OriginalGenerationState API or strict-LX08 implementation claimed",
+      "excluded_context": "production fallback API, fake PID-reuse claim and domain error constructor are not ported",
+      "preservation_evidence_contract": {
+        "positive": "Literal same-birth zombie with terminal original pidfd; separate interrupted poll, permission denial and missing retained-birth vectors.",
+        "independent_oracle": "Independently authored native-phase/literal expectation distinguishes terminal, current, reused and unknown evidence; it is not a new production classification API.",
+        "active_bad_control": "Birth-equals-alive, poll-error-is-exit, denial-is-exit or missing-birth-is-exit.",
+        "intended_assertion": "The named independent counterexample assertion fails; no actual PID-reuse race or LX08 implementation is claimed.",
+        "adaptation_why": "VECTORS_ONLY preserves original oracle counterexamples in the fixture tier; strict production classification remains with LX08."
+      }
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "only_a_missing_process_is_proof_of_exit",
+      "line_start": 1745,
+      "line_end": 1760,
+      "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c",
+      "reason": "Denial/malformed proc is not exit proof",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-10",
+      "original_disposition_preserved": "ADAPT_ORACLE_FACETS",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "VECTORS_ONLY",
+      "selected_facet": "NotFound differs from denied/malformed/live proc",
+      "selected_ranges": [
+        {
+          "line_start": 1745,
+          "line_end": 1760,
+          "bytes": 605,
+          "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c"
+        }
+      ],
+      "destination_contract": "independent error/absence literal vectors; no actual restricted-credential or strict-LX08 classification claimed",
+      "excluded_context": "production gone_from/generation_gone API and native credential recipe remain outside increment",
+      "preservation_evidence_contract": {
+        "positive": "Literal NotFound, live starttime, EACCES and malformed-stat populations, with raw source labels retained.",
+        "independent_oracle": "Original absence-versus-unobserved distinction, independently encoded in fixture literal expectations.",
+        "active_bad_control": "Collapse EACCES/InvalidData into NotFound/exit.",
+        "intended_assertion": "Exact non-exit/unknown vector expectation fails; no restricted-credential native population is credited.",
+        "adaptation_why": "Retain deterministic error/absence regression without claiming production API or deferred credential support."
+      }
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+      "line_start": 1883,
+      "line_end": 1917,
+      "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072",
+      "reason": "Actual tricky name and live/zombie/reaped states; independent parser and explicit cleanup",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-11",
+      "original_disposition_preserved": "ADAPT_RECOMMENDED",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "ADAPT",
+      "selected_facet": "literal tricky comm and live/zombie/reaped birth invariants",
+      "selected_ranges": [
+        {
+          "line_start": 1883,
+          "line_end": 1917,
+          "bytes": 1688,
+          "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072"
+        }
+      ],
+      "destination_contract": "owned worker PR_SET_NAME plus independent Python raw-stat final-delimiter/state/birth oracle; explicit r4 parent retirement",
+      "excluded_context": "/bin/sleep/symlink/arg0/timing loops and cleanup after assertions are replaced only as ratified worker composition requires",
+      "preservation_evidence_contract": {
+        "positive": "P tricky_comm_has_independent_birth_state: exact nine-byte a) Z 1 (b under actual worker naming, same original birth in real live/zombie phases and recorded reap.",
+        "independent_oracle": "Independent Python final-right-delimiter raw stat parser plus real comm bytes and original parent phase evidence.",
+        "active_bad_control": "First-right-delimiter or wrong-index parser, fake Z name treated as zombie, or cleanup only after assertion.",
+        "intended_assertion": "The actual live tricky-name state/birth assertion fails after real naming and before claimed native completion; cleanup truth remains collected.",
+        "adaptation_why": "Own explicit worker operation replaces external sleep/symlink timing dependency; source literal and original live/zombie/reaped invariant remain."
+      }
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "symbol": "only_this_namespaces_own_proc_classifies_own",
+      "line_start": 595,
+      "line_end": 635,
+      "sha256": "6a7d57bb5281e53acfd2c4c01e3bda9042fcb9b1583cde4e2c74b3f61e92b13f",
+      "reason": "Pure self/NSpid mismatch corpus; real matched nested/foreign routes are NEW",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-12",
+      "original_disposition_preserved": "ADAPT_VECTORS_ONLY",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "symbol": "the_numbering_composes_the_mounted_procs_view",
+      "line_start": 729,
+      "line_end": 772,
+      "sha256": "382db24dd63a0eae76031bffebd49f33df640cefb48b37800df854fcea35dd59",
+      "reason": "Retain fake proc mismatch vectors separately from real namespace evidence; exclude global cache expectation",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-13",
+      "original_disposition_preserved": "ADAPT_VECTORS_ONLY",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "DEFERRED",
+      "selected_ranges": [],
+      "selected_facet": "Preserved for real denied/namespace/LX08/TT04 route; not ordinary-host work claimed complete."
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "symbol": "external_pid_target_is_never_signaled",
+      "line_start": 359,
+      "line_end": 375,
+      "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a",
+      "reason": "Real actual-library no-control and sentinel; stronger syscall audit still required",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true,
+      "facet_id": "TT03-SF-14",
+      "original_disposition_preserved": "ADAPT_NO_CONTROL_FACET",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "ADAPT_NO_CONTROL_FACET",
+      "selected_facet": "external observation never gains signal/wait authority",
+      "selected_ranges": [
+        {
+          "line_start": 359,
+          "line_end": 375,
+          "bytes": 628,
+          "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a"
+        }
+      ],
+      "destination_contract": "borrow-only actual consumer/fixture sentinel invariant; actual LX08 control API/type/audit comparison waits for its implementation",
+      "excluded_context": "application ExternalTarget/OwnedTarget API, external /bin/sleep dependency and unguarded cleanup are not ported",
+      "preservation_evidence_contract": {
+        "positive": "P observation_does_not_control_target: actual borrow-only accepted Linux consumer while independent active A/B endpoints remain responsive.",
+        "independent_oracle": "Original-owner phase endpoints and actual adapter/API binding, separate from consumer return values. Full invisible no-control syscall audit remains F/open.",
+        "active_bad_control": "Actual consumer stops/kills/adopts wrong target or loses independent live sentinel after a valid phase.",
+        "intended_assertion": "Reached visible no-control/target-identity assertion fails. Signal0/wait-WNOHANG coverage and future ProcessObservation UI are never inferred.",
+        "adaptation_why": "Preserve external observation/control separation without porting application custody policy or substituting a sentinel for the separately required operation audit."
+      }
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "symbol": "stopped_child_maps_readable_for_setup_baseline",
+      "line_start": 336,
+      "line_end": 356,
+      "sha256": "d4a953540f5d39b897557b01a339c039a3640d98ae08fafc5042ff9c8e5bf312",
+      "reason": "Cannot replace stopped pre-exec/dumpable original with ordinary live fixture",
+      "copy_admission": "UNGRANTED_REFERENCE_ONLY",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": false,
+      "facet_id": "TT03-SF-15",
+      "original_disposition_preserved": "REFERENCE_ONLY_LX09",
+      "new_source_grant": false,
+      "actual_destination_hashes": null,
+      "selected_port_receipt": null,
+      "first_increment": "REFERENCE_ONLY",
+      "selected_ranges": [],
+      "selected_facet": "Preserve defect/context only; no copying or replacement qualification."
+    }
+  ],
+  "counts": {
+    "observed": 15,
+    "inside_existing_ready_ranges": 14,
+    "inside_range_reference_only": 2,
+    "selected_first_increment": 6,
+    "deferred": 6,
+    "reference_only_total": 3,
+    "ungranted_reference_only": 1
+  },
+  "source_admission_followup": {
+    "status": "NEEDS_DECISION_TT03_CONSUMER_MAPPING_SUPPLEMENT",
+    "missing_field": "Immutable admission references.tasks omit TT03 on selected P:src/process.rs and O:tests/target_lifecycle.rs; no task-specific selected TT03 slice records exist.",
+    "smallest_recommendation": "Adopt a separate narrow supplement under the existing intake schema/OWNER-2026-10-18, naming TT03 as consumer only for the exact six selected facet/ranges. Preserve e29cc admission and all existing tasks/owners/ranges; no whole-file or stopped-child expansion.",
+    "not_a_new_author_grant": true,
+    "do_not_write_during_this_preparation": true,
+    "gate": "Before TT03 PORT/ADAPT/VECTORS_ONLY execution/receipt binding; source intake is not performed by this amendment."
+  },
+  "new_mechanisms": [
+    {
+      "id": "TT03-NEW-COMPOSITION",
+      "what": "exact r4 accepted-TT02 session/finite full-key wire/raw ledger/creator and original-owner finalization",
+      "why_missing": "Selected donors have application tests and weaker framing/destructor custody, not the accepted TT02 bounded independent fixture contract.",
+      "design": "unchanged ratified r4 protocol/schema/creator support"
+    },
+    {
+      "id": "TT03-NEW-DELIVERY",
+      "what": "verified expected-inventory whole-subject copy, two literal manifests, bounded terminal report and explicit strict CLI",
+      "why_missing": "Cargo excludes real nested packages and selected donor tests supply no delivered verified-archive materializer; direct nested-manifest recipe cannot carry intended source.",
+      "design": "materializer-contract.md/json; no production process/syscall replacement"
+    },
+    {
+      "id": "TT03-NEW-DELIVERY-ORACLE",
+      "what": "independent literal membership/hash/path/copy/refusal/partial oracle and active controls",
+      "why_missing": "Neither toy Cargo packaging shapes nor a self-roundtrip tests the actual delivered materializer/copy custody.",
+      "design": "materializer-controls.json; no materializer implementation import for expected hashes/membership"
+    }
+  ],
+  "source_license_boundary": [
+    "Historical GPL-3.0-or-later owned-source observation remains. Existing OWNER-2026-10-18 admission permits only the admitted host scopes under Apache-2.0; no automatic whole-file, shared target, BPF, upstream-third-party or later helper grant.",
+    "Fourteen inspected scopes lie within adopted ready ranges; some remain reference-only. The fifteenth stopped-child setup slice outside the admission stays reference-only/ungranted. Preserve every selected scope disposition.",
+    "NEW fixture composition/finite wire and creator-context adapter follow exact ratified r4. ADAPT source contributions require candidate-bound selected-port receipts with copied ranges, original regression correspondence, destination symbol/hash and preserved deviations.",
+    "The provider, worker, driver and Python development helpers are userspace fixture/test components proposed Apache-2.0. No GPL BPF program is generated by this increment; application migration terms remain separate.",
+    "All actual upstream dependency license expressions, option files and COPYRIGHT hashes are retained in the exact 24-entry proposed notice union; Apache-2.0 remains the selected option where offered. Existing third-party MIT-only or Unicode obligations are preserved, not project MIT options.",
+    "License/build-input records are dependency-source custody, not native ABI, ELF interpreter/runtime closure or fixture evidence."
+  ],
+  "candidate_bound_receipt_rule": "Each actual selected contribution binds existing admission plus adopted TT03 supplement, source range/hash, destination symbol/hash, preserved deviation, original regression, oracle/positive/reached bad control and reviewed candidate. Source-only metadata is not a selected-port receipt.",
+  "packet_ready": false,
+  "implementation_admitted": false
+}

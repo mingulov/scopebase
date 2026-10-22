@@ -1,6 +1,8 @@
 # TT03 Linux fixture verification and execution handoff
 
-**All product cases, commands and cells here are future / NOT_RUN.** Private
+**PROPOSED narrow C7/delivery amendment; all product cases, commands and cells
+remain future / NOT_RUN.** The new materializer/source subset is not covered by
+the unchanged r4 predecessor ratification. Private
 validation checks immutable inputs, closed schema/literal premises and arithmetic;
 it is not a product codec, compiler, native or runtime result. BP02 and TT02
 maintenance are accepted; [inputs.json](../specs/tt03-linux/inputs.json) binds the actual maintenance
@@ -147,3 +149,74 @@ no control after guard failure; and context3 retained through actual run retirem
 Cleanup guards use actual cleanup allowances despite execution cancellation or
 expiry. Root's later actual realm route supplies PID1/nested-PID1 collision and
 fresh Own positives. These are future native controls, not private static results.
+
+## Proposed C7 delivery amendment: complete route and sensitivity
+
+Read the [materializer contract](../specs/tt03-linux/materializer-contract.md),
+[exact fields](../specs/tt03-linux/materializer-contract.json),
+[finite command DAG](../specs/tt03-linux/materializer-command-dag.json),
+[controls](../specs/tt03-linux/materializer-controls.json) and
+[exact selected facets](../specs/tt03-linux/materializer-source-selection.json).
+These add developer-delivery checks without changing any P/F/H denominator.
+They are NOT_RUN and do not reopen the complete r4 native/creator design.
+
+Before execution, root adopts the source task/subset supplement and the scoped
+amendment, binds the isolated TT03 product/policy candidate and exact one-member
+testkit policy projection, actual current source/manifest/notices, source-only
+bootstrap maps, first-lock generator inputs/config/cache, pinned tools, actual
+archive/companion/member roster and process/build/output/custody resources.
+The new pipe+try_close feature union is not compiled by the historical dead
+caller proof. Actual metadata/consumer backend and runtime closure remain gates.
+
+Three independently locked source bootstrap roots precede actual packaging;
+the delivered strict materializer never resolves or accepts missing locks.
+Both Cargo versions must observe actual positive archive membership and a reached
+nested-manifest negative that loses the expected subtree at the membership
+assertion, followed by the restored template positive. `package --list` alone
+does not establish the bytes in an actual archive. Independently generated
+companion entries bind the normalized Cargo.toml, Cargo.toml.orig, archive-root
+lock, literal templates and two workspace locks as distinct members.
+
+Delivered Python oracle/materializer tests run outside the checkout, without
+Cargo/compiler/fixture/native subprocesses. Missing/extra/changed source, lock,
+template, matching-hash wrong topology, bad caller anchor/schema/path, symlink/
+hardlink/nonregular input, source/output overlap, existing output, actual copy
+race/partial write and report publication controls must reach their named
+predicate. Retain source before/after hashes, original errno/stage, completed/
+uncertain map and owned partial directory. Report-publication failure cannot
+claim a surviving full map. Each negative has a fresh valid/restored twin and
+must fail its semantic assertion rather than abort setup. Test actual retained
+metadata/peak RSS and work/byte/deadline boundaries separately.
+
+Normal zero exit plus COMPLETE, an external report digest and immediate full
+source/copy/template/lock recheck gate every actual archive build. Worker and
+driver use the same archive-derived subject and original frozen own locks;
+the actual Linux consumer has its own subject-linux/testkit/manifest/source/lock
+and independent accepted held-file/read/control/parser assertions. It consumes
+neither speculative LX08 nor TT02 prepared-response APIs. Wrong-copy/feature/
+helper-digest/reopened-path negatives remain required. New actual fixture/core
+compile, native ownership/cleanup and independently sensitive reference-client
+results remain separate from the policy union pair and Python delivery tests.
+
+All14 P/seven F, TT04/EOF/audit/LX09/final-index LX08 compatibility, full TT03,
+installed delivery and target-count qualification remain open. No template toy,
+copied source tree, static design check or reported task count closes them.
+
+### R2 scoped review repairs, not product results
+
+TT03-MAT-R1-01 preserves exact sealed-root membership and puts the real consumer/
+Linux copies in a fresh sibling container; every consumer precheck/lockcheck/
+postcheck uses the closed bounded read-only verify-consumer mode with explicit
+source, manifest, own-lock, Linux, descriptor/receipt, original inventory/report
+and live subject identity bindings. M21 reaches extra-member, wrong-source/lock/
+manifest/moved-subject/forged-receipt refusals after a legitimate assembly positive.
+TT03-MAT-R1-02 adds a bounded diagnostic reservation summary for unattempted,
+known-existing, created-verified, created-unopened and uncertain-attempt states;
+M22 distinguishes the two no-report EIO populations without error/path smuggling
+or report/cleanup authority. TT03-MAT-R1-03 enumerates full independent first-lock
+maps, deliberate unrelated absences, exact worker->driver->consumer generation
+and post-graph origin/copy order; M23's static trace does not resolve/build code.
+Strict delivered materialization still requires every frozen lock and has no
+resolver mode. All146 r1 DAG IDs and original237 author statics remain historical;
+new necessary IDs append without relabelling prior evidence. All actual commands
+remain NOT_RUN; r4 native/source grants/six selected facets/nine ranges are unchanged.

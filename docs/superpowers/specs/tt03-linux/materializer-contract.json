@@ -1,0 +1,1131 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_MATERIALIZER_NORMATIVE_V1_FIELD_CONTRACT",
+  "status": "PROPOSED_R2_NARROW_REPAIR_NOT_IMPLEMENTED",
+  "not_an_expected_inventory": true,
+  "strict_objects": "Exactly the named fields; no unknown or duplicate fields at any level. No NaN/floats/boolean integers/surrogates/BOM/trailing JSON.",
+  "cli": {
+    "program": "tests/fixtures/linux/materialize.py",
+    "exact_required_options": [
+      "--package-root",
+      "--inventory",
+      "--inventory-sha256",
+      "--output"
+    ],
+    "paths": "absolute no-follow; inventory outside source/output; output absent; existing owned parent",
+    "caller_anchor": "--inventory-sha256 must match the actual raw companion bytes before parsing"
+  },
+  "input": {
+    "exact_root_fields": [
+      "schema_version",
+      "kind",
+      "source_archive",
+      "subject",
+      "entries",
+      "topology",
+      "totals",
+      "limits"
+    ],
+    "schema_version": 1,
+    "kind": "scopebase.tt03.expected-inventory.v1",
+    "source_archive": {
+      "sha256": "lowercase-64-hex",
+      "bytes": "u64-json-integer-positive",
+      "root_directory": "one relative component exactly scopebase-testkit-0.1.0"
+    },
+    "subject": {
+      "name": "scopebase-testkit",
+      "version": "0.1.0",
+      "default_features": false,
+      "requested_features": [
+        "linux-fixtures"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "intended_rustix_backend": "linux_raw"
+    },
+    "entries": {
+      "record_exact_fields": {
+        "path": "bounded-relative-path",
+        "bytes": "u64-json-integer",
+        "sha256": "lowercase-64-hex"
+      },
+      "order": "strict UTF-8 byte order; unique paths; regular files only",
+      "minimum": 1,
+      "maximum": 8192
+    },
+    "topology": {
+      "root_manifest": {
+        "fixed_path": "Cargo.toml",
+        "exact_fields": {
+          "path": "bounded-relative-path",
+          "bytes": "u64-json-integer",
+          "sha256": "lowercase-64-hex"
+        }
+      },
+      "root_original_manifest": {
+        "fixed_path": "Cargo.toml.orig",
+        "exact_fields": {
+          "path": "bounded-relative-path",
+          "bytes": "u64-json-integer",
+          "sha256": "lowercase-64-hex"
+        }
+      },
+      "archive_root_lock": {
+        "fixed_path": "Cargo.lock",
+        "exact_fields": {
+          "path": "bounded-relative-path",
+          "bytes": "u64-json-integer",
+          "sha256": "lowercase-64-hex"
+        }
+      },
+      "worker": {
+        "template": {
+          "fixed_path": "tests/fixtures/linux/worker/Cargo.toml.in",
+          "exact_fields": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "lock": {
+          "fixed_path": "tests/fixtures/linux/worker/Cargo.lock",
+          "exact_fields": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "generated_manifest": "tests/fixtures/linux/worker/Cargo.toml"
+      },
+      "driver": {
+        "template": {
+          "fixed_path": "tests/fixtures/linux/driver/Cargo.toml.in",
+          "exact_fields": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "lock": {
+          "fixed_path": "tests/fixtures/linux/driver/Cargo.lock",
+          "exact_fields": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "generated_manifest": "tests/fixtures/linux/driver/Cargo.toml"
+      }
+    },
+    "totals": {
+      "files": "exact entry count",
+      "directories": "exact non-root prefix-directory count",
+      "file_bytes": "exact entry bytes sum",
+      "directory_path_bytes": "exact non-root prefix-directory UTF-8 bytes sum",
+      "generated_bytes": "exact two-template bytes sum"
+    },
+    "limits": {
+      "inventory_bytes": 4194304,
+      "json_depth": 12,
+      "integer_decimal_digits": 20,
+      "files": 8192,
+      "directories": 8192,
+      "path_utf8_bytes": 4096,
+      "path_components": 64,
+      "directory_path_utf8_bytes": 4194304,
+      "file_bytes": 8388608,
+      "input_bytes": 67108864,
+      "toml_manifest_bytes": 262144,
+      "generated_manifest_bytes": 524288,
+      "chunk_bytes": 65536,
+      "charged_read_bytes": 536870912,
+      "copied_and_generated_write_bytes": 67633152,
+      "logical_io_steps": 1048576,
+      "open_descriptors": 32,
+      "report_bytes": 16777216,
+      "diagnostic_bytes": 65536,
+      "accounted_retained_metadata_bytes": 67108864,
+      "outer_process_memory_allowance_bytes": 536870912,
+      "cooperative_deadline_ms": 120000,
+      "absolute_path_utf8_bytes": 4096
+    },
+    "cross_field_rules": [
+      "Every topology file record equals its same-path entries record.",
+      "No non-root Cargo.toml basename, empty directories, symlink/hardlink/nonregular member, path-prefix collision or unknown/missing/extra member.",
+      "Input tree directories equal entry prefix closure. Source root is separate, not an entry.",
+      "Root normalized/original manifests and archive-root lock are distinct inputs, not workspace locks.",
+      "Both frozen workspace locks are mandatory; no resolver exception.",
+      "All totals are recomputed before output; all arithmetic is checked; fixed limits cannot be increased."
+    ]
+  },
+  "stat_record_exact_fields": {
+    "dev": "unsigned-json-integer",
+    "ino": "unsigned-json-integer",
+    "mode": "unsigned-json-integer",
+    "uid": "unsigned-json-integer",
+    "nlink": "unsigned-json-integer",
+    "size": "unsigned-json-integer",
+    "mtime_ns": "i64-json-integer",
+    "ctime_ns": "i64-json-integer"
+  },
+  "output": {
+    "report_path": "OUTPUT/materialize-report.json",
+    "copied_subject": "OUTPUT/subject-testkit",
+    "generated_paths": [
+      "tests/fixtures/linux/worker/Cargo.toml",
+      "tests/fixtures/linux/driver/Cargo.toml"
+    ],
+    "generated_bytes": "byte-identical to respective original/copied template; no substitution",
+    "states_exit_codes": {
+      "COMPLETE": 0,
+      "INPUT_REFUSED": 2,
+      "PARTIAL": 3
+    },
+    "input_refused": "Diagnostic only, output absent/preexisting untouched. No report claimed at absent output.",
+    "partial": "Retain created output; no deletion/resume/build. Failed report publication leaves mapping unknown and outer collector authoritative for nonzero completion.",
+    "reservation_uncertainty": "Any ambiguous mkdir result or success followed by inability to obtain original output authority is PARTIAL/nonzero; preserve parent/possible-entry custody, no copies and no build. No filesystem report is promised if output authority is unavailable. Known EEXIST/input rejection leaves existing output untouched.",
+    "exact_root_members": [
+      "subject-testkit",
+      "materialize-report.json"
+    ],
+    "no_extension": "No consumer/Linux sibling, receipt, descriptor, target or unknown entry is permitted inside this sealed root. It is not moved, copied/relabelled or merged for consumer use."
+  },
+  "report_v1": {
+    "exact_root_fields": [
+      "schema_version",
+      "kind",
+      "state",
+      "inventory",
+      "subject",
+      "source",
+      "output",
+      "directories",
+      "files",
+      "generated",
+      "locks",
+      "charges",
+      "error"
+    ],
+    "schema_version": 1,
+    "kind": "scopebase.tt03.materialize-report.v1",
+    "state": [
+      "COMPLETE",
+      "PARTIAL"
+    ],
+    "inventory": {
+      "expected_sha256": "lowercase-64-hex",
+      "observed_sha256": "lowercase-64-hex",
+      "archive_asserted_sha256": "lowercase-64-hex",
+      "archive_asserted_bytes": "u64",
+      "archive_observed_by_materializer": false,
+      "absolute_path": "absolute UTF-8 path <=4096 bytes",
+      "before": "stat-record",
+      "after": "stat-record-or-null",
+      "final_observed_sha256": "lowercase-64-hex-or-null"
+    },
+    "subject": {
+      "name": "scopebase-testkit",
+      "version": "0.1.0",
+      "default_features": false,
+      "requested_features": [
+        "linux-fixtures"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "intended_rustix_backend": "linux_raw"
+    },
+    "source": {
+      "absolute_path": "bounded absolute path",
+      "root_before": "stat-record",
+      "root_after": "stat-record-or-null",
+      "exclusive_stable_caller_precondition": true,
+      "revalidation": [
+        "MATCHED_SEQUENTIAL_OBSERVATIONS",
+        "NOT_COMPLETED",
+        "MISMATCH"
+      ]
+    },
+    "output": {
+      "absolute_path": "bounded absolute path",
+      "identity": "stat-record-or-null",
+      "exclusive_created": "true if mkdir success was observed, null for uncertain reservation attempt; never invented",
+      "copied_prefix": "subject-testkit",
+      "caller_retains_custody": true,
+      "reservation": [
+        "CREATED_VERIFIED",
+        "CREATED_UNOPENED",
+        "ATTEMPT_UNCERTAIN"
+      ]
+    },
+    "directories": {
+      "order": "prefix directories UTF-8 order including root as empty string only in this report",
+      "record_exact_fields": {
+        "path": "directory prefix",
+        "source_before": "stat-record",
+        "source_after": "stat-record-or-null",
+        "destination": "stat-record-or-null",
+        "state": [
+          "VERIFIED",
+          "NOT_ATTEMPTED",
+          "UNCERTAIN"
+        ]
+      }
+    },
+    "files": {
+      "order": "same as inventory entries; one record for every entry",
+      "destination_rule": "copied_prefix + / + path; do not duplicate the full path string",
+      "record_exact_fields": {
+        "path": "inventory path",
+        "bytes_expected": "u64",
+        "bytes_copied": "u64",
+        "expected_sha256": "lowercase-64-hex",
+        "source_observed_sha256": "lowercase-64-hex-or-null",
+        "destination_observed_sha256": "lowercase-64-hex-or-null",
+        "source_before": "stat-record",
+        "source_after": "stat-record-or-null",
+        "destination": "stat-record-or-null",
+        "state": [
+          "VERIFIED",
+          "NOT_ATTEMPTED",
+          "UNCERTAIN"
+        ]
+      }
+    },
+    "generated": {
+      "cardinality": 2,
+      "record_exact_fields": {
+        "path": "fixed generated path",
+        "template_path": "fixed template path",
+        "bytes_expected": "u64",
+        "bytes_written": "u64",
+        "expected_sha256": "lowercase-64-hex",
+        "observed_sha256": "lowercase-64-hex-or-null",
+        "destination": "stat-record-or-null",
+        "state": [
+          "VERIFIED",
+          "NOT_ATTEMPTED",
+          "UNCERTAIN"
+        ]
+      }
+    },
+    "locks": {
+      "cardinality": 3,
+      "roles": [
+        "archive-root",
+        "worker",
+        "driver"
+      ],
+      "record_exact_fields": {
+        "role": "one fixed role",
+        "path": "fixed inventory path",
+        "bytes": "u64",
+        "expected_sha256": "lowercase-64-hex",
+        "observed_sha256": "lowercase-64-hex-or-null"
+      }
+    },
+    "charges": {
+      "inventory_bytes": "u64",
+      "entries_seen": "u64",
+      "directories_seen": "u64",
+      "read_bytes": "u64",
+      "copied_write_bytes": "u64",
+      "generated_write_bytes": "u64",
+      "report_bytes": "u64",
+      "diagnostic_bytes": "u64",
+      "logical_io_steps": "u64",
+      "peak_open_descriptors": "u64",
+      "accounted_retained_metadata_bytes": "u64",
+      "observed_peak_rss_bytes": "u64-or-null; unavailable observation cannot qualify memory envelope",
+      "elapsed_ns": "u64"
+    },
+    "error": "null for COMPLETE; error-record for PARTIAL",
+    "error_record_exact_fields": {
+      "stage": "closed stage",
+      "category": "closed category",
+      "errno": "nonnegative integer or null",
+      "path": "bounded relative path or null",
+      "operation": "closed actual operation name"
+    },
+    "complete_predicate": "All entries/directories/generated VERIFIED; all observed expected hashes/bytes and source revalidation match; no error; zero normal process completion; report external digest plus immediate full recheck required for build. Inventory held identity/stat and final digest match the caller anchor; output reservation is CREATED_VERIFIED with exclusive_created=true and known original identity.",
+    "digest": "External only; no self hash. Reports do not authenticate archives/backend or transfer/release custody."
+  },
+  "terminal_diagnostic_v1": {
+    "exact_root_fields": [
+      "schema_version",
+      "kind",
+      "state",
+      "error",
+      "publication_error",
+      "output_reservation",
+      "output_identity",
+      "report_path",
+      "report_publication",
+      "inventory_sha256",
+      "charges"
+    ],
+    "schema_version": 1,
+    "kind": "scopebase.tt03.materialize-terminal.v1",
+    "states": [
+      "COMPLETE",
+      "INPUT_REFUSED",
+      "PARTIAL"
+    ],
+    "report_publication": [
+      "NOT_CREATED",
+      "PUBLISHED",
+      "FAILED_OR_UNCERTAIN"
+    ],
+    "nullable_fields": [
+      "error",
+      "publication_error",
+      "output_identity",
+      "report_path",
+      "inventory_sha256"
+    ],
+    "charges": "Same exact charge fields as report; observed_peak_rss_bytes may be null if unavailable. Work counters start at known zero; no unknown observation is fabricated as zero.",
+    "full_map_in_diagnostic": false,
+    "error": "First original error-record, or null only for COMPLETE; never replace it with a later publication failure.",
+    "publication_error": "Separate REPORT_PUBLISH/CLOSE error-record or null; failed publication never claims a complete surviving map.",
+    "output_reservation_exact_fields": {
+      "state": [
+        "NOT_ATTEMPTED",
+        "KNOWN_EXISTING",
+        "CREATED_VERIFIED",
+        "CREATED_UNOPENED",
+        "ATTEMPT_UNCERTAIN"
+      ],
+      "exclusive_created": "boolean-or-null with exact state rules",
+      "identity": "stat-record-or-null; equal to the retained top-level output_identity"
+    },
+    "reservation_state_rules": [
+      {
+        "state": "NOT_ATTEMPTED",
+        "exclusive_created": false,
+        "identity": "null",
+        "terminal": "INPUT_REFUSED",
+        "meaning": "No mkdir attempted and no existing entry established; no created output/custody claim."
+      },
+      {
+        "state": "KNOWN_EXISTING",
+        "exclusive_created": false,
+        "identity": "observed existing-entry stat or null",
+        "terminal": "INPUT_REFUSED",
+        "meaning": "Precheck found existing output or mkdir returned known EEXIST; no writes/merge/delete; identity is descriptive existing-entry evidence, not creation authority."
+      },
+      {
+        "state": "CREATED_VERIFIED",
+        "exclusive_created": true,
+        "identity": "nonnull original held output stat",
+        "terminal": "COMPLETE or PARTIAL",
+        "meaning": "mkdir success and original no-follow output authority/identity were obtained; COMPLETE still requires all original completion gates."
+      },
+      {
+        "state": "CREATED_UNOPENED",
+        "exclusive_created": true,
+        "identity": "null",
+        "terminal": "PARTIAL",
+        "meaning": "mkdir success observed, but original output open/fstat authority not established. No file copy, no filesystem report claim, caller retains parent/entry custody."
+      },
+      {
+        "state": "ATTEMPT_UNCERTAIN",
+        "exclusive_created": null,
+        "identity": "null",
+        "terminal": "PARTIAL",
+        "meaning": "mkdir result/partial effect uncertain. No creation/absence/original identity claim, no copy/report attempt; caller retains parent/possible-entry custody."
+      }
+    ],
+    "reservation_summary_bytes": 1024,
+    "reservation_summary_counted_in_existing_diagnostic_limit": true,
+    "reservation_consistency": "Summary identity equals top-level output_identity. CREATED_UNOPENED/ATTEMPT_UNCERTAIN imply report_path=null, report_publication=NOT_CREATED, publication_error=null unless an actual separate report operation was attempted; output authority must never be invented. Original operation/stage/errno remain in error."
+  },
+  "stages": [
+    "CLI",
+    "INTERPRETER",
+    "INVENTORY_READ",
+    "INVENTORY_SCHEMA",
+    "SOURCE_OPEN",
+    "SOURCE_ENUMERATE",
+    "SOURCE_VERIFY",
+    "TOPOLOGY_VERIFY",
+    "PREFLIGHT",
+    "OUTPUT_RESERVE",
+    "COPY",
+    "GENERATE",
+    "FINAL_VERIFY",
+    "REPORT_PUBLISH",
+    "CLOSE"
+  ],
+  "categories": [
+    "ARGUMENT",
+    "UNSUPPORTED_INTERPRETER",
+    "INVENTORY_ANCHOR",
+    "SCHEMA",
+    "PATH",
+    "KIND",
+    "OWNERSHIP",
+    "MEMBERSHIP",
+    "SIZE",
+    "DIGEST",
+    "TOPOLOGY",
+    "LOCK",
+    "EXISTING_OUTPUT",
+    "OVERLAP",
+    "IDENTITY_CHANGED",
+    "BOUND",
+    "DEADLINE",
+    "IO",
+    "INTERNAL"
+  ],
+  "limits": {
+    "inventory_bytes": 4194304,
+    "json_depth": 12,
+    "integer_decimal_digits": 20,
+    "files": 8192,
+    "directories": 8192,
+    "path_utf8_bytes": 4096,
+    "path_components": 64,
+    "directory_path_utf8_bytes": 4194304,
+    "file_bytes": 8388608,
+    "input_bytes": 67108864,
+    "toml_manifest_bytes": 262144,
+    "generated_manifest_bytes": 524288,
+    "chunk_bytes": 65536,
+    "charged_read_bytes": 536870912,
+    "copied_and_generated_write_bytes": 67633152,
+    "logical_io_steps": 1048576,
+    "open_descriptors": 32,
+    "report_bytes": 16777216,
+    "diagnostic_bytes": 65536,
+    "accounted_retained_metadata_bytes": 67108864,
+    "outer_process_memory_allowance_bytes": 536870912,
+    "cooperative_deadline_ms": 120000,
+    "absolute_path_utf8_bytes": 4096
+  },
+  "report_preflight": "Exact reserved maximum encoding from complete map and actual escaped paths; refuse before output if over report/metadata cap; no truncation.",
+  "memory_truth": "64MiB accounted retained graph is not total RSS. 512MiB outer process allowance and actual retained/peak-RSS measurement are separate required bindings. No materializer host-limit mutation.",
+  "stability_truth": "Held descriptor checks and sequential rehashes detect observed races, not atomicity or hostile concurrent same-user rewrite. Exclusive stable-source/output ownership remains a caller precondition through build.",
+  "stat_comparison_rules": {
+    "source_regular_and_inventory": "All eight recorded fields equal across initial/final held and path rechecks, plus bytes/hash. Atime is intentionally absent.",
+    "source_directories": "Original held/path directory identity/kind/UID unchanged; size/nlink/mtime/ctime observations must also match because the source is stable and unwritten.",
+    "destination_regular": "Record after completed write; all recorded fields plus bytes/hash remain unchanged through final verification and later build rechecks.",
+    "destination_directories_and_output_root": "Verify dev/ino/mode/uid identity and exact path membership. Other fields are descriptive observations, not equality to the initially empty directory: own child/report creation legitimately changes size/nlink/mtime/ctime. Record copied-prefix directory observations after its final writes.",
+    "no_atomicity": "Matching observations do not defeat coherent hostile same-user rewrite or unobserved ABA; exclusive custody is a caller premise."
+  },
+  "open_rules": "Held directory components: O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC. Leaf no-follow lstat first rejects nonregular, then source/inventory open O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK and fstat original. Destination files O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, mode0600, original held output authority. O_NONBLOCK avoids opening an observed FIFO as blocking input; unsupported concurrent same-user rebind is not a device/security guarantee.",
+  "encoding": "UTF-8 strict; JSON sorted keys, ensure_ascii=false, separators comma/colon without padding, allow_nan=false, one final LF; byte ceilings include LF. Exact external SHA256 covers final bytes; no self hash.",
+  "delivery_checker_cli": {
+    "program": "tests/fixtures/linux/test_materialize.py",
+    "test": {
+      "exact_options": [
+        "--package-root",
+        "--inventory",
+        "--inventory-sha256",
+        "--output"
+      ],
+      "output": "previously absent root; terminal test-materialize-report.json plus retained per-control inputs/outputs",
+      "cases": "Exactly C7DEL-M01..M18 plus M21/M22 in this process; M19/M20 outer Cargo and M23 authoring-map checks remain separate.",
+      "no_fixture_subprocess": true,
+      "report_exact_fields": {
+        "schema_version": 1,
+        "kind": "scopebase.tt03.materialize-tests.v1",
+        "state": [
+          "PASSED",
+          "FAILED",
+          "INCOMPLETE"
+        ],
+        "inventory_sha256": "caller lowerhex64",
+        "cases": "Exactly20 ordered records for test_mode_ids in materializer-controls.json; same closed record/expanded literal fixture vocabulary, all required subpopulations reached.",
+        "invocation_exact_fields": [
+          "fixture_id",
+          "output_relative_path",
+          "tier",
+          "expected_terminal",
+          "observed_exit",
+          "observed_terminal",
+          "semantic_assertion_reached",
+          "restored_twin_fixture_id",
+          "report_sha256",
+          "diagnostic_sha256"
+        ],
+        "charges": "materializer-controls.json exact expanded roster count/bytes/work/retained metadata/peakRSS/elapsed observations",
+        "error": "closed error-record or null only for PASSED"
+      },
+      "test_report_bytes": 16777216,
+      "exit": "Zero only when all20 named in-process families and bound expanded subpopulations passed, each wrong control reached its intended assertion and fresh restored positive completed. Missing/skip/setup-only/outer termination stays INCOMPLETE. Filesystem report failure preserves nonzero outer diagnostic/custody; no fabricated publication."
+    },
+    "verify": {
+      "exact_options": [
+        "--package-root",
+        "--inventory",
+        "--inventory-sha256",
+        "--materialized-root",
+        "--report-sha256"
+      ],
+      "behavior": "Independent read-only full source/map/template/generated/lock/stat/topology recheck; exact COMPLETE report anchor; no resolver, output mutation or subprocess.",
+      "diagnostic_exact_fields": {
+        "schema_version": 1,
+        "kind": "scopebase.tt03.materialize-verify.v1",
+        "state": [
+          "VERIFIED",
+          "REFUSED"
+        ],
+        "inventory_sha256": "caller expected lowerhex64",
+        "report_sha256": "caller expected lowerhex64",
+        "error": "closed error-record or null only for VERIFIED",
+        "charges": "same exact charge fields as materializer report; observed_peak_rss_bytes may be null, never fake zero"
+      },
+      "result": "zero only for exact verified map; <=65536-byte terminal diagnostic. REFUSED nonzero; no custody release."
+    },
+    "bounds": {
+      "raw_report_bytes": 16777216,
+      "inventory_bytes": 4194304,
+      "accounted_metadata_bytes": 268435456,
+      "outer_memory_allowance_bytes": 536870912,
+      "verify_cooperative_deadline_ms": 120000,
+      "read_bytes": 536870912,
+      "logical_io_steps": 1048576,
+      "max_open_descriptors": 32,
+      "test_bounds": "materializer-controls.json process_bounds"
+    },
+    "oracle_independence": "Do not import materializer production validation/hash/membership routines for expected facts. Standard-library input decoding and hashlib are permitted; semantic expected maps/shape assertions are separately authored.",
+    "verify-consumer": {
+      "status": "PROPOSED_R2_NOT_IMPLEMENTED",
+      "no_additional_packaged_file": true,
+      "program": "tests/fixtures/linux/test_materialize.py",
+      "mode": "verify-consumer",
+      "exact_options": [
+        "--package-root",
+        "--inventory",
+        "--inventory-sha256",
+        "--materialized-root",
+        "--report-sha256",
+        "--consumer-inventory",
+        "--consumer-inventory-sha256",
+        "--assembly-root",
+        "--assembly-receipt",
+        "--assembly-receipt-sha256",
+        "--consumer-source-root",
+        "--linux-package-root"
+      ],
+      "read_only": true,
+      "subprocess_cargo_compiler_native_network": false,
+      "topology": {
+        "parent": "U: existing owned stable no-follow directory; U itself is not the sealed root",
+        "materialized_root": "U/materialized-testkit",
+        "materialized_exact_members": [
+          "subject-testkit",
+          "materialize-report.json"
+        ],
+        "assembly_root": "U/consumer-assembly",
+        "assembly_exact_members": [
+          "consumer",
+          "subject-linux",
+          "consumer-assembly-report.json"
+        ],
+        "consumer_manifest": "U/consumer-assembly/consumer/Cargo.toml",
+        "testkit_dependency_path": "../../materialized-testkit/subject-testkit",
+        "linux_dependency_path": "../subject-linux",
+        "descriptor_location": "outside both materialized_root and assembly_root; caller supplied data, not a new package member",
+        "receipt_location": "exactly assembly_root/consumer-assembly-report.json",
+        "alias_rule": "U/M/C/source/receipt/descriptor held identities and ancestry are checked, no symlink/overlap/relabelled/copy-substituted materialization root; the two selected roots are distinct direct siblings."
+      },
+      "consumer_inventory_v1": {
+        "exact_root_fields": [
+          "schema_version",
+          "kind",
+          "testkit",
+          "consumer",
+          "linux",
+          "assembly",
+          "totals",
+          "limits"
+        ],
+        "schema_version": 1,
+        "kind": "scopebase.tt03.consumer-inventory.v1",
+        "testkit_exact_fields": {
+          "inventory_sha256": "caller-anchored original testkit inventory digest",
+          "materialize_report_sha256": "externally anchored original COMPLETE report digest",
+          "source_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "materialized_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "subject_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          }
+        },
+        "consumer_exact_fields": {
+          "source_bundle_asserted_sha256": "lowercase-64-hex; caller asserted, not archive measured by checker",
+          "source_bundle_asserted_bytes": "positive-u64",
+          "source_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "package": {
+            "name": "scopebase-tt03-independent-held-file-client",
+            "version": "0.1.0",
+            "default_features": false,
+            "binary": "scopebase-tt03-held-file-check"
+          },
+          "entries": "nonempty ordered unique regular-file records path/bytes/sha256, exact prefix-directory closure",
+          "manifest": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          },
+          "own_lock": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "linux_exact_fields": {
+          "archive_asserted_sha256": "lowercase-64-hex; outer caller binding",
+          "archive_asserted_bytes": "positive-u64",
+          "source_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "subject": {
+            "name": "scopebase-linux",
+            "version": "0.1.0",
+            "default_features": false,
+            "features": []
+          },
+          "entries": "nonempty ordered unique regular-file records path/bytes/sha256, exact prefix-directory closure",
+          "manifest": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          },
+          "original_manifest": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          },
+          "archive_root_lock": {
+            "path": "bounded-relative-path",
+            "bytes": "u64-json-integer",
+            "sha256": "lowercase-64-hex"
+          }
+        },
+        "assembly_exact_fields": {
+          "materialized_basename": "materialized-testkit",
+          "assembly_basename": "consumer-assembly",
+          "members": [
+            "consumer",
+            "subject-linux",
+            "consumer-assembly-report.json"
+          ],
+          "testkit_dependency_path": "../../materialized-testkit/subject-testkit",
+          "linux_dependency_path": "../subject-linux"
+        },
+        "totals_exact_fields": {
+          "consumer_files": "exact count",
+          "consumer_directories": "exact non-root prefix count",
+          "consumer_bytes": "exact entries byte sum",
+          "linux_files": "exact count",
+          "linux_directories": "exact non-root prefix count",
+          "linux_bytes": "exact entries byte sum"
+        },
+        "limits": {
+          "testkit_inventory_bytes": 4194304,
+          "consumer_inventory_bytes": 4194304,
+          "materialize_report_bytes": 16777216,
+          "assembly_receipt_bytes": 16777216,
+          "consumer_plus_linux_files": 8192,
+          "consumer_plus_linux_directories": 8192,
+          "consumer_plus_linux_source_bytes": 67108864,
+          "file_bytes": 8388608,
+          "path_utf8_bytes": 4096,
+          "path_components": 64,
+          "json_depth": 12,
+          "integer_decimal_digits": 20,
+          "chunk_bytes": 65536,
+          "all_charged_read_bytes": 536870912,
+          "logical_io_steps": 1048576,
+          "open_descriptors": 32,
+          "accounted_metadata_bytes": 268435456,
+          "outer_process_memory_allowance_bytes": 536870912,
+          "one_cooperative_deadline_ms": 120000,
+          "diagnostic_bytes": 65536
+        },
+        "rules": "Same strict duplicate/unknown/numeric/UTF8/path/kind/size/hash/owned-stable-source rules as the original inventory. Manifest/lock role records equal their same-path entries; consumer own manifest/lock at Cargo.toml/Cargo.lock; Linux normalized/original/archive lock at Cargo.toml/Cargo.toml.orig/Cargo.lock. No descriptor self hash or receipt digest occurs here.",
+        "origin": "Reviewed consumer bundle and actual accepted Linux archive determine approved entry bytes; root/caller then binds original live materialization lineage. It cannot make an arbitrary source tree approved by measuring it. Actual archive/bundle bytes are separately bound outside this checker."
+      },
+      "assembly_receipt_v1": {
+        "exact_root_fields": [
+          "schema_version",
+          "kind",
+          "state",
+          "consumer_inventory_sha256",
+          "testkit",
+          "assembly",
+          "consumer",
+          "linux",
+          "charges",
+          "error"
+        ],
+        "schema_version": 1,
+        "kind": "scopebase.tt03.consumer-assembly.v1",
+        "state": "COMPLETE",
+        "consumer_inventory_sha256": "lowercase-64-hex exactly matching caller-anchored descriptor bytes",
+        "testkit": "Exactly the five testkit fields from the consumer inventory; compare each to original report/inventory and live held objects, never accept a report as object authority.",
+        "assembly_exact_fields": {
+          "absolute_path": "bounded absolute assembly path",
+          "identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "exclusive_created": true,
+          "members": [
+            "consumer",
+            "subject-linux",
+            "consumer-assembly-report.json"
+          ]
+        },
+        "consumer_and_linux_exact_fields": {
+          "source_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "destination_root_identity": {
+            "dev": "u64-json-integer",
+            "ino": "u64-json-integer",
+            "mode": "u64-json-integer",
+            "uid": "u64-json-integer"
+          },
+          "files": "one ordered record per approved entry: path,bytes,sha256,source_identity,destination_identity",
+          "directories": "one prefix-directory record including empty root: path,source_identity,destination_identity"
+        },
+        "file_identity_shape": "full eight-field stat-record from original contract, timestamps signed i64; source/destination recorded after copy writes and immutable thereafter",
+        "directory_identity_shape": {
+          "dev": "u64-json-integer",
+          "ino": "u64-json-integer",
+          "mode": "u64-json-integer",
+          "uid": "u64-json-integer"
+        },
+        "charges": "same exact charge vocabulary as materialize-report; source/copy/report observations only, no control or lease settlement authority",
+        "error": null,
+        "origin": "Caller-created descriptive COMPLETE receipt only after exclusive bounded copy. Its external digest is supplied separately; no self hash. Incomplete assembly has no accepted receipt, remains caller-owned and blocks use; outer bounded collection preserves the failure without inventing a complete record. Checker re-reads the complete schema/map and all actual source/destination bytes/identities and original testkit bindings."
+      },
+      "manifest_semantics": "Consumer exact own resolver2 workspace, build=false, automatic targets off, selected binary/src/main.rs and pinned reviewed dependencies. testkit edge path ../../materialized-testkit/subject-testkit version=\"=0.1.0\" defaults=false features=[linux-fixtures]; Linux path ../subject-linux version=\"=0.1.0\" defaults=false features=[]. Require exact reviewed consumer manifest bytes plus semantic checks; no patch/config/path rewrite or substituted lock.",
+      "algorithm": [
+        "Validate all12 exact options/absolute paths/anchors/closed bounded descriptor and receipt, rejecting extra/duplicate fields and unknown versions before comparisons.",
+        "Perform the existing complete strict verify of original extracted testkit, original expected inventory, original COMPLETE materialization report and original live root/subject identities. Require exact two-member materialized root. Share one monotonic deadline and all counters with the remaining checks.",
+        "Check descriptor original source/materialized/subject identities against currently held original objects and original report; original report source/output absolute paths must equal the CLI original roots. Report metadata cannot construct or transfer ownership. Check M/C distinct direct siblings with fixed basenames and exact C three-member set.",
+        "Read approved actual consumer and Linux source roots with no-follow held descriptors; check expected source identities, full byte/member inventories and declared manifest/lock roles. Read independently created consumer/Linux copies in C and match every source/expected/receipt/destination byte/hash/identity. Never hash only receipt summaries.",
+        "Verify consumer manifest dependency paths resolve through held parent U to this exact original live M/subject-testkit and C/subject-linux, plus literal manifest semantics and own lock bytes. Refuse moved/copied/relabelled subject or foreign Linux/consumer even when file bytes match.",
+        "Recheck all roots, source/copied members, receipt and descriptor identities/digests at completion. Matching sequential observations are not atomicity/hostile same-user protection. Preserve caller exclusive ownership through later metadata/build and repeat checks immediately before/after.",
+        "Emit only one bounded diagnostic and zero for VERIFIED; otherwise REFUSED/nonzero. Write no files, run no subprocess, acquire no owner/control/lease authority and do not release custody."
+      ],
+      "bounds": {
+        "testkit_inventory_bytes": 4194304,
+        "consumer_inventory_bytes": 4194304,
+        "materialize_report_bytes": 16777216,
+        "assembly_receipt_bytes": 16777216,
+        "consumer_plus_linux_files": 8192,
+        "consumer_plus_linux_directories": 8192,
+        "consumer_plus_linux_source_bytes": 67108864,
+        "file_bytes": 8388608,
+        "path_utf8_bytes": 4096,
+        "path_components": 64,
+        "json_depth": 12,
+        "integer_decimal_digits": 20,
+        "chunk_bytes": 65536,
+        "all_charged_read_bytes": 536870912,
+        "logical_io_steps": 1048576,
+        "open_descriptors": 32,
+        "accounted_metadata_bytes": 268435456,
+        "outer_process_memory_allowance_bytes": 536870912,
+        "one_cooperative_deadline_ms": 120000,
+        "diagnostic_bytes": 65536
+      },
+      "bounds_scope": "Limits are shared over original testkit verification plus consumer/Linux/receipt checks, not reset per subcheck. Additional consumer+Linux files/bytes are jointly bounded separately from original testkit; all work/read/time/metadata/RSS limits cover the whole mode. No total RSS theorem or syscall interruption claim.",
+      "diagnostic_exact_fields": {
+        "schema_version": 1,
+        "kind": "scopebase.tt03.verify-consumer.v1",
+        "state": [
+          "VERIFIED",
+          "REFUSED"
+        ],
+        "inventory_sha256": "caller lowerhex64",
+        "report_sha256": "caller lowerhex64",
+        "consumer_inventory_sha256": "caller lowerhex64",
+        "assembly_receipt_sha256": "caller lowerhex64",
+        "identities": {
+          "materialized_root": "identity-or-null",
+          "subject_root": "identity-or-null",
+          "assembly_root": "identity-or-null",
+          "consumer_source_root": "identity-or-null",
+          "consumer_destination_root": "identity-or-null",
+          "linux_source_root": "identity-or-null",
+          "linux_destination_root": "identity-or-null"
+        },
+        "error": "closed actual operation/stage/category/errno/path or null only for VERIFIED",
+        "charges": "same exact original charge fields; copied/generated/report write counts=0, peakRSS nullable observation only"
+      }
+    }
+  },
+  "error_operations": [
+    "parse_cli",
+    "check_interpreter",
+    "read_inventory",
+    "parse_inventory",
+    "open_directory",
+    "enumerate_directory",
+    "inspect_leaf",
+    "open_source",
+    "hash_source",
+    "parse_toml",
+    "reserve_metadata",
+    "precheck_output",
+    "mkdir_output",
+    "open_output",
+    "fstat_output",
+    "copy_read",
+    "copy_write",
+    "close_source",
+    "close_destination",
+    "generate_manifest",
+    "final_verify",
+    "write_report",
+    "close_report",
+    "publish_report",
+    "read_consumer_inventory",
+    "read_assembly_receipt",
+    "verify_consumer",
+    "verify_linux",
+    "verify_assembly"
+  ],
+  "error_operation_rules": "Each error/publication_error carries its actual closed operation independently of stage/category/errno/path. OUTPUT_RESERVE mkdir/open/fstat failures use mkdir_output/open_output/fstat_output respectively. No reserved state is smuggled into category/path; first error is never overwritten by a secondary report failure.",
+  "first_lock_bootstrap": {
+    "scope": "Root-only source assemblies after actual reviewed source exists. No strict materializer, fake materialization report, undeclared seed or source-discovery mode.",
+    "maps": {
+      "worker": {
+        "selected_manifest": "@bootstrap-worker-root@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml",
+        "locks": [
+          {
+            "role": "candidate-root-workspace",
+            "path": "@candidate@/Cargo.lock",
+            "initial": "PRESENT_EXTERNAL",
+            "origin": "ROOT-LOCK; actual reviewed candidate root digest, never copied/substituted as an own lock",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "assembly-container-root",
+            "path": "@bootstrap-worker-root@/Cargo.lock",
+            "initial": "ABSENT_NOT_WORKSPACE",
+            "origin": "container has no Cargo.toml",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "testkit-crate-root",
+            "path": "@bootstrap-worker-root@/subject-testkit/Cargo.lock",
+            "initial": "ABSENT_SOURCE_ONLY_DEPENDENCY",
+            "origin": "source-only crate copy; future Cargo-normalized testkit archive-root lock does not exist here yet",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "worker-own",
+            "path": "@bootstrap-worker-root@/subject-testkit/tests/fixtures/linux/worker/Cargo.lock",
+            "initial": "ABSENT_GENERATOR_OUTPUT",
+            "origin": "BOOT-FIRST-LOCK-worker only in worker assembly; no sibling seed",
+            "selected_resolution_lock": true
+          },
+          {
+            "role": "driver-own",
+            "path": "@bootstrap-worker-root@/subject-testkit/tests/fixtures/linux/driver/Cargo.lock",
+            "initial": "ABSENT_UNRELATED_NEW_WORKSPACE",
+            "origin": "BOOT-FIRST-LOCK-driver only in driver assembly; no sibling seed",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "consumer-own",
+            "path": null,
+            "initial": "ABSENT_NOT_IN_ASSEMBLY",
+            "origin": "BOOT-FIRST-LOCK-consumer only in consumer assembly; external consumer bundle lock filled only after review",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "linux-archive-root",
+            "path": null,
+            "initial": "ABSENT_NOT_IN_ASSEMBLY",
+            "origin": "Actual accepted Linux archive root lock, hash bound independently; never selected consumer own lock",
+            "selected_resolution_lock": false
+          }
+        ],
+        "initial_source_only": true,
+        "actual_map_hashes": null
+      },
+      "driver": {
+        "selected_manifest": "@bootstrap-driver-root@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml",
+        "locks": [
+          {
+            "role": "candidate-root-workspace",
+            "path": "@candidate@/Cargo.lock",
+            "initial": "PRESENT_EXTERNAL",
+            "origin": "ROOT-LOCK; actual reviewed candidate root digest, never copied/substituted as an own lock",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "assembly-container-root",
+            "path": "@bootstrap-driver-root@/Cargo.lock",
+            "initial": "ABSENT_NOT_WORKSPACE",
+            "origin": "container has no Cargo.toml",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "testkit-crate-root",
+            "path": "@bootstrap-driver-root@/subject-testkit/Cargo.lock",
+            "initial": "ABSENT_SOURCE_ONLY_DEPENDENCY",
+            "origin": "source-only crate copy; future Cargo-normalized testkit archive-root lock does not exist here yet",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "worker-own",
+            "path": "@bootstrap-driver-root@/subject-testkit/tests/fixtures/linux/worker/Cargo.lock",
+            "initial": "ABSENT_UNRELATED_NEW_WORKSPACE",
+            "origin": "BOOT-FIRST-LOCK-worker only in worker assembly; no sibling seed",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "driver-own",
+            "path": "@bootstrap-driver-root@/subject-testkit/tests/fixtures/linux/driver/Cargo.lock",
+            "initial": "ABSENT_GENERATOR_OUTPUT",
+            "origin": "BOOT-FIRST-LOCK-driver only in driver assembly; no sibling seed",
+            "selected_resolution_lock": true
+          },
+          {
+            "role": "consumer-own",
+            "path": null,
+            "initial": "ABSENT_NOT_IN_ASSEMBLY",
+            "origin": "BOOT-FIRST-LOCK-consumer only in consumer assembly; external consumer bundle lock filled only after review",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "linux-archive-root",
+            "path": null,
+            "initial": "ABSENT_NOT_IN_ASSEMBLY",
+            "origin": "Actual accepted Linux archive root lock, hash bound independently; never selected consumer own lock",
+            "selected_resolution_lock": false
+          }
+        ],
+        "initial_source_only": true,
+        "actual_map_hashes": null
+      },
+      "consumer": {
+        "selected_manifest": "@bootstrap-consumer-root@/consumer-assembly/consumer/Cargo.toml",
+        "locks": [
+          {
+            "role": "candidate-root-workspace",
+            "path": "@candidate@/Cargo.lock",
+            "initial": "PRESENT_EXTERNAL",
+            "origin": "ROOT-LOCK; actual reviewed candidate root digest, never copied/substituted as an own lock",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "assembly-container-root",
+            "path": "@bootstrap-consumer-root@/Cargo.lock",
+            "initial": "ABSENT_NOT_WORKSPACE",
+            "origin": "container has no Cargo.toml",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "testkit-crate-root",
+            "path": "@bootstrap-consumer-root@/materialized-testkit/subject-testkit/Cargo.lock",
+            "initial": "ABSENT_SOURCE_ONLY_DEPENDENCY",
+            "origin": "source-only crate copy; future Cargo-normalized testkit archive-root lock does not exist here yet",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "worker-own",
+            "path": "@bootstrap-consumer-root@/materialized-testkit/subject-testkit/tests/fixtures/linux/worker/Cargo.lock",
+            "initial": "ABSENT_UNRELATED_NEW_WORKSPACE",
+            "origin": "BOOT-FIRST-LOCK-worker only in worker assembly; no sibling seed",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "driver-own",
+            "path": "@bootstrap-consumer-root@/materialized-testkit/subject-testkit/tests/fixtures/linux/driver/Cargo.lock",
+            "initial": "ABSENT_UNRELATED_NEW_WORKSPACE",
+            "origin": "BOOT-FIRST-LOCK-driver only in driver assembly; no sibling seed",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "consumer-own",
+            "path": "@bootstrap-consumer-root@/consumer-assembly/consumer/Cargo.lock",
+            "initial": "ABSENT_GENERATOR_OUTPUT",
+            "origin": "BOOT-FIRST-LOCK-consumer only in consumer assembly; external consumer bundle lock filled only after review",
+            "selected_resolution_lock": true
+          },
+          {
+            "role": "linux-archive-root",
+            "path": "@bootstrap-consumer-root@/consumer-assembly/subject-linux/Cargo.lock",
+            "initial": "PRESENT_ARCHIVE_INPUT",
+            "origin": "Actual accepted Linux archive root lock, hash bound independently; never selected consumer own lock",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "source-only-materialization-container",
+            "path": "@bootstrap-consumer-root@/materialized-testkit/Cargo.lock",
+            "initial": "ABSENT_NOT_WORKSPACE",
+            "origin": "layout analog only; no COMPLETE materialization or root report claimed",
+            "selected_resolution_lock": false
+          },
+          {
+            "role": "consumer-assembly-container",
+            "path": "@bootstrap-consumer-root@/consumer-assembly/Cargo.lock",
+            "initial": "ABSENT_NOT_WORKSPACE",
+            "origin": "container has no Cargo.toml",
+            "selected_resolution_lock": false
+          }
+        ],
+        "initial_source_only": true,
+        "actual_map_hashes": null
+      }
+    },
+    "exact_generation_order": [
+      "ROOT-LOCK",
+      "BOOT-ASSEMBLE-worker",
+      "BOOT-FIRST-LOCK-worker",
+      "BOOT-ASSEMBLE-driver",
+      "BOOT-FIRST-LOCK-driver",
+      "BOOT-ASSEMBLE-consumer",
+      "BOOT-FIRST-LOCK-consumer",
+      "all-six-BOOT-GRAPH-rows",
+      "LOCK-REVIEW-AND-COPY",
+      "actual-two-Cargo-package-rows"
+    ],
+    "unrelated_absences": "Worker/driver manifests both exist in every whole-source testkit copy, but neither as-yet-uncreated unrelated own lock is required to resolve the selected own workspace. A lock generated in another independent assembly is not silently copied as a seed.",
+    "after_first_generation": "Only the selected own path in that assembly changes from ABSENT_GENERATOR_OUTPUT to PRESENT_GENERATED by its same-named pinned MSRV generator; freeze input and output map/hash and graph before later work.",
+    "review_and_copy_order": [
+      "After all three actual first locks and all six pinned-toolchain graph rows are reviewed, freeze each generated origin/hash.",
+      "Copy worker-own lock only from worker generator output into canonical worker/Cargo.lock and the exact matching worker subpath of the other source testkit assemblies.",
+      "Copy driver-own lock only from driver generator output into canonical driver/Cargo.lock and the exact matching driver subpath of the other source testkit assemblies.",
+      "Copy consumer-own lock only from consumer generator output into the reviewed independent consumer source bundle/own workspace, never into a testkit or Linux root-lock role.",
+      "Candidate root and one-member policy-projection root locks remain separately bound roles; Linux archive-root lock remains exact archive input. Source-only testkit crate-root lock remains absent; actual packaged testkit Cargo.lock is captured from each actual archive later, never seeded from another role.",
+      "Only then freeze canonical source/delivery lock bytes, package both actual archives, seal their own archive-root locks/inventories and use strict materialization requiring every declared frozen lock."
+    ],
+    "unexpected_map": "Unexpected existing/absent/hash/config/role input stops binding for a named C7 decision; never delete a lock or substitute an unrelated lock to fit the map.",
+    "strict_delivery": "No CLI/resolver exception: original four-option materializer requires archive-root+worker+driver frozen locks; verify-consumer additionally requires its actual independent consumer own lock and actual Linux archive-root lock.",
+    "actual_commands": "NOT_RUN"
+  }
+}

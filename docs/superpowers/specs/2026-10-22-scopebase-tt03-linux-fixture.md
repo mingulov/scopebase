@@ -1,6 +1,12 @@
 # TT03 owned Linux fixture and independent raw truth contract
 
-2026-10-22. **RATIFIED_DESIGN / task PLANNED / not PACKET_READY / no
+2026-10-22. **PROPOSED NARROW C7/DELIVERY AMENDMENT.** The new
+materializer/source-selection support is not ratified by the predecessor record
+below. It requires scoped review/root adoption and actual separate execution
+bindings. The unchanged r4 process/protocol/creator contract retains its
+predecessor ratification; no implementation or execution is admitted here.
+
+2026-10-22 predecessor. **RATIFIED_DESIGN / task PLANNED / not PACKET_READY / no
 implementation admission or runtime qualification.** The exact frozen r4 design
 is adopted by [the root design ratification](tt03-linux/design-ratification.json),
 SHA256 `ccde378b41f96e718628da7c780662c7fb490d81b59d08953b2db09410ac746d`.
@@ -11,11 +17,12 @@ The independent full r3 review index is
 the scoped r4 review index is
 `5f3c47c55eb83095815a59e6d71f43b811823125d404cfe8c154247ae573bf27`.
 R4 addresses TT03-R3-FINAL-01 through the single guard mapping; r1/r2/r3,
-all reviews and historical receipts remain unchanged. The support JSON is copied
-byte for byte from the ratified private assets. Its embedded draft/review status
-strings describe those frozen source artifacts; this administrative adoption
-header and exact root record establish current design status without changing
-any contract field, literal, bound, native choice or owner rule.
+all reviews and historical receipts remain unchanged. The original r4 support JSON remains copied
+byte for byte from the ratified private assets; the new materializer support is
+separately proposed by this amendment. Its embedded draft/review status
+strings describe those frozen source artifacts. The predecessor adoption header
+and exact r4 root record establish only the unchanged r4 design status; they do
+not ratify the new delivery/source-selection fields.
 
 Read the complete [protocol](tt03-linux/protocol.md),
 [creator-context contract](tt03-linux/creator-context.md),
@@ -24,6 +31,11 @@ Read the complete [protocol](tt03-linux/protocol.md),
 [contract-data.json](tt03-linux/contract-data.json),
 [verification plan](../plans/2026-10-22-scopebase-tt03-verification.md),
 [delivery contract](tt03-linux/delivery.md),
+[materializer contract](tt03-linux/materializer-contract.md),
+[exact delivery fields](tt03-linux/materializer-contract.json),
+[delivery command DAG](tt03-linux/materializer-command-dag.json),
+[delivery controls](tt03-linux/materializer-controls.json),
+[first-increment source facets](tt03-linux/materializer-source-selection.json),
 [literal-controls.json](tt03-linux/literal-controls.json),
 [repair map](tt03-linux/repair-map.md),
 [inputs.json](tt03-linux/inputs.json) and
@@ -34,7 +46,8 @@ actual unresolved architecture/support/result choice. Actual product/base/C7,
 provider/worker/consumer/archive, build/output, TT04 realms, EOF, operation audit,
 LX09 helper and separate final-index LX08 compatibility remain UNBOUND gates.
 Fourteen P and seven F rows, full TT03 and mapped-image exits stay open.
-Sixteen tasks remain accepted; this adoption adds zero accepted tasks.
+The integration checkpoint records seventeen accepted tasks; this proposed
+amendment adds zero accepted tasks and does not accept TT03.
 
 ## Adopted directions and remaining gates
 
@@ -364,13 +377,13 @@ reconstruct authority or release a lease.
 
 | Local gate | Exact proposal or pending binding |
 |---|---|
-| C1 | Existing admission is adopted. Actual TT03 source/destination/test subset and port receipt remain UNBOUND; source preservation uses r1's 15 scopes, with stopped-child baseline reference-only. |
+| C1 | Preserve immutable existing admission and all 15 observations. Proposed materializer-source-selection.json selects six ordinary facets, defers six denial/namespace facets, and leaves three references uncopied (two in-range plus ungranted stopped-child). TT03 consumer mapping supplement requires root adoption before selected port execution; actual destinations/receipts remain UNBOUND. |
 | C2 | Root ratified the exact r4 schemas/API/immutable publication details and packaged layout, including the single guard mapping. Actual TT03 source, guard and consumers remain UNBOUND. Accepted maintenance is bound above. |
 | C3 | Full-key Hello/handover, existing bodies/chunks/scripts and closed controls are ratified design. No message/exchange added; joint LX09 helper design compatibility remains UNBOUND. |
 | C4 | Exhaustive schemas, population-specific terminal reservations, 568 wire derivation, original-owner one-shot finalizer and constructor asset guard are ratified design. Actual allocation/native/failure measurements remain UNBOUND. |
 | C5 | Canonical LX08 r2 result/error/creator/EOF design is ratified. Actual product/provider/consumer/unit artifacts and separate joint compatibility binding remain UNBOUND. Raw fixture oracle stays distinct. |
 | C6 | Exact owned initial/nested/PID1 realms, denial/credential recipes, kernel/config artifacts and TT04 leases remain UNBOUND; required populations are fixed before discovery. |
-| C7 | Optional rustix=1.1.5 defaults-off std/fs/process/event/net/time and fixture-only libc=0.2.191 remain candidates. The separate 6aaf00 partial API compile proof is bound, while actual product manifests/locks/features/notices/archive/helper/runtime closure remain UNBOUND. Add only needed features after source/API checking; no dependency is implied by a report. |
+| C7 | Proposed selected union: optional target-Linux rustix=1.1.5 defaults-off std/fs/pipe/process/event/net/time/try_close; direct libc=0.2.191 belongs only to the explicit standalone worker. Ship literal .toml.in templates/frozen locks and strict explicit whole-subject materialization with an external caller-anchored inventory; first-lock source bootstrap is separate/root-owned. Isolated TT03 product/policy candidate and testkit-only policy projection preserve TT01 clients. Existing partial dead-caller proof does not compile or qualify this union. Actual base/source/manifests/locks/graphs/tools/archive/materializer/runtime/resources remain UNBOUND. |
 | C8 | Exact tracer/parser/canary/window/ABI/thread/spawn coverage and raw bounds remain UNBOUND. Zero visible effects cannot prove zero control calls. |
 
 The provider/worker writer owns new Linux module files, the sole protocol codec

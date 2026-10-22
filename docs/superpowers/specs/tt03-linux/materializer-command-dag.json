@@ -1,0 +1,4021 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_COMPLETE_DELIVERY_COMMAND_DAG_GRAMMAR",
+  "status": "PROPOSED_R2_THREE_REVIEW_FINDINGS_REPAIRED_ALL_NOT_RUN",
+  "packet_ready": false,
+  "notation": "@name@ is a mandatory future absolute path/digest/value binding; it is not shell expansion or an executable command. Freeze exact argv/cwd/env/resource/output and expected assertion before dispatch.",
+  "tools": {
+    "wrapper": "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+    "cargo-1.88.0": "actual pinned absolute path/hash/version UNBOUND; prior installed proof preserved",
+    "cargo-1.98.1": "actual pinned absolute path/hash/version UNBOUND; prior installed proof preserved",
+    "python": "actual supported absolute interpreter/stdlib identity UNBOUND"
+  },
+  "routing": "Every Cargo/resolver/native row uses common explicit absolute wrapper/resource and fresh targets/evidence; independent Python filesystem rows have bound own memory/wait/output/custody. No lease is acquired by this proposal.",
+  "binding_context": "Each archive producer and consuming compiler tuple has distinct concrete path/digest/runtime/target/result bindings. No marker resolves from ambient PATH/HOME/cwd.",
+  "template_manifest_drafts": [
+    "tt03-c7-binding-preparation-r1/drafts/testkit/Cargo.toml.proposed",
+    "tt03-c7-binding-preparation-r1/drafts/worker/Cargo.toml.in.proposed",
+    "tt03-c7-binding-preparation-r1/drafts/driver/Cargo.toml.in.proposed",
+    "tt03-c7-binding-preparation-r1/drafts/independent-consumer/Cargo.toml.proposed"
+  ],
+  "policy_projection": {
+    "members": [
+      "crates/scopebase-testkit"
+    ],
+    "fixture_members": [],
+    "minimal": [],
+    "default": [],
+    "supported_unions": [
+      [
+        "linux-fixtures"
+      ]
+    ],
+    "new_ordered_pair": [
+      {
+        "id": "tt03-files-admission",
+        "source": "tests/package-policy/fixtures/clients/tt03-files-admission.rs",
+        "default_features": false,
+        "features": [
+          "linux-fixtures"
+        ]
+      },
+      {
+        "id": "tt03-process-phase",
+        "source": "tests/package-policy/fixtures/clients/tt03-process-phase.rs",
+        "default_features": false,
+        "features": [
+          "linux-fixtures"
+        ]
+      }
+    ],
+    "preserved_TT01_pair": [
+      "tt01-inventory",
+      "tt01-selection"
+    ],
+    "runtime": "Pure public/default value/admission API only; no live session/worker/native action. First client cfg-gates optional imports and tests actual default API in minimal/default.",
+    "qualification": "Projection/policy itself is a helper input and no product qualification; actual candidate/source/archive/graph/client command results remain required."
+  },
+  "consumer_template_path_rule": "Only independent consumer testkit dependency path changes from ../subject-testkit to ../../materialized-testkit/subject-testkit. Linux remains ../subject-linux. Fixed basenames/direct siblings U/materialized-testkit and U/consumer-assembly; original driver ../../../.. unchanged.",
+  "rows": [
+    {
+      "id": "SOURCE-ADOPTION",
+      "depends_on": [],
+      "kind": "CONTROLLER_GATE",
+      "operation": "Adopt exact narrow design/source selection and immutable TT03 task/subset supplement; preserve original grants/pins/reference/deferred observations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No source copying before supplement; no stopped-child/denial/namespace substitution."
+    },
+    {
+      "id": "CANDIDATE-BIND",
+      "depends_on": [
+        "SOURCE-ADOPTION"
+      ],
+      "kind": "CONTROLLER_GATE",
+      "operation": "Bind clean isolated TT03 product/policy candidate/base and current accepted TT02 API; bind complete actual sources/templates/corpus/notices, config/cache/tools/resource custody.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No moving BP03 candidate input; no speculative LX08/prepared-response API."
+    },
+    {
+      "id": "ROOT-LOCK",
+      "depends_on": [
+        "CANDIDATE-BIND"
+      ],
+      "kind": "ROOT_OWNED_LOCK_ACTION",
+      "operation": "Review root manifest graph delta; if generation needed, pinned MSRV offline generator produces only candidate root lock, then review graph/checksums/features. Otherwise bind exact unchanged root lock.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "generate-lockfile",
+        "--offline",
+        "--manifest-path",
+        "@candidate@/Cargo.toml"
+      ],
+      "expected": "Generation is a deliberate initial/resolution action, not a locked qualification run or old lock reuse."
+    },
+    {
+      "id": "POLICY-PROJECTION-ASSEMBLE",
+      "depends_on": [
+        "CANDIDATE-BIND",
+        "ROOT-LOCK"
+      ],
+      "kind": "ROOT_EXCLUSIVE_FILE_ASSEMBLY",
+      "operation": "Create fresh one-member testkit workspace projection from exact candidate source; explicit root resolver2 members=[crates/scopebase-testkit], isolated affected policy, new cfg-gated pair and preserved separate TT01 pair. Freeze complete copy/path/member map.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Projection is a helper input; its existence is not product qualification."
+    },
+    {
+      "id": "POLICY-PROJECTION-LOCK",
+      "depends_on": [
+        "POLICY-PROJECTION-ASSEMBLE"
+      ],
+      "kind": "ROOT_OWNED_LOCK_ACTION",
+      "operation": "Generate/review the projection own lock and graph with frozen offline inputs; never pass the four-member root as a one-member declared policy.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "generate-lockfile",
+        "--offline",
+        "--manifest-path",
+        "@policy-projection@/Cargo.toml"
+      ]
+    },
+    {
+      "id": "BOOT-ASSEMBLE-worker",
+      "depends_on": [
+        "CANDIDATE-BIND",
+        "ROOT-LOCK"
+      ],
+      "kind": "ROOT_EXCLUSIVE_SOURCE_ASSEMBLY",
+      "operation": "Create only this fresh independent source assembly from first_lock_bootstrap.maps.worker, recording every PRESENT/ABSENT role exactly; generated manifests use the reviewed bytes and consumer uses the sibling-container path layout. No undeclared sibling lock is a seed.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Not delivered materializer, no archive/installed qualification, no placeholder source.",
+      "bootstrap_map": "materializer-contract.json:first_lock_bootstrap.maps.worker"
+    },
+    {
+      "id": "BOOT-FIRST-LOCK-worker",
+      "depends_on": [
+        "BOOT-ASSEMBLE-worker"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Generate only this selected own initially absent lock using pinned MSRV/offline inputs, in the explicit worker->driver->consumer order. Do not require/copy an unrelated new own lock; preserve full initial map and unique output origin.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "generate-lockfile",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-worker-manifest@"
+      ]
+    },
+    {
+      "id": "BOOT-ASSEMBLE-driver",
+      "depends_on": [
+        "CANDIDATE-BIND",
+        "ROOT-LOCK"
+      ],
+      "kind": "ROOT_EXCLUSIVE_SOURCE_ASSEMBLY",
+      "operation": "Create only this fresh independent source assembly from first_lock_bootstrap.maps.driver, recording every PRESENT/ABSENT role exactly; generated manifests use the reviewed bytes and consumer uses the sibling-container path layout. No undeclared sibling lock is a seed.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Not delivered materializer, no archive/installed qualification, no placeholder source.",
+      "bootstrap_map": "materializer-contract.json:first_lock_bootstrap.maps.driver"
+    },
+    {
+      "id": "BOOT-FIRST-LOCK-driver",
+      "depends_on": [
+        "BOOT-ASSEMBLE-driver",
+        "BOOT-FIRST-LOCK-worker"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Generate only this selected own initially absent lock using pinned MSRV/offline inputs, in the explicit worker->driver->consumer order. Do not require/copy an unrelated new own lock; preserve full initial map and unique output origin.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "generate-lockfile",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-driver-manifest@"
+      ]
+    },
+    {
+      "id": "BOOT-ASSEMBLE-consumer",
+      "depends_on": [
+        "CANDIDATE-BIND",
+        "ROOT-LOCK"
+      ],
+      "kind": "ROOT_EXCLUSIVE_SOURCE_ASSEMBLY",
+      "operation": "Create only this fresh independent source assembly from first_lock_bootstrap.maps.consumer, recording every PRESENT/ABSENT role exactly; generated manifests use the reviewed bytes and consumer uses the sibling-container path layout. No undeclared sibling lock is a seed.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Not delivered materializer, no archive/installed qualification, no placeholder source.",
+      "bootstrap_map": "materializer-contract.json:first_lock_bootstrap.maps.consumer"
+    },
+    {
+      "id": "BOOT-FIRST-LOCK-consumer",
+      "depends_on": [
+        "BOOT-ASSEMBLE-consumer",
+        "BOOT-FIRST-LOCK-driver"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Generate only this selected own initially absent lock using pinned MSRV/offline inputs, in the explicit worker->driver->consumer order. Do not require/copy an unrelated new own lock; preserve full initial map and unique output origin.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "generate-lockfile",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-consumer-manifest@"
+      ]
+    },
+    {
+      "id": "BOOT-GRAPH-worker-1.88.0",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-worker"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-worker-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "BOOT-GRAPH-worker-1.98.1",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-worker"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-worker-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "BOOT-GRAPH-driver-1.88.0",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-driver"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-driver-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "BOOT-GRAPH-driver-1.98.1",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-driver"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-driver-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "BOOT-GRAPH-consumer-1.88.0",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-consumer"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-consumer-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "BOOT-GRAPH-consumer-1.98.1",
+      "depends_on": [
+        "BOOT-FIRST-LOCK-consumer"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture exact packages/checksums/features/target/backend/build inputs and preserve lock bytes before/after.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@bootstrap-consumer-manifest@"
+      ],
+      "expected": "Unexpected graph/backend is C7 stop. Metadata alone is not actual provider compile proof."
+    },
+    {
+      "id": "LOCK-REVIEW-AND-COPY",
+      "depends_on": [
+        "BOOT-GRAPH-worker-1.88.0",
+        "BOOT-GRAPH-worker-1.98.1",
+        "BOOT-GRAPH-driver-1.88.0",
+        "BOOT-GRAPH-driver-1.98.1",
+        "BOOT-GRAPH-consumer-1.88.0",
+        "BOOT-GRAPH-consumer-1.98.1",
+        "POLICY-PROJECTION-LOCK"
+      ],
+      "kind": "CONTROLLER_GATE_AND_FILE_COPY",
+      "operation": "Apply first_lock_bootstrap.review_and_copy_order only after all actual own first locks and six graph rows exist and pass review; freeze each exact own origin/hash, preserve root/testkit/Linux roles and copy no substitute seed.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Three independent own workspace locks; all later commands --locked --offline; no resolver in materializer."
+    },
+    {
+      "id": "SOURCE-minimal-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--no-default-features",
+        "--target-dir",
+        "@fresh-source-minimal-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-default-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-source-default-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-linux-fixtures-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--no-default-features",
+        "--features",
+        "linux-fixtures",
+        "--target-dir",
+        "@fresh-source-linux-fixtures-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-minimal-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--no-default-features",
+        "--target-dir",
+        "@fresh-source-minimal-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-default-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-source-default-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-linux-fixtures-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Affected actual testkit source library/pure protocol tests, no automatic worker/native process.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--no-default-features",
+        "--features",
+        "linux-fixtures",
+        "--target-dir",
+        "@fresh-source-linux-fixtures-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "AFFECTED-ARCHIVE-POLICY",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "POLICY-PROJECTION-LOCK"
+      ],
+      "kind": "LEASED_HELPER",
+      "operation": "Run actual supported helper on the explicit one-member policy projection and reviewed TT03 pair; preserve old TT01 source/evidence separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@python@",
+        "@candidate@/tools/build/check_features.py",
+        "--manifest",
+        "@policy-projection@/Cargo.toml",
+        "--matrix",
+        "@projection-policy@",
+        "--output-dir",
+        "@fresh-policy-output@",
+        "--report",
+        "@fresh-policy-report@"
+      ],
+      "expected": "Six testkit feature/compiler cells have actual source/archive/client evidence; helper-generated union does not replace independently locked native consumers."
+    },
+    {
+      "id": "SOURCE-BUILD-worker-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-worker-manifest@",
+        "--bins",
+        "--target-dir",
+        "@fresh-source-worker-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-BUILD-worker-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-worker-manifest@",
+        "--bins",
+        "--target-dir",
+        "@fresh-source-worker-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-BUILD-driver-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-driver-manifest@",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-source-driver-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-BUILD-driver-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-driver-manifest@",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-source-driver-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-BUILD-consumer-1.88.0",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-consumer-manifest@",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-source-consumer-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "SOURCE-BUILD-consumer-1.98.1",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual independently locked source-only bootstrap build; bind actual linked subject/version/features/backend, not archive qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@bootstrap-consumer-manifest@",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-source-consumer-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-LIST",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "AFFECTED-ARCHIVE-POLICY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1",
+        "SOURCE-BUILD-worker-1.88.0",
+        "SOURCE-BUILD-worker-1.98.1",
+        "SOURCE-BUILD-driver-1.88.0",
+        "SOURCE-BUILD-driver-1.98.1",
+        "SOURCE-BUILD-consumer-1.88.0",
+        "SOURCE-BUILD-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual candidate package --list; keep distinct from final archive membership.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-package-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-PACKAGE",
+      "depends_on": [
+        "A1.88.0-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual candidate archive with frozen source/templates/workspace locks; no nested actual Cargo.toml.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-package-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-EXTRACT-AND-MEMBERSHIP",
+      "depends_on": [
+        "A1.88.0-PACKAGE"
+      ],
+      "kind": "CONTROLLER_BOUNDED_ARCHIVE_INSPECTION",
+      "operation": "Measure actual archive digest/length; safely extract single regular-file package prefix to fresh owned root; compare complete actual members against reviewed source-to-normalized-Cargo mapping, including Cargo.toml.orig/root lock/templates/two workspace locks. Preserve original source hashes.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Do not generate approved inventory from an unapproved arbitrary directory; no links/nonregular/unknown archive members."
+    },
+    {
+      "id": "A1.88.0-NESTED-NEGATIVE-ASSEMBLY",
+      "depends_on": [
+        "A1.88.0-EXTRACT-AND-MEMBERSHIP"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CONTROL_COPY",
+      "operation": "In a separate exact private control copy introduce real nested worker/driver Cargo.toml with the reviewed literal template bytes; freeze complete control map. Keep positive candidate/extracted source unchanged.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.88.0-NESTED-NEGATIVE-LIST",
+      "depends_on": [
+        "A1.88.0-NESTED-NEGATIVE-ASSEMBLY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture actual negative package-list output separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@negative-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-negative-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-NESTED-NEGATIVE-PACKAGE",
+      "depends_on": [
+        "A1.88.0-NESTED-NEGATIVE-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Build actual negative control archive; this is not candidate publication or qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@negative-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-negative-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-NESTED-NEGATIVE-MEMBERSHIP",
+      "depends_on": [
+        "A1.88.0-NESTED-NEGATIVE-PACKAGE"
+      ],
+      "kind": "CONTROLLER_INDEPENDENT_MEMBERSHIP_ASSERTION",
+      "operation": "Safely extract negative archive to fresh bounded root and assert the expected subtree loss fails the exact membership predicate; preserve actual reached mismatch and setup success.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "C7DEL-M20 intended semantic negative; setup failure is not sensitivity evidence."
+    },
+    {
+      "id": "A1.88.0-RESTORED-TEMPLATE-ASSEMBLY",
+      "depends_on": [
+        "A1.88.0-NESTED-NEGATIVE-MEMBERSHIP"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CONTROL_COPY",
+      "operation": "Create fresh restored positive control copy with templates only and frozen original source/locks; no actual nested Cargo.toml.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.88.0-RESTORED-TEMPLATE-LIST",
+      "depends_on": [
+        "A1.88.0-RESTORED-TEMPLATE-ASSEMBLY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture actual restored list independently.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@restored-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-restored-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-RESTORED-TEMPLATE-PACKAGE",
+      "depends_on": [
+        "A1.88.0-RESTORED-TEMPLATE-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Package exact restored template positive independently.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@restored-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-restored-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-RESTORED-TEMPLATE-MEMBERSHIP",
+      "depends_on": [
+        "A1.88.0-RESTORED-TEMPLATE-PACKAGE"
+      ],
+      "kind": "CONTROLLER_BOUNDED_ARCHIVE_INSPECTION",
+      "operation": "Safely extract restored actual archive and assert every expected source/template/workspace-lock/corpus member returned; source before/after unchanged.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Complete restored valid twin; list output alone cannot certify archive bytes."
+    },
+    {
+      "id": "A1.88.0-SEAL-COMPANION",
+      "depends_on": [
+        "A1.88.0-EXTRACT-AND-MEMBERSHIP",
+        "A1.88.0-RESTORED-TEMPLATE-MEMBERSHIP"
+      ],
+      "kind": "PACKAGER_COMPANION_ACTION",
+      "operation": "Emit exact version1 external companion from the approved actual archive member map with fixed source archive binding, exact normalized/original/lock/template records, intended subject descriptor, recomputed totals/limits; externally freeze companion digest.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No companion inside archive, no self-hash cycle, all actual leaf/hash values bound."
+    },
+    {
+      "id": "A1.88.0-DELIVERED-ORACLE",
+      "depends_on": [
+        "A1.88.0-SEAL-COMPANION"
+      ],
+      "kind": "PYTHON_NO_FIXTURE_SUBPROCESS",
+      "operation": "Run actual independent raw/wire oracle tests outside checkout from this extracted delivered package.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "@extracted@/tests/fixtures/linux",
+        "-p",
+        "test_oracle.py",
+        "-v"
+      ]
+    },
+    {
+      "id": "A1.88.0-DELIVERED-MATERIALIZER-CONTROLS",
+      "depends_on": [
+        "A1.88.0-SEAL-COMPANION"
+      ],
+      "kind": "PYTHON_NO_FIXTURE_SUBPROCESS",
+      "operation": "Run C7DEL-M01..M18 with actual delivered subject/anchor, literal independent expectations and finite reached fault/restored populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "test",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@fresh-controls-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-MATERIALIZE-worker-driver",
+      "depends_on": [
+        "A1.88.0-SEAL-COMPANION",
+        "A1.88.0-DELIVERED-MATERIALIZER-CONTROLS",
+        "A1.88.0-DELIVERED-ORACLE"
+      ],
+      "kind": "STRICT_DELIVERED_PYTHON_COPY",
+      "operation": "Fresh previously absent root; accept only normal zero exit + exact COMPLETE map and external report digest.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/materialize.py",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@materialized-worker-driver-1.88.0@"
+      ],
+      "expected": "No lock generation, substitution, code execution or old output reuse; partial remains caller-owned and blocks descendants."
+    },
+    {
+      "id": "A1.88.0-MATERIALIZE-consumer",
+      "depends_on": [
+        "A1.88.0-SEAL-COMPANION",
+        "A1.88.0-DELIVERED-MATERIALIZER-CONTROLS",
+        "A1.88.0-DELIVERED-ORACLE"
+      ],
+      "kind": "STRICT_DELIVERED_PYTHON_COPY",
+      "operation": "Fresh previously absent root; accept only normal zero exit + exact COMPLETE map and external report digest. Bind its output basename exactly materialized-testkit under the fresh caller-owned consumer parent U; keep its sealed root at exactly the original two members.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/materialize.py",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@materialized-consumer-1.88.0@"
+      ],
+      "expected": "No lock generation, substitution, code execution or old output reuse; partial remains caller-owned and blocks descendants."
+    },
+    {
+      "id": "A1.88.0-CONSUMER-SEALED-ROOT-CHECK",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-consumer"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Check original exact two-member sealed root before consumer binding; no extra siblings are permitted.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-CONSUMER-INVENTORY-SEAL",
+      "depends_on": [
+        "A1.88.0-CONSUMER-SEALED-ROOT-CHECK",
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "CONTROLLER_EXPECTED_CONSUMER_BINDING",
+      "operation": "Seal closed consumer-inventory-v1 from reviewed real consumer bundle/manifest/own lock and actual accepted Linux archive, plus original live materialization source/inventory/report/subject identities. Descriptor outside both roots, independent caller digest; no receipt cycle.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.88.0-CONSUMER-ARCHIVE-ASSEMBLY",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-consumer",
+        "LOCK-REVIEW-AND-COPY",
+        "A1.88.0-CONSUMER-INVENTORY-SEAL"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CLIENT_ASSEMBLY",
+      "operation": "Reserve fresh U/consumer-assembly outside original U/materialized-testkit; copy only approved consumer bundle to consumer/ and actual Linux subject to subject-linux/. Preserve sealed materialized root unchanged. Capture exact source/destination identities/maps and create only consumer-assembly-report.json as the third root member. Consumer manifest paths ../../materialized-testkit/subject-testkit and ../subject-linux; no report-as-copy substitution.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Actual accepted APIs HeldFile/from_file/open/read_all/cooperative controls/parse_maps/parse_mountinfo; independent assertions; not worker/policy pair/mocked driver return values. Closed assembly receipt/consumer descriptor bind actual inputs; no unknown root siblings."
+    },
+    {
+      "id": "A1.88.0-CONSUMER-ASSEMBLY-RECEIPT-SEAL",
+      "depends_on": [
+        "A1.88.0-CONSUMER-ARCHIVE-ASSEMBLY"
+      ],
+      "kind": "CONTROLLER_ASSEMBLY_RECEIPT_SEAL",
+      "operation": "Externally hash the complete closed consumer-assembly-report.json after bounded exclusive copy; no self hash, no code/helper/compiler/native execution. Retain original assembly/source custody.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.88.0-PRECHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-worker-1.88.0",
+      "depends_on": [
+        "A1.88.0-PRECHECK-worker-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-worker-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-worker-1.88.0",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-worker-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml",
+        "--bins",
+        "--target-dir",
+        "@fresh-A1.88.0-worker-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.88.0-BUILD-worker-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-PRECHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-driver-1.88.0",
+      "depends_on": [
+        "A1.88.0-PRECHECK-driver-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-driver-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-driver-1.88.0",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-driver-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-A1.88.0-driver-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.88.0-BUILD-driver-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-PRECHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.88.0-CONSUMER-ARCHIVE-ASSEMBLY",
+        "A1.88.0-CONSUMER-ASSEMBLY-RECEIPT-SEAL"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-consumer-1.88.0",
+      "depends_on": [
+        "A1.88.0-PRECHECK-consumer-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@consumer-assembly-1.88.0@/consumer/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-consumer-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-consumer-1.88.0",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-consumer-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@consumer-assembly-1.88.0@/consumer/Cargo.toml",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-A1.88.0-consumer-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.88.0-BUILD-consumer-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BIND-NATIVE-DRIVER-1.88.0",
+      "depends_on": [
+        "A1.88.0-POSTCHECK-worker-1.88.0",
+        "A1.88.0-POSTCHECK-driver-1.88.0",
+        "A1.88.0-POSTCHECK-consumer-1.88.0"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Actual image A/B and driver/runtime/input/catalog/oracle bindings.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-driver@",
+        "--fixture-inputs",
+        "@preselected-driver-fixture-inputs@",
+        "--output",
+        "@fresh-A1.88.0-1.88.0-driver-bindings@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BIND-NATIVE-CLIENT-1.88.0",
+      "depends_on": [
+        "A1.88.0-POSTCHECK-worker-1.88.0",
+        "A1.88.0-POSTCHECK-driver-1.88.0",
+        "A1.88.0-POSTCHECK-consumer-1.88.0"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Independent actual Linux client contract binds its own measured subject/adapter/runtime and preselected inputs.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-consumer-1.88.0@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-linux-client@",
+        "--fixture-inputs",
+        "@preselected-client-fixture-inputs@",
+        "--output",
+        "@fresh-A1.88.0-1.88.0-client-bindings@"
+      ]
+    },
+    {
+      "id": "A1.88.0-NATIVE-RESOURCE-GATE-1.88.0",
+      "depends_on": [
+        "A1.88.0-BIND-NATIVE-DRIVER-1.88.0",
+        "A1.88.0-BIND-NATIVE-CLIENT-1.88.0"
+      ],
+      "kind": "CONTROLLER_RESOURCE_GATE",
+      "operation": "Bind ordinary native root/original owners/lease/bounds/actual runtime closure and all preselected P populations/active controls. F/TT04/EOF/audit/LX09/LX08 joint remain separate required later gates.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No native admission from this document; unavailable required ordinary cells remain incomplete."
+    },
+    {
+      "id": "A1.88.0-ACTUAL-DRIVER-1.88.0",
+      "depends_on": [
+        "A1.88.0-NATIVE-RESOURCE-GATE-1.88.0"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run actual driver with original r4 constructor/assets/runner/finalizer/retirement evidence and all required ordinary populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-driver@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@driver-contract@",
+        "--fixture-manifest",
+        "@driver-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-fixture-root@",
+        "--output",
+        "@fresh-driver-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-LINUX-CLIENT-1.88.0",
+      "depends_on": [
+        "A1.88.0-NATIVE-RESOURCE-GATE-1.88.0"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run independently wired actual Linux client with its own actual subject/adapter/assertions/custody; consumer CLI binds the same catalog/contract/fixture/image/root/output/execution-ms option grammar as driver.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-linux-client@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@client-contract@",
+        "--fixture-manifest",
+        "@client-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-client-fixture-root@",
+        "--output",
+        "@fresh-client-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ],
+      "expected": "Independent held-file/read/control/parser assertions and wrong-copy/feature/helper-digest/reopened-path controls, actual cleanup before semantic assertions."
+    },
+    {
+      "id": "A1.88.0-PRECHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-worker-1.98.1",
+      "depends_on": [
+        "A1.88.0-PRECHECK-worker-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-worker-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-worker-1.98.1",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-worker-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml",
+        "--bins",
+        "--target-dir",
+        "@fresh-A1.88.0-worker-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.88.0-BUILD-worker-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-PRECHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.88.0-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-driver-1.98.1",
+      "depends_on": [
+        "A1.88.0-PRECHECK-driver-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-driver-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-driver-1.98.1",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-driver-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-A1.88.0-driver-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.88.0-BUILD-driver-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.88.0@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.88.0-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.88.0-PRECHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.88.0-CONSUMER-ARCHIVE-ASSEMBLY",
+        "A1.88.0-CONSUMER-ASSEMBLY-RECEIPT-SEAL"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-GRAPH-consumer-1.98.1",
+      "depends_on": [
+        "A1.88.0-PRECHECK-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@consumer-assembly-1.88.0@/consumer/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.88.0-LOCKCHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.88.0-ACTUAL-GRAPH-consumer-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BUILD-consumer-1.98.1",
+      "depends_on": [
+        "A1.88.0-LOCKCHECK-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@consumer-assembly-1.88.0@/consumer/Cargo.toml",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-A1.88.0-consumer-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.88.0-POSTCHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.88.0-BUILD-consumer-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.88.0@",
+        "--report-sha256",
+        "@materialized-consumer-1.88.0-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.88.0@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.88.0-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.88.0@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.88.0@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.88.0-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.88.0@",
+        "--linux-package-root",
+        "@linux-extracted-1.88.0@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BIND-NATIVE-DRIVER-1.98.1",
+      "depends_on": [
+        "A1.88.0-POSTCHECK-worker-1.98.1",
+        "A1.88.0-POSTCHECK-driver-1.98.1",
+        "A1.88.0-POSTCHECK-consumer-1.98.1"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Actual image A/B and driver/runtime/input/catalog/oracle bindings.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-worker-driver-1.88.0@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-driver@",
+        "--fixture-inputs",
+        "@preselected-driver-fixture-inputs@",
+        "--output",
+        "@fresh-A1.88.0-1.98.1-driver-bindings@"
+      ]
+    },
+    {
+      "id": "A1.88.0-BIND-NATIVE-CLIENT-1.98.1",
+      "depends_on": [
+        "A1.88.0-POSTCHECK-worker-1.98.1",
+        "A1.88.0-POSTCHECK-driver-1.98.1",
+        "A1.88.0-POSTCHECK-consumer-1.98.1"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Independent actual Linux client contract binds its own measured subject/adapter/runtime and preselected inputs.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-consumer-1.88.0@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-linux-client@",
+        "--fixture-inputs",
+        "@preselected-client-fixture-inputs@",
+        "--output",
+        "@fresh-A1.88.0-1.98.1-client-bindings@"
+      ]
+    },
+    {
+      "id": "A1.88.0-NATIVE-RESOURCE-GATE-1.98.1",
+      "depends_on": [
+        "A1.88.0-BIND-NATIVE-DRIVER-1.98.1",
+        "A1.88.0-BIND-NATIVE-CLIENT-1.98.1"
+      ],
+      "kind": "CONTROLLER_RESOURCE_GATE",
+      "operation": "Bind ordinary native root/original owners/lease/bounds/actual runtime closure and all preselected P populations/active controls. F/TT04/EOF/audit/LX09/LX08 joint remain separate required later gates.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No native admission from this document; unavailable required ordinary cells remain incomplete."
+    },
+    {
+      "id": "A1.88.0-ACTUAL-DRIVER-1.98.1",
+      "depends_on": [
+        "A1.88.0-NATIVE-RESOURCE-GATE-1.98.1"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run actual driver with original r4 constructor/assets/runner/finalizer/retirement evidence and all required ordinary populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-driver@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@driver-contract@",
+        "--fixture-manifest",
+        "@driver-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-fixture-root@",
+        "--output",
+        "@fresh-driver-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ]
+    },
+    {
+      "id": "A1.88.0-ACTUAL-LINUX-CLIENT-1.98.1",
+      "depends_on": [
+        "A1.88.0-NATIVE-RESOURCE-GATE-1.98.1"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run independently wired actual Linux client with its own actual subject/adapter/assertions/custody; consumer CLI binds the same catalog/contract/fixture/image/root/output/execution-ms option grammar as driver.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-linux-client@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@client-contract@",
+        "--fixture-manifest",
+        "@client-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-client-fixture-root@",
+        "--output",
+        "@fresh-client-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ],
+      "expected": "Independent held-file/read/control/parser assertions and wrong-copy/feature/helper-digest/reopened-path controls, actual cleanup before semantic assertions."
+    },
+    {
+      "id": "A1.98.1-LIST",
+      "depends_on": [
+        "LOCK-REVIEW-AND-COPY",
+        "AFFECTED-ARCHIVE-POLICY",
+        "SOURCE-minimal-1.88.0",
+        "SOURCE-default-1.88.0",
+        "SOURCE-linux-fixtures-1.88.0",
+        "SOURCE-minimal-1.98.1",
+        "SOURCE-default-1.98.1",
+        "SOURCE-linux-fixtures-1.98.1",
+        "SOURCE-BUILD-worker-1.88.0",
+        "SOURCE-BUILD-worker-1.98.1",
+        "SOURCE-BUILD-driver-1.88.0",
+        "SOURCE-BUILD-driver-1.98.1",
+        "SOURCE-BUILD-consumer-1.88.0",
+        "SOURCE-BUILD-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual candidate package --list; keep distinct from final archive membership.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-package-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-PACKAGE",
+      "depends_on": [
+        "A1.98.1-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual candidate archive with frozen source/templates/workspace locks; no nested actual Cargo.toml.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@candidate-testkit-manifest@",
+        "--target-dir",
+        "@fresh-package-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-EXTRACT-AND-MEMBERSHIP",
+      "depends_on": [
+        "A1.98.1-PACKAGE"
+      ],
+      "kind": "CONTROLLER_BOUNDED_ARCHIVE_INSPECTION",
+      "operation": "Measure actual archive digest/length; safely extract single regular-file package prefix to fresh owned root; compare complete actual members against reviewed source-to-normalized-Cargo mapping, including Cargo.toml.orig/root lock/templates/two workspace locks. Preserve original source hashes.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Do not generate approved inventory from an unapproved arbitrary directory; no links/nonregular/unknown archive members."
+    },
+    {
+      "id": "A1.98.1-NESTED-NEGATIVE-ASSEMBLY",
+      "depends_on": [
+        "A1.98.1-EXTRACT-AND-MEMBERSHIP"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CONTROL_COPY",
+      "operation": "In a separate exact private control copy introduce real nested worker/driver Cargo.toml with the reviewed literal template bytes; freeze complete control map. Keep positive candidate/extracted source unchanged.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.98.1-NESTED-NEGATIVE-LIST",
+      "depends_on": [
+        "A1.98.1-NESTED-NEGATIVE-ASSEMBLY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture actual negative package-list output separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@negative-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-negative-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-NESTED-NEGATIVE-PACKAGE",
+      "depends_on": [
+        "A1.98.1-NESTED-NEGATIVE-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Build actual negative control archive; this is not candidate publication or qualification.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@negative-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-negative-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-NESTED-NEGATIVE-MEMBERSHIP",
+      "depends_on": [
+        "A1.98.1-NESTED-NEGATIVE-PACKAGE"
+      ],
+      "kind": "CONTROLLER_INDEPENDENT_MEMBERSHIP_ASSERTION",
+      "operation": "Safely extract negative archive to fresh bounded root and assert the expected subtree loss fails the exact membership predicate; preserve actual reached mismatch and setup success.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "C7DEL-M20 intended semantic negative; setup failure is not sensitivity evidence."
+    },
+    {
+      "id": "A1.98.1-RESTORED-TEMPLATE-ASSEMBLY",
+      "depends_on": [
+        "A1.98.1-NESTED-NEGATIVE-MEMBERSHIP"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CONTROL_COPY",
+      "operation": "Create fresh restored positive control copy with templates only and frozen original source/locks; no actual nested Cargo.toml.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.98.1-RESTORED-TEMPLATE-LIST",
+      "depends_on": [
+        "A1.98.1-RESTORED-TEMPLATE-ASSEMBLY"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Capture actual restored list independently.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--list",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@restored-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-restored-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-RESTORED-TEMPLATE-PACKAGE",
+      "depends_on": [
+        "A1.98.1-RESTORED-TEMPLATE-LIST"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Package exact restored template positive independently.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "package",
+        "--locked",
+        "--offline",
+        "--no-verify",
+        "--manifest-path",
+        "@restored-control-testkit-manifest@",
+        "--target-dir",
+        "@fresh-restored-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-RESTORED-TEMPLATE-MEMBERSHIP",
+      "depends_on": [
+        "A1.98.1-RESTORED-TEMPLATE-PACKAGE"
+      ],
+      "kind": "CONTROLLER_BOUNDED_ARCHIVE_INSPECTION",
+      "operation": "Safely extract restored actual archive and assert every expected source/template/workspace-lock/corpus member returned; source before/after unchanged.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Complete restored valid twin; list output alone cannot certify archive bytes."
+    },
+    {
+      "id": "A1.98.1-SEAL-COMPANION",
+      "depends_on": [
+        "A1.98.1-EXTRACT-AND-MEMBERSHIP",
+        "A1.98.1-RESTORED-TEMPLATE-MEMBERSHIP"
+      ],
+      "kind": "PACKAGER_COMPANION_ACTION",
+      "operation": "Emit exact version1 external companion from the approved actual archive member map with fixed source archive binding, exact normalized/original/lock/template records, intended subject descriptor, recomputed totals/limits; externally freeze companion digest.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No companion inside archive, no self-hash cycle, all actual leaf/hash values bound."
+    },
+    {
+      "id": "A1.98.1-DELIVERED-ORACLE",
+      "depends_on": [
+        "A1.98.1-SEAL-COMPANION"
+      ],
+      "kind": "PYTHON_NO_FIXTURE_SUBPROCESS",
+      "operation": "Run actual independent raw/wire oracle tests outside checkout from this extracted delivered package.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "@extracted@/tests/fixtures/linux",
+        "-p",
+        "test_oracle.py",
+        "-v"
+      ]
+    },
+    {
+      "id": "A1.98.1-DELIVERED-MATERIALIZER-CONTROLS",
+      "depends_on": [
+        "A1.98.1-SEAL-COMPANION"
+      ],
+      "kind": "PYTHON_NO_FIXTURE_SUBPROCESS",
+      "operation": "Run C7DEL-M01..M18 with actual delivered subject/anchor, literal independent expectations and finite reached fault/restored populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "test",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@fresh-controls-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-MATERIALIZE-worker-driver",
+      "depends_on": [
+        "A1.98.1-SEAL-COMPANION",
+        "A1.98.1-DELIVERED-MATERIALIZER-CONTROLS",
+        "A1.98.1-DELIVERED-ORACLE"
+      ],
+      "kind": "STRICT_DELIVERED_PYTHON_COPY",
+      "operation": "Fresh previously absent root; accept only normal zero exit + exact COMPLETE map and external report digest.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/materialize.py",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@materialized-worker-driver-1.98.1@"
+      ],
+      "expected": "No lock generation, substitution, code execution or old output reuse; partial remains caller-owned and blocks descendants."
+    },
+    {
+      "id": "A1.98.1-MATERIALIZE-consumer",
+      "depends_on": [
+        "A1.98.1-SEAL-COMPANION",
+        "A1.98.1-DELIVERED-MATERIALIZER-CONTROLS",
+        "A1.98.1-DELIVERED-ORACLE"
+      ],
+      "kind": "STRICT_DELIVERED_PYTHON_COPY",
+      "operation": "Fresh previously absent root; accept only normal zero exit + exact COMPLETE map and external report digest. Bind its output basename exactly materialized-testkit under the fresh caller-owned consumer parent U; keep its sealed root at exactly the original two members.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/materialize.py",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--output",
+        "@materialized-consumer-1.98.1@"
+      ],
+      "expected": "No lock generation, substitution, code execution or old output reuse; partial remains caller-owned and blocks descendants."
+    },
+    {
+      "id": "A1.98.1-CONSUMER-SEALED-ROOT-CHECK",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-consumer"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Check original exact two-member sealed root before consumer binding; no extra siblings are permitted.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-CONSUMER-INVENTORY-SEAL",
+      "depends_on": [
+        "A1.98.1-CONSUMER-SEALED-ROOT-CHECK",
+        "LOCK-REVIEW-AND-COPY"
+      ],
+      "kind": "CONTROLLER_EXPECTED_CONSUMER_BINDING",
+      "operation": "Seal closed consumer-inventory-v1 from reviewed real consumer bundle/manifest/own lock and actual accepted Linux archive, plus original live materialization source/inventory/report/subject identities. Descriptor outside both roots, independent caller digest; no receipt cycle.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.98.1-CONSUMER-ARCHIVE-ASSEMBLY",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-consumer",
+        "LOCK-REVIEW-AND-COPY",
+        "A1.98.1-CONSUMER-INVENTORY-SEAL"
+      ],
+      "kind": "ROOT_EXCLUSIVE_CLIENT_ASSEMBLY",
+      "operation": "Reserve fresh U/consumer-assembly outside original U/materialized-testkit; copy only approved consumer bundle to consumer/ and actual Linux subject to subject-linux/. Preserve sealed materialized root unchanged. Capture exact source/destination identities/maps and create only consumer-assembly-report.json as the third root member. Consumer manifest paths ../../materialized-testkit/subject-testkit and ../subject-linux; no report-as-copy substitution.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "Actual accepted APIs HeldFile/from_file/open/read_all/cooperative controls/parse_maps/parse_mountinfo; independent assertions; not worker/policy pair/mocked driver return values. Closed assembly receipt/consumer descriptor bind actual inputs; no unknown root siblings."
+    },
+    {
+      "id": "A1.98.1-CONSUMER-ASSEMBLY-RECEIPT-SEAL",
+      "depends_on": [
+        "A1.98.1-CONSUMER-ARCHIVE-ASSEMBLY"
+      ],
+      "kind": "CONTROLLER_ASSEMBLY_RECEIPT_SEAL",
+      "operation": "Externally hash the complete closed consumer-assembly-report.json after bounded exclusive copy; no self hash, no code/helper/compiler/native execution. Retain original assembly/source custody.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null
+    },
+    {
+      "id": "A1.98.1-PRECHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-worker-1.88.0",
+      "depends_on": [
+        "A1.98.1-PRECHECK-worker-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-worker-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-worker-1.88.0",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-worker-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml",
+        "--bins",
+        "--target-dir",
+        "@fresh-A1.98.1-worker-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-worker-1.88.0",
+      "depends_on": [
+        "A1.98.1-BUILD-worker-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-PRECHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-driver-1.88.0",
+      "depends_on": [
+        "A1.98.1-PRECHECK-driver-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-driver-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-driver-1.88.0",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-driver-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-A1.98.1-driver-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-driver-1.88.0",
+      "depends_on": [
+        "A1.98.1-BUILD-driver-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-PRECHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.98.1-CONSUMER-ARCHIVE-ASSEMBLY",
+        "A1.98.1-CONSUMER-ASSEMBLY-RECEIPT-SEAL"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-consumer-1.88.0",
+      "depends_on": [
+        "A1.98.1-PRECHECK-consumer-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@consumer-assembly-1.98.1@/consumer/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-consumer-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-consumer-1.88.0",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-consumer-1.88.0"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.88.0@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@consumer-assembly-1.98.1@/consumer/Cargo.toml",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-A1.98.1-consumer-1.88.0-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-consumer-1.88.0",
+      "depends_on": [
+        "A1.98.1-BUILD-consumer-1.88.0"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BIND-NATIVE-DRIVER-1.88.0",
+      "depends_on": [
+        "A1.98.1-POSTCHECK-worker-1.88.0",
+        "A1.98.1-POSTCHECK-driver-1.88.0",
+        "A1.98.1-POSTCHECK-consumer-1.88.0"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Actual image A/B and driver/runtime/input/catalog/oracle bindings.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-driver@",
+        "--fixture-inputs",
+        "@preselected-driver-fixture-inputs@",
+        "--output",
+        "@fresh-A1.98.1-1.88.0-driver-bindings@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BIND-NATIVE-CLIENT-1.88.0",
+      "depends_on": [
+        "A1.98.1-POSTCHECK-worker-1.88.0",
+        "A1.98.1-POSTCHECK-driver-1.88.0",
+        "A1.98.1-POSTCHECK-consumer-1.88.0"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Independent actual Linux client contract binds its own measured subject/adapter/runtime and preselected inputs.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-consumer-1.98.1@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-linux-client@",
+        "--fixture-inputs",
+        "@preselected-client-fixture-inputs@",
+        "--output",
+        "@fresh-A1.98.1-1.88.0-client-bindings@"
+      ]
+    },
+    {
+      "id": "A1.98.1-NATIVE-RESOURCE-GATE-1.88.0",
+      "depends_on": [
+        "A1.98.1-BIND-NATIVE-DRIVER-1.88.0",
+        "A1.98.1-BIND-NATIVE-CLIENT-1.88.0"
+      ],
+      "kind": "CONTROLLER_RESOURCE_GATE",
+      "operation": "Bind ordinary native root/original owners/lease/bounds/actual runtime closure and all preselected P populations/active controls. F/TT04/EOF/audit/LX09/LX08 joint remain separate required later gates.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No native admission from this document; unavailable required ordinary cells remain incomplete."
+    },
+    {
+      "id": "A1.98.1-ACTUAL-DRIVER-1.88.0",
+      "depends_on": [
+        "A1.98.1-NATIVE-RESOURCE-GATE-1.88.0"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run actual driver with original r4 constructor/assets/runner/finalizer/retirement evidence and all required ordinary populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-driver@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@driver-contract@",
+        "--fixture-manifest",
+        "@driver-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-fixture-root@",
+        "--output",
+        "@fresh-driver-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-LINUX-CLIENT-1.88.0",
+      "depends_on": [
+        "A1.98.1-NATIVE-RESOURCE-GATE-1.88.0"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run independently wired actual Linux client with its own actual subject/adapter/assertions/custody; consumer CLI binds the same catalog/contract/fixture/image/root/output/execution-ms option grammar as driver.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-linux-client@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@client-contract@",
+        "--fixture-manifest",
+        "@client-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-client-fixture-root@",
+        "--output",
+        "@fresh-client-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ],
+      "expected": "Independent held-file/read/control/parser assertions and wrong-copy/feature/helper-digest/reopened-path controls, actual cleanup before semantic assertions."
+    },
+    {
+      "id": "A1.98.1-PRECHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-worker-1.98.1",
+      "depends_on": [
+        "A1.98.1-PRECHECK-worker-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-worker-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-worker-1.98.1",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-worker-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/worker/Cargo.toml",
+        "--bins",
+        "--target-dir",
+        "@fresh-A1.98.1-worker-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-worker-1.98.1",
+      "depends_on": [
+        "A1.98.1-BUILD-worker-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-PRECHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.98.1-MATERIALIZE-worker-driver"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Immediate independent source/copy/template/generated/three-lock/report check; independently check consumer own source/Linux subject/lock when role=consumer.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-driver-1.98.1",
+      "depends_on": [
+        "A1.98.1-PRECHECK-driver-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-driver-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact source/generated/template/lock map immediately after metadata and before actual build; consumer closure checked separately.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-driver-1.98.1",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-driver-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/driver/Cargo.toml",
+        "--bin",
+        "scopebase-linux-fixture-check",
+        "--target-dir",
+        "@fresh-A1.98.1-driver-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-driver-1.98.1",
+      "depends_on": [
+        "A1.98.1-BUILD-driver-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Confirm exact immutable inputs/locks after build, measure actual emitted bins and actual interpreter/loaded-library closure.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-worker-driver-1.98.1@",
+        "--report-sha256",
+        "@materialized-worker-driver-1.98.1-report-sha256@"
+      ]
+    },
+    {
+      "id": "A1.98.1-PRECHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.98.1-CONSUMER-ARCHIVE-ASSEMBLY",
+        "A1.98.1-CONSUMER-ASSEMBLY-RECEIPT-SEAL"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-GRAPH-consumer-1.98.1",
+      "depends_on": [
+        "A1.98.1-PRECHECK-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual copied consumer graph with frozen locks, target/backend/build-input checks; recheck lock/source before build.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--format-version",
+        "1",
+        "--filter-platform",
+        "x86_64-unknown-linux-gnu",
+        "--manifest-path",
+        "@consumer-assembly-1.98.1@/consumer/Cargo.toml"
+      ]
+    },
+    {
+      "id": "A1.98.1-LOCKCHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.98.1-ACTUAL-GRAPH-consumer-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BUILD-consumer-1.98.1",
+      "depends_on": [
+        "A1.98.1-LOCKCHECK-consumer-1.98.1"
+      ],
+      "kind": "LEASED_CARGO",
+      "operation": "Actual outside-checkout separately locked build from this archive-derived subject; distinct compiler targets/results.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@cargo-1.98.1@",
+        "build",
+        "--release",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "@consumer-assembly-1.98.1@/consumer/Cargo.toml",
+        "--bin",
+        "scopebase-tt03-held-file-check",
+        "--target-dir",
+        "@fresh-A1.98.1-consumer-1.98.1-target@"
+      ]
+    },
+    {
+      "id": "A1.98.1-POSTCHECK-consumer-1.98.1",
+      "depends_on": [
+        "A1.98.1-BUILD-consumer-1.98.1"
+      ],
+      "kind": "INDEPENDENT_DELIVERED_READ_ONLY_CHECK",
+      "operation": "Bounded read-only verify-consumer checks both exact containers, original source/inventory/report/live testkit identities and actual consumer/Linux source/copy/manifest/own-lock receipt bindings; shared global limits, no Cargo/native action or unknown-sibling exception.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@extracted@/tests/fixtures/linux/test_materialize.py",
+        "verify-consumer",
+        "--package-root",
+        "@extracted@",
+        "--inventory",
+        "@inventory@",
+        "--inventory-sha256",
+        "@inventory-sha256@",
+        "--materialized-root",
+        "@materialized-consumer-1.98.1@",
+        "--report-sha256",
+        "@materialized-consumer-1.98.1-report-sha256@",
+        "--consumer-inventory",
+        "@consumer-inventory-1.98.1@",
+        "--consumer-inventory-sha256",
+        "@consumer-inventory-1.98.1-sha256@",
+        "--assembly-root",
+        "@consumer-assembly-1.98.1@",
+        "--assembly-receipt",
+        "@consumer-assembly-1.98.1@/consumer-assembly-report.json",
+        "--assembly-receipt-sha256",
+        "@consumer-assembly-1.98.1-receipt-sha256@",
+        "--consumer-source-root",
+        "@consumer-source-1.98.1@",
+        "--linux-package-root",
+        "@linux-extracted-1.98.1@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BIND-NATIVE-DRIVER-1.98.1",
+      "depends_on": [
+        "A1.98.1-POSTCHECK-worker-1.98.1",
+        "A1.98.1-POSTCHECK-driver-1.98.1",
+        "A1.98.1-POSTCHECK-consumer-1.98.1"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Actual image A/B and driver/runtime/input/catalog/oracle bindings.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-worker-driver-1.98.1@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-driver@",
+        "--fixture-inputs",
+        "@preselected-driver-fixture-inputs@",
+        "--output",
+        "@fresh-A1.98.1-1.98.1-driver-bindings@"
+      ]
+    },
+    {
+      "id": "A1.98.1-BIND-NATIVE-CLIENT-1.98.1",
+      "depends_on": [
+        "A1.98.1-POSTCHECK-worker-1.98.1",
+        "A1.98.1-POSTCHECK-driver-1.98.1",
+        "A1.98.1-POSTCHECK-consumer-1.98.1"
+      ],
+      "kind": "PYTHON_BINDER_NO_BUILD",
+      "operation": "Independent actual Linux client contract binds its own measured subject/adapter/runtime and preselected inputs.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "@python@",
+        "@materialized-consumer-1.98.1@/subject-testkit/tests/fixtures/linux/bind_run.py",
+        "--catalog",
+        "@catalog@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--consumer",
+        "@actual-linux-client@",
+        "--fixture-inputs",
+        "@preselected-client-fixture-inputs@",
+        "--output",
+        "@fresh-A1.98.1-1.98.1-client-bindings@"
+      ]
+    },
+    {
+      "id": "A1.98.1-NATIVE-RESOURCE-GATE-1.98.1",
+      "depends_on": [
+        "A1.98.1-BIND-NATIVE-DRIVER-1.98.1",
+        "A1.98.1-BIND-NATIVE-CLIENT-1.98.1"
+      ],
+      "kind": "CONTROLLER_RESOURCE_GATE",
+      "operation": "Bind ordinary native root/original owners/lease/bounds/actual runtime closure and all preselected P populations/active controls. F/TT04/EOF/audit/LX09/LX08 joint remain separate required later gates.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No native admission from this document; unavailable required ordinary cells remain incomplete."
+    },
+    {
+      "id": "A1.98.1-ACTUAL-DRIVER-1.98.1",
+      "depends_on": [
+        "A1.98.1-NATIVE-RESOURCE-GATE-1.98.1"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run actual driver with original r4 constructor/assets/runner/finalizer/retirement evidence and all required ordinary populations.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-driver@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@driver-contract@",
+        "--fixture-manifest",
+        "@driver-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-fixture-root@",
+        "--output",
+        "@fresh-driver-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ]
+    },
+    {
+      "id": "A1.98.1-ACTUAL-LINUX-CLIENT-1.98.1",
+      "depends_on": [
+        "A1.98.1-NATIVE-RESOURCE-GATE-1.98.1"
+      ],
+      "kind": "LEASED_NATIVE",
+      "operation": "Run independently wired actual Linux client with its own actual subject/adapter/assertions/custody; consumer CLI binds the same catalog/contract/fixture/image/root/output/execution-ms option grammar as driver.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "argv_grammar": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--",
+        "@actual-linux-client@",
+        "--catalog",
+        "@catalog@",
+        "--contract",
+        "@client-contract@",
+        "--fixture-manifest",
+        "@client-fixture-manifest@",
+        "--image-a",
+        "@actual-image-a@",
+        "--image-b",
+        "@actual-image-b@",
+        "--fixture-root",
+        "@exclusive-existing-client-fixture-root@",
+        "--output",
+        "@fresh-client-evidence@",
+        "--execution-ms",
+        "@positive-decimal@"
+      ],
+      "expected": "Independent held-file/read/control/parser assertions and wrong-copy/feature/helper-digest/reopened-path controls, actual cleanup before semantic assertions."
+    },
+    {
+      "id": "CANDIDATE-REVIEW-AND-ROOT-ACCEPTANCE",
+      "depends_on": [
+        "A1.88.0-ACTUAL-DRIVER-1.88.0",
+        "A1.88.0-ACTUAL-LINUX-CLIENT-1.88.0",
+        "A1.88.0-ACTUAL-DRIVER-1.98.1",
+        "A1.88.0-ACTUAL-LINUX-CLIENT-1.98.1",
+        "A1.98.1-ACTUAL-DRIVER-1.88.0",
+        "A1.98.1-ACTUAL-LINUX-CLIENT-1.88.0",
+        "A1.98.1-ACTUAL-DRIVER-1.98.1",
+        "A1.98.1-ACTUAL-LINUX-CLIENT-1.98.1",
+        "A1.88.0-DELIVERED-ORACLE",
+        "A1.88.0-DELIVERED-MATERIALIZER-CONTROLS",
+        "A1.98.1-DELIVERED-ORACLE",
+        "A1.98.1-DELIVERED-MATERIALIZER-CONTROLS"
+      ],
+      "kind": "INDEPENDENT_REVIEW_AND_ROOT_GATE",
+      "operation": "Review exact candidate/source/admission/port receipts, actual new union/graphs/locks/source/archive/materializer/client/native evidence; root validates accepted subset only.",
+      "status": "NOT_RUN",
+      "actual_cwd": null,
+      "actual_input_output_digests": null,
+      "actual_resource_binding": null,
+      "expected": "No task-count/profile/full-TT03/installed promotion without its distinct actual gates. Old evidence retains original scope."
+    }
+  ],
+  "grammar_row_count": 152,
+  "row_count_is_not_a_product_case_or_pass_count": true,
+  "unchanged_old_command_roster": "Previous 32 proposed rows preserved at original preparation index; replaced grammar/dependency rows do not relabel them executed.",
+  "fresh_attempt_rule": "One COMPLETE tree may serve both compilers only under continued exclusive custody/unchanged inputs and separate targets/results. Any failure/interruption requires a fresh tree; no resume/cleanup inference.",
+  "claim_limits": "No compiler/resolver command executed here, no actual new source/archive/locks/tools/resource/binary qualified, no P/F accepted.",
+  "consumer_path_binding_rules": {
+    "1.88.0": {
+      "@materialized-consumer-1.88.0@": "U/materialized-testkit",
+      "@consumer-assembly-1.88.0@": "same U/consumer-assembly"
+    },
+    "1.98.1": {
+      "@materialized-consumer-1.98.1@": "U/materialized-testkit",
+      "@consumer-assembly-1.98.1@": "same U/consumer-assembly"
+    }
+  },
+  "first_lock_map": "materializer-contract.json:first_lock_bootstrap, including all initial absent/present roles, exact generation/copy order and strict-delivery boundary",
+  "r1_history": {
+    "index_sha256": "1cdc4e13cd4095814b33eaab09443e6c1eb6038692836586e3e41223b55d1d7f",
+    "original_rows": 146,
+    "preserved_ids_in_relative_order": true,
+    "new_ids": [
+      "A1.88.0-CONSUMER-SEALED-ROOT-CHECK",
+      "A1.88.0-CONSUMER-INVENTORY-SEAL",
+      "A1.88.0-CONSUMER-ASSEMBLY-RECEIPT-SEAL",
+      "A1.98.1-CONSUMER-SEALED-ROOT-CHECK",
+      "A1.98.1-CONSUMER-INVENTORY-SEAL",
+      "A1.98.1-CONSUMER-ASSEMBLY-RECEIPT-SEAL"
+    ],
+    "artifact": "historical/r1-command-dag.json; original237 authoring checks remain historical/r1-verification.json, not rerun or promoted"
+  }
+}

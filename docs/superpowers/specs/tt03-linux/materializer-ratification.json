@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "kind": "ROOT_TT03_MATERIALIZER_CONTRACT_RATIFICATION",
+  "status": "EXACT_R2_CONTRACT_ADOPTED_NO_EXECUTION_ADMISSION",
+  "created_utc": "2026-10-22T11:05:27.869032+00:00",
+  "proposal_index_sha256": "ff674f96313459201ee4f9a996c44f250de6621918797a1f89a0ae39cca1e8e0",
+  "independent_review_index_sha256": "89476c28c1811e9bac2c1356119a7f6f55e4e4a063924c70c8cbc75ca9a848bc",
+  "root_repair_rulings_sha256": "c581c8c15471dd9111eb2417c5292f3df9151334a14e3eb617d8ba8b76db5589",
+  "resolved_contract_findings": [
+    "TT03-MAT-R1-01",
+    "TT03-MAT-R1-02",
+    "TT03-MAT-R1-03"
+  ],
+  "exact_canonical_subjects": [
+    {
+      "path": "docs/superpowers/plans/2026-10-22-scopebase-tt03-verification.md",
+      "bytes": 26221,
+      "sha256": "07c9411547da875b0c23d1033f0ae3cb125f706df37a232a035790439f4d582d"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-22-scopebase-tt03-linux-fixture.md",
+      "bytes": 31004,
+      "sha256": "961b3c1d1683b582f91b512c9a83c59c1625ed905f0327655e02e09056ab4303"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/delivery.md",
+      "bytes": 12633,
+      "sha256": "558a6da34e86dbeda46a3816e3cfdd2ae167101dd8281008577b2f683c33dc59"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-command-dag.json",
+      "bytes": 148662,
+      "sha256": "1e6a0c10d9ee0d881f340a12c302b18db7c4e577ecfe68316d9aacf7a99fecf6"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-contract.json",
+      "bytes": 51054,
+      "sha256": "e882ebb27259982a2ba91f18a47f33cf1f95b01ee65b26d399cca7ec282465aa"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-contract.md",
+      "bytes": 36103,
+      "sha256": "005b5c01c46bc6b664f40605a2efc9014d398460827afbc1b1ce1208ce7c8c14"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-controls.json",
+      "bytes": 15238,
+      "sha256": "dea5ce157997f9a4b474ed79af1fe8714e21428a06fc9f827758c466de710e4d"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-source-selection.json",
+      "bytes": 29986,
+      "sha256": "99017919830f93965b169644471292538c3f837530a64f2eb3d2938eb62ed020"
+    },
+    {
+      "path": "docs/superpowers/specs/tt03-linux/preservation.md",
+      "bytes": 10463,
+      "sha256": "73e22196da70bfdd10472bb9970a408cad12d5b1346e1356c5fddb0b340518e9"
+    }
+  ],
+  "scope": "Ratify exact materializer, separate consumer assembly/read-only checker, full terminal reservation evidence, independent source-lock bootstrap and finite delivery DAG contracts. Original proposal/status strings remain literal historical labels; this companion records root design ratification only.",
+  "preservation": "All ten protected r4 support hashes preserved; approved two-pointer navigation exception already applied. No runtime/creator/protocol/cleanup/finalizer/source-grant change. All146original DAG IDs retained, six necessary consumer rows appended.",
+  "command_rows": 152,
+  "all_actual_commands": "NOT_RUN",
+  "control_ids": "M01-M20 preserved; M21-M23 appended as required future controls",
+  "source_task_routing": "Separate narrow supplement still required for six selected host facets/nine existing-granted ranges before copying",
+  "C7_union": "Selected rustix1.1.5 std/fs/pipe/process/event/net/time/try_close plus selectedworkerlibc0.2.191 remain uncompiled for this exact union",
+  "packet_ready": false,
+  "implementation_admitted": false,
+  "product_qualified": false,
+  "runtime_qualified": false,
+  "operator_qualified": false,
+  "accepted_task_delta": 0,
+  "remaining": "Actual base/dependencies/locks/tools/cache/resource/executor/source-port/product/archive/consumers and fourteenP/sevenF/native/installed/TT04/EOF/audit/LX09/final-indexLX08 joint gates remain unbound/unrun."
+}
