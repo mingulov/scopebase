@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Host-only BPF error transport and explicit resource-cap configuration.
+//! Host BPF errors, resource caps, descriptive geometry and owned native map reads.
 //!
-//! This std-only foundation performs no native operations. Classification is
-//! caller supplied; caps confer no allocation, work or live-resource authority.
+//! Error carriers preserve caller classification; native operations classify their
+//! own errors. Caps and parsed topology confer no native-resource authority.
+//! Native owners internally authenticate their source and actual map FD.
 //!
 //! ```
 //! use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
@@ -20,10 +21,30 @@
 //! and `cargo test --offline --locked --doc`. Downstream `cargo test` does not
 //! automatically run dependency tests. External UI controls are described in
 //! the package README. No installed operator route or BPF profile is qualified.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod error;
 pub mod limits;
 
 pub use error::{ErrorKind, OperationError, Stage};
 pub use limits::Limits;
+
+pub mod artifact;
+pub mod maps;
+pub use artifact::ArtifactId;
+pub use maps::{
+    CpuTopology, MapBtfExpectation, MapExpectation, MapMetadata, PerCpuGeometry, ValueLayout,
+};
+
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu",
+    target_pointer_width = "64",
+    target_endian = "little"
+))]
+pub use maps::{LiveCpuTopology, ValidatedMap};
+
+#[cfg(test)]
+extern crate self as scopebase_bpf;

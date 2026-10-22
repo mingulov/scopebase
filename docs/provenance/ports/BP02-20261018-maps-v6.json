@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "BP02-20261018-maps",
+  "task_id": "BP02",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-bp02-maps.json",
+    "sha256": "bc5293b72dc53f1e180bc2b289a15cf73c7a595035135d23ae433b560d51547d"
+  },
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-privilege/src/mapops.rs",
+      "source_scope": [
+        [
+          160,
+          215
+        ],
+        [
+          258,
+          285
+        ],
+        [
+          320,
+          414
+        ],
+        [
+          471,
+          508
+        ],
+        [
+          515,
+          631
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/src/maps/topology.rs",
+          "sha256": "a5d992b6adc47601f8ad00d744c568d005cf2dce0187ebc9604ed03cc2e6ed1a",
+          "symbols": [
+            "CpuTopology::parse_possible"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/src/maps/geometry.rs",
+          "sha256": "9db0105943c09f85f02cf594c25a78c371171304f02243788411fd5fbe68b459",
+          "symbols": [
+            "PerCpuGeometry::checked"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/src/maps/native.rs",
+          "sha256": "fcaa05856574e221c4187c6b1c3961a7ade0225997528d3be350888ecd14918c",
+          "symbols": [
+            "MapInfo",
+            "key_witness",
+            "lookup"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/src/maps/handle.rs",
+          "sha256": "e3be9c52a8767e4f45fffad6cce8178ac13063a18a74826db50d940df74980d2",
+          "symbols": [
+            "ValidatedMap::from_owned_fd",
+            "lookup",
+            "lookup_into"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_pure.rs",
+          "sha256": "52eb5d8cd8e8fb28bfd4a71d755adc961d8507d020f035190099e38f07426ac3",
+          "symbols": [
+            "stride_1_7_8_9_13",
+            "sparse_offline_possible",
+            "overlap_missing_and_overflow_refuse"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_contract.rs",
+          "sha256": "37bed4aaffc81570e59ff7c77a83b625a4cad91cad9347944af2da6b980637fe",
+          "symbols": [
+            "map_metadata_kind_and_extent"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_live.rs",
+          "sha256": "0c548196cdd3d93e1485a12a4d69a2407522abc7634e242d0c970cc718affc75",
+          "symbols": [
+            "n1_geometry_activity",
+            "n9_raw_guard"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/src/kcrypto_snapshot.rs",
+      "source_scope": [
+        [
+          1100,
+          1111
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/who_preservation.rs",
+          "sha256": "69b2c59e8a0e1ac25fa8060d86159c2e53360c37b3b47f476ddef1466a80e581",
+          "symbols": [
+            "terminal_unavailable_topology_refuses_before_bpf",
+            "unavailable_topology_refuses_totals_before_bpf"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-abi/src/kcrypto_agg.rs",
+      "source_scope": [
+        [
+          162,
+          166
+        ],
+        [
+          483,
+          506
+        ],
+        [
+          508,
+          579
+        ],
+        [
+          807,
+          868
+        ],
+        [
+          874,
+          879
+        ],
+        [
+          953,
+          965
+        ],
+        [
+          967,
+          978
+        ],
+        [
+          980,
+          1004
+        ],
+        [
+          1152,
+          1240
+        ],
+        [
+          1345,
+          1355
+        ],
+        [
+          1356,
+          1385
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/support/who_fixture.rs",
+          "sha256": "9c26abe1599d0eef9926c8b4362b0eece420be84695a026bbb1c2584f9361cb5",
+          "symbols": [
+            "KWHO_IDENTITY_PRESENT",
+            "KWhoKey",
+            "VWho",
+            "try_fold_vwho",
+            "kwho_key_from_bytes",
+            "vwho_from_bytes"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/who_preservation.rs",
+          "sha256": "69b2c59e8a0e1ac25fa8060d86159c2e53360c37b3b47f476ddef1466a80e581",
+          "symbols": [
+            "try_fold_vwho_sources_identity_from_unique_marked_lane",
+            "try_fold_vwho_refuses_missing_and_conflicting_provenance",
+            "try_fold_vwho_accepts_genuine_root_and_stack_zero",
+            "try_fold_vwho_refuses_saturated_calls",
+            "who_codecs_roundtrip_and_reject_short"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_who.rs",
+      "source_scope": [
+        [
+          432,
+          692
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/who_preservation.rs",
+          "sha256": "69b2c59e8a0e1ac25fa8060d86159c2e53360c37b3b47f476ddef1466a80e581",
+          "symbols": [
+            "PcpuWho",
+            "who_migration_initializes_secondary_lane",
+            "who_single_cpu_control_keeps_identity",
+            "who_migration_under_change_keeps_insertion_identity",
+            "who_noexist_race_loser_never_marks",
+            "who_fold_ignores_unrelated_stack_id_zero",
+            "who_fold_accepts_genuine_root_and_stack_zero",
+            "who_fold_refuses_missing_and_conflicting_provenance"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+      "source_scope": [
+        [
+          40,
+          50
+        ],
+        [
+          263,
+          265
+        ],
+        [
+          279,
+          304
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/support/who_fixture.rs",
+          "sha256": "9c26abe1599d0eef9926c8b4362b0eece420be84695a026bbb1c2584f9361cb5",
+          "symbols": [
+            "report_rows"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/examples/who_map_reader.rs",
+          "sha256": "cc42deaba23c1eaee77763095f0c995f4ef4648f6c11b341d61bf5c946e18259",
+          "symbols": [
+            "main"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/consumers/who-reader/src/main.rs",
+          "sha256": "b987b0c23007d4ab9e093441e1b26f86f0b2a2758ee6c7fe02babaecce50d407",
+          "symbols": [
+            "main"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/who_preservation.rs",
+          "sha256": "69b2c59e8a0e1ac25fa8060d86159c2e53360c37b3b47f476ddef1466a80e581",
+          "symbols": [
+            "who88_every_lookup_path"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_live.rs",
+          "sha256": "0c548196cdd3d93e1485a12a4d69a2407522abc7634e242d0c970cc718affc75",
+          "symbols": [
+            "n5_who_consumers"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "L:native/src/object_maps.c",
+      "source_scope": [
+        [
+          24,
+          98
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/src/maps/geometry.rs",
+          "sha256": "9db0105943c09f85f02cf594c25a78c371171304f02243788411fd5fbe68b459",
+          "symbols": [
+            "PerCpuGeometry::checked"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/src/maps/handle.rs",
+          "sha256": "e3be9c52a8767e4f45fffad6cce8178ac13063a18a74826db50d940df74980d2",
+          "symbols": [
+            "metadata",
+            "read_io",
+            "lookup_into"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_live.rs",
+          "sha256": "0c548196cdd3d93e1485a12a4d69a2407522abc7634e242d0c970cc718affc75",
+          "symbols": [
+            "n4_bloom_output",
+            "n9_guarded_output"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "L:tests/native/generic_maps.c",
+      "source_scope": [
+        [
+          344,
+          501
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/maps_pure.rs",
+          "sha256": "52eb5d8cd8e8fb28bfd4a71d755adc961d8507d020f035190099e38f07426ac3",
+          "symbols": [
+            "stride_1_7_8_9_13"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/maps_live.rs",
+          "sha256": "0c548196cdd3d93e1485a12a4d69a2407522abc7634e242d0c970cc718affc75",
+          "symbols": [
+            "n1_geometry_activity",
+            "n4_bloom_output",
+            "n9_guarded_output"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/src/maps/handle.rs",
+          "sha256": "e3be9c52a8767e4f45fffad6cce8178ac13063a18a74826db50d940df74980d2",
+          "symbols": [
+            "output_short_exact_long_and_partial_failure",
+            "bloom_refuses_before_extent_and_copy"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/BP02-preservation-20261018-v6.md",
+    "sha256": "accc530983d39e35828caca9b393d5935a0e865ceb7c3fbb3c8e892c988ced7f"
+  },
+  "supersedes": null
+}

@@ -1,0 +1,82 @@
+{
+  "status": "NEW_INDEPENDENT_PREPARATION_VECTORS_NOT_PRODUCT_TEST_RESULTS",
+  "license": "Apache-2.0",
+  "btf": {
+    "file": "btf-u32-u64.bin",
+    "sha256": "e17f95293a58594a1fa238c97778778a8b2be5ab05a7b01b0264ea3654d925ca",
+    "size": 65,
+    "header": {
+      "magic": 60319,
+      "version": 1,
+      "flags": 0,
+      "hdr_len": 24,
+      "type_off": 0,
+      "type_len": 32,
+      "str_off": 32,
+      "str_len": 9
+    },
+    "types": [
+      {
+        "id": 1,
+        "kind": "INT",
+        "name_offset": 1,
+        "size": 4,
+        "bits": 32,
+        "signed": false
+      },
+      {
+        "id": 2,
+        "kind": "INT",
+        "name_offset": 5,
+        "size": 8,
+        "bits": 64,
+        "signed": false
+      }
+    ],
+    "strings_hex": "007533320075363400",
+    "map": {
+      "type": 6,
+      "key_size": 4,
+      "value_size": 8,
+      "max_entries": 2,
+      "key_type_id": 1,
+      "value_type_id": 2
+    },
+    "map_types": [
+      5,
+      6
+    ]
+  },
+  "who": {
+    "file": "who88-two-lanes.bin",
+    "sha256": "7449ed6f2ad699e307ff0e9a036dc57e78dfbb5e20bf9a1dd5df23fab6fc86eb",
+    "size": 176,
+    "lane_size": 88,
+    "expected_fold": {
+      "comm": "latest",
+      "tid": 101,
+      "uid": 0,
+      "cgroup": 291,
+      "ppid": 4,
+      "pcomm": "parent",
+      "stack": 0,
+      "calls": 12,
+      "first_ns": 11,
+      "last_ns": 44,
+      "identity_present": 1,
+      "reserved": 0
+    },
+    "generation": "Python struct.pack explicit LE fixed offsets, independent of donor/ScopeBase encoder. Extra possible lanes are zero-filled for this native case."
+  },
+  "kwho_key": {
+    "file": "kwho-key16.bin",
+    "size": 16,
+    "sha256": "60d8b09224ef5d8ab50502b006df42fc81b0a2a412334cd0f48516c9a006e70e",
+    "expected": {
+      "kh_hex": "8e834f55dbe259a5",
+      "tgid": 4242,
+      "padding": 0
+    },
+    "second_key": "Same kh and tgid4243, with independently populated second row; key is per-tgid, not per-tid."
+  }
+}

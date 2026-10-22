@@ -1,0 +1,13 @@
+[package]
+name="bp02-who-reader"
+version="0.0.0"
+edition="2021"
+rust-version="1.88.0"
+autobins=false
+[workspace]
+[[bin]]
+name="bp02-who-reader"
+path="src/main.rs"
+[dependencies]
+scopebase-bpf={path="@SUBJECT@",version="=0.1.0",default-features=@DEFAULT@}
+libc={version="=0.2.191",default-features=false,features=["std"]}

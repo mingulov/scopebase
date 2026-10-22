@@ -1,0 +1,12 @@
+[package]
+name="bp02-topology-cli"
+version="0.0.0"
+edition="2021"
+rust-version="1.88.0"
+autobins=false
+[workspace]
+[[bin]]
+name="bp02-topology-cli"
+path="src/main.rs"
+[dependencies]
+scopebase-bpf={path="@SUBJECT@",version="=0.1.0",default-features=@DEFAULT@}

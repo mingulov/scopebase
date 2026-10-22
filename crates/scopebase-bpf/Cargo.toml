@@ -9,7 +9,50 @@ publish = false
 build = false
 readme = "README.md"
 description = "ScopeBase host BPF error and budget contracts"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/lib.rs", "src/error.rs", "src/limits.rs", "tests/api_contract.rs", "tests/ui/positive.rs", "tests/ui/non_exhaustive.rs", "tests/ui/limits_default.rs", "tests/ui/error_clone.rs", "tests/ui/source_not_send.rs"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**"]
+autotests = false
+autoexamples = false
 
 [features]
 default = []
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process", "thread", "linux_4_11"] }
+libc = { version = "=0.2.191", default-features = false, features = ["std"] }
+sha2 = { version = "=0.11.0", default-features = false }
+
+[[test]]
+name="api_contract"
+path="tests/api_contract.rs"
+
+[[test]]
+name="maps_pure"
+path="tests/maps_pure.rs"
+
+[[test]]
+name="maps_contract"
+path="tests/maps_contract.rs"
+
+[[test]]
+name="maps_live"
+path="tests/maps_live.rs"
+
+[[test]]
+name="maps_mounts"
+path="tests/maps_mounts.rs"
+
+[[test]]
+name="who_preservation"
+path="tests/who_preservation.rs"
+
+[[example]]
+name="possible_topology"
+path="examples/possible_topology.rs"
+
+[[example]]
+name="who_map_reader"
+path="examples/who_map_reader.rs"
+
+[[example]]
+name="bp02_live_fixture"
+path="examples/bp02_live_fixture.rs"

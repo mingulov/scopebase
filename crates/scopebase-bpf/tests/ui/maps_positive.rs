@@ -1,0 +1,2 @@
+use scopebase_bpf::{ArtifactId,CpuTopology,PerCpuGeometry,LiveCpuTopology,ValidatedMap};
+fn main(){let t=CpuTopology::parse_possible(b"0",0,1).unwrap();let _=t.clone();let _=PerCpuGeometry::checked(1,1,8).unwrap();let _=ArtifactId([0;32]);let _f:fn(&scopebase_bpf::Limits)->Result<LiveCpuTopology,scopebase_bpf::OperationError>=LiveCpuTopology::acquire;let _g:fn(std::os::fd::OwnedFd,&scopebase_bpf::MapExpectation,&scopebase_bpf::Limits)->Result<ValidatedMap,scopebase_bpf::OperationError>=ValidatedMap::from_owned_fd;}

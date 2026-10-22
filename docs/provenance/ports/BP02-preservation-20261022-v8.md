@@ -1,0 +1,67 @@
+# BP02 selected source preservation
+
+The [selected-port receipt](BP02-20261018-maps.json) binds actual destination bytes to the [controller admission](../admissions/2026-10-18-bp02-maps.json). KryProbe inputs are frozen at `d153f3aaf9a3931337b47c9e1b046c692da55083`; libbpf-mojo L inputs at `ff6ea5087cb6cab3db51a9ffaf99922f880da8c9`. Their historical GPL-3.0-or-later and Apache-2.0 WITH LLVM-exception labels remain recorded. The owner-authorized selected host/data destination is Apache-2.0 under OWNER-2026-10-18. No kernel implementation or BPF program is copied. This records implemented source correspondence; it does not accept the task or certify a runtime profile.
+
+| Frozen source and inclusive lines | Destination and preservation | Independent oracle and discriminating control |
+|---|---|---|
+| K `mapops.rs` 160–215, 258–285 | `maps/topology.rs` and `maps/geometry.rs`: bounded possible-CPU parsing, possible rather than online lane count, eight-byte rounding and checked multiplication. The explicit ID representation additionally rejects contradictory overlap and preserves exact input bytes. | `maps_pure`: 15 literal size/count/stride/extent vectors, hostile lists, sparse IDs and precedence. `generate_vectors.py` uses independent integer arithmetic. Unrounded and overlap mutants must fail their named assertion and restored twins pass. |
+| K `mapops.rs` 320–414, 471–508, 515–631 | `maps/native.rs`, `maps/handle.rs`, `maps_contract` and `maps_live`: actual map witness/lookup, errno/stage retention, all possible/offline lanes, and early scalar argument admission. Raw byte paths remain opaque; public values cannot authorize a native copy. | N1 real array/hash maps for sizes1,7,8,9,13,88,120; independent full-capacity raw population and offline lane values. Unit partial-copy/error models and N9 logical-boundary sentinel. The deliberately short logical sentinel retains a full physically safe backing allocation. |
+| K `kcrypto_snapshot.rs` 1100–1111 | `who_preservation::terminal_unavailable_topology_refuses_before_bpf` and `unavailable_topology_refuses_totals_before_bpf`, through fixture-local policy adapters. Missing topology refuses before any map callback. | Callback counters stay zero; no healthy-zero fallback. The 120-byte and 8-byte fixture policies remain distinct. |
+| K `kcrypto_agg.rs` 162–166, 483–506, 508–579, 807–868, 874–879, 953–965, 967–978, 980–1004 | `tests/support/who_fixture.rs`: identity marker,16-byte key/88-byte value field layout/codecs, checked fold, unique insertion provenance, latest tid/comm, reserved output zero. This is delivered fixture/report code, not a generic public crypto API. | Independent literal16/176-byte vectors, field offsets, exact decoder lengths and report text. Individual lane MAX refuses; an exactly representable final sum MAX succeeds. Stale80 decoder/slice/report, missing sentinel, final-MAX refusal and saturating mutants must fail their named semantic assertions; the WHO mutations are test-model tier. |
+| K `kcrypto_agg.rs` 1152–1240, 1345–1355, 1356–1385 | `who_preservation`: all four selected fold regressions and both selected key/WHO codec statement fragments. Genuine root uid/stack zero remains valid; unmarked zeros do not assert identity; missing/duplicate/unknown marker refuses. | Explicit folded fields and independently encoded bytes, including short/long buffers, ties, reserved fields and maximum stamp behavior. The fold controls above distinguish per-lane refusal from final arithmetic. |
+| K `tests/kcrypto_who.rs` 432–692 | `who_preservation::PcpuWho` and all seven original named model regressions: migration secondary lane, single CPU, changed identity, losing NOEXIST inserter, unrelated stack0, genuine root/stack0, missing/conflicting provenance. | Independent producer model transitions and exact identity/latest fields. These are models; no BPF producer race or loss behavior is claimed. |
+| K `snapshot_who.rs` 40–50, 263–265, 279–304 | `who_fixture::report_rows`, `examples/who_map_reader.rs`, standalone `who-reader`, and N5: every known key is16 bytes; every read/slice/decode/fold/report path uses88-byte lanes; decoded-lane storage is hoisted, cleared and reused across rows; any missing known row aborts the entire report. | Two different populated WHO keys, decoded reports, stale80 and disappearing-key controls. Both native lookup methods and the independently built delivered client exercise real owned map FDs. |
+| L `native/src/object_maps.c` 24–98 | `maps/geometry.rs`, `maps/handle.rs`: early bloom-kind refusal, checked rounded extent, private scratch and commit only after success. Native source/context checks strengthen the donor's plain-path trust boundary. | N4 metadata-only call counter and zero downstream operations; modeled partial native writes, actual ENOENT, short/exact/long and guarded output; pre/post source refusal keeps all caller bytes unchanged. |
+| L `tests/native/generic_maps.c` 344–501 | `maps_pure`, `maps_contract`, `maps_live`, native call-order units: small and odd value geometries, rejected kinds, argument precedence and output retention. | Independent geometry vectors plus real kernel maps; short logical boundary control fails its intended canary assertion, followed by restored success. |
+
+The K filename prefixes above resolve under the exact paths in the receipt. No other statements from those donor files are claimed copied. Partial codec statement ranges are retained as selected fragments rather than whole-test or whole-file copy claims.
+
+## New authority and bounded adapters
+
+The admitted maps/native contracts require a missing mechanism beyond donor plain-path reading: only an actual retained map FD plus authenticated complete sysfs/procfs roots can authorize a lengthless kernel copy. `provenance.rs` uses constrained traversal, full root identities, exact original task text and a newly opened original-relative stat description for each probe. Its documented immutable possible-mask/kernel ABI assumption remains explicit. `native.rs` confines unsafe pointer/syscall construction and binds key witnesses to the private FD/MapInfo pair. `budget.rs` separates byte, work and observed-capacity limits. None of the pure topology, descriptive metadata, BTF digest, test resource records or model seams can manufacture a native owner.
+
+The private model controls test different task text with equal tuples, dead original anchors despite reused numeric IDs, every probe stage, cumulative work, poisoning, map errno precedence and postcheck output suppression. Native fixtures separately exercise actual child exit/reap, retained original anchors, root and genuine same-mount leaf symlink refusal, replacement after precheck, fork and same-local-PID context. Unsafe/authority code and subsequent bounded fixture deltas are reviewed independently before their live use. Actual outcomes and failures are recorded in job evidence, separately from this source map.
+
+The packaged mutant driver selects 12 production-library and 12 test-model
+mutations per compiler across its two feature modes. The 24 WHO model runs
+across both compilers are not direct production-library checks, even though
+Cargo invokes those tests directly. The stale-80 variants use separate named
+rejection sites, and a valid-88-byte unwrap panic cannot satisfy their receipt.
+
+Independent review corrections retain focused regressions: F01 checks observed ID capacity plus existing charge and requested source before a second reserve; F02 limits EXDEV/ELOOP traversal overrides to constrained traversal; F03 records exact child/FD custody through failure and reap; F04 uses an existing genuine root target with exact ELOOP; F05 builds/binds all advertised direct-route control executables. Shipped helper imports disable local bytecode before sibling imports, and ordinary-environment controls require the whole subject inventory unchanged. Inert `Cargo.toml.in` templates avoid Cargo nested-package omission and are materialized only in private clients.
+
+## Reference-only inputs and retirement
+
+K `kcrypto_snapshot.rs` 395–444 and446–550 informs separate260-byte-key/120-byte KAGG and KTOT controls: two rows, disappearing known key, slot0 absence, later slot absence, checked versus historical saturating totals. K `snapshot_who.rs` 69–105,246–262,266–278,335–346,352–367 informs8-byte diagnostic refusal and product-local iteration/cache/report boundaries. Those controls are new fixture adapters, not copied application machinery or unified folding policy.
+
+LJ `object_maps.c` 24–98 and `generic_maps.c` 344–501 at `e55ecbef7493714944cf05a2f92f10938ca6c5ed` are byte-identical successor references, not an additional copying grant. Kernel sources are reference-only. Producer implementation and later WHO loss tests belong to BP07; semantic BTF to BP09; C pointer/ABI wrappers to NX05/BP10. Complete bpf-host-v1, provisioning/operator/full-profile work remains BP11/TT05/TT07/TT10. Product migrations and external publication remain later work.
+
+No donor duplicate is retired. Retirement requires a named real donor consumer using its actual ScopeBase version/features, preserved original application and producer regressions, independent conformance checks, and explicit retention of application policy. Source/archive/native evidence for this increment cannot substitute for that migration gate.
+
+## V8 fixture custody repair
+
+The selected `tests/maps_live.rs` destination additionally establishes private
+mapping ownership immediately after successful mmap. A protection-setup failure
+retains the primary errno and attempts exact-base/extent rollback once; failed
+rollback retains explicit unresolved ownership without a second Drop panic.
+Actual owned controls select an unaligned protection address for EINVAL, verify
+one exact successful munmap, retain primary EINVAL plus injected cleanup EIO,
+and retire only the control-owned mapping afterward. The aligned positive twin
+is unchanged. These are fixture acquisition/cleanup corrections; the selected
+production map mechanism and WHO production/model inputs remain byte-identical
+to the retained v7-r2 semantic campaigns.
+
+The private mount/source fixture reports its own root path and device/inode.
+Parents first reap their exact child and then corroborate one report against the
+computed `temp_dir()/scopebase-bp02-<spawned PID>` non-symlink directory before
+cleanup. Missing or mismatched identity remains unresolved; a missing report
+with verified absence stays distinct. Structured receipts preserve child failure,
+cleanup/report/log failure, and bounded internal-child wait custody together.
+This trusted fixture protocol does not claim hostile same-UID race resistance
+or grant authority to an arbitrary reported path. N9 records exactly42 owned
+mapping retirements for its fixed2map-kind/7size/3delta population.
+
+These changes add no production unsafe/public API or dependency and do not
+replace the original BP02 controller admission/source grants. Final v8 archive
+and native-preparation bindings and independent review remain separate from
+historical unchanged-input semantic evidence and unrun privileged cells.

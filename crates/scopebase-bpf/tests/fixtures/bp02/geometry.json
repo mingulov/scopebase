@@ -1,0 +1,92 @@
+[
+  {
+    "value": 1,
+    "count": 1,
+    "stride": 8,
+    "extent": 8
+  },
+  {
+    "value": 1,
+    "count": 3,
+    "stride": 8,
+    "extent": 24
+  },
+  {
+    "value": 1,
+    "count": 9,
+    "stride": 8,
+    "extent": 72
+  },
+  {
+    "value": 7,
+    "count": 1,
+    "stride": 8,
+    "extent": 8
+  },
+  {
+    "value": 7,
+    "count": 3,
+    "stride": 8,
+    "extent": 24
+  },
+  {
+    "value": 7,
+    "count": 9,
+    "stride": 8,
+    "extent": 72
+  },
+  {
+    "value": 8,
+    "count": 1,
+    "stride": 8,
+    "extent": 8
+  },
+  {
+    "value": 8,
+    "count": 3,
+    "stride": 8,
+    "extent": 24
+  },
+  {
+    "value": 8,
+    "count": 9,
+    "stride": 8,
+    "extent": 72
+  },
+  {
+    "value": 9,
+    "count": 1,
+    "stride": 16,
+    "extent": 16
+  },
+  {
+    "value": 9,
+    "count": 3,
+    "stride": 16,
+    "extent": 48
+  },
+  {
+    "value": 9,
+    "count": 9,
+    "stride": 16,
+    "extent": 144
+  },
+  {
+    "value": 13,
+    "count": 1,
+    "stride": 16,
+    "extent": 16
+  },
+  {
+    "value": 13,
+    "count": 3,
+    "stride": 16,
+    "extent": 48
+  },
+  {
+    "value": 13,
+    "count": 9,
+    "stride": 16,
+    "extent": 144
+  }
+]
