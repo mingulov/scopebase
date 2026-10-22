@@ -55,3 +55,15 @@ pub use capability::{
     CauseDescriptionInput, DescribedCause, EvidenceStage, HazardState, ObservationOrigin,
     ObservationOutcome, OperationErrorSnapshot, ProbeContext, ProbePopulation, ProfileId,
 };
+
+pub mod attach;
+pub use attach::{
+    adjudicate_split, is_terminal_error, AttachBackend, AttachMode, AttachPlan, CustodyCharge,
+    ErrorAction, ErrorPolicy, NativeAttach, NativeRetire, Site,
+};
+
+pub mod ring;
+pub use ring::{
+    frame_step, BoundaryState, BoundedRingSource, DrainBudget, DrainResult, FrameStep,
+    RecordHeader, RingPositions, StageStats, StagedRecord, STAGE_FRAMING_VERSION,
+};
