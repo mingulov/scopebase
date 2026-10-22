@@ -235,3 +235,7 @@ Add missing necessary work when found: stable new task/source ID, affected capab
 At a handoff record the current task and checkout/commit; dirty owned paths; completed commands and exact result scope; next actionable command; required unavailable cells; pending children/maps/links/output leases; and who owns shared resources. Keep a single current restart route here or in an explicitly selected root handoff, never competing completion narratives.
 
 Planning verification is recorded in [the documentation review](docs/superpowers/reviews/2026-10-17-scopebase-verification.md). It cannot close any implementation checkbox above.
+
+## Controller maintenance — retained custody and writer capacity
+
+- [ ] **JOB-CUSTODY01 (coordination maintenance; no new product task):** correct `scopebase-job` writer-cap admission so a controller-declared idle source writer can be suspended while its full path/resource custody remains retained. CP06 source dispatch is currently refused because accepted LX05's unresolved custody consumes a writer slot alongside two active writers. Dependencies: a closed controller suspension/resume contract and independent review. Exit: actual admission permits at most three active writers, suspended paths still block overlap, resume reacquires capacity, partial/mismatched state fails closed, original manifests/evidence/resources are preserved, and the orchestration regression suite passes. Never infer resource retirement from source quiescence or release LX05 custody.
