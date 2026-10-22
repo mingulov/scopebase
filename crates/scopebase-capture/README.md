@@ -353,3 +353,36 @@ zero/MAX values. K first-seen implementation bodies, wire/refcount handling and
 M text validation/rendering are deliberately deferred. CP08 ordering, CP10 replay,
 CP11 actual application adapters, CP13/TT07 installed conformance, full profiles,
 UC14 and MG runtime/duplicate retirement remain separate gates.
+
+CP05 owner-authorized adaptations and normalized vectors:
+
+- KryProbe pin `d153f3aaf9a3931337b47c9e1b046c692da55083`,
+  `crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs` narrow selected ranges:
+  563–576, 586–595, 636–640, 660–670, 963–1006, 1013–1022, 1057–1061,
+  1138–1154, 1215–1254, 1297–1313, 1349–1367. Test-local K policy preserves
+  submit-bound stable identity, separate count bounds, forced ambiguous boundaries
+  and retired-only compaction. Twelve selected assertion subsets from
+  `crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs` are normalized into
+  named tests, with requested-name/type/mask/driver literals retained as data.
+- MemVeil pin `8307a17d4c1d01d2e6fa66679f0e7bed113fa416`,
+  `src/memveil/model/identity.mojo` 38–42/121–150 supplies structured identity
+  fields and a local positive-generation fixture only; checked/render/imported
+  text validators are not ported. `src/memveil/analysis/mappings.mojo`
+  490–510/536–548/663–680 supplies separate identity-present/retired-ring policies;
+  `src/memveil/capture/reader.mojo` 401–409 supplies the known-only duplicate gate.
+  Five selected assertion subsets from `tests/unit/test_{identity,mappings,reader}.mojo`
+  are normalized scripted tests, without copying reader session archives.
+
+Historical source labels are GPL-3.0-or-later. The author's separate
+`OWNER-2026-10-18` authorization selects Apache-2.0 for these project-owned
+host/test/data destinations; source labels are not rewritten into a third-party
+grant. No third-party block was identified in the admitted scopes. Exact frozen
+full-file/slice hashes, original ranges and copied subsets are recorded in the
+repository's CP05 issue/preservation record and root-owned selected-port receipt.
+No ungranted K first-seen/configuration body, M validator body, reference-only
+workload/request file, BPF source or native bridge is copied by this increment.
+
+CP05's `tests/support/cp05_bounded_process.py` reuses the already accepted
+ScopeBase testkit `tests/fixtures/fixture-access/bounded_process.py` unchanged
+under Apache-2.0. Its exact common.py-excerpt provenance and SHA256 are stated
+in the package README; it adds no third-party dependency or donor grant.
