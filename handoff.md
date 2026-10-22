@@ -2,7 +2,7 @@
 
 Date: 2026-10-22. **Development is paused at the user's explicit request.** The instruction was: “prepare to do a pause and restart. Wait all tasks will be finished, do not start new tasks - and write handoff.md to allow proper restart.” Existing workers finished their current bounded checkpoint, audit, review or preparation; no follow-on repair, source import, job, product campaign or C7 probe was started. Resume requires a later user instruction.
 
-**Seventeen of 86 tasks remain accepted; sixty-nine remain planned.** TT02-RSP01 and JOB-CUSTODY01 are maintenance, not additional product tasks. CP06, BP03, TT03 and LX08 remain planned despite their bounded source/design increments. No complete twenty-cell matrix, installed operator, full mapped-image capability or runtime/conformance profile is qualified.
+**Eighteen of 86 tasks remain accepted; sixty-eight remain planned.** TT02-RSP01 and JOB-CUSTODY01 are maintenance, not additional product tasks. CP06 is accepted at `e6fe76c` after resumed finite repair, freeze, two-lane final review and qualification; BP03, TT03 and LX08 remain planned despite their bounded source/design increments. No complete twenty-cell matrix, installed operator, full mapped-image capability or runtime/conformance profile is qualified.
 
 ## Resume here
 
@@ -153,6 +153,10 @@ Current selected-port filename is `docs/provenance/ports/BP02-20261018-maps.json
 ### CP05 exact continuation
 
 CP05 accepted source is `7d992e12bd73519610e5b2eac7866993fe83ac16`; reviewed candidate `336a4d3879bbd5de2c033096fb94cafd8aa8e1ff` preserves executable `80b3847` and moves notice prose losslessly. Root acceptance `resume-20261022/cp05-root-acceptance.json`, SHA256 `e6f5f5624e831fdf8401f8a7bc3e6d59d2737f60f5f01ddd3b596fd5715e7f9b`, binds actual six-cell matrix `3ca7e19e7d3dd25e5b3baecba56452dc6d7deb391d70de640d8384afd81923bc`: 57 PASS rows, 105 tests/four doctests per cell, 48 commands/144 checkpoints/96 logs, all groups retired. Exact archive `32cab5770eca2a841c24ed62162bc5b48dbbb8c637c29cba246056f5718d2d11` has fifty-two members. Candidate six archive helper runs plus one standalone retain 1,218 commands, 266 semantic negatives/restored twins and fourteen distinct client binaries. They are reused by reference, not fresh root helper runs. The original checker rejection remains correct for whole-directory fingerprints; a reviewed exception admits only two exact generated, unshipped Python bytecode records while all fifty declared sources, archive bytes, extracted files, tools, lock, dependencies/features and clients match. Selected-port receipt/preservation map retains eight sources, seventeen originals, forty-eight destination slices and thirteen prior destinations. No new full twenty-cell matrix, runtime identity or installed profile is qualified.
+
+### CP06 exact continuation
+
+CP06 accepted source is `e6fe76c0add00e6035892bc983214895db6bf674` (source commit `4985574`); frozen candidate `7a39686d112d178edd2471e55798da096d9f2752` repairs ESR1-01/02/03 plus required-name manifest and wrapper binding over base `0be053c`. Root acceptance `resume-20261022/cp06-root-acceptance.json`, SHA256 `67868a16a326da69ee7848a2d5a306cef65a38062b01d465d6f2a2951b37f007`, binds final two-lane review (workflow APPROVE plus Codex gpt-6-sol max APPROVE, zero open findings), twelve source/archive configurations (432/432 `KILLED_SEMANTIC`, 199 commands each) and six root archive cells (59/59 PASS rows). Exact archive `1d9f73349e85f7a21b26bf2de8439be059c967e133bdc33e4a0bc42d33e2642d` has 75 members. Root-owned files are byte-identical to the pause snapshot; root lock `f6c25f000ee1446a0654b1b92e303244cd2e51abf3db963f22e8fd3eb956d16b` preserved. Selected-port receipt/preservation map retains 29 source slices, fifteen originals and eleven destination files. No new full twenty-cell matrix, reducer behavior, installed profile or migration is qualified.
 
 ## Historical records
 

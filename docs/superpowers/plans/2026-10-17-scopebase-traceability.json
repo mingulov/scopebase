@@ -915,7 +915,7 @@
       "anchor": "task-cp06-scoped-immutable-views-required-feeds-and-corrections",
       "lane": "capture",
       "milestone": "M4",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "CP03",
         "CP05"
@@ -928,7 +928,12 @@
         "CP-R15",
         "CP-R18"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "e6fe76c0add00e6035892bc983214895db6bf674",
+        "reviewed_candidate_commit": "7a39686d112d178edd2471e55798da096d9f2752",
+        "evidence_record": "docs/reviews/2026-10-22-cp06-views.md"
+      }
     },
     {
       "id": "CP07",

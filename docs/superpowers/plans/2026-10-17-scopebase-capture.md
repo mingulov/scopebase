@@ -152,7 +152,7 @@ Dependency order: SB02 → CP01 → CP02; CP03, CP04, CP05, CP07 and CP08 use CP
 
 ## Task CP06: Scoped immutable views, required feeds and corrections
 
-**Requirements:** CP-R07/CP-R11/CP-R13/CP-R18. H13/H26/H27, Q01/Q02/Q04. Depends on accepted CP03/CP05. The [ratified exact r3 contract](../specs/2026-10-22-scopebase-cp06-views.md) and [detailed verification plan](2026-10-22-scopebase-cp06-verification.md) govern the precise API/private representation, 25 cases/fifteen originals/29 source ranges, normal-error/Drop boundaries and finite/delivery checks. D9 exact-bound-delta prototype prerequisite is satisfied under the [reviewed narrow successor](../specs/cp06-views/d9-private-unit-successor.md), which governs historical Task0 Step3/U01 allowance wording. Actual product/source/archive privacy/API/dyn/compiler, quantity-port and final executor/source-port/resource gates remain open. This task stays planned, NOT_PACKET_READY.
+**Requirements:** CP-R07/CP-R11/CP-R13/CP-R18. H13/H26/H27, Q01/Q02/Q04. Depends on accepted CP03/CP05. The [ratified exact r3 contract](../specs/2026-10-22-scopebase-cp06-views.md) and [verification plan](2026-10-22-scopebase-cp06-verification.md) govern the precise API/private representation, 25 cases/fifteen originals/29 source ranges, normal-error/Drop boundaries and finite/delivery checks. [Scoped views acceptance](../../reviews/2026-10-22-cp06-views.md) binds integrated `e6fe76c`, frozen candidate `7a39686`, twelve source/archive configurations and six root archive cells. Reducer/audit/export/installed/migration owners remain separate.
 
 **Files:** Create `src/{view,feeds,correction}.rs`, tests `report_views.rs`, `feed_integrity.rs`, `corrections.rs`, issue `docs/issues/capture/view-isolation.md`.
 
