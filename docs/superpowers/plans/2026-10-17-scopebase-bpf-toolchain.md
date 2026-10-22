@@ -95,7 +95,7 @@ The spec's file map is normative. BP tasks own `crates/scopebase-bpf/`, BPF case
 
 ### BP03: Capability and hazard evidence with non-vacuous probes
 
-The [ratified descriptive host contract](../specs/2026-10-22-scopebase-bp03-host.md) and [verification plan](2026-10-22-scopebase-bp03-verification.md) define the first bounded host/model increment, including complete finite support assets and resource/delivery contracts. Bind actual current execution inputs/resources before implementation. Full BP03/native/operator/profile obligations below remain open; ratified design does not complete this task.
+The [ratified descriptive host contract](../specs/2026-10-22-scopebase-bp03-host.md) and [verification plan](2026-10-22-scopebase-bp03-verification.md) define the first bounded host/model increment, including complete finite support assets and resource/delivery contracts. [Host acceptance](../../reviews/2026-10-22-bp03-host.md) binds integrated `bfb9452`, frozen `bd9d361+e4a4629`, 24 bounded source/archive cells and 1844 passing tests. Full native/operator/profile obligations below remain open.
 
 **Requirements:** BP-R03/BP-R13; B03/B10/H22/G12/G14. **Depends on:** BP01, TT01/TT02 for case integration.
 

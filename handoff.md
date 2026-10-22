@@ -2,7 +2,7 @@
 
 Date: 2026-10-22. **Development is paused at the user's explicit request.** The instruction was: “prepare to do a pause and restart. Wait all tasks will be finished, do not start new tasks - and write handoff.md to allow proper restart.” Existing workers finished their current bounded checkpoint, audit, review or preparation; no follow-on repair, source import, job, product campaign or C7 probe was started. Resume requires a later user instruction.
 
-**Eighteen of 86 tasks remain accepted; sixty-eight remain planned.** TT02-RSP01 and JOB-CUSTODY01 are maintenance, not additional product tasks. CP06 is accepted at `e6fe76c` after resumed finite repair, freeze, two-lane final review and qualification; BP03, TT03 and LX08 remain planned despite their bounded source/design increments. No complete twenty-cell matrix, installed operator, full mapped-image capability or runtime/conformance profile is qualified.
+**Nineteen of 86 tasks remain accepted; sixty-seven remain planned.** TT02-RSP01 and JOB-CUSTODY01 are maintenance, not additional product tasks. CP06 is accepted at `e6fe76c`; BP03 is accepted at `bfb9452` after custody closure, prepared integration, fix round and 24-cell bounded qualification; TT03 and LX08 remain planned despite their bounded design increments. No complete twenty-cell matrix, installed operator, full mapped-image capability or runtime/conformance profile is qualified.
 
 ## Resume here
 
@@ -157,6 +157,10 @@ CP05 accepted source is `7d992e12bd73519610e5b2eac7866993fe83ac16`; reviewed can
 ### CP06 exact continuation
 
 CP06 accepted source is `e6fe76c0add00e6035892bc983214895db6bf674` (source commit `4985574`); frozen candidate `7a39686d112d178edd2471e55798da096d9f2752` repairs ESR1-01/02/03 plus required-name manifest and wrapper binding over base `0be053c`. Root acceptance `resume-20261022/cp06-root-acceptance.json`, SHA256 `67868a16a326da69ee7848a2d5a306cef65a38062b01d465d6f2a2951b37f007`, binds final two-lane review (workflow APPROVE plus Codex gpt-6-sol max APPROVE, zero open findings), twelve source/archive configurations (432/432 `KILLED_SEMANTIC`, 199 commands each) and six root archive cells (59/59 PASS rows). Exact archive `1d9f73349e85f7a21b26bf2de8439be059c967e133bdc33e4a0bc42d33e2642d` has 75 members. Root-owned files are byte-identical to the pause snapshot; root lock `f6c25f000ee1446a0654b1b92e303244cd2e51abf3db963f22e8fd3eb956d16b` preserved. Selected-port receipt/preservation map retains 29 source slices, fifteen originals and eleven destination files. No new full twenty-cell matrix, reducer behavior, installed profile or migration is qualified.
+
+### BP03 exact continuation
+
+BP03 accepted source is `bfb94520bda8a75dbb76a86855cd58ed6ceade25` (source commit `0b8643f`); frozen `bd9d3618e14df13927e414766edfa1c567bf2ddc` plus fix `e4a4629c13e325a5b220d771b1028e7af492fdd3` deliver the prepared adapter, independent allocator observer and error oracle over the combined base. Old jobs reconciled closed (audit `fda569ab`, 132+22 unknowns retained). Final two-lane review APPROVE after a Codex BLOCK triaged to a 2-file red-green fix; 24 bounded cells qualified with 1844 passing tests in 6.2M. Exact archives `985c4ddf…` (108 members) and `97994694…` (175 members). Root lock evolved `f6c25f00 → 30d65150`, byte-identical to the reviewed offline oracle. Selected-port receipt/preservation map retains three P source slices, three mechanisms and four destination files. Full campaign, populations-runtime, installed routes, native behavior and migration remain open, NOT_RUN where applicable.
 
 ## Historical records
 

@@ -345,7 +345,7 @@
       "anchor": "bp03-capability-and-hazard-evidence-with-non-vacuous-probes",
       "lane": "bpf",
       "milestone": "M3",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "BP01",
         "TT01",
@@ -357,7 +357,15 @@
         "BP-R13",
         "TC-R10"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "bfb94520bda8a75dbb76a86855cd58ed6ceade25",
+        "reviewed_candidate_commits": [
+          "bd9d3618e14df13927e414766edfa1c567bf2ddc",
+          "e4a4629c13e325a5b220d771b1028e7af492fdd3"
+        ],
+        "evidence_record": "docs/reviews/2026-10-22-bp03-host.md"
+      }
     },
     {
       "id": "BP04",

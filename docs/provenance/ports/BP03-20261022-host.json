@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "BP03-20261022-host",
+  "task_id": "BP03",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+    "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+  },
+  "mappings": [
+    {
+      "file_id": "P:crates/bpf-multi/src/lib.rs",
+      "source_scope": [
+        [
+          591,
+          605
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/src/capability.rs",
+          "sha256": "b3e13cdfb1cc4d0273b7401a084f207d4c10266f1d684b964a15779e804b61c4",
+          "symbols": [
+            "ProbePopulation",
+            "assess_filter_probe"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/bpf-multi/src/lib.rs",
+      "source_scope": [
+        [
+          1179,
+          1192
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/tests/capability.rs",
+          "sha256": "2aecbb1ede128c071e6f5b3eefc212cf959fa3d1b57e46e777cbafd58a36a881",
+          "symbols": [
+            "filter_original_populations"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/fixtures/capability-v1/filter-inputs.json",
+          "sha256": "942b8dbe7e509b2208db4bfddaae3b28526898078e99b1440247e15e6e123028",
+          "symbols": []
+        },
+        {
+          "path": "crates/scopebase-bpf/fixtures/capability-v1/filter-expected.json",
+          "sha256": "2a51260735e004ceae2b6b064550fba06f74f50aac46c19476dc69e874524f5d",
+          "symbols": []
+        }
+      ]
+    },
+    {
+      "file_id": "P:src/uretprobe_hazard.rs",
+      "source_scope": [
+        [
+          34,
+          50
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-bpf/src/capability.rs",
+          "sha256": "b3e13cdfb1cc4d0273b7401a084f207d4c10266f1d684b964a15779e804b61c4",
+          "symbols": [
+            "CapabilityState",
+            "HazardState"
+          ]
+        },
+        {
+          "path": "crates/scopebase-bpf/tests/capability.rs",
+          "sha256": "2aecbb1ede128c071e6f5b3eefc212cf959fa3d1b57e46e777cbafd58a36a881",
+          "symbols": [
+            "hazard_and_capability_remain_separate"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/BP03-preservation-20261022.md",
+    "sha256": "dee2efd957acf2583721df46fe01fdba2022fd6cbc2be51a0bd330f5ba25c26e"
+  },
+  "supersedes": null
+}
