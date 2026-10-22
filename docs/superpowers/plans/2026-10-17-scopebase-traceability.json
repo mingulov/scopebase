@@ -1563,7 +1563,7 @@
    "anchor": "sdk02-bounded-context-diagnostics-and-component-bindings",
    "lane": "sdk",
    "milestone": "M5",
-   "status": "PLANNED",
+   "status": "ACCEPTED",
    "depends_on": [
     "SDK01"
    ],
@@ -1573,7 +1573,12 @@
     "SDK-R05",
     "SDK-R10"
    ],
-   "profile_gates": []
+   "profile_gates": [],
+   "acceptance": {
+    "subject_commit": "b11d8c96d04ac99cd8c8afc61ae056ad22ef427f",
+    "reviewed_candidate_commit": "b11d8c96d04ac99cd8c8afc61ae056ad22ef427f",
+    "evidence_record": "docs/reviews/2026-10-23-sdk02-tt03adopt.md"
+   }
   },
   {
    "id": "SDK03",
