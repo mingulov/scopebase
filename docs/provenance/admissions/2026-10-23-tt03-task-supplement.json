@@ -1,0 +1,929 @@
+{
+  "schema_version": "2.0.0",
+  "kind": "SCOPEBASE_SOURCE_INTAKE",
+  "status": "SOURCE_INTAKE_NOT_PRODUCTION_PORT",
+  "qualification": "NOT_RUN",
+  "authorizations": [
+    {
+      "id": "OWNER-2026-10-18",
+      "authority": "USER_DECLARED_AUTHOR",
+      "status": "PROVISIONAL",
+      "scope": "USER_CONTRIBUTIONS_IN_SELECTED_FILES",
+      "decision_ref": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md#d03--license-by-code-ownership-and-actual-build-destination",
+      "allowed_destinations": {
+        "host": "Apache-2.0",
+        "bpf-target": "GPL-2.0-only",
+        "shared-target-source": "Apache-2.0 OR GPL-2.0-only",
+        "host-build-tool": "Apache-2.0",
+        "data-document": "Apache-2.0"
+      }
+    }
+  ],
+  "registry_note": "Narrow TT03 task/subset supplement. The full H01-H33 family registry, 179 obligation mappings and unaffected donor/ledger rows are retained unchanged in the chained admissions docs/provenance/admissions/2026-10-22-next-host-scopes.json (e29cc889) and docs/provenance/admissions/2026-10-22-tt03-selected-host-routing.json (7c487fe2); they are referenced by hash, not duplicated here. This file carries only the two TT03-consumed file rows, their P/O donor records, the single TT03 port group and the tt03_task_supplement adoption section.",
+  "observation": {
+    "method": "READ_ONLY_FROZEN_SOURCE_AND_EXPLICIT_LOCAL_HISTORY_INSPECTION_NOT_TEST_EXECUTION",
+    "source_inventory_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "scope_limits": [
+      "Narrow TT03 task/subset supplement (Q-TT03-2): TT03 consumer mapping over the exact six first-increment facets/nine ranges already routed by adopted Rev 12; no new source bytes selected.",
+      "No new grant; chained immutable admissions unchanged; no source copied, port receipt, implementation or test/runtime qualification.",
+      "Full family/obligation registry retained only in the chained admissions. It does not select their other source files."
+    ]
+  },
+  "selection": {
+    "selected_file_count": 2,
+    "selected_file_ids": [
+      "P:src/process.rs",
+      "O:tests/target_lifecycle.rs"
+    ],
+    "unselected_disposition": "RESEARCH_ONLY_NOT_ADOPTED",
+    "unselected_scope": "This supplement selects ONLY six TT03 host facets/nine exact ranges for the first increment; chained admissions outside this supplement remain intact. Six denial/namespace facets stay DEFERRED/uncopied; two in-range facets stay REFERENCE_ONLY/uncopied; the stopped-child scope stays UNGRANTED/REFERENCE_ONLY/uncopied.",
+    "findings": [
+      "The immutable e29cc889 admission references.tasks omits TT03 on exactly these two source rows. Adopted Rev 12 routing (7c487fe2) added TT03 over the narrowed source_scope; this task supplement binds the same nine ranges as TT03's first-increment execution subset with per-range admitted-scope citations and recomputed hash verification."
+    ]
+  },
+  "files": [
+    {
+      "id": "P:src/process.rs",
+      "donor": "P",
+      "path": "src/process.rs",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+      "dirty_sha256": null,
+      "owner": "LX09",
+      "intended_contracts": [
+        "tt03-ordinary-host-selected-facets"
+      ],
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "LX09",
+          "LX10",
+          "LX11",
+          "LX08",
+          "LX06",
+          "TT03"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/process.rs",
+            "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "abb1308bbd77a8d742fa83b61c90912e64346383b45816a5514b5741683bf051",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1555,
+            1617
+          ],
+          [
+            1745,
+            1760
+          ],
+          [
+            1883,
+            1917
+          ],
+          [
+            2343,
+            2367
+          ],
+          [
+            2381,
+            2384
+          ],
+          [
+            2388,
+            2392
+          ],
+          [
+            2396,
+            2400
+          ],
+          [
+            2404,
+            2410
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+        "observed_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 89140,
+        "research_baseline_delta": {
+          "baseline_exists": true,
+          "baseline_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+          "changed_current_bytes": false
+        },
+        "original_observation_sha256": "2e831f643ddae869c417e2d4ebad14ecebc100bed67ee8ce65c860e14b79bdf9"
+      },
+      "source_issue_test": {
+        "issues": [
+          "tt03-ordinary-host-selected-facets"
+        ],
+        "existing_symbols": [
+          {
+            "name": "exited_unreaped",
+            "line": 2343
+          },
+          {
+            "name": "run_pidfd_denial_case",
+            "line": 2369
+          },
+          {
+            "name": "original_generation_state_distinguishes_exit_from_pid_reuse",
+            "line": 1555
+          },
+          {
+            "name": "only_a_missing_process_is_proof_of_exit",
+            "line": 1745
+          },
+          {
+            "name": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+            "line": 1883
+          }
+        ],
+        "evidence": "Exact selected source symbols/ranges present in immutable frozen local bytes; NOT_RUN, no port."
+      },
+      "intake_mapping_note": "TT03 task/subset supplement (Q-TT03-2): same eight exact TT03 ranges as adopted routing 7c487fe2, bound here as TT03's first-increment execution subset with per-range admitted-scope citations in tt03_task_supplement. Existing LX09 primary owner and previous consumers retained as provenance; chained admissions/scopes/dispositions unchanged. Existing OWNER-2026-10-18 only. No port exists."
+    },
+    {
+      "id": "O:tests/target_lifecycle.rs",
+      "donor": "O",
+      "path": "tests/target_lifecycle.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+      "dirty_sha256": null,
+      "owner": "LX09",
+      "intended_contracts": [
+        "tt03-ordinary-host-selected-facets"
+      ],
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "LX09",
+          "LX10",
+          "LX11",
+          "LX08",
+          "LX06",
+          "TT03"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "tests/target_lifecycle.rs",
+            "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "e791d495780ed43a41cdbe2fd4cf3536939c3e010c8c05bf35588557bd8ec852",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            359,
+            375
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+        "observed_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 125083,
+        "research_baseline_delta": {
+          "baseline_exists": true,
+          "baseline_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+          "changed_current_bytes": false
+        },
+        "original_observation_sha256": "b8d10d5d95b8525be684b47dd361e4285d9d99530bbe73ad9f8d3b64bbb35d59"
+      },
+      "source_issue_test": {
+        "issues": [
+          "tt03-ordinary-host-selected-facets"
+        ],
+        "existing_symbols": [
+          {
+            "name": "external_pid_target_is_never_signaled",
+            "line": 359
+          }
+        ],
+        "evidence": "Exact selected source symbols/ranges present in immutable frozen local bytes; NOT_RUN, no port."
+      },
+      "intake_mapping_note": "TT03 task/subset supplement (Q-TT03-2): same single exact TT03 range as adopted routing 7c487fe2, bound here as TT03's first-increment execution subset with per-range admitted-scope citation in tt03_task_supplement. Existing LX09 primary owner and previous consumers retained as provenance; chained admissions/scopes/dispositions unchanged. Existing OWNER-2026-10-18 only. No port exists."
+    }
+  ],
+  "donors": [
+    {
+      "id": "P",
+      "project": "p11scope",
+      "host": "local",
+      "repository_path": "/home/user/src/m/p11scope-ws/.worktrees/v040-integration",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "tree": "c61420fd7488d02c4a9e5f09c5be0164a02a41a2",
+      "baseline_commit": "eb6bbe1df910a3cf40b6b7e8965cc65c69f203ae",
+      "authority": "Active integration selected by current outer handoff; nested public main is older.",
+      "observed_head_before": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "observed_head_after": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "observed_branch_label_only": "v040-h7-object-wire",
+      "baseline_relationship": {
+        "relationship": "ancestor"
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "5f941905370d8a5e4a1294b216e149682e262543e80a8eee9897ad0eae18f003",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "2b6d91de37017aad31162156eac7ad3378b7d584f64356bbf64b79b99718533d",
+          "status": ""
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "d2e9fe8bfc29c87c8db8b7d8b6fe61f5e91666b098da8c4b4d426643cb565993",
+          "status": ""
+        }
+      ],
+      "policy_gap": "third-party/README.md cites licenses/sources.json and licenses/, absent in this selected checkout; original upstream license texts do exist under generated third-party/src/aya*/LICENSE-* and are hashed here.",
+      "selected_tree_entries": {
+        "src/process.rs": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e"
+      }
+    },
+    {
+      "id": "O",
+      "project": "OSSLscope",
+      "host": "um790",
+      "repository_path": "/work/osslscope-ws/osslscope/.worktrees/preview-r21",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "tree": "2ad18b4da848c0ef1d3701caa2839418129b2d10",
+      "baseline_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "authority": "Integration preview selected by donor research; root product checkout task/p7-traversal is a different authority.",
+      "observed_head_before": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "observed_head_after": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "observed_branch_label_only": "task/integration-preview-r21",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "c77c24678c7bd887bda60bb91b04ead378d211fb0cee8c8177000b05e3d4a9a2",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "7e537c672c0556266f04a59eaf72161a2012e652f433b07541b67946d0f9d82a",
+          "status": ""
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "9322675a787fec5385280b7a04ff5da54c17faf1b7f18c78c1a3e24c0f4de62e",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {
+        "tests/target_lifecycle.rs": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19"
+      }
+    }
+  ],
+  "port_groups": [
+    {
+      "id": "tt03-ordinary-host-selected-facets",
+      "owner": "TT03",
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "TT03"
+        ]
+      },
+      "source_file_ids": [
+        "P:src/process.rs",
+        "O:tests/target_lifecycle.rs"
+      ],
+      "contract": "Six exact ordinary-host TT03 selected facets/nine ranges; original child/pidfd nonreaping and phase order, independent error/birth/tricky-name vectors and borrow-only sentinel invariant, per exact r2 materializer selection and unchanged r4 runtime contract. No production process classification/API, denial/namespace route, stopped-child setup, or implicit no-control syscall audit.",
+      "selected_regressions_to_port_or_adapt": [
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "exited_unreaped",
+          "line": 2343,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "run_pidfd_denial_case",
+          "line": 2369,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "original_generation_state_distinguishes_exit_from_pid_reuse",
+          "line": 1555,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "only_a_missing_process_is_proof_of_exit",
+          "line": 1745,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+          "line": 1883,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "tests/target_lifecycle.rs",
+          "name": "external_pid_target_is_never_signaled",
+          "line": 359,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        }
+      ]
+    }
+  ],
+  "tt03_task_supplement": {
+    "question": "Q-TT03-2",
+    "status": "ADOPTED_DESIGN_REVIEW_ONLY_NO_EXECUTION",
+    "adopted_utc": "2026-10-23",
+    "adoption_record": "docs/provenance/adoption-decisions.md Revision 14; packet record docs/issues/testkit/tt03-adoption.md",
+    "human_record": "docs/provenance/tt03-task-supplement-20261023.md",
+    "supersedes": null,
+    "supplements": [
+      {
+        "role": "scope_authority",
+        "path": "docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+        "bytes": 966251,
+        "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+      },
+      {
+        "role": "consumer_routing",
+        "path": "docs/provenance/admissions/2026-10-22-tt03-selected-host-routing.json",
+        "bytes": 126051,
+        "sha256": "7c487fe2934a1c10a3252312b3c1ef70757fdc13b5b2a0037d83d0422ccc1bad"
+      }
+    ],
+    "consumer": "TT03",
+    "original_owners_preserved": true,
+    "new_author_grant": false,
+    "new_source_grant": false,
+    "source_grants_intake_changed": false,
+    "packet_ready": false,
+    "implementation_admitted": false,
+    "selection_source": {
+      "path": "docs/superpowers/specs/tt03-linux/materializer-source-selection.json",
+      "bytes": 29986,
+      "sha256": "99017919830f93965b169644471292538c3f837530a64f2eb3d2938eb62ed020"
+    },
+    "facets": [
+      {
+        "facet_id": "TT03-SF-06",
+        "file_id": "P:src/process.rs",
+        "symbol": "exited_unreaped",
+        "line_start": 2343,
+        "line_end": 2367,
+        "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56",
+        "first_increment": "ADAPT",
+        "selected_ranges": [
+          {
+            "line_start": 2343,
+            "line_end": 2367,
+            "bytes": 1143,
+            "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56",
+            "admitted_scope": [
+              1929,
+              2427
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "parent original-owner phase oracle; rustix PidFd wait with WNOWAIT if accepted API supports it; no arbitrary numeric-PID/wait-any authority; EINTR charges/deadline",
+        "excluded_context": "unbounded EINTR loop and raw PID reacquisition are adapted to finite work/original-owner authority",
+        "preservation_evidence_contract": {
+          "positive": "P owned_live_zombie_reaped_are_distinct: original live child, actual terminal pidfd plus WNOWAIT unreaped, exact original-child reap and only then ECHILD; active B remains responsive.",
+          "independent_oracle": "Original parent-owned Child/pidfd and raw wait disposition, distinct from consumer output and bare numeric PID.",
+          "active_bad_control": "Remove WNOWAIT or substitute wait-any/B or accept unrecorded ECHILD as reap.",
+          "intended_assertion": "Exact original-owned-child nonreaping/phase/custody assertion fails after valid live setup.",
+          "adaptation_why": "Finite work/deadline and retained original authority replace unbounded EINTR/raw-number convenience without discarding the original nonreaping regression."
+        },
+        "original_disposition_preserved": "ADAPT_RECOMMENDED"
+      },
+      {
+        "facet_id": "TT03-SF-07",
+        "file_id": "P:src/process.rs",
+        "symbol": "run_pidfd_denial_case",
+        "line_start": 2369,
+        "line_end": 2414,
+        "sha256": "b43df48f91e6b2f05a47a744325042b6fa2c2aa0fbb43617d2d6eac1d8067766",
+        "first_increment": "ADAPT_LIFECYCLE_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 2381,
+            "line_end": 2384,
+            "bytes": 262,
+            "sha256": "ec6e2831aed824b6e46b7586f872b042aa05e2cc86f35f30c5daca371fa8c434",
+            "admitted_scope": [
+              1929,
+              2427
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          },
+          {
+            "line_start": 2388,
+            "line_end": 2392,
+            "bytes": 181,
+            "sha256": "524d127845b99bc3f0f56ad9d3e68ab1eca0f4be96da01444cb05e7eb2c5a953",
+            "admitted_scope": [
+              1929,
+              2427
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          },
+          {
+            "line_start": 2396,
+            "line_end": 2400,
+            "bytes": 253,
+            "sha256": "e33a467ffecac019858e111921a718e98fcc313a5e43cc201a8b96503f9929ea",
+            "admitted_scope": [
+              1929,
+              2427
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          },
+          {
+            "line_start": 2404,
+            "line_end": 2410,
+            "bytes": 282,
+            "sha256": "89e463ab87fa48ef4d8d07a24739181a7489887c6d4016141862d0975c2f8166",
+            "admitted_scope": [
+              1929,
+              2427
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "parent lifecycle schedule and literal oracle, exact original Child/pidfd; no denial helper or destructor copied",
+        "excluded_context": "ReapOnDrop/cat/denial helper commands/refreshed deadlines and helper ACK after target death are not copied",
+        "preservation_evidence_contract": {
+          "positive": "Same retained original birth/pidfd across real live -> zombie -> recorded reap, with independent target B and immutable phase ledger.",
+          "independent_oracle": "Parent real pidfd readiness, raw starttime/state and exact wait result; worker ACK cannot certify dead phases.",
+          "active_bad_control": "Treat terminal pidfd as completed reap, accept helper ACK as death witness, use a replacement Child or destructor-only cleanup.",
+          "intended_assertion": "Original phase order and cleanup/custody fail after actual original exit, not during helper setup.",
+          "adaptation_why": "Reuse the original lifecycle evidence sequence while retaining the r4 bounded framing/original-owner finalizer instead of copying the reference-only denial helper or destructor."
+        },
+        "original_disposition_preserved": "ADAPT_LIFECYCLE_ONLY"
+      },
+      {
+        "facet_id": "TT03-SF-09",
+        "file_id": "P:src/process.rs",
+        "symbol": "original_generation_state_distinguishes_exit_from_pid_reuse",
+        "line_start": 1555,
+        "line_end": 1617,
+        "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb",
+        "first_increment": "VECTORS_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 1555,
+            "line_end": 1617,
+            "bytes": 2148,
+            "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb",
+            "admitted_scope": [
+              1552,
+              1617
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "independent literal phase/oracle vectors; no production OriginalGenerationState API or strict-LX08 implementation claimed",
+        "excluded_context": "production fallback API, fake PID-reuse claim and domain error constructor are not ported",
+        "preservation_evidence_contract": {
+          "positive": "Literal same-birth zombie with terminal original pidfd; separate interrupted poll, permission denial and missing retained-birth vectors.",
+          "independent_oracle": "Independently authored native-phase/literal expectation distinguishes terminal, current, reused and unknown evidence; it is not a new production classification API.",
+          "active_bad_control": "Birth-equals-alive, poll-error-is-exit, denial-is-exit or missing-birth-is-exit.",
+          "intended_assertion": "The named independent counterexample assertion fails; no actual PID-reuse race or LX08 implementation is claimed.",
+          "adaptation_why": "VECTORS_ONLY preserves original oracle counterexamples in the fixture tier; strict production classification remains with LX08."
+        },
+        "original_disposition_preserved": "ADAPT_ORACLE_FACETS"
+      },
+      {
+        "facet_id": "TT03-SF-10",
+        "file_id": "P:src/process.rs",
+        "symbol": "only_a_missing_process_is_proof_of_exit",
+        "line_start": 1745,
+        "line_end": 1760,
+        "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c",
+        "first_increment": "VECTORS_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 1745,
+            "line_end": 1760,
+            "bytes": 605,
+            "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c",
+            "admitted_scope": [
+              1739,
+              1760
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "independent error/absence literal vectors; no actual restricted-credential or strict-LX08 classification claimed",
+        "excluded_context": "production gone_from/generation_gone API and native credential recipe remain outside increment",
+        "preservation_evidence_contract": {
+          "positive": "Literal NotFound, live starttime, EACCES and malformed-stat populations, with raw source labels retained.",
+          "independent_oracle": "Original absence-versus-unobserved distinction, independently encoded in fixture literal expectations.",
+          "active_bad_control": "Collapse EACCES/InvalidData into NotFound/exit.",
+          "intended_assertion": "Exact non-exit/unknown vector expectation fails; no restricted-credential native population is credited.",
+          "adaptation_why": "Retain deterministic error/absence regression without claiming production API or deferred credential support."
+        },
+        "original_disposition_preserved": "ADAPT_ORACLE_FACETS"
+      },
+      {
+        "facet_id": "TT03-SF-11",
+        "file_id": "P:src/process.rs",
+        "symbol": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+        "line_start": 1883,
+        "line_end": 1917,
+        "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072",
+        "first_increment": "ADAPT",
+        "selected_ranges": [
+          {
+            "line_start": 1883,
+            "line_end": 1917,
+            "bytes": 1688,
+            "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072",
+            "admitted_scope": [
+              1877,
+              1917
+            ],
+            "admission_ref": "e29cc889 P:src/process.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "owned worker PR_SET_NAME plus independent Python raw-stat final-delimiter/state/birth oracle; explicit r4 parent retirement",
+        "excluded_context": "/bin/sleep/symlink/arg0/timing loops and cleanup after assertions are replaced only as ratified worker composition requires",
+        "preservation_evidence_contract": {
+          "positive": "P tricky_comm_has_independent_birth_state: exact nine-byte a) Z 1 (b under actual worker naming, same original birth in real live/zombie phases and recorded reap.",
+          "independent_oracle": "Independent Python final-right-delimiter raw stat parser plus real comm bytes and original parent phase evidence.",
+          "active_bad_control": "First-right-delimiter or wrong-index parser, fake Z name treated as zombie, or cleanup only after assertion.",
+          "intended_assertion": "The actual live tricky-name state/birth assertion fails after real naming and before claimed native completion; cleanup truth remains collected.",
+          "adaptation_why": "Own explicit worker operation replaces external sleep/symlink timing dependency; source literal and original live/zombie/reaped invariant remain."
+        },
+        "original_disposition_preserved": "ADAPT_RECOMMENDED"
+      },
+      {
+        "facet_id": "TT03-SF-14",
+        "file_id": "O:tests/target_lifecycle.rs",
+        "symbol": "external_pid_target_is_never_signaled",
+        "line_start": 359,
+        "line_end": 375,
+        "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a",
+        "first_increment": "ADAPT_NO_CONTROL_FACET",
+        "selected_ranges": [
+          {
+            "line_start": 359,
+            "line_end": 375,
+            "bytes": 628,
+            "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a",
+            "admitted_scope": [
+              358,
+              375
+            ],
+            "admission_ref": "e29cc889 O:tests/target_lifecycle.rs READY_FOR_SELECTED_SCOPE"
+          }
+        ],
+        "destination_contract": "borrow-only actual consumer/fixture sentinel invariant; actual LX08 control API/type/audit comparison waits for its implementation",
+        "excluded_context": "application ExternalTarget/OwnedTarget API, external /bin/sleep dependency and unguarded cleanup are not ported",
+        "preservation_evidence_contract": {
+          "positive": "P observation_does_not_control_target: actual borrow-only accepted Linux consumer while independent active A/B endpoints remain responsive.",
+          "independent_oracle": "Original-owner phase endpoints and actual adapter/API binding, separate from consumer return values. Full invisible no-control syscall audit remains F/open.",
+          "active_bad_control": "Actual consumer stops/kills/adopts wrong target or loses independent live sentinel after a valid phase.",
+          "intended_assertion": "Reached visible no-control/target-identity assertion fails. Signal0/wait-WNOHANG coverage and future ProcessObservation UI are never inferred.",
+          "adaptation_why": "Preserve external observation/control separation without porting application custody policy or substituting a sentinel for the separately required operation audit."
+        },
+        "original_disposition_preserved": "ADAPT_NO_CONTROL_FACET"
+      }
+    ],
+    "deferred_facets": [
+      {
+        "facet_id": "TT03-SF-02",
+        "file_id": "P:src/process.rs",
+        "symbol": "deny_pidfd_open",
+        "range": [1972, 2025],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Real x86_64 seccomp denial route; preserved for denied/namespace/LX08/TT04 work, not ordinary-host execution."
+      },
+      {
+        "facet_id": "TT03-SF-03",
+        "file_id": "P:src/process.rs",
+        "symbol": "thread_status_field",
+        "range": [2030, 2036],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Bounded status/filter delta witness; preserved for denied/namespace/LX08/TT04 work."
+      },
+      {
+        "facet_id": "TT03-SF-04",
+        "file_id": "P:src/process.rs",
+        "symbol": "pidfd_denial_helper",
+        "range": [2054, 2180],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Denial/live/zombie/reaped/no-authority phases; preserved for denied/namespace/LX08/TT04 work."
+      },
+      {
+        "facet_id": "TT03-SF-08",
+        "file_id": "P:src/process.rs",
+        "symbol": "real_pidfd_denial_preserves_proc_identity_without_signal_authority",
+        "range": [2422, 2426],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Both actual errno populations; destination refuses permissive fallback."
+      },
+      {
+        "facet_id": "TT03-SF-12",
+        "file_id": "P:src/pidns.rs",
+        "symbol": "only_this_namespaces_own_proc_classifies_own",
+        "range": [595, 635],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Pure self/NSpid mismatch corpus; real matched nested/foreign routes are NEW."
+      },
+      {
+        "facet_id": "TT03-SF-13",
+        "file_id": "P:src/pidns.rs",
+        "symbol": "the_numbering_composes_the_mounted_procs_view",
+        "range": [729, 772],
+        "first_increment": "DEFERRED",
+        "copy_status": "NOT_COPIED",
+        "note": "Fake proc mismatch vectors; global cache expectation excluded."
+      }
+    ],
+    "reference_only_facets": [
+      {
+        "facet_id": "TT03-SF-01",
+        "file_id": "P:src/process.rs",
+        "symbol": "ReapOnDrop destructor and owned child wrapper",
+        "range": [1945, 1967],
+        "first_increment": "REFERENCE_ONLY",
+        "copy_status": "NOT_COPIED",
+        "inside_adopted_ready_scope": true,
+        "note": "Preserve defect/context only; Drop ignores errors and cannot certify retirement."
+      },
+      {
+        "facet_id": "TT03-SF-05",
+        "file_id": "P:src/process.rs",
+        "symbol": "PidfdDenialHelper parent framing/channel/finish",
+        "range": [2185, 2339],
+        "first_increment": "REFERENCE_ONLY",
+        "copy_status": "NOT_COPIED",
+        "inside_adopted_ready_scope": true,
+        "note": "Preserve causal phase pattern only; unbounded thread/mpsc/stdout parsing replaced."
+      },
+      {
+        "facet_id": "TT03-SF-15",
+        "file_id": "O:tests/target_lifecycle.rs",
+        "symbol": "stopped_child_maps_readable_for_setup_baseline",
+        "range": [336, 356],
+        "first_increment": "REFERENCE_ONLY",
+        "copy_status": "NOT_COPIED",
+        "inside_adopted_ready_scope": false,
+        "copy_admission": "UNGRANTED_REFERENCE_ONLY",
+        "note": "Outside e29cc889 O ready scopes ([122,127],[129,138],[358,375]); stopped pre-exec/dumpable original has no ordinary live-fixture replacement. No NEEDS_OWNER_GRANT is raised because this facet is NOT selected for the increment."
+      }
+    ],
+    "range_verification": {
+      "method": "READ_ONLY_RECOMPUTATION_FROM_GITLESS_FROZEN_CHECKOUTS",
+      "frozen_roots": {
+        "P": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration/src/process.rs",
+        "O": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21/tests/target_lifecycle.rs"
+      },
+      "whole_file": [
+        {
+          "file_id": "P:src/process.rs",
+          "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+          "recomputed_match": true
+        },
+        {
+          "file_id": "O:tests/target_lifecycle.rs",
+          "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+          "recomputed_match": true
+        }
+      ],
+      "ranges_verified": 9,
+      "ranges_matched": 9,
+      "out_of_scope_ranges": [],
+      "containment": "Every selected range sits inside a READY_FOR_SELECTED_SCOPE admitted scope of e29cc889 (cited per range above); no selected range required a new owner grant. SF-15 [336,356] is the only observed facet outside e29cc889 and stays UNGRANTED/REFERENCE_ONLY/uncopied."
+    },
+    "counts": {
+      "observed": 15,
+      "inside_existing_ready_ranges": 14,
+      "selected_first_increment": 6,
+      "selected_ranges": 9,
+      "deferred": 6,
+      "reference_only_total": 3,
+      "ungranted_reference_only": 1
+    },
+    "unbound": [
+      "future_execution_base",
+      "candidate_selected_port_receipt",
+      "actual_destination_hashes",
+      "actual_C7_product_dependency_feature_lock_notice_artifacts",
+      "TT03_provider_worker_consumer_archive_binaries",
+      "actual_build_output_resources",
+      "actual_TT04_realms",
+      "actual_EOF_assets",
+      "operation_tracer",
+      "joint_final_index_compatibility_LX08",
+      "LX09_helper_compatibility",
+      "actual_private_TT03_creator_guard_source_artifacts",
+      "all_152_delivery DAG_rows_NOT_RUN",
+      "all_14P_7F_rows_NOT_RUN",
+      "installed_operator_delivery"
+    ],
+    "candidate_bound_receipt_rule": "Each actual selected contribution binds this supplement plus chained admissions e29cc889 and 7c487fe2, source range/hash, destination symbol/hash, preserved deviation, original regression, oracle/positive/reached bad control and reviewed candidate. Source-only metadata is not a selected-port receipt."
+  }
+}
