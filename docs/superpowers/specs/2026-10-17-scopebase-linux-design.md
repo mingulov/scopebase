@@ -242,6 +242,8 @@ impl StatObservation {
 
 Both implement Copy/Clone/Eq/PartialEq and bounded custom Debug; equality creates no authority. Stat uses fresh held-descriptor metadata, never a stored pathname. Signed seconds preserve pre-epoch times; nanoseconds must be in 0..1_000_000_000. Negative/unrepresentable length, seconds or raw device/inode conversion overflow, or invalid nanoseconds refuse observation construction with ValidateFile/Malformed and no invented errno. Acquisition may extract type/key alone; no unchanged-content predicate is added. No public raw constructors, serde, MapsFileKey or owner conversion, extra time wrapper or content hash is introduced. Size/times support later consistency observations, not immutable snapshots or universal identity.
 
+The [ratified LX08 addendum](2026-10-22-scopebase-lx08-process.md) governs the process API and replaces this original process outline with the exact strict constructor, six-FD observation owner, creator authority checks, descriptive results and bounded accounting. Its [verification plan](../plans/2026-10-22-scopebase-lx08-verification.md) remains NOT_RUN; LX08 is not accepted. Pure parser interfaces retain their separate LX05 contract.
+
 `scopebase_linux::procfs` supplies:
 
 ```rust
@@ -257,7 +259,7 @@ impl ProcessObservation {
     pub fn read_mountinfo(&self, limits: ProcLimits, control: &OperationControl)
         -> Result<MountObservation, LinuxError>;
     pub fn verify_birth(&self, control: &OperationControl)
-        -> Result<BirthStatus, LinuxError>;
+        -> Result<BirthVerification, LinuxError>;
 }
 ```
 
@@ -269,6 +271,7 @@ pub struct ParseLimits {
 }
 pub struct ProcLimits {
     pub parse: ParseLimits, pub max_read_calls: u64,
+    pub max_metadata_bytes: usize,
 }
 ```
 
@@ -276,7 +279,7 @@ All ProcLimits fields are nonzero; callers select explicit ceilings. Parsers pre
 
 LX05 uses the [exact pure parser contract](2026-10-18-scopebase-lx05-proc-contract.md) and [verification plan](../plans/2026-10-18-scopebase-lx05-verification.md): mount text decodes non-NUL octal 001..377 exactly once; duplicate mount diagnostics sort by `(number, original_row)` and retain original record order. Parsed observations and table-local IDs carry no runtime authority. The acquisition interfaces below remain LX08 work.
 
-Acquire retains the original pidfd, proc directory, birth starttime and PID/mount namespace handles sampled around acquisition. It rejects death, mismatched birth/view or inability to obtain the requested pidfd semantics. A caller may explicitly request a separate `ProcSnapshot::read_unpinned(pid, ...)` descriptive snapshot API; it returns UntrustedObservation and cannot become ProcessObservation. No automatic stat-only fallback satisfies this profile. Retained proc directory pins a PID object, not an mm. verify_birth reports AliveSameBirth, Exited, Changed or Inconclusive; it never reports SameImage. Namespace handles identify a namespace but do not freeze its mount table. Observed exec changes cannot be inferred reliably from birth alone; task/exec producer generation belongs to its own BPF/transport adapter.
+Acquire retains the original pidfd, proc directory, birth starttime and PID/mount namespace handles sampled around acquisition. It rejects death, mismatched birth/view or inability to obtain the requested pidfd semantics. A separate future unpinned descriptive API would need its own selected contract; LX08 adds no unpinned API or descriptive-to-authority upgrade. No automatic stat-only fallback satisfies this profile. Retained proc directory pins a PID object, not an mm. verify_birth reports AliveSameBirth, Exited, Changed or Inconclusive; it never reports SameImage. Namespace handles identify a namespace but do not freeze its mount table. Observed exec changes cannot be inferred reliably from birth alone; task/exec producer generation belongs to its own BPF/transport adapter.
 
 ## Mapping evidence and calibration
 
@@ -374,7 +377,7 @@ A retained private state anchor prevents deallocation of unresolved queue owners
 
 No global worker, destination registry or output alias state exists. Only the immediate child is owned; daemonized/double-forked descendants are not tracked or controllable through this API. Compiler-process-tree supervision needs its separate TC contract. Caller fork before exec invalidates supervisor/pool use in the child; no inherited wait on absent threads is allowed.
 
-`ObserverEpoch::new() -> ObserverEpoch` creates a process-local non-reused owner identity using a retained Arc allocation; live equality uses its retained identity, not a serialized counter. Reports include a diagnostic run ID assigned by the runner, which cannot recreate the epoch. A new observer/restart always creates a new epoch and rescan. Birth observations and producer exec generations are not interchangeable; old cookies/counters/partial windows cannot be merged merely because PID/path bytes repeat. Persistent crash-resume, adoption of preexisting children and durable BPF recovery are unsupported.
+`ObserverEpoch::new(ProcLimits,&OperationControl) -> Result<Self,LinuxError>` strictly acquires the original creator pidfd and authenticated active-PID namespace under the [LX08 addendum](2026-10-22-scopebase-lx08-process.md). Real epochs retain two authority FDs and a separate FD-free marker; live equality uses that marker identity, not a serialized counter. Descriptive results retain no authority FD; creator checks precede target operations. Reports include a diagnostic run ID assigned by the runner, which cannot recreate the epoch. A new observer/restart always creates a new epoch and rescan. Birth observations and producer exec generations are not interchangeable; old cookies/counters/partial windows cannot be merged merely because PID/path bytes repeat. Persistent crash-resume, adoption of preexisting children and durable BPF recovery are unsupported.
 
 ## Discovery budgets
 

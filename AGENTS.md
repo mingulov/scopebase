@@ -24,6 +24,8 @@ The user requires deep, proactive gap analysis, preservation of hard-won fixes, 
 
 - [CP05 generation contract](docs/superpowers/specs/2026-10-22-scopebase-cp05-generations.md) and [verification plan](docs/superpowers/plans/2026-10-22-scopebase-cp05-verification.md): errors, generic callback ordering, original subsets and finite history oracle are ratified. Bind the post-BP02 base, prerequisites and build/output resources before implementation; source admission and design do not make it PACKET_READY.
 
+- [LX08 strict process contract](docs/superpowers/specs/2026-10-22-scopebase-lx08-process.md) and [verification plan](docs/superpowers/plans/2026-10-22-scopebase-lx08-verification.md): exact independently reviewed r2 design is ratified; the 34 selected/12 deferred source objects remain preserved. Actual product/C7/TT02 maintenance/TT03/TT04/EOF/audit and final-index joint compatibility bindings remain UNBOUND; this does not accept LX08 or make its packet ready.
+
 - [Decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), and [repair plan / all task routes](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md): mandatory WHAT/WHY decisions, source slices, stop rules and task origins. Read before dispatch or implementation; source inventory and dependency readiness alone do not make a packet ready.
 
 - [Development workflow](DEVELOPMENT.md), [current handoff](handoff.md) and [execution policy](orchestration/policy.json): controller/worker roles, model efforts, task/review preparation and restart custody. Product work follows the active thread goal; do not create a replacement goal or infer a budget.

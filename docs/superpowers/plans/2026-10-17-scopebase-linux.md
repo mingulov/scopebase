@@ -184,7 +184,9 @@ LX03 starts only after LX02 and accepted LX04 controls are frozen; serialize sha
 
 **Files:** Create `src/process/{mod.rs,observation.rs,epoch.rs}`, `tests/process_observation.rs` and observation-control UI case.
 
-**Interfaces:** `ProcessObservation::{acquire(Pid,&ObserverEpoch,ProcLimits,&OperationControl),read_maps,read_mountinfo,verify_birth}` and `ObserverEpoch::new()`. Produces retained pidfd/proc/view/birth observation only; no signal/wait/adopt-child method. `ProcSnapshot::read_unpinned` is explicitly descriptive and cannot upgrade itself.
+**Detailed normative design:** [LX08 strict process contract](../specs/2026-10-22-scopebase-lx08-process.md) and [verification plan](2026-10-22-scopebase-lx08-verification.md), ratified design only. Those exact API/error/authority/accounting/oracle rules govern this task; its actual execution bindings remain UNBOUND.
+
+**Interfaces:** `ObserverEpoch::new(ProcLimits,&OperationControl)->Result<Self,LinuxError>` and `ProcessObservation::{acquire(Pid,&ObserverEpoch,ProcLimits,&OperationControl),read_maps,read_mountinfo,verify_birth}`; `verify_birth` returns `BirthVerification`. Produces retained pidfd/proc/view/birth observation only; no signal/wait/adopt-child method or unpinned API in this increment.
 
 **Mandatory source slice:** Include P `src/process.rs` and `src/pidns.rs`, O `src/pin.rs` and their actual process acquisition/death/birth/exec regressions; the coarse held-file group alone omitted these inputs. Freeze source symbols, destination methods and all rejection tests before implementation. D07 keeps observation/control and birth/exec distinct.
 
