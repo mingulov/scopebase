@@ -310,7 +310,7 @@
       "anchor": "bp02-checked-possible-cpu-map-geometry-and-abi-safe-lookup",
       "lane": "bpf",
       "milestone": "M3",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "BP01"
       ],
@@ -321,14 +321,21 @@
         "BP-R14"
       ],
       "profile_gates": [],
-      "execution": {
-        "job_id": "bp02-maps-20261018",
-        "base_commit": "c2a6e6c88448fae77c998f5d80b69efae97d1eab",
-        "checkpoint": "PAUSED_FOR_TRANSFER_STAGED_CANDIDATE",
-        "candidate_index": ".scopebase/jobs/bp02-maps-20261018/evidence/candidate-final-index.json",
-        "candidate_index_sha256": "adb9beb22ab298dd9d32fce6eb5a10e768526298940b04f82e48fdf5d9650154",
-        "handoff": "handoff.md#bp02-exact-continuation",
-        "qualification": "NOT_EVALUATED"
+      "execution_history": [
+        {
+          "job_id": "bp02-maps-20261018",
+          "base_commit": "c2a6e6c88448fae77c998f5d80b69efae97d1eab",
+          "checkpoint": "PAUSED_FOR_TRANSFER_STAGED_CANDIDATE",
+          "candidate_index": ".scopebase/jobs/bp02-maps-20261018/evidence/candidate-final-index.json",
+          "candidate_index_sha256": "adb9beb22ab298dd9d32fce6eb5a10e768526298940b04f82e48fdf5d9650154",
+          "handoff": "handoff.md#bp02-exact-continuation",
+          "qualification": "NOT_EVALUATED"
+        }
+      ],
+      "acceptance": {
+        "subject_commit": "8f10d948bdd6cf92007870a838d258ee35333eb8",
+        "reviewed_candidate_commit": "b2d37fb073ed5132279e7e092662f2de0a8a4faa",
+        "evidence_record": "docs/reviews/2026-10-22-bp02-maps.md"
       }
     },
     {
