@@ -10,6 +10,9 @@ autobins = false
 
 [workspace]
 
+[features]
+json = []
+
 [[bin]]
 name = "bp03-populations"
 path = "src/main.rs"

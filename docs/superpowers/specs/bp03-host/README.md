@@ -2,7 +2,11 @@
 
 These frozen finite definitions accompany the [ratified host contract](../2026-10-22-scopebase-bp03-host.md)
 and [verification plan](../../plans/2026-10-22-scopebase-bp03-verification.md).
-They preserve the exact independently reviewed r2 bytes, including historical
+They preserve the independently reviewed r2 definitions except the two client
+templates amended by the [client JSON feature correction](client-json-amendment.md).
+That correction adds only literal json=[] with no client default feature;
+dependency substitutions and all original feature graphs remain fixed. Other
+assets preserve the exact independently reviewed r2 bytes, including historical
 PRIVATE/PROPOSAL/kind labels and PLANNED_NOT_RUN status. They are normative
 authoring inputs; no product implementation, package helper, executed result or
 runtime support is claimed by their presence. No private directory is needed
@@ -15,6 +19,7 @@ to recover their finite cases, raw literals, templates or resource definitions.
 | [observation-fixtures.json](observation-fixtures.json) | Full observation object/wire, context mutations, zero-BTF distinction and same-errno descriptive cases |
 | [codec-cases.json](codec-cases.json) | 22 raw literal files with lengths/hashes/expected errors, plus five encoder boundaries |
 | [adapter-cases.json](adapter-cases.json) | 16 closed constructor/binding/work/joint-retention recipes |
+| [client-json-amendment.md](client-json-amendment.md) | Client-local JSON feature activation, separate graph bindings and exact controls |
 | [delivery-recipes.json](delivery-recipes.json) | Full source/archive mappings, commands, templates, tools/cache/config rules and all cell definitions |
 | [manifest-additions-bpf.toml](manifest-additions-bpf.toml) | Exact additive target/JSON declarations; preserve inherited manifest |
 | [manifest-additions-testkit.toml](manifest-additions-testkit.toml) | Exact optional edge/features and gated target |

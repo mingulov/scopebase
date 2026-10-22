@@ -539,6 +539,11 @@ cause/hazard/ID domains; inherited accepted BP02 manifest/source/archive deliver
 R1 adapter composition, R2 codec admission/errors, R3 literal-ledger limits and
 R4 complete target/client/cell/tool/cache recipes are adopted exactly. The
 support assets remain authoring seeds/templates until implemented and measured.
+The [client JSON feature amendment](bp03-host/client-json-amendment.md) corrects
+client-local cfg activation independently of dependency features: literal
+json=[] in both delivered templates, no client default, --features json only
+for json-union, separately bound client features and discriminating controls.
+It preserves the six substitutions, all dependency graphs and complete JSON checks.
 
 
 ## Adapter resource contract

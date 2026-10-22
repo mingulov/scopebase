@@ -389,6 +389,15 @@ the helper creates separately measured raw input/expected vector assets from
 the canonical packaged literal index, and the oracle compares outcome bytes
 with ExpectedEvidence bytes. It never computes truth through the subject APIs.
 
+The [client JSON feature amendment](../specs/bp03-host/client-json-amendment.md)
+fixes a separate client cfg activation gap. Both templates declare literal
+[features] json=[] with no client default feature. Metadata/build/run activate
+client --features json only in json-union; raw client features are [] for both
+core modes and [json] for json-union, measured separately from dependency
+features. Its exact missing-JSON semantic and core/client-feature binding
+controls are mandatory. All complete JSON checks and source-byte mappings
+remain required. This adds no substitution or dependency-feature forwarding.
+
 Cargo.toml.in is a finite template: only BPF_PACKAGE_PATH, TESTKIT_PACKAGE_PATH,
 BPF_DEFAULT_FEATURES, TESTKIT_DEFAULT_FEATURES, BPF_FEATURES and TESTKIT_FEATURES are substituted as typed
 TOML values. No shell expansion, environment lookup, arbitrary dependency or
