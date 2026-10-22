@@ -131,6 +131,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "rustix",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -153,6 +155,7 @@ dependencies = [
 name = "scopebase-testkit"
 version = "0.1.0"
 dependencies = [
+ "scopebase-bpf",
  "serde",
  "serde_json",
  "sha2",
