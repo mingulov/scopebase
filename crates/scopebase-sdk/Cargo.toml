@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-sdk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+build = false
+readme = "README.md"
+description = "ScopeBase explicit application profiles and effects admission"
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "src/**", "tests/**"]
+
+[dependencies]
+scopebase-capture = { version = "0.1.0", path = "../scopebase-capture", optional = true }
+scopebase-linux = { version = "0.1.0", path = "../scopebase-linux", optional = true }
+scopebase-bpf = { version = "0.1.0", path = "../scopebase-bpf", optional = true }
+
+[features]
+default = ["capture"]
+capture = ["dep:scopebase-capture"]
+linux = ["dep:scopebase-linux"]
+bpf = ["linux", "dep:scopebase-bpf"]
