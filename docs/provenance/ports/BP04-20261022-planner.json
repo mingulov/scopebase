@@ -1,0 +1,303 @@
+{
+ "schema_version": 1,
+ "kind": "SOURCE_MAP",
+ "id": "BP04-20261022-planner",
+ "task_id": "BP04",
+ "copy_state": "MAPPED_NOT_ADMITTED",
+ "admission": null,
+ "admission_note": "No admission covers the mapped ranges yet; per-slice grant_status names the missing authorization. Not a selected-port receipt.",
+ "mappings": [
+  {
+   "dest_symbols": [
+    "is_terminal_error",
+    "adjudicate_split",
+    "is_terminal_error_pins_kinds",
+    "backend_errno_is_not_terminal",
+    "terminal_denied_cannot_split_even_if_policy_requests",
+    "terminal_resource_cannot_split"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    285,
+    308
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "e41fbf80f0be0c83be1d93901bf888734e4a1b2b9d658540b3fc813775a526a4",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "is_terminal_error",
+    "terminal_denied_cannot_split_even_if_policy_requests",
+    "terminal_resource_cannot_split"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    310,
+    319
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "b8feae626a7e63f3091669a471983acbb927c3ae250b552b748b20224dae9382",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "adjudicate_split",
+    "ErrorAction::AbortAndRollback",
+    "first_profile_rolls_back"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    338,
+    348
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "cbb220e826b55ac6c54eb89eff9511b0e8804f0cde333767399a8c109b698e97",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "model_mixed_bad_leaves",
+    "model_every_terminal_position",
+    "model_exhaustive_bad_subsets"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    364,
+    382
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "422e627f3febcea56846471bda8cd6b8b60b8a254b21f9d118f070a00547ec88",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "AttachPlan::checked",
+    "checked_reserves_worst_case_attempts"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    384,
+    403
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "3d8188f861f7e4785032881a51ce995c4d6ed6bf143b7ef26169573163cfc41e",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "AttachPlan::split_sites",
+    "adjudicate_split",
+    "ErrorPolicy",
+    "ErrorAction",
+    "split_halves_even",
+    "split_halves_odd",
+    "split_cover_is_disjoint_and_exact",
+    "model_full_split_matches_fixture"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-MECH: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 285-308, 310-319, 338-348, 364-382, 384-403, 405-465 as host Apache-2.0 ADAPT for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    405,
+    465
+   ],
+   "origin": "ADAPT",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "4d809f26f61542c207e17e7d4661c4580eadee90e7b8b3b1720bb8c9be0f9a8d",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "model_all_success_single_attempt",
+    "checked_accepts_distinct_sites"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-VEC: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 872-895, 897-925, 927-948, 950-978, 980-1014 as host Apache-2.0 VECTORS_ONLY for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    872,
+    895
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "6dc020621ccb4a7059a4577d459d1b5931b64f0c10587a69e1a2e20783ea411a",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "model_mixed_bad_leaves",
+    "model_exhaustive_bad_subsets",
+    "model_bounded_sweep_seeded",
+    "mutant_unbounded_singleton_retry_violates_bound"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-VEC: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 872-895, 897-925, 927-948, 950-978, 980-1014 as host Apache-2.0 VECTORS_ONLY for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    897,
+    925
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "f1d09981e34f65c67b0ae231308c8a73d4a438273c4fe2d3ea7e3911b8e118c8",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "terminal_denied_cannot_split_even_if_policy_requests",
+    "mutant_split_on_terminal_denial_over_attempts"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-VEC: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 872-895, 897-925, 927-948, 950-978, 980-1014 as host Apache-2.0 VECTORS_ONLY for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    927,
+    948
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "1b98a1b4c6f52dbb953fbd9efb94283b547518378c3a5d0ba5b04229b68648b0",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "terminal_resource_cannot_split",
+    "is_terminal_error_pins_kinds"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-VEC: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 872-895, 897-925, 927-948, 950-978, 980-1014 as host Apache-2.0 VECTORS_ONLY for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    950,
+    978
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "bf1c447e199334bc4cfa8cd868a52584b9249025fa0c61863bcb1691c519a419",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "first_profile_rolls_back",
+    "model_every_terminal_position"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_question": "Q-P-VEC: does the owner authorize PORT_SOURCE of P:crates/bpf-multi/src/lib.rs @2c2713e6 ranges 872-895, 897-925, 927-948, 950-978, 980-1014 as host Apache-2.0 VECTORS_ONLY for BP04? Granted scope covers only [591,605]+[1179,1192] (BP03).",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    980,
+    1014
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:crates/bpf-multi/src/lib.rs",
+   "slice_sha256": "06a267a38eee704927b8a81cff87c801db84a01e713753fb75ccaa1c5412d927",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "ErrorPolicy",
+    "ErrorAction::IsolateSites",
+    "adjudicate_split",
+    "AttachPlan::split_sites",
+    "policy_vote_honored_for_isolatable_errors",
+    "policy_is_consulted_before_terminal_override"
+   ],
+   "donor_pin": "1a481831a85375ecb2d69ca65618d37c846de8b3",
+   "grant_question": "Q-O-MECH: does the owner (a) admit O:src/plan.rs @1a481831 (product root, whole-file 9654ef09...) and authorize PORT_SOURCE of range 561-611 as host Apache-2.0 ADAPT for BP04, or (b) require the byte-identical preview-r21 range 658-708 @4bcb24ce under a scope extension? O grants cover held-file ranges only and no admission mentions 1a481831.",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    561,
+    611
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/plan.rs",
+   "slice_sha256": "9310b841505cb28cf4e8e5eee08f03ca0bfde11619f3113962f31e0cafb697c6",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "drive_model"
+   ],
+   "donor_pin": "1a481831a85375ecb2d69ca65618d37c846de8b3",
+   "grant_question": "Q-O-VEC: does the owner (a) admit O:src/plan.rs @1a481831 and authorize PORT_SOURCE of ranges 773-790, 792-811, 813-827, 864-873 as host Apache-2.0 VECTORS_ONLY for BP04, or (b) require the equivalent preview-r21 ranges @4bcb24ce under a scope extension? O grants cover held-file ranges only and no admission mentions 1a481831.",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    773,
+    790
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/plan.rs",
+   "slice_sha256": "18fff503787d6e0e3b033b0f17d9739c58fbdabad038829879fbd26166768ee9",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "model_mixed_bad_leaves",
+    "model_exhaustive_bad_subsets",
+    "model_offset_cookie_pairs_exact"
+   ],
+   "donor_pin": "1a481831a85375ecb2d69ca65618d37c846de8b3",
+   "grant_question": "Q-O-VEC: does the owner (a) admit O:src/plan.rs @1a481831 and authorize PORT_SOURCE of ranges 773-790, 792-811, 813-827, 864-873 as host Apache-2.0 VECTORS_ONLY for BP04, or (b) require the equivalent preview-r21 ranges @4bcb24ce under a scope extension? O grants cover held-file ranges only and no admission mentions 1a481831.",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    792,
+    811
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/plan.rs",
+   "slice_sha256": "65f331d4cc810b235fdb5496ce8c42ab6a2c32b17e6fcb686fede14fd1ad2c1b",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "terminal_denied_cannot_split_even_if_policy_requests",
+    "mutant_split_on_terminal_denial_over_attempts"
+   ],
+   "donor_pin": "1a481831a85375ecb2d69ca65618d37c846de8b3",
+   "grant_question": "Q-O-VEC: does the owner (a) admit O:src/plan.rs @1a481831 and authorize PORT_SOURCE of ranges 773-790, 792-811, 813-827, 864-873 as host Apache-2.0 VECTORS_ONLY for BP04, or (b) require the equivalent preview-r21 ranges @4bcb24ce under a scope extension? O grants cover held-file ranges only and no admission mentions 1a481831.",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    813,
+    827
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/plan.rs",
+   "slice_sha256": "9fd59e223c69e7199a197c98e704b1173138467777def23b48e8b33b2be6336b",
+   "task": "BP04"
+  },
+  {
+   "dest_symbols": [
+    "singleton_cannot_split",
+    "model_every_terminal_position"
+   ],
+   "donor_pin": "1a481831a85375ecb2d69ca65618d37c846de8b3",
+   "grant_question": "Q-O-VEC: does the owner (a) admit O:src/plan.rs @1a481831 and authorize PORT_SOURCE of ranges 773-790, 792-811, 813-827, 864-873 as host Apache-2.0 VECTORS_ONLY for BP04, or (b) require the equivalent preview-r21 ranges @4bcb24ce under a scope extension? O grants cover held-file ranges only and no admission mentions 1a481831.",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    864,
+    873
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/plan.rs",
+   "slice_sha256": "a9e358ffe47551cfff235a8182fa5570c4bba52465331852939c720674ed43bc",
+   "task": "BP04"
+  }
+ ],
+ "preservation_map": "docs/provenance/ports/BP04-preservation-20261022.md"
+}

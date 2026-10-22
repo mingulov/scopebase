@@ -1,0 +1,374 @@
+{
+ "schema_version": 1,
+ "kind": "SOURCE_MAP",
+ "id": "BP06-20261022-ring",
+ "task_id": "BP06",
+ "copy_state": "MAPPED_NOT_ADMITTED",
+ "admission": null,
+ "admission_note": "No admission covers the mapped ranges yet; per-slice grant_status names the missing authorization. Not a selected-port receipt.",
+ "mappings": [
+  {
+   "dest_symbols": [
+    "frame.rs::HEADER_BYTES",
+    "frame.rs::ALIGN_BYTES",
+    "frame.rs::MAX_PAYLOAD_LEN"
+   ],
+   "donor_pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    13,
+    20
+   ],
+   "origin": "ADAPT",
+   "path": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+   "slice_sha256": "4d7296eb3e53a99c8c65ccda1fb39f60caa99f862239d7ffa56dd3aba1bf8815",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs::FrameStep"
+   ],
+   "donor_pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    33,
+    51
+   ],
+   "origin": "ADAPT",
+   "path": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+   "slice_sha256": "4a67b72878f5d413a05b894e0cced51a4d91a62e8e76dbe94abdb372f1b068ac",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs::frame_step"
+   ],
+   "donor_pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    53,
+    79
+   ],
+   "origin": "ADAPT",
+   "path": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+   "slice_sha256": "0d577b5ec6cbeff070d7334fa11190bec29d3d3fecb14da80591086d2218f7db",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::frame_*",
+    "fixtures/ring-v1/cursors.json"
+   ],
+   "donor_pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    81,
+    152
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "K:crates/kryprobe-privilege/src/drain/frame.rs",
+   "slice_sha256": "f089999b7eead15b2c76bf8ed9e348767f6e9d948c26b458f5927b901dd43664",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs::RingPositions",
+    "frame.rs::FrameStep",
+    "bounded.rs::DrainBudget",
+    "bounded.rs::DrainResult",
+    "bounded.rs::BoundaryState",
+    "OperationError kinds"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    26,
+    92
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "8c7b1f9f842cacd2d48d32fb104f0fd8c912df98a196cfd3bc9f6e84bf39ed39",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "bounded.rs::BoundedRingSource::snapshot",
+    "bounded.rs::DrainResult.discarded"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    101,
+    125
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "1599bdb237b7f4c879bfcfbea888bdea8d1faa3a35504d6fe713cef16d045585",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "bounded.rs::BoundedRingSource::consume_before"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    134,
+    149
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "28dfa96d9be48beff04463e0c1e069a069c145127a3066f5831055f359391df8",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "bounded.rs::DrainResult.discarded"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    177,
+    180
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "24f2e3e8243803eb60b88baaf534f2475a05534e05088ed1146a16ed8aafcbb3",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs::frame_step"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    223,
+    256
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "e8cb540531a30085c78429a74ef59d251d3b54da54b72a282c0017eef25537fe",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs::frame_step"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    257,
+    308
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "9c28359f1760d7b737a479db18dd7167ae5d412e0e91ef39140d14a58547b522",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "frame.rs aligned-total arithmetic"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    369,
+    371
+   ],
+   "origin": "ADAPT",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "3cb23207fb30e4ca48a1a3655da077248518a3abe3d85cfced0225727c098d48",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::drain_*"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    544,
+    754
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "2d0c8a790bb5a95b76a3483c087119fcba3eddff9a42ac31eb69e1489f840c25",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::drain_discard_*",
+    "bounded.rs::DrainResult.discarded"
+   ],
+   "donor_pin": "2c2713e66292b0d2688508a25f79e813ae823d81",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    872,
+    929
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "P:third-party/patches/aya-0.14.0/aya-ring-reader.patch",
+   "slice_sha256": "7a2a240fbdc02eb514fa5c7e3e5542d0b7cdcb028acba859880b37bcb9de0915",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "stage.rs::StagedRecord::copy_into"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    14,
+    33
+   ],
+   "origin": "ADAPT",
+   "path": "L:src/libbpf_mojo/buffer.mojo",
+   "slice_sha256": "5d8cefdecfa1c3933b5c3449db52b4cdd5524b15fa18b1e85185c5b21012a924",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "stage.rs::StageStats",
+    "stage.rs::StageStats::balanced"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    35,
+    43
+   ],
+   "origin": "ADAPT",
+   "path": "L:src/libbpf_mojo/buffer.mojo",
+   "slice_sha256": "fa84a225a1a14a5b65e2e1e2846e9e88c5b44da9f8a7c58c582330ce2d78e838",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "stage.rs::StagedRecord::offer",
+    "stage.rs::StagedRecord::copy_into"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    110,
+    140
+   ],
+   "origin": "ADAPT",
+   "path": "L:src/libbpf_mojo/buffer.mojo",
+   "slice_sha256": "5238a41cae365bd6b87dfaa29ad5f553fffce6b105ca064f74d29c8ced442d88",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "stage.rs::StagedRecord::stats"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    142,
+    169
+   ],
+   "origin": "ADAPT",
+   "path": "L:src/libbpf_mojo/buffer.mojo",
+   "slice_sha256": "9e976c1dfc44c53470f7695be9c98a94b1ed8d64ca7fe0ae6870d5bd964cfa6a",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::stage_short_retained_then_delivers_once",
+    "fixtures/ring-v1/staging.json"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    353,
+    390
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "e28a0e4afc0c37249cdc3fd5f3616f54b2614b27c2fd367e964bf393df003ea7",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::stage_single_frame_per_call",
+    "fixtures/ring-v1/staging.json"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    421,
+    446
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "a6f1f7c82375739eae05f9e12f771bc07ddf87b1f15c068d34e4d2e37fa11df6",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::stage_source_mutation_cannot_corrupt"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    481,
+    501
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "f2ffe321d55c74c087a41cd9b1e4d7561502c804d1bbfa532c3cd4a796113c41",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::stage_conservation_sequence",
+    "tests/ring.rs::stage_occupied_drop_preserves_previous",
+    "tests/ring.rs::stage_zero_and_oversize_are_malformed"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    543,
+    571
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "3dcbc5aba020ca06905f8076ee604c0d213e1c68079084a63ddf3cc4f89f5072",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "stage.rs::StageStats::balanced",
+    "tests/ring.rs::stage_conservation_sequence"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "COVERED",
+   "lines": [
+    572,
+    574
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "ea4e2cd55392cae41748a532333d357bdf5ac4eb18770a645906608ee8abaea8",
+   "task": "BP06"
+  },
+  {
+   "dest_symbols": [
+    "tests/ring.rs::stage_conservation_sequence"
+   ],
+   "donor_pin": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+   "grant_status": "NEW-GRANT-NEEDED",
+   "lines": [
+    575,
+    578
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "L:tests/native/ring_conformance.c",
+   "slice_sha256": "71e41a0b25274f1524f5b16d9d351fd9d35bee7772c04a3911a2d76ddfa821be",
+   "task": "BP06"
+  }
+ ],
+ "preservation_map": "docs/provenance/ports/BP06-preservation-20261022.md"
+}

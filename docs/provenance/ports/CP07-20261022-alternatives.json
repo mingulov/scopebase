@@ -1,0 +1,272 @@
+{
+ "schema_version": 1,
+ "kind": "SOURCE_MAP",
+ "id": "CP07-20261022-alternatives",
+ "task_id": "CP07",
+ "copy_state": "MAPPED_NOT_ADMITTED",
+ "admission": null,
+ "admission_note": "No admission covers the mapped ranges yet; per-slice grant_status names the missing authorization. Not a selected-port receipt.",
+ "mappings": [
+  {
+   "dest_symbols": [
+    "bounds.rs::SiteCount::site",
+    "domain::PhysicalSiteId"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: PORT_SOURCE of O:src/evidence.rs 30-39 at 4bcb24c to Apache-2.0 host bounds.rs not in any admission source_scope",
+   "lines": [
+    30,
+    39
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "af0408145351f5773a861c0109ef25f7bcf4ddff1c8abe471e41d21a399717e6",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::SiteCount<C>",
+    "bounds.rs::MatchClass"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: PORT_SOURCE of O:src/evidence.rs 41-77 at 4bcb24c to Apache-2.0 host bounds.rs not in any admission source_scope",
+   "lines": [
+    41,
+    77
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "e1e702e0a9bf9c5d6c5ece3a30e42a33d1659ad7ff238d6fe57f7c0701375aa0",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::CandidateCoverage"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: PORT_SOURCE of O:src/evidence.rs 79-94 at 4bcb24c to Apache-2.0 host bounds.rs not in any admission source_scope",
+   "lines": [
+    79,
+    94
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "8a3f36dfd739db36359a58395fab4f78642583000fb530312d0f1878829298d7",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::MatchClass",
+    "quantity::CountBounds"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: PORT_SOURCE of O:src/evidence.rs 136-152 at 4bcb24c to Apache-2.0 host bounds.rs not in any admission source_scope (granted [145,152] is a strict subset; no wider grant follows)",
+   "lines": [
+    136,
+    152
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "600a69a3a8138dc994eb075136c035597fbc0dc191550e56c6935ef15d49bb8f",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::classify_alternatives",
+    "bounds.rs::combine_disjoint_sites"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: PORT_SOURCE of O:src/evidence.rs 154-229 at 4bcb24c to Apache-2.0 host bounds.rs not in any admission source_scope",
+   "lines": [
+    154,
+    229
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "867f9db2de77964dcde5abfa592858295d1d0ad26f322cc38840b46d004226e8",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "CP03 loss.rs/counter.rs (vocabulary reference only)"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "COVERED: 2026-10-22-cp06-scopes.json O:src/evidence.rs [300,348] PORT_SOURCE READY_FOR_SELECTED_SCOPE under OWNER-2026-10-18, USER_OWNED, host Apache-2.0",
+   "lines": [
+    300,
+    348
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/evidence.rs",
+   "slice_sha256": "6df66297cd1dca7477f763c3eab79948e664e37009407c89004a0e3b68b66cb8",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::one_physical_count_is_not_duplicated_across_aliases"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:tests/evidence_model.rs 105-130 at 4bcb24c to tests/alternative_bounds.rs not in any admission source_scope (granted [110,110]/[121,126] are strict subsets; no wider grant follows)",
+   "lines": [
+    105,
+    130
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/evidence_model.rs",
+   "slice_sha256": "06517480a3a434f04bdde32b1b10f6abe0b457d07098f338ae24bcf020a54ad0",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::all_candidates_vs_mixed_bounds"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:tests/evidence_model.rs 132-148 at 4bcb24c to tests/alternative_bounds.rs not in any admission source_scope",
+   "lines": [
+    132,
+    148
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/evidence_model.rs",
+   "slice_sha256": "d7208c5505eed777d2f966f38861d692c0ea4615afa3d684d60327b37f4db5f4",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::all_candidates_vs_mixed_bounds",
+    "alternative_bounds.rs::small_world_oracle_agrees_on_all_class_pairs"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:tests/evidence_model.rs 468-491 at 4bcb24c to tests/alternative_bounds.rs not in any admission source_scope",
+   "lines": [
+    468,
+    491
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/evidence_model.rs",
+   "slice_sha256": "db5291ec46bb409599cf5ffcc89bfd65d8be0f672be179c1571832de0be2749f",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::SiteCount::new"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:tests/evidence_model.rs 631-649 at 4bcb24c to tests/alternative_bounds.rs not in any admission source_scope",
+   "lines": [
+    631,
+    649
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/evidence_model.rs",
+   "slice_sha256": "d89d1c29f39c428b3fd87a1ef1d1afd8f6b9275ae7211636ce40b7d8daed3988",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::MatchClass::Possible"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: rule-PORT of O:src/capture.rs 3163-3167 (00b135d sites_mixed) at 4bcb24c not in any admission source_scope",
+   "lines": [
+    3163,
+    3167
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/capture.rs",
+   "slice_sha256": "0a4345529d04da4487683530b4858b77d8d52455e3ff5689bbe09fc82b38816f",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::classify_alternatives"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: rule-PORT of O:src/capture.rs 3574-3621 (00b135d mixed/bad_read split) at 4bcb24c not in any admission source_scope",
+   "lines": [
+    3574,
+    3621
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/capture.rs",
+   "slice_sha256": "dc3c691c7fdb4efc01f407722b06f2a8855ea1067462734570e2b0b0f09db4f8",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "bounds.rs::classify_alternatives"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: rule-PORT of O:src/capture.rs 3645-3663 (00b135d pure-mixed/unknown fold) at 4bcb24c not in any admission source_scope",
+   "lines": [
+    3645,
+    3663
+   ],
+   "origin": "ADAPT",
+   "path": "O:src/capture.rs",
+   "slice_sha256": "29f3b34eb30efa0eb28b43964845f615f52343c9f32695540eb2bc0ad9129c16",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative-measurements.md H3 accounting note"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:src/capture.rs 6046-6060 (00b135d discovery.mixed_classes counter) at 4bcb24c not in any admission source_scope",
+   "lines": [
+    6046,
+    6060
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:src/capture.rs",
+   "slice_sha256": "1da0fd05f941bfa98c09c20c918855599e3ea13aa826ce2e3bb961b218bd9dac",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::all_candidates_vs_mixed_bounds"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of O:tests/capture_controller.rs 2267-2362 (00b135d H3-T2) at 4bcb24c not in any admission source_scope",
+   "lines": [
+    2267,
+    2362
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/capture_controller.rs",
+   "slice_sha256": "242a67414990cf12663a0b555a895c8f66280a582928b27ccd317a825b9541f8",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::all_candidates_vs_mixed_bounds"
+   ],
+   "donor_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+   "grant_status": "NEW-GRANT-NEEDED: O:tests/policy_contract.rs has no admission entry at all; needs first-time intake plus VECTORS_ONLY of lines 443-485 (00b135d H3-T3) at 4bcb24c",
+   "lines": [
+    443,
+    485
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "O:tests/policy_contract.rs",
+   "slice_sha256": "a9cb12eb0dc50b56579ac2ff369e6230559f752fcc65e16fd65cad795414949b",
+   "task": "CP07"
+  },
+  {
+   "dest_symbols": [
+    "alternative_bounds.rs::unknown_candidates_cannot_prove_absence"
+   ],
+   "donor_pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+   "grant_status": "NEW-GRANT-NEEDED: VECTORS_ONLY of M:tests/unit/test_mappings.mojo 1174-1203 (H26 cross-check) at 8307a17 not in any admission source_scope",
+   "lines": [
+    1174,
+    1203
+   ],
+   "origin": "VECTORS_ONLY",
+   "path": "M:tests/unit/test_mappings.mojo",
+   "slice_sha256": "289f1e1293f88977b8a14742a989814a326826d87df94a9b94311ec089f5c23a",
+   "task": "CP07"
+  }
+ ],
+ "preservation_map": "docs/provenance/ports/CP07-preservation-20261022.md"
+}

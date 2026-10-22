@@ -1,0 +1,62 @@
+{
+ "schema_version": 1,
+ "kind": "SOURCE_MAP",
+ "id": "CP08-20261022-ordering",
+ "task_id": "CP08",
+ "copy_state": "MAPPED_NOT_ADMITTED",
+ "admission": null,
+ "admission_note": "No admission covers the mapped ranges yet; per-slice grant_status names the missing authorization. Not a selected-port receipt.",
+ "mappings": [
+  {
+   "dest_symbols": [
+    "time.rs::validate_sweep_order",
+    "time.rs::EdgeKind",
+    "time.rs::StateEdge",
+    "time.rs::SweepProof",
+    "interval_order.rs::release_before_acquire_tie_is_valid",
+    "interval_order.rs::acquire_before_release_tie_withholds_sweep",
+    "interval_order.rs::reordered_edges_do_not_destroy_independent_duration",
+    "interval_order.rs::timestamp_zero_is_valid",
+    "interval_order.rs::generation_local_zero_ordinals_map_to_distinct_sweep_ids",
+    "interval_order.rs::duplicate_sweep_event_id_refuses",
+    "interval_order.rs::non_state_facts_do_not_break_the_sweep"
+   ],
+   "donor_pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+   "grant_status": "NEW-GRANT-NEEDED: extend M:tests/unit/test_mappings.mojo ready scope to 302-501 for CP08 VECTORS_ONLY+ADAPT (existing OWNER-2026-10-18 scope covers only [544,559],[599,607],[768,783],[848,899]; H27 anchor is INSPECTED_SOURCE, not a grant)",
+   "lines": [
+    302,
+    501
+   ],
+   "origin": "VECTORS_ONLY+ADAPT",
+   "path": "tests/unit/test_mappings.mojo",
+   "slice_sha256": "8057c9a6e46f1d530c306a2aa50dc4e46d83d1e7fb4cca479e8ed6130a52aad7",
+   "task": "CP08"
+  },
+  {
+   "dest_symbols": [
+    "time.rs::validate_sweep_order",
+    "time.rs::EdgeKind",
+    "time.rs::StateEdge",
+    "time.rs::SweepProof",
+    "interval_order.rs::release_before_acquire_tie_is_valid",
+    "interval_order.rs::acquire_before_release_tie_withholds_sweep",
+    "interval_order.rs::reordered_edges_do_not_destroy_independent_duration",
+    "interval_order.rs::timestamp_zero_is_valid",
+    "interval_order.rs::generation_local_zero_ordinals_map_to_distinct_sweep_ids",
+    "interval_order.rs::duplicate_sweep_event_id_refuses",
+    "interval_order.rs::non_state_facts_do_not_break_the_sweep"
+   ],
+   "donor_pin": "6ea5ffc43fafd0e67690be3b2da7192ecbaf2573",
+   "grant_status": "NEW-GRANT-NEEDED: same missing question as HEAD slice (fix test hunk bytes identical); production hunks concept-reference only, uncertainty/fixture hunks unselected",
+   "lines": [
+    302,
+    501
+   ],
+   "origin": "ADAPT",
+   "path": "tests/unit/test_mappings.mojo",
+   "slice_sha256": "8057c9a6e46f1d530c306a2aa50dc4e46d83d1e7fb4cca479e8ed6130a52aad7",
+   "task": "CP08"
+  }
+ ],
+ "preservation_map": "docs/provenance/ports/CP08-preservation-20261022.md"
+}
