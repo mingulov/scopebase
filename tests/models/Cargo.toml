@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-catalog-model"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+scopebase-testkit = { version = "=0.1.0", path = "../../crates/scopebase-testkit", default-features = false }
+
+[[bin]]
+name = "catalog_model"
+path = "src/bin/catalog_model.rs"

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "campaigns": [
+    {
+      "id": "catalog-model-512",
+      "kind": "state-model",
+      "target": {
+        "argv": ["cargo", "run", "--offline", "--manifest-path", "tests/models/Cargo.toml", "--bin", "catalog_model", "--", "--seed", "20261022", "--cases", "512", "--result", "{result}"]
+      },
+      "seed": 20261022,
+      "version": "scopebase-catalog-model 0.1.0 driving scopebase-testkit 0.1.0 (accepted TT01 CaseCatalog::load)",
+      "limits": {"time_secs": 300, "max_work_items": 512, "max_memory_bytes": 2147483648},
+      "domain_contract": "TT01 strict catalog admission: I1 valid base loads with exact-pair lookup; I2 duplicate pair rejects DuplicateId; I3 unknown field rejects UnknownField; I4 truncation rejects; I5 no panic and deterministic verdicts. Time, work and memory bounds are stated separately; memory is observed (peak child RSS, includes cargo wrapper overhead) not enforced.",
+      "artifact": "catalog-model-512.json",
+      "expected_verdict": "EXHAUSTED"
+    },
+    {
+      "id": "catalog-model-mutant",
+      "kind": "state-model",
+      "target": {
+        "argv": ["cargo", "run", "--offline", "--manifest-path", "tests/models/Cargo.toml", "--bin", "catalog_model", "--", "--seed", "20261022", "--cases", "64", "--result", "{result}", "--mutant"]
+      },
+      "seed": 20261022,
+      "version": "scopebase-catalog-model 0.1.0 (mutant: inverted I2) driving scopebase-testkit 0.1.0",
+      "limits": {"time_secs": 300, "max_work_items": 64, "max_memory_bytes": 2147483648},
+      "domain_contract": "Bad control: the mutant asserts duplicated (id, version) pairs are accepted. The campaign matches only when the target reports valid setup plus a failed semantic assertion (verdict FAILED). Setup errors and crashes do not satisfy this control.",
+      "artifact": "catalog-model-mutant.json",
+      "expected_verdict": "FAILED"
+    },
+    {
+      "id": "catalog-fuzz-smoke",
+      "kind": "fuzz",
+      "target": {
+        "argv": ["cargo", "run", "--offline", "--manifest-path", "fuzz/scopebase-testkit/Cargo.toml", "--bin", "catalog_load", "--", "--corpus", "fuzz/scopebase-testkit/corpus/catalog_load", "--result", "{result}"]
+      },
+      "seed": 0,
+      "corpus": "fuzz/scopebase-testkit/corpus/catalog_load (6 seeds; fixed 8-input fan-out per seed)",
+      "version": "scopebase-testkit-fuzz 0.0.0 stable smoke engine driving scopebase-testkit 0.1.0",
+      "limits": {"time_secs": 300, "max_work_items": 48, "max_memory_bytes": 2147483648},
+      "domain_contract": "Byte robustness: no input panics and every verdict is deterministic across repeated loads. This finite smoke run covers the seed corpus only (48 inputs); it is not a time-bounded libFuzzer campaign and claims no coverage beyond its scope. The 60-minute qualification campaigns from the TT06 plan remain future work behind the cargo-fuzz admission gate.",
+      "artifact": "catalog-fuzz-smoke.json",
+      "expected_verdict": "EXHAUSTED"
+    },
+    {
+      "id": "catalog-miri-boundary",
+      "kind": "sanitizer",
+      "target": {
+        "argv": ["cargo", "+nightly", "miri", "run", "--offline", "--manifest-path", "tests/models/Cargo.toml", "--bin", "catalog_model", "--", "--seed", "20261022", "--cases", "512", "--result", "{result}"]
+      },
+      "seed": 20261022,
+      "version": "scopebase-catalog-model 0.1.0 under Miri via cargo +nightly miri run (requires a nightly toolchain with the miri component, e.g. rustup toolchain install nightly --component miri)",
+      "limits": {"time_secs": 600, "max_work_items": 512, "max_memory_bytes": 2147483648},
+      "domain_contract": "TT06 names Miri for supported pure unsafe boundaries. The bound command is cargo +nightly miri run, requiring a nightly toolchain with the miri component. Tool support is not admitted in this environment, so this campaign records PREREQUISITE_UNMET as an explicit gap rather than substituting another check. PREREQUISITE_UNMET is an incomplete diagnostic: the command gate never passes on it.",
+      "artifact": "catalog-miri-boundary.json",
+      "expected_verdict": "PREREQUISITE_UNMET",
+      "prerequisites": ["miri"]
+    }
+  ]
+}
