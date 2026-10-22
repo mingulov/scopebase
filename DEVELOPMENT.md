@@ -19,7 +19,7 @@ The [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md
 
 The user changed routing on 2026-10-18 to conserve the weekly Astra allowance. Sol max replaces routine Astra architecture/critical review. Record the concrete serious problem, prior Sol max work and need for additional consultation before exceptional Astra use; this is a controller decision within existing authorization, not a new permission loop. Preserve historical completed Astra reviews as evidence.
 
-The machine-readable [policy](orchestration/policy.json) is local project policy, not a global Codex configuration. Every native dispatch explicitly sets `model`, `reasoning_effort` and `fork_turns: none`. Check the current tool allowlist before dispatch. Availability failures are recorded; they never silently select a different model or downgrade a critical review. Native implementers are resumed for fixes. A Muse fix/review invocation is a fresh process with the prior report/rulings; no assumption that a headless session can resume.
+The machine-readable [policy](orchestration/policy.json) is local project policy, not a global Codex configuration. Every native dispatch explicitly sets `model`, `reasoning_effort` and `fork_turns: none`. Check the current tool allowlist before dispatch. Availability failures are recorded; they never silently select a different model or downgrade a critical review. Native implementers with active writing permission may resume for fixes. A suspended job first needs the writing grant and explicit controller assignment described below. A Muse fix/review invocation is a fresh process with the prior report/rulings; no assumption that a headless session can resume.
 
 Default to at most three independent implementation lanes and one heavy build slot. Actual capacity, overlapping interfaces and available reviewers may reduce this. One writer owns every worktree and shared file set. Reviewers use a pinned source checkout/package and remain read-only; the worker never creates its own approving reviewer.
 
@@ -61,6 +61,29 @@ bin/scopebase-job prepare --repo /home/user/src/m/bpfscope \
 6. Require an explicit worker report and independently inspect its commits/working tree. Generate `bin/scopebase-job review-package --repo /absolute/repository --job ID --head FULL_SHA`, then supply the immutable package, brief, report and candidate source to a fresh reviewer. A report's DONE does not accept the task.
 7. Record findings and rulings, send focused fixes to the owner, and review the changed range. Every fix commit receives a new immutable `job/reviews/FULL_SHA/` package; an old package is never overwritten. A real correctness or evidence-integrity defect stays blocking. Cosmetic debt has an owner and exit criterion; it cannot hide a structural flaw. Refresh the candidate binding after every changed byte.
 8. Run the causal affected checks on the final candidate, integrate only locally owned work, and update product TODO/traceability/handoff together. A local integration is distinct from external publication. After actual resource retirement and accepted or deliberately abandoned work, use `bin/scopebase-job reconcile --repo PATH --job ID --reason TEXT --evidence-file /absolute/controller-evidence.md --resources-retired` to release administrative writable ownership. The helper snapshots the evidence and preserves the manifest, checkout and reviews; it cannot infer that runtime resources are gone or accept the product task. Keep the claim while custody is unresolved.
+
+## Retaining custody while suspending writing
+
+The controller can suspend an explicitly quiescent prepared writer without releasing its paths, checkout, reviews, resources, locks or leases. The implementation ceiling remains three. `execution_state: PREPARED`, dispatch launch text, task acceptance, elapsed time and PID absence never prove that a writer has stopped. Record bounded evidence identifying the stopped or finished writer and retained custody; no global FD scan or resource-retirement assertion is implied.
+
+Use the job's full lowercase current commit ID, exact current generation (initially zero), nonempty reason and absolute regular no-follow UTF-8 evidence file. The source checkpoint must be clean across the full registered worktree, including untracked source; assume-unchanged/skip-worktree index entries and Gitlink trees refuse. Ignored runtime/build/evidence files are outside this Git source checkpoint.
+
+```sh
+bin/scopebase-job suspend-writing --repo /absolute/repository --job ID \
+  --generation 0 --head FULL_CURRENT_COMMIT_ID --write-quiescent \
+  --reason 'Writer finished; retained resources remain unresolved' \
+  --evidence-file /absolute/controller-quiescence.txt
+bin/scopebase-job resume-writing --repo /absolute/repository --job ID \
+  --generation 1 --head FULL_CURRENT_COMMIT_ID \
+  --reason 'Controller assigns further source work' \
+  --evidence-file /absolute/controller-resume.txt
+```
+
+Only a valid published suspension stops counting the job as an implementation writer. Every original path overlap claim remains effective. Resume checks the unchanged suspended checkpoint, all other retained claims and the current policy capacity under the same canonical controller flock; its durable grant immediately consumes the writer slot. Both commands preserve the original manifest, goal, brief and dispatch and return `worker_launch: NOT_LAUNCHED`. A suspended worker must not edit source or start job builds/tests. Before doing so it needs a confirmed durable resume grant and a new explicit controller assignment referencing that grant; the old immutable brief/dispatch cannot resume it.
+
+The helper stores private immutable numbered `writing/events/NNNNNNNN/{event.json,source.json,evidence.txt}` snapshots and atomically replaces/fsyncs `writing/current.json`. It validates the complete contiguous hash chain, exact schemas and current suspended source. JSON head/source/event bounds are 4,096/16,384/131,072 bytes; reason and evidence each have a 65,536-byte nonempty UTF-8/no-NUL bound. There are at most 256 transitions, ending with a possible resume at 256. This is cooperative controller administration, with no authentication boundary, process stopping or syscall deadline guarantee.
+
+A partial/invalid ledger, orphan event or `current.json.next` stops further transitions and admission with custody retained. Preserve it for separately reviewed controller repair; never delete/retry/skip it or infer a prior suspension from the directory tail. Loss of the command response after head publication is ambiguous delivery: inspect its exact generation and hashes before acting. A visible complete resume counts even when durable command success was not received; a worker still needs a confirmed durable grant. Final `reconcile` remains the separate release operation requiring actual resource retirement, and cannot be reopened by either writing command. These are development-tool controls, not product acceptance or runtime retirement evidence.
 
 ## Tests and resource coordination
 

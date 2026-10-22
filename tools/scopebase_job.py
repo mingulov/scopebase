@@ -51,11 +51,12 @@ def git(repo, *args, binary=False):
     configured = subprocess.run(['git', '-C', str(repo), 'config', '--name-only', '--get-regexp',
                                  r'^filter\..*\.[^.]+$'], capture_output=True, text=True)
     require(configured.returncode in (0, 1), 'cannot inspect local Git filter configuration')
-    overrides = ['-c', 'core.hooksPath=/dev/null']
+    overrides = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false']
     for driver in sorted({key.rsplit('.', 1)[0] for key in configured.stdout.splitlines()}):
         for field, value in (('clean', ''), ('smudge', ''), ('process', ''), ('required', 'false')):
             overrides.extend(['-c', f'{driver}.{field}={value}'])
-    result = subprocess.run(['git', *overrides, '-C', str(repo), *args], capture_output=True, text=not binary)
+    result = subprocess.run(['git', *overrides, '-C', str(repo), *args], capture_output=True, text=not binary,
+                            env=dict(os.environ, GIT_OPTIONAL_LOCKS='0', GIT_NO_LAZY_FETCH='1'))
     if result.returncode:
         error = result.stderr.decode(errors='replace') if binary else result.stderr
         raise JobError(f'Git command failed: {error.strip()}')
@@ -359,7 +360,309 @@ def reconcile(args):
                 'ownership': 'RELEASED_BY_CONTROLLER_ASSERTION'}
 
 
-def admission(state, allowed, cap):
+# Writing lifecycle is separate from immutable preparation and final reconciliation.
+WRITING_LIMIT = 256
+SHA256 = re.compile(r'[0-9a-f]{64}\Z', re.ASCII)
+OID = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})\Z', re.ASCII)
+SOURCE_KEYS = {'schema_version', 'kind', 'job_id', 'repository_root', 'git_common_dir',
+               'worktree', 'worktree_git_dir', 'branch', 'head_commit', 'head_tree', 'status_sha256'}
+HEAD_KEYS = {'schema_version', 'kind', 'job_id', 'job_manifest_sha256', 'generation', 'event_sha256'}
+EVENT_KEYS = {'schema_version', 'kind', 'job_id', 'job_manifest_sha256', 'generation',
+              'previous_event_sha256', 'action', 'writing_permission', 'created_utc', 'reason',
+              'reason_sha256', 'evidence_original_path', 'evidence_snapshot', 'evidence_sha256',
+              'source_snapshot', 'source_sha256'}
+
+
+def existing_private_directory(path):
+    require(not path.is_symlink() and path.is_dir(), f'writing directory missing or symlink: {path}')
+    info = path.stat()
+    require(info.st_uid == os.getuid() and info.st_mode & 0o077 == 0,
+            f'writing directory must be private and user-owned: {path}')
+
+
+def writing_entries(path, expected):
+    # Stop at the first unexpected entry; corrupt directories do not expand the work bound.
+    remaining = set(expected)
+    for entry in path.iterdir():
+        require(entry.name in remaining, f'partial/unexpected writing history entry: {entry}')
+        remaining.remove(entry.name)
+    require(not remaining, f'writing history missing entries in {path}; custody retained')
+
+
+def writing_bytes(path, limit):
+    content = regular_bytes(path, limit)
+    info = path.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_mode & 0o077 == 0,
+            f'writing artifact must be a private user-owned regular file: {path}')
+    return content
+
+
+def canonical_record(path, limit, keys):
+    content = writing_bytes(path, limit)
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, f'duplicate JSON key in writing artifact: {path}')
+            result[key] = value
+        return result
+    try:
+        value = json.loads(decode_text(content, str(path)), object_pairs_hook=unique)
+    except ValueError as exc:
+        raise JobError(f'invalid writing JSON: {path}: {exc}') from exc
+    require(isinstance(value, dict) and set(value) == keys and json_bytes(value) == content,
+            f'noncanonical or unsupported writing record: {path}')
+    require(type(value.get('schema_version')) is int and value['schema_version'] == 1,
+            f'unsupported writing schema: {path}')
+    return value, content
+
+
+def writing_artifacts(root, common, directory, manifest):
+    require(isinstance(manifest, dict) and type(manifest.get('schema_version')) is int and
+            manifest['schema_version'] == 1 and manifest.get('kind') == 'SCOPEBASE_ADMINISTRATIVE_JOB' and
+            manifest.get('job_id') == directory.name and ID.fullmatch(directory.name) and
+            manifest.get('repository_root') == str(root) and manifest.get('git_common_dir') == str(common) and
+            manifest.get('execution_state') == 'PREPARED' and manifest.get('read_only') is False and
+            isinstance(manifest.get('allowed_paths'), list) and manifest['allowed_paths'],
+            'writing requires a matching writable PREPARED job')
+    for path in manifest['allowed_paths']:
+        relative_path(path)
+    require(not matching_reconciliation(directory, manifest), 'reconciled job cannot regain writing permission')
+    artifacts = manifest.get('artifact_sha256')
+    require(isinstance(artifacts, dict) and set(artifacts) == {'goal.txt', 'brief.md', 'dispatch.json'},
+            'original job artifact bindings missing')
+    for name, expected in artifacts.items():
+        require(isinstance(expected, str) and SHA256.fullmatch(expected) and
+                digest(regular_bytes(directory / name)) == expected, f'original job artifact binding changed: {name}')
+    require(manifest.get('goal_snapshot') == str(directory / 'goal.txt') and
+            manifest.get('goal_sha256') == artifacts['goal.txt'], 'original goal binding differs')
+
+
+def writing_source(root, common, directory, manifest, expected_head=None):
+    writing_artifacts(root, common, directory, manifest)
+    worktree = root / '.worktrees' / directory.name
+    branch = 'scopebase/' + directory.name
+    require(manifest.get('worktree') == str(worktree) and manifest.get('branch') == branch and
+            not worktree.is_symlink() and worktree.is_dir() and not (worktree / '.git').is_symlink(),
+            'writing worktree/branch binding missing or replaced')
+    actual_source, actual_root, actual_common = repository(worktree)
+    git_dir = git(worktree, 'rev-parse', '--absolute-git-dir').strip()
+    require(actual_source == worktree and actual_root == root and actual_common == common and
+            git_dir == manifest.get('worktree_git_dir') and Path(git_dir).resolve() == Path(git_dir) and
+            not Path(git_dir).is_symlink() and Path(git_dir).is_dir() and
+            git(worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD').strip() == branch,
+            'writing worktree Git identity binding changed')
+    registrations = git(root, 'worktree', 'list', '--porcelain', '-z', binary=True).split(b'\0\0')
+    registration = [block.split(b'\0') for block in registrations
+                    if block.split(b'\0')[0] == b'worktree ' + os.fsencode(worktree)]
+    require(len(registration) == 1 and b'branch refs/heads/' + branch.encode() in registration[0],
+            'writing worktree is not registered with its exact branch')
+    head = commit(worktree, 'HEAD')
+    tree = git(worktree, 'rev-parse', '--verify', 'HEAD^{tree}').strip()
+    require(OID.fullmatch(head) and OID.fullmatch(tree), 'writing source requires full object IDs')
+    if expected_head is not None:
+        require(isinstance(expected_head, str) and OID.fullmatch(expected_head) and expected_head == head,
+                'requested full HEAD does not match writing source checkpoint')
+    index = git(worktree, 'ls-files', '-v', '-z', binary=True).split(b'\0')
+    require(all(entry[:1] != b'S' and not entry[:1].islower() for entry in index if entry),
+            'writing source has assume-unchanged or skip-worktree index entries')
+    entries = git(worktree, 'ls-tree', '-r', '-z', 'HEAD', binary=True).split(b'\0')
+    require(not any(entry.startswith(b'160000 ') for entry in entries), 'writing source Gitlink/submodule refused')
+    status = git(worktree, 'status', '--porcelain=v1', '--untracked-files=all', binary=True)
+    require(not status, 'dirty/untracked writing source; clean full HEAD required')
+    return {'schema_version': 1, 'kind': 'SCOPEBASE_WRITING_SOURCE', 'job_id': directory.name,
+            'repository_root': str(root), 'git_common_dir': str(common), 'worktree': str(worktree),
+            'worktree_git_dir': git_dir, 'branch': branch, 'head_commit': head, 'head_tree': tree,
+            'status_sha256': digest(status)}
+
+
+def writing_state(directory, manifest):
+    writing = directory / 'writing'
+    if not os.path.lexists(writing):
+        return {'generation': 0, 'writing_permission': 'ACTIVE', 'event_sha256': None}
+    existing_private_directory(writing)
+    writing_entries(writing, {'current.json', 'events'})
+    events = writing / 'events'
+    existing_private_directory(events)
+    head, _ = canonical_record(writing / 'current.json', 4096, HEAD_KEYS)
+    manifest_hash = digest(regular_bytes(directory / 'job.json'))
+    require(head['kind'] == 'SCOPEBASE_WRITING_HEAD' and head['job_id'] == directory.name and
+            head['job_manifest_sha256'] == manifest_hash and
+            type(head['generation']) is int and 1 <= head['generation'] <= WRITING_LIMIT and
+            isinstance(head['event_sha256'], str) and SHA256.fullmatch(head['event_sha256']),
+            'invalid writing head binding; custody retained')
+    writing_entries(events, {f'{n:08d}' for n in range(1, head['generation'] + 1)})
+    root = directory.parent.parent.parent
+    common = root / '.git'
+    writing_artifacts(root, common, directory, manifest)
+    previous_hash = None
+    previous_source = None
+    for generation in range(1, head['generation'] + 1):
+        event_dir = events / f'{generation:08d}'
+        existing_private_directory(event_dir)
+        writing_entries(event_dir, {'event.json', 'source.json', 'evidence.txt'})
+        suspended = generation % 2 == 1
+        extra = {'write_quiescent'} if suspended else {'suspended_event_sha256', 'policy_sha256',
+                                                       'implementation_cap', 'other_active_writers'}
+        event, event_bytes = canonical_record(event_dir / 'event.json', 131072, EVENT_KEYS | extra)
+        source, source_bytes = canonical_record(event_dir / 'source.json', 16384, SOURCE_KEYS)
+        evidence = writing_bytes(event_dir / 'evidence.txt', GOAL_LIMIT)
+        bounded_nonempty_text(evidence, 'writing evidence')
+        require(event['kind'] == 'SCOPEBASE_WRITING_TRANSITION' and event['job_id'] == directory.name and
+                event['job_manifest_sha256'] == manifest_hash and type(event['generation']) is int and
+                event['generation'] == generation and event['previous_event_sha256'] == previous_hash and
+                event['action'] == ('SUSPEND' if suspended else 'RESUME') and
+                event['writing_permission'] == ('SUSPENDED' if suspended else 'ACTIVE'),
+                'invalid writing transition binding; custody retained')
+        require(isinstance(event['created_utc'], str), 'invalid writing creation time')
+        try:
+            created = datetime.fromisoformat(event['created_utc'])
+            require(created.utcoffset() is not None and created.utcoffset().total_seconds() == 0,
+                    'writing creation time must be UTC')
+        except ValueError as exc:
+            raise JobError('invalid writing creation time') from exc
+        require(isinstance(event['reason'], str), 'invalid writing reason')
+        bounded_nonempty_text(event['reason'].encode('utf-8'), 'writing reason')
+        require(event['reason_sha256'] == digest(event['reason'].encode('utf-8')) and
+                isinstance(event['evidence_original_path'], str) and Path(event['evidence_original_path']).is_absolute() and
+                '\0' not in event['evidence_original_path'] and event['evidence_snapshot'] == 'evidence.txt' and
+                event['source_snapshot'] == 'source.json' and event['evidence_sha256'] == digest(evidence) and
+                event['source_sha256'] == digest(source_bytes), 'writing snapshot/reason digest binding differs')
+        require(source['kind'] == 'SCOPEBASE_WRITING_SOURCE' and source['job_id'] == directory.name and
+                all(isinstance(source[key], str) for key in SOURCE_KEYS - {'schema_version'}) and
+                source['repository_root'] == str(root) and source['git_common_dir'] == str(common) and
+                source['worktree'] == manifest['worktree'] and source['worktree_git_dir'] == manifest['worktree_git_dir'] and
+                source['branch'] == manifest['branch'] and OID.fullmatch(source['head_commit']) and
+                OID.fullmatch(source['head_tree']) and source['status_sha256'] == digest(b''),
+                'invalid writing source snapshot binding')
+        if suspended:
+            require(event['write_quiescent'] is True, 'writing suspension lacks quiescence assertion')
+        else:
+            require(event['suspended_event_sha256'] == previous_hash and source_bytes == previous_source and
+                    isinstance(event['policy_sha256'], str) and SHA256.fullmatch(event['policy_sha256']) and
+                    type(event['implementation_cap']) is int and type(event['other_active_writers']) is int and
+                    0 <= event['other_active_writers'] < event['implementation_cap'] <= 3,
+                    'invalid resume capacity/source binding')
+        previous_hash = digest(event_bytes)
+        previous_source = source_bytes
+    require(previous_hash == head['event_sha256'], 'writing current head/event hash differs; custody retained')
+    if event['writing_permission'] == 'SUSPENDED':
+        require(json_bytes(writing_source(root, common, directory, manifest)) == previous_source,
+                'suspended writing source checkpoint drift; custody retained')
+    return {'generation': head['generation'], 'writing_permission': event['writing_permission'],
+            'event_sha256': previous_hash}
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_file(path, content):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def writing_transition(args, suspended):
+    job_id = identifier(args.job, 'job')
+    require(type(args.generation) is int and args.generation >= 0, 'writing generation must be nonnegative integer')
+    require(isinstance(args.head, str) and OID.fullmatch(args.head), 'writing requires full lowercase HEAD object ID')
+    if suspended:
+        require(args.write_quiescent, 'explicit --write-quiescent assertion required')
+    reason = bounded_nonempty_text(args.reason.encode('utf-8'), 'writing reason')
+    evidence_path = Path(args.evidence_file)
+    require(evidence_path.is_absolute(), 'writing evidence-file must be an absolute path')
+    evidence = regular_bytes(evidence_path, GOAL_LIMIT)
+    bounded_nonempty_text(evidence, 'writing evidence')
+    source_repo, root, common = repository(args.repo)
+    with controller(root) as state:
+        existing_private_directory(state / 'jobs')
+        directory = state / 'jobs' / job_id
+        existing_private_directory(directory)
+        manifest_bytes = regular_bytes(directory / 'job.json')
+        manifest = json_file(directory / 'job.json')
+        checkpoint = writing_source(root, common, directory, manifest, args.head)
+        current = writing_state(directory, manifest)
+        require(current['generation'] == args.generation, 'stale writing generation; inspect retained evidence')
+        require(current['writing_permission'] == ('ACTIVE' if suspended else 'SUSPENDED'),
+                'writing permission already in requested state')
+        generation = current['generation'] + 1
+        require(generation <= WRITING_LIMIT, 'writing transition bound reached; custody retained')
+        event = {'schema_version': 1, 'kind': 'SCOPEBASE_WRITING_TRANSITION', 'job_id': job_id,
+                 'job_manifest_sha256': digest(manifest_bytes), 'generation': generation,
+                 'previous_event_sha256': current['event_sha256'], 'action': 'SUSPEND' if suspended else 'RESUME',
+                 'writing_permission': 'SUSPENDED' if suspended else 'ACTIVE',
+                 'created_utc': datetime.now(timezone.utc).isoformat(), 'reason': reason,
+                 'reason_sha256': digest(reason.encode('utf-8')), 'evidence_original_path': str(evidence_path),
+                 'evidence_snapshot': 'evidence.txt', 'evidence_sha256': digest(evidence),
+                 'source_snapshot': 'source.json', 'source_sha256': digest(json_bytes(checkpoint))}
+        if suspended:
+            event['write_quiescent'] = True
+        else:
+            policy_bytes = regular_bytes(source_repo / POLICY)
+            selected_policy = policy(source_repo)
+            require(regular_bytes(source_repo / POLICY) == policy_bytes,
+                    'policy changed while validating resume capacity; no transition reserved')
+            cap = selected_policy['max_independent_implementation_lanes']
+            writers = admission(state, manifest['allowed_paths'], cap, resuming_job=job_id)
+            event.update(suspended_event_sha256=current['event_sha256'],
+                         policy_sha256=digest(policy_bytes),
+                         implementation_cap=cap, other_active_writers=writers)
+        source_bytes = json_bytes(checkpoint)
+        event_bytes = json_bytes(event)
+        head = {'schema_version': 1, 'kind': 'SCOPEBASE_WRITING_HEAD', 'job_id': job_id,
+                'job_manifest_sha256': digest(manifest_bytes), 'generation': generation,
+                'event_sha256': digest(event_bytes)}
+        head_bytes = json_bytes(head)
+        require(len(source_bytes) <= 16384 and len(event_bytes) <= 131072 and len(head_bytes) <= 4096,
+                'writing JSON exceeds record bound; no transition reserved')
+        writing = directory / 'writing'
+        if not os.path.lexists(writing):
+            writing.mkdir(mode=0o700)
+            (writing / 'events').mkdir(mode=0o700)
+        events = writing / 'events'
+        event_dir = events / f'{generation:08d}'
+        event_dir.mkdir(mode=0o700)  # From here every failure is retained, never retried/repaired.
+        durable_file(event_dir / 'evidence.txt', evidence)
+        durable_file(event_dir / 'source.json', source_bytes)
+        durable_file(event_dir / 'event.json', event_bytes)
+        sync_directory(event_dir)
+        sync_directory(events)
+        # Make new directory entries durable before publishing their authoritative head.
+        sync_directory(writing)
+        sync_directory(directory)
+        if not suspended:
+            require(regular_bytes(source_repo / POLICY) == policy_bytes, 'resume policy changed before publication')
+        require(regular_bytes(directory / 'job.json') == manifest_bytes and
+                json_bytes(writing_source(root, common, directory, manifest, args.head)) == json_bytes(checkpoint),
+                'writing source/original job changed before head publication')
+        durable_file(writing / 'current.json.next', head_bytes)
+        os.replace(writing / 'current.json.next', writing / 'current.json')
+        sync_directory(writing)
+        published = writing_state(directory, manifest)
+        require(published['generation'] == generation and published['event_sha256'] == digest(event_bytes),
+                'published writing transition failed validation; custody retained')
+        return {**published, 'job': str(directory), 'event': str(event_dir / 'event.json'),
+                'source_checkpoint': checkpoint, 'source_snapshot': str(event_dir / 'source.json'),
+                'source_sha256': event['source_sha256'], 'evidence_snapshot': str(event_dir / 'evidence.txt'),
+                'evidence_sha256': event['evidence_sha256'], 'path_ownership': 'RETAINED',
+                'resource_retirement': 'NOT_ATTESTED', 'worker_launch': 'NOT_LAUNCHED'}
+
+
+def suspend_writing(args):
+    return writing_transition(args, True)
+
+
+def resume_writing(args):
+    return writing_transition(args, False)
+
+
+def admission(state, allowed, cap, *, resuming_job=None):
     jobs = state / 'jobs'
     private_directory(jobs)
     writers = 0
@@ -372,13 +675,18 @@ def admission(state, allowed, cap):
         if matching_reconciliation(directory, manifest):
             continue
         existing = [relative_path(p) for p in manifest['allowed_paths']]
-        if existing:
+        lifecycle = writing_state(directory, manifest)
+        if directory.name == resuming_job:
+            require(lifecycle['writing_permission'] == 'SUSPENDED', 'resume subject is not suspended')
+            continue
+        if existing and lifecycle['writing_permission'] != 'SUSPENDED':
             writers += 1
         if allowed:
             for first in allowed:
                 for second in existing:
                     require(not overlaps(first, second), f'writable path overlap: {first} with {directory.name}:{second}')
-    require(not allowed or writers < cap, 'implementation lane cap reached; controller reconciliation required')
+    require(not allowed or writers < cap, 'implementation lane cap reached; controller reconciliation or suspension required')
+    return writers
 
 
 def prepare(args):
@@ -632,9 +940,17 @@ def main(argv=None):
     for option in ('repo', 'job', 'reason', 'evidence-file'):
         closure.add_argument('--' + option, required=True)
     closure.add_argument('--resources-retired', action='store_true')
+    for name in ('suspend-writing', 'resume-writing'):
+        transition = commands.add_parser(name)
+        for option in ('repo', 'job', 'head', 'reason', 'evidence-file'):
+            transition.add_argument('--' + option, required=True)
+        transition.add_argument('--generation', required=True, type=int)
+        if name == 'suspend-writing':
+            transition.add_argument('--write-quiescent', action='store_true')
     try:
         args = parser.parse_args(argv)
-        result = {'doctor': doctor, 'prepare': prepare, 'review-package': review_package, 'reconcile': reconcile}[args.command](args)
+        result = {'doctor': doctor, 'prepare': prepare, 'review-package': review_package, 'reconcile': reconcile,
+                  'suspend-writing': suspend_writing, 'resume-writing': resume_writing}[args.command](args)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (JobError, OSError, ValueError, KeyError, TypeError) as exc:

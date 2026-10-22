@@ -122,6 +122,530 @@ class JobTests(unittest.TestCase):
         self.git('commit', '-qm', 'candidate change', cwd=worktree)
         return worktree, self.git('rev-parse', 'HEAD', cwd=worktree).stdout.strip()
 
+    def writing_args(self, action='suspend-writing', job='first', generation=0, head=None,
+                     reason='Writer finished; retained custody is unresolved', evidence=None):
+        if evidence is None:
+            evidence = Path(self.temp.name) / 'quiescence.txt'
+            evidence.write_text('Controller confirms writer finished; retain all paths and resources.\n')
+        args = [action, '--repo', self.repo, '--job', job, '--generation', generation,
+                '--head', head or self.git('rev-parse', 'HEAD', cwd=self.repo / '.worktrees' / job).stdout.strip(),
+                '--reason', reason, '--evidence-file', evidence]
+        if action == 'suspend-writing':
+            args.append('--write-quiescent')
+        return args
+
+    def snapshot(self, directory):
+        return {str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob('*') if p.is_file()}
+
+    def assert_no_job(self, name):
+        self.assertFalse((self.repo / '.scopebase/jobs' / name).exists())
+        self.assertFalse((self.repo / '.worktrees' / name).exists())
+        self.assertNotEqual(self.git('show-ref', '--verify', 'refs/heads/scopebase/' + name,
+                                     check=False).returncode, 0)
+
+    def test_suspend_frees_writer_slot_but_preserves_original_job(self):
+        first = self.prepare()
+        self.prepare(job='second', paths=('src/second.txt',))
+        self.prepare(job='third', paths=('src/third.txt',))
+        refused = self.cli(*self.prepare_args(job='fourth', paths=('src/fourth.txt',)), ok=False)
+        self.assertEqual(refused.returncode, 64)
+        self.assertIn('lane', refused.stderr)
+        self.assert_no_job('fourth')
+        self.package()
+        job = Path(first['job'])
+        before = self.snapshot(job)
+        policy_before = (self.repo / 'orchestration/policy.json').read_bytes()
+        registry_before = (self.repo / REGISTRY).read_bytes()
+        args = self.writing_args()
+        evidence = Path(args[args.index('--evidence-file') + 1])
+        evidence_bytes = evidence.read_bytes()
+        result = self.cli(*args)
+        self.assertEqual(result['writing_permission'], 'SUSPENDED')
+        self.assertEqual(result['generation'], 1)
+        self.assertEqual(result['path_ownership'], 'RETAINED')
+        self.assertEqual(result['resource_retirement'], 'NOT_ATTESTED')
+        self.assertEqual(result['worker_launch'], 'NOT_LAUNCHED')
+        evidence.write_text('changed later input\n')
+        self.assertEqual(Path(result['evidence_snapshot']).read_bytes(), evidence_bytes)
+        self.prepare(job='fourth', paths=('src/fourth.txt',))
+        for rel, content in before.items():
+            self.assertEqual((job / rel).read_bytes(), content)
+        self.assertTrue(Path(first['worktree']).is_dir())
+        self.assertIn(str(first['worktree']), self.git('worktree', 'list', '--porcelain').stdout)
+        self.assertEqual((self.repo / 'orchestration/policy.json').read_bytes(), policy_before)
+        self.assertEqual((self.repo / REGISTRY).read_bytes(), registry_before)
+
+    def test_suspended_claim_still_rejects_same_ancestor_descendant_paths(self):
+        self.prepare(paths=('src/owned',))
+        self.cli(*self.writing_args())
+        for number, path in enumerate(('src/owned', 'src', 'src/owned/child')):
+            name = 'overlap-' + str(number)
+            result = self.cli(*self.prepare_args(job=name, paths=(path,)), ok=False)
+            self.assertEqual(result.returncode, 64)
+            self.assertIn('overlap', result.stderr)
+            self.assert_no_job(name)
+        self.prepare(job='similar', paths=('src/owned-other',))
+        self.prepare(job='disjoint', paths=('tests',))
+
+    def test_suspension_requires_explicit_quiescence_and_supported_subject(self):
+        prepared = self.prepare()
+        directory = Path(prepared['job'])
+        worktree = Path(prepared['worktree'])
+        args = self.writing_args()
+        invalid_args = [args[:-1]]
+        for flag, value in (('--generation', '-1'), ('--generation', 'true'), ('--generation', '1'),
+                            ('--head', 'HEAD'), ('--head', self.base[:12]),
+                            ('--reason', ''), ('--reason', '  '), ('--reason', 'x' * 65537), ('--reason', '\n' * 65535 + 'x'),
+                            ('--reason', '\u0080' * 32768)):
+            changed = list(args)
+            changed[changed.index(flag) + 1] = value
+            invalid_args.append(changed)
+        evidence = Path(self.temp.name) / 'invalid evidence'
+        for content in (b'', b' \n', b'NUL\0text', b'\xff', b'x' * 65537):
+            evidence.write_bytes(content)
+            changed = list(args)
+            changed[changed.index('--evidence-file') + 1] = evidence
+            self.assertEqual(self.cli(*changed, ok=False).returncode, 64)
+        link = Path(self.temp.name) / 'evidence-link'
+        link.symlink_to(evidence)
+        fifo = Path(self.temp.name) / 'evidence-fifo'
+        os.mkfifo(fifo)
+        for value in ('relative.txt', link, fifo):
+            changed = list(args)
+            changed[changed.index('--evidence-file') + 1] = value
+            invalid_args.append(changed)
+        for changed in invalid_args:
+            with self.subTest(args=changed[-3:]):
+                self.assertEqual(self.cli(*changed, ok=False).returncode, 64)
+                self.assertFalse((directory / 'writing').exists())
+        manifest_path = directory / 'job.json'
+        original = manifest_path.read_bytes()
+        for field, value in (('execution_state', 'PREPARING'), ('execution_state', 'PREPARATION_FAILED'),
+                             ('read_only', True), ('allowed_paths', []), ('worktree_git_dir', '/wrong'),
+                             ('branch', 'wrong'), ('schema_version', True)):
+            record = json.loads(original)
+            record[field] = value
+            manifest_path.write_text(json.dumps(record))
+            self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+            self.assertFalse((directory / 'writing').exists())
+        manifest_path.write_bytes(original)
+        nul_reason = list(args)
+        nul_reason[nul_reason.index('--reason') + 1] = 'invalid\0reason'
+        self.assertEqual(job_helper.main(list(map(str, nul_reason))), 64)
+        self.assertFalse((directory / 'writing').exists())
+        for name in ('goal.txt', 'brief.md', 'dispatch.json'):
+            artifact = directory / name
+            saved_artifact = artifact.read_bytes()
+            artifact.write_bytes(saved_artifact + b'changed')
+            self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+            self.assertFalse((directory / 'writing').exists())
+            artifact.write_bytes(saved_artifact)
+        for flag in ('--assume-unchanged', '--skip-worktree'):
+            self.git('update-index', flag, 'src/first.txt', cwd=worktree)
+            self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+            self.git('update-index', flag.replace('--', '--no-', 1), 'src/first.txt', cwd=worktree)
+        (worktree / 'src/first.txt').write_text('dirty\n')
+        self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+        self.git('restore', 'src/first.txt', cwd=worktree)
+        (worktree / 'untracked').write_text('source\n')
+        self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+        (worktree / 'untracked').unlink()
+        self.git('checkout', '--detach', '-q', cwd=worktree)
+        self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+        self.git('checkout', '-q', 'scopebase/first', cwd=worktree)
+        self.git('update-index', '--add', '--cacheinfo', '160000,' + self.base + ',submodule', cwd=worktree)
+        self.git('commit', '-qm', 'gitlink fixture', cwd=worktree)
+        self.assertEqual(self.cli(*self.writing_args(), ok=False).returncode, 64)
+        self.assertFalse((directory / 'writing').exists())
+        readonly = self.prepare(job='readonly', role='reviewer', paths=())
+        self.assertEqual(self.cli(*self.writing_args(job='readonly'), ok=False).returncode, 64)
+        self.assertFalse((Path(readonly['job']) / 'writing').exists())
+        self.cli(*self.reconciliation_args())
+        self.assertEqual(self.cli(*self.writing_args(), ok=False).returncode, 64)
+
+    def test_resume_reacquires_capacity_and_retains_suspension_on_refusal(self):
+        prepared = self.prepare()
+        self.prepare(job='second', paths=('second',))
+        self.prepare(job='third', paths=('third',))
+        self.cli(*self.writing_args())
+        self.prepare(job='fourth', paths=('fourth',))
+        ledger = Path(prepared['job']) / 'writing'
+        before = self.snapshot(ledger)
+        result = self.cli(*self.writing_args('resume-writing', generation=1), ok=False)
+        self.assertEqual(result.returncode, 64)
+        self.assertIn('lane', result.stderr)
+        self.assertEqual(self.snapshot(ledger), before)
+        policy_path = self.repo / 'orchestration/policy.json'
+        policy_before = policy_path.read_bytes()
+        reduced_policy = json.loads(policy_before)
+        reduced_policy['max_independent_implementation_lanes'] = 2
+        policy_path.write_text(json.dumps(reduced_policy))
+        reduced = self.cli(*self.writing_args('resume-writing', generation=1), ok=False)
+        self.assertEqual(reduced.returncode, 64)
+        self.assertIn('lane', reduced.stderr)
+        policy_path.write_bytes(policy_before)
+        self.cli(*self.reconciliation_args(job='second'))
+        from unittest.mock import patch
+        real_policy = job_helper.policy
+        def policy_changes_after_read(repo):
+            selected = real_policy(repo)
+            policy_path.write_text(json.dumps(reduced_policy))
+            return selected
+        with patch.object(job_helper, 'policy', side_effect=policy_changes_after_read):
+            self.assertEqual(job_helper.main(list(map(str, self.writing_args('resume-writing', generation=1)))), 64)
+        self.assertFalse((Path(prepared['job']) / 'writing/events/00000002').exists())
+        policy_path.write_bytes(policy_before)
+        result = self.cli(*self.writing_args('resume-writing', generation=1))
+        self.assertEqual(result['writing_permission'], 'ACTIVE')
+        self.assertEqual(result['generation'], 2)
+        refused = self.cli(*self.prepare_args(job='fifth', paths=('fifth',)), ok=False)
+        self.assertEqual(refused.returncode, 64)
+        self.assertIn('lane', refused.stderr)
+        self.assert_no_job('fifth')
+
+    def test_resume_only_skips_own_claim_and_never_changes_scope(self):
+        first = self.prepare()
+        other = self.prepare(job='other', paths=('other',))
+        self.cli(*self.writing_args())
+        manifest = Path(other['manifest'])
+        original = manifest.read_bytes()
+        # Deliberately conflicting retained fixture: do not edit any operational job.
+        record = json.loads(original)
+        record['allowed_paths'] = ['src']
+        manifest.write_text(json.dumps(record))
+        result = self.cli(*self.writing_args('resume-writing', generation=1), ok=False)
+        self.assertEqual(result.returncode, 64)
+        self.assertIn('overlap', result.stderr)
+        self.assertFalse((Path(first['job']) / 'writing/events/00000002').exists())
+        manifest.write_bytes(original)
+        for extra in (('--write-path', 'new'), ('--role', 'reviewer'), ('--resources-retired',)):
+            self.assertEqual(self.cli(*self.writing_args('resume-writing', generation=1),
+                                      *extra, ok=False).returncode, 64)
+        self.cli(*self.writing_args('resume-writing', generation=1))
+
+    def test_repeat_suspend_resume_is_generation_bound_and_append_only(self):
+        prepared = self.prepare()
+        ledger = Path(prepared['job']) / 'writing'
+        self.cli(*self.writing_args())
+        first = self.snapshot(ledger / 'events/00000001')
+        self.assertEqual(self.cli(*self.writing_args(generation=1), ok=False).returncode, 64)
+        self.assertEqual(self.cli(*self.writing_args('resume-writing', generation=0), ok=False).returncode, 64)
+        self.cli(*self.writing_args('resume-writing', generation=1))
+        worktree = Path(prepared['worktree'])
+        (worktree / 'src/first.txt').write_text('authorized active change\n')
+        # ACTIVE state permits work, including dirty source and a later clean commit.
+        self.prepare(job='during-active-edit', paths=('other',))
+        self.git('add', 'src/first.txt', cwd=worktree)
+        self.git('commit', '-qm', 'authorized active checkpoint', cwd=worktree)
+        self.cli(*self.writing_args(generation=2))
+        self.cli(*self.writing_args('resume-writing', generation=3))
+        self.assertEqual(self.snapshot(ledger / 'events/00000001'), first)
+        self.assertEqual(self.cli(*self.writing_args('resume-writing', generation=4), ok=False).returncode, 64)
+        # Build a hand-authored, hash-linked valid history to the real on-disk bound.
+        source = (ledger / 'events/00000003/source.json').read_bytes()
+        previous = hashlib.sha256((ledger / 'events/00000004/event.json').read_bytes()).hexdigest()
+        suspend = json.loads((ledger / 'events/00000003/event.json').read_bytes())
+        resume = json.loads((ledger / 'events/00000004/event.json').read_bytes())
+        for generation in range(5, 256):
+            event = dict(suspend if generation % 2 else resume)
+            event.update(generation=generation, previous_event_sha256=previous)
+            if generation % 2 == 0:
+                event['suspended_event_sha256'] = previous
+            target = ledger / 'events' / f'{generation:08d}'
+            target.mkdir(mode=0o700)
+            for name, content in (('source.json', source), ('evidence.txt', b'Controller confirms writer finished; retain all paths and resources.\n'),
+                                  ('event.json', (json.dumps(event, sort_keys=True, indent=2) + '\n').encode())):
+                (target / name).write_bytes(content)
+                (target / name).chmod(0o600)
+            previous = hashlib.sha256((target / 'event.json').read_bytes()).hexdigest()
+        head = json.loads((ledger / 'current.json').read_bytes())
+        head.update(generation=255, event_sha256=previous)
+        (ledger / 'current.json').write_text(json.dumps(head, sort_keys=True, indent=2) + '\n')
+        self.cli(*self.writing_args('resume-writing', generation=255))
+        before = self.snapshot(ledger)
+        result = self.cli(*self.writing_args(generation=256), ok=False)
+        self.assertEqual(result.returncode, 64)
+        self.assertEqual(self.snapshot(ledger), before)
+
+    def test_suspended_source_drift_retains_writer_and_claim(self):
+        prepared = self.prepare()
+        self.cli(*self.writing_args())
+        worktree = Path(prepared['worktree'])
+        ledger = Path(prepared['job']) / 'writing'
+        before = self.snapshot(ledger)
+        def refused():
+            for name, path in (('drift-disjoint', 'other'), ('drift-overlap', 'src')):
+                result = self.cli(*self.prepare_args(job=name, paths=(path,)), ok=False)
+                self.assertEqual(result.returncode, 64)
+                self.assert_no_job(name)
+            self.assertEqual(self.cli(*self.writing_args('resume-writing', generation=1), ok=False).returncode, 64)
+            self.assertEqual(self.snapshot(ledger), before)
+        (worktree / 'src/first.txt').write_text('drift\n')
+        refused()
+        self.git('restore', 'src/first.txt', cwd=worktree)
+        (worktree / 'new-source').write_text('drift\n')
+        refused()
+        (worktree / 'new-source').unlink()
+        self.git('commit', '--allow-empty', '-qm', 'moved suspended head', cwd=worktree)
+        refused()
+        self.git('reset', '--hard', self.base, cwd=worktree)
+        self.git('checkout', '--detach', '-q', cwd=worktree)
+        refused()
+        self.git('checkout', '-q', 'scopebase/first', cwd=worktree)
+        dotgit = worktree / '.git'
+        identity = dotgit.read_bytes()
+        dotgit.unlink()
+        dotgit.symlink_to(self.repo / '.git')
+        refused()
+        dotgit.unlink()
+        dotgit.write_bytes(identity)
+        self.prepare(job='restored', paths=('other',))
+
+    def test_corrupt_or_missing_writing_state_fails_closed(self):
+        prepared = self.prepare()
+        self.cli(*self.writing_args())
+        self.cli(*self.writing_args('resume-writing', generation=1))
+        job = Path(prepared['job'])
+        ledger = job / 'writing'
+        saved = self.snapshot(ledger)
+        def restore():
+            shutil.rmtree(ledger)
+            ledger.mkdir(mode=0o700)
+            (ledger / 'events').mkdir(mode=0o700)
+            for rel, data in saved.items():
+                path = ledger / rel
+                path.parent.mkdir(mode=0o700, exist_ok=True)
+                path.write_bytes(data)
+                path.chmod(0o600)
+        def refusal():
+            result = self.cli(*self.prepare_args(job='invalid-ledger', paths=('other',)), ok=False)
+            self.assertEqual(result.returncode, 64, result.stdout)
+            self.assert_no_job('invalid-ledger')
+            self.assertEqual(self.cli(*self.writing_args(generation=2), ok=False).returncode, 64)
+        for rel in ('current.json', 'events/00000002/event.json', 'events/00000001/event.json',
+                    'events/00000001/source.json', 'events/00000002/evidence.txt'):
+            with self.subTest(missing=rel):
+                (ledger / rel).unlink()
+                refusal()
+                restore()
+        shutil.rmtree(ledger / 'events/00000002')
+        refusal()  # Last RESUME must not disappear into prior SUSPEND authority.
+        restore()
+        event_path = ledger / 'events/00000002/event.json'
+        for key, value in (('reason_sha256', '0' * 64), ('job_manifest_sha256', '0' * 64),
+                           ('generation', True), ('previous_event_sha256', '0' * 64),
+                           ('unknown', 'unsupported')):
+            record = json.loads(event_path.read_bytes())
+            record[key] = value
+            event_path.write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
+            refusal()
+            restore()
+        for content in (b'{}' + b' ' * 131073,
+                        saved['events/00000002/event.json'].replace(b'"schema_version": 1,', b'"schema_version": 1, "schema_version": 1,'),
+                        json.dumps(json.loads(saved['events/00000002/event.json'])).encode()):
+            event_path.write_bytes(content)
+            refusal()
+            restore()
+        for rel in ('current.json.next', 'extra', 'events/00000003/extra', 'events/00000004/extra'):
+            path = ledger / rel
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+            path.write_text('partial/orphan\n')
+            refusal()
+            restore()
+        path = ledger / 'events/00000001/evidence.txt'
+        path.unlink()
+        path.symlink_to(Path(self.temp.name) / 'quiescence.txt')
+        refusal()
+        restore()
+        for rel, field, value in (('current.json', 'generation', True),
+                                  ('current.json', 'schema_version', 2),
+                                  ('current.json', 'unknown', 'field'),
+                                  ('events/00000001/source.json', 'head_commit', 'HEAD'),
+                                  ('events/00000002/event.json', 'other_active_writers', True),
+                                  ('events/00000002/event.json', 'implementation_cap', 4)):
+            record_path = ledger / rel
+            record = json.loads(record_path.read_bytes())
+            record[field] = value
+            record_path.write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
+            refusal()
+            restore()
+        for rel in ('current.json', 'events/00000001/source.json', 'events/00000001/evidence.txt'):
+            path = ledger / rel
+            path.write_bytes(b'x' * (65537 if rel.endswith('txt') else 16385))
+            refusal()
+            restore()
+        manifest_path = job / 'job.json'
+        original_manifest = manifest_path.read_bytes()
+        altered = json.loads(original_manifest)
+        altered['allowed_paths'] = ['changed']
+        manifest_path.write_text(json.dumps(altered))
+        refusal()
+        manifest_path.write_bytes(original_manifest)
+        # A malformed ledger also refuses read-only preparation.
+        (ledger / 'current.json').unlink()
+        result = self.cli(*self.prepare_args(job='readonly-invalid', role='reviewer', paths=()), ok=False)
+        self.assertEqual(result.returncode, 64)
+        self.assert_no_job('readonly-invalid')
+
+    def test_partial_transition_and_fsync_failure_preserve_claims(self):
+        from unittest.mock import patch
+        prepared = self.prepare()
+        args = self.writing_args()
+        # Inject failures in real filesystem operations, keeping all state/Git validation real.
+        ledger = Path(prepared['job']) / 'writing'
+        real_fsync = os.fsync
+        for failed_call in range(1, 10):
+            with self.subTest(fsync=failed_call):
+                calls = 0
+                def fail(fd):
+                    nonlocal calls
+                    calls += 1
+                    if calls == failed_call:
+                        raise OSError('deliberate publication fsync failure')
+                    return real_fsync(fd)
+                with patch.object(job_helper.os, 'fsync', side_effect=fail):
+                    self.assertEqual(job_helper.main(list(map(str, args))), 64)
+                self.assertTrue(ledger.exists())
+                if (ledger / 'current.json').exists():
+                    # A fully visible post-replace SUSPEND can be valid despite lost success.
+                    self.assertEqual(json.loads((ledger / 'current.json').read_bytes())['generation'], 1)
+                else:
+                    refused = self.cli(*self.prepare_args(job='partial', paths=('other',)), ok=False)
+                    self.assertEqual(refused.returncode, 64)
+                    self.assert_no_job('partial')
+                    self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+                shutil.rmtree(ledger)  # Only temporary fixture repair between independent injections.
+        real_write = job_helper.durable_file
+        for failed_write in range(1, 5):
+            with self.subTest(file_write=failed_write):
+                writes = 0
+                def fail_write(path, content):
+                    nonlocal writes
+                    writes += 1
+                    if writes == failed_write:
+                        raise OSError('deliberate snapshot/head write failure')
+                    return real_write(path, content)
+                with patch.object(job_helper, 'durable_file', side_effect=fail_write):
+                    self.assertEqual(job_helper.main(list(map(str, args))), 64)
+                self.assertTrue((ledger / 'events/00000001').is_dir())
+                self.assertEqual(self.cli(*self.prepare_args(job='partial-write', paths=('other',)), ok=False).returncode, 64)
+                self.assert_no_job('partial-write')
+                self.assertEqual(self.cli(*args, ok=False).returncode, 64)
+                shutil.rmtree(ledger)
+        # Failure at replacement leaves exclusive .next and event: admission must refuse.
+        with patch.object(job_helper.os, 'replace', side_effect=OSError('head replace failure')):
+            self.assertEqual(job_helper.main(list(map(str, args))), 64)
+        self.assertTrue((ledger / 'current.json.next').exists())
+        self.assertEqual(self.cli(*self.prepare_args(job='torn', paths=('other',)), ok=False).returncode, 64)
+        shutil.rmtree(ledger)
+        self.cli(*args)
+        # A visible resume counts even if its final-directory fsync failed.
+        real_sync = job_helper.sync_directory
+        def fail_final(path):
+            if path == ledger and (ledger / 'current.json').exists() and json.loads((ledger / 'current.json').read_bytes())['generation'] == 2:
+                raise OSError('resume final directory fsync failure')
+            return real_sync(path)
+        resume_args = self.writing_args('resume-writing', generation=1)
+        with patch.object(job_helper, 'sync_directory', side_effect=fail_final):
+            self.assertEqual(job_helper.main(list(map(str, resume_args))), 64)
+        self.prepare(job='second', paths=('second',))
+        self.prepare(job='third', paths=('third',))
+        result = self.cli(*self.prepare_args(job='fourth', paths=('fourth',)), ok=False)
+        self.assertEqual(result.returncode, 64)
+        self.assertIn('lane', result.stderr)
+
+    def test_resume_and_prepare_race_for_one_slot_under_common_lock(self):
+        prepared = self.prepare()
+        self.prepare(job='second', paths=('second',))
+        self.prepare(job='third', paths=('third',))
+        self.cli(*self.writing_args())
+        resume = self.writing_args('resume-writing', generation=1)
+        prepare = self.prepare_args(job='racer', paths=('racer',))
+        prepare[2] = Path(prepared['worktree'])
+        processes = [subprocess.Popen([sys.executable, str(HELPER), *map(str, args)],
+                                     text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                     for args in (resume, prepare)]
+        outputs = [p.communicate(timeout=20) for p in processes]
+        self.assertEqual(sorted(p.returncode for p in processes), [0, 64], outputs)
+        if processes[0].returncode:
+            self.assertFalse((Path(prepared['job']) / 'writing/events/00000002').exists())
+        else:
+            self.assert_no_job('racer')
+        # Both transition commands must block on the same actual canonical lock.
+        for action, generation in (('suspend-writing', 2), ('resume-writing', 1)):
+            args = self.writing_args(action, generation=generation)
+            before = self.snapshot(Path(prepared['job']))
+            with (self.repo / '.scopebase/controller.lock').open('r+b') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                process = subprocess.Popen([sys.executable, str(HELPER), *map(str, args)],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 5
+                    blocked = False
+                    while process.poll() is None and time.monotonic() < deadline:
+                        try:
+                            blocked = 'lock' in Path(f'/proc/{process.pid}/wchan').read_text()
+                        except FileNotFoundError:
+                            break
+                        if blocked:
+                            break
+                        time.sleep(0.01)
+                    self.assertTrue(blocked)
+                    self.assertEqual(self.snapshot(Path(prepared['job'])), before)
+                finally:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    process.communicate(timeout=20)
+
+    def test_legacy_reconciliation_and_review_bindings_stay_compatible(self):
+        prepared = self.prepare()
+        package = self.package()
+        metadata = (Path(package['package']) / 'package.json').read_bytes()
+        manifest = Path(prepared['manifest']).read_bytes()
+        self.cli(*self.writing_args())
+        self.cli(*self.writing_args('resume-writing', generation=1))
+        self.assertEqual(Path(prepared['manifest']).read_bytes(), manifest)
+        self.assertEqual((Path(package['package']) / 'package.json').read_bytes(), metadata)
+        self.assertEqual(json.loads(metadata)['job_manifest_sha256'], hashlib.sha256(manifest).hexdigest())
+        self.cli(*self.writing_args(generation=2))
+        ledger = Path(prepared['job']) / 'writing'
+        before = self.snapshot(ledger)
+        self.cli(*self.reconciliation_args())
+        self.assertEqual(self.cli(*self.writing_args('resume-writing', generation=3), ok=False).returncode, 64)
+        self.assertEqual(self.cli(*self.writing_args(generation=3), ok=False).returncode, 64)
+        self.assertEqual(self.snapshot(ledger), before)
+        # Final release remains valid even with later damaged historical writing evidence.
+        (ledger / 'current.json').unlink()
+        self.prepare(job='released', paths=('src',))
+
+    def test_writing_operations_do_not_launch_or_modify_external_resources(self):
+        prepared = self.prepare()
+        directory = Path(prepared['job'])
+        retained = directory / 'evidence/retained-lease'
+        retained.write_text('unresolved resource custody\n')
+        before = self.snapshot(directory)
+        source = self.git('rev-parse', 'HEAD', cwd=Path(prepared['worktree'])).stdout
+        fake_bin = Path(self.temp.name) / 'sentinels'
+        fake_bin.mkdir()
+        marker = Path(self.temp.name) / 'external-effect'
+        for name in ('codex', 'muse', 'cargo', 'rustc', 'ssh', 'kill', 'pkill', 'flock'):
+            path = fake_bin / name
+            path.write_text('#!/bin/sh\n: > ' + shlex.quote(str(marker)) + '\nexit 97\n')
+            path.chmod(0o755)
+        (fake_bin / 'git').symlink_to(shutil.which('git'))
+        self.git('config', 'core.fsmonitor', str(fake_bin / 'codex'))
+        env = dict(os.environ, PATH=str(fake_bin))
+        for args in (self.writing_args(), self.writing_args('resume-writing', generation=1)):
+            result = subprocess.run([sys.executable, str(HELPER), *map(str, args)],
+                                    capture_output=True, text=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['worker_launch'], 'NOT_LAUNCHED')
+        self.git('config', '--unset', 'core.fsmonitor')
+        self.assertFalse(marker.exists())
+        for rel, content in before.items():
+            self.assertEqual((directory / rel).read_bytes(), content)
+        self.assertEqual(self.git('rev-parse', 'HEAD', cwd=Path(prepared['worktree'])).stdout, source)
+        self.assertEqual(self.git('status', '--porcelain', cwd=Path(prepared['worktree'])).stdout, '')
+
     def test_prepare_binds_real_worktree_fresh_native_dispatch_and_exact_brief(self):
         prepared = self.prepare(paths=('src',))
         worktree = Path(prepared['worktree'])
