@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "TT02_RSP01_ROOT_R2_DESIGN_RATIFICATION",
+  "status": "RATIFIED_DESIGN_ONLY",
+  "time_utc": "2026-10-22T09:02:18.200764+00:00",
+  "maintenance_id": "TT02-RSP01",
+  "what": "Adopt exact reviewed prepared-only API/opt-in shared runner, checked actual response ownership and scalar no-dispatch failure; preserve total legacy TT02 callers and v1 semantics.",
+  "why": "Strong responseF needs finite owned fallback without fresh metadata allocation after Ready; first key admission may fail outside old total trait.",
+  "proposal_index_sha256": "79d270a73554b6772c8c901cc18baae36982d8cdcbf74cf38c7085f90728a78a",
+  "independent_review_index_sha256": "b4812a7ed4e7df41817e177f49020f58ba033950dcbcb3f2d9b8a31750dcec6b",
+  "choices": {
+    "route": "A independent prepared-only BP03 trait with consuming exact bound call, no legacyBpfHostAdapterimpl",
+    "runner": "sharedcore, additivegenericentry, existinglegacyrouteunchanged; exactr2chronology",
+    "failure": "scalarcause/index retained alongside optionalfollowupHarnessError and singlemovedpartialreport; preserveInvalid>Failed>Incomplete",
+    "receipt": "v1unchanged, truthfulnonterminalpartial; persistedouterdispatchreceiptdeferred",
+    "bound": "actualR<=F thenmetadatafinishallocationfree; actualB/Junchanged; no hardtransient/RSS/OOMclaim",
+    "test_policy_exception": "dedicatedsinglepurposeforwardingallocationobserverbinary, nofailureinjection/host/productallocatorchange; ownerlocalseamsretained",
+    "inventory": "scopedTT02maintenance,86producttasksunchanged"
+  },
+  "local_controls": [
+    "PRP01",
+    "PRP02",
+    "PRP03",
+    "PRP04",
+    "PRP05",
+    "PRP06",
+    "PRP07",
+    "PRP08",
+    "PRP09",
+    "PRP10",
+    "PRP11",
+    "PRP12",
+    "PRP13"
+  ],
+  "packet_ready": false,
+  "implementation_admitted": false,
+  "product_execution": "NOT_RUN",
+  "accepted_task_delta": 0,
+  "remaining": [
+    "Canonicalselectedspec/planandcompleteBP03machinecase/delivery/targetamendments.",
+    "ActualTT02/BP03source/API/manifest/dependency/lock/offlinetool/resources/workerownershipbindings.",
+    "CausalRED/GREEN/privatecapacityandrepeatedcopy/realallallocationobservations,oldAPI/cleanup/receiptregressions.",
+    "Source/archive/newactualBP03consumersandoldclients,independentsourceR1anddeliveryreview."
+  ]
+}

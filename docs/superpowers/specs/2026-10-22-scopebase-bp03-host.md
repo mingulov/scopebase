@@ -1,7 +1,7 @@
 # BP03 descriptive host capability contract
 
 Date: 2026-10-22. **RATIFIED DESIGN ONLY; IMPLEMENTATION NOT_RUN.**
-Sixteen tasks are accepted, including BP02. Independent r2 review resolved
+Seventeen tasks are accepted, including BP02 and CP05. Independent r2 review resolved
 R1–R4 and root ratified all eight choices. This canonical adoption preserves
 that exact descriptive host/model increment; it does not accept BP03 or make
 an executor packet ready. Actual execution base, accepted API/dependency/source/
@@ -408,7 +408,9 @@ impl BpfHostAdapter {
                bpf_limits: scopebase_bpf::Limits,
                run_limits: RunLimits) -> Result<Self, HarnessError>;
 }
-impl ConformanceAdapter for BpfHostAdapter { /* existing exact three methods */ }
+pub struct BpfPreparedCall<'a> { /* opaque exact adapter/invocation borrows and admitted response */ }
+impl ResponsePreparedAdapter for BpfHostAdapter { /* independent subject, prepare_response, retire */ }
+impl PreparedExecution for BpfPreparedCall<'_> { /* consuming execute */ }
 ```
 
 Both bridge functions call the receiving parser on unchanged bytes. BPF→testkit
@@ -549,8 +551,14 @@ It preserves the six substitutions, all dependency graphs and complete JSON chec
 ## Adapter resource contract
 
 Status: ratified R1 repair under the adopted explicit-BPF-Limits choice.
-This specifies the existing TT02 adapter implementation only. It adds no public
-budget type, observer, fixture engine or verdict mechanism.
+This now consumes the [ratified TT02-RSP01 contract](2026-10-22-scopebase-tt02-prepared-response.md).
+BpfHostAdapter implements only ResponsePreparedAdapter; old run_profile/dyn
+ConformanceAdapter use must fail compilation. Direct prepare_response followed
+by consuming PreparedExecution::execute and run_profile_prepared are its strict-F
+routes. No implicit wrapper or borrowed total execute is selected. Existing
+legacy TT02 callers and schema1 remain unchanged. The narrow additive GAT/call,
+scalar failure and shared runner are TT02-RSP01 maintenance; no public allocator
+hook, universal budget service, second fixture engine or verdict engine is added.
 
 ```rust
 impl BpfHostAdapter {
@@ -591,17 +599,21 @@ Other RunLimits fields retain their ordinary checked constraints; these are
 adapter minima, not changes to RunLimits. Larger JSON results are admitted per
 invocation below. The 256-byte name minimum is deliberately explicit: current
 CaseKey admission uses name_bytes≤256, while CaseId/RunId have their own fixed
-bounds. This lets the adapter return a checked current-key binding error even
-for a legal invocation declaring different smaller or larger selected limits.
+bounds. This permits an exact current-key binding error after successful metadata
+preparation, even for legal different smaller or larger selected limits.
 
-execute first compares all invocation.limits values with the stored run_limits.
-Any inequality returns CaseErrorCategory::InvalidOutput at stage `binding`,
+prepare_response first compares all invocation.limits values with the stored
+run_limits using scalar equality. After successful actual-key metadata admission,
+any inequality prepares CaseErrorCategory::InvalidOutput at stage `binding`,
 method `bp03-model`, diagnostic `run-limits-mismatch`, step_id=None, errno=None,
 Unknown cause, no completed steps/partial observation and empty complete effects.
 It uses the stored run_limits for this response, never the rejected invocation
 limits. No script/input content is read and no BPF work is admitted. The current
-key must be a valid TT02 key, as provided by accepted RunContract/run_profile;
-the response reserve covers its current hard string bounds. No response is
+key must satisfy exactly accepted TT02 invariants, as provided by
+RunContract/run_profile_prepared. Actual metadata admission may fail with a
+Copy scalar ResponsePreparationFailure and no dispatch; it never fabricates an
+executed CaseError or retries a fresh key. Constructor F reservation alone does
+not prove the actual per-key context fits. No response is
 claimed valid under a different rejected limit selection. Constructor tests
 also prove a smaller otherwise legal RunLimits selection is rejected before
 any adapter can promise labels/diagnostics it cannot construct.
@@ -615,12 +627,24 @@ known enum tokens and at most20 decimal digits; they never exceed128 bytes or
 format untrusted payload/error sources. Library refusals use `bpf:<kind>/<stage>`
 and optionally `;required=<decimal>`, preserving the raw errno separately.
 
-The current one-step key/schema/step metadata is copied into responses under
-the stored checked ceiling. Name/label/diagnostic allocation is part of the
-reserve F. Standard TT02 record construction retains its existing allocator/OOM
-limits; this contract does not promise recovery from process-wide allocator
-failure. Injected operation-allocation tests keep the separately reserved
-response path available and assert the logical checked record is constructible.
+Pure prepare_response fallibly copies the actual key once and owns all schema,
+step, fixed stage/method alternatives, one completion Vec slot and at least128
+usable diagnostic bytes before Ready. Count actual String/Vec capacities and
+inline footprint once, including every simultaneous unused alternative and the
+maximum returned response inline shape: R<=F. Reject/drop post-allocation excess
+with scalar kind/component/demand, without formatting or owned key in the
+failure. No fixture input/public operation/effect enters before Ready.
+
+The exact bound BpfPreparedCall consumes its adapter/invocation borrows once.
+Success or exact logical/library refusal moves the same admitted key/metadata;
+no fresh clone, generic allocating unique validator, diagnostic formatting,
+capacity-growing push, retry or emergency fallback is permitted after Ready.
+The narrow private finisher preserves the accepted constructor invariants; the
+runner revalidates after handoff outside F. Public ID parsers/Clone/grammar and
+record wire/getters stay unchanged. See TT02-RSP01 for complete borrow, chronology,
+scalar-first dual-error, fixed cleanup and truthful nonterminal partial-v1 rules.
+Preparation can detect excess only after allocation returns; no hard transient,
+RSS, allocator overhead or process-wide OOM recovery guarantee is claimed.
 
 ## One private per-invocation ledger
 
@@ -632,7 +656,7 @@ F is `8192 + max(size_of::<CaseError>(), size_of::<Observation>(),
 size_of::<RetirementReport>())`, checked; it is a conservative response
 reservation, not an assertion that this much memory was allocated.
 
-For every execute call start a new private ledger with:
+For every admitted consuming execute call start a new private ledger with:
 
 `H = min(bpf_limits.retained_bytes, 262144,
          checked_usize(run_limits.retained_bytes)-B-F)`.
@@ -643,15 +667,17 @@ retained_bytes; temporary ID storage; each standalone Vec struct plus its actual
 capacity; owned result/prefix bytes and any other operation-owned copy. Borrowed
 FixtureAccess bytes, immutable invocation metadata, caller-owned input storage,
 allocator metadata and fixed parsing stack are excluded. No source input is
-cloned. The actual response header is bounded by F; its moved payload is removed
-from J at handoff, never counted as a second owned copy. Before publication/drop
+cloned. The admitted response context has actual charge R<=F; publication drops unused
+alternatives and returns actual header Q<=R. Its admitted output is charged once
+with J before handoff and removed from J at handoff, never a second owned copy. Before publication/drop
 or another allocation, check B+F+J≤run_limits.retained_bytes and J≤H.
 
 Before an allocation reserve its minimum requested charge; after it succeeds
 replace that request by actual capacity and recheck before writing/publishing.
 All ledger arithmetic is checked. Deallocation removes an actual live charge,
 but consumed work is never refunded. On failure, drop operation temporaries and
-use F to construct the exact CaseError; no partial observation escapes. The
+move the same admitted context into exact CaseError without new response
+metadata allocation; no partial observation escapes. The
 ceiling is joint across records/buffers, never reset per record or native call.
 
 The required trait method subject() returns the existing TT02 SubjectBinding
@@ -682,7 +708,9 @@ traits. The latter three helpers permit actual subject/response capacity charges
 without guessing string capacity from length. Check actual TT ID capacity before
 publishing it. Its
 owned-copy behavior remains the accepted unchanged receiving parser. No new
-public trait, allocator hook or fallible-copy API is introduced.
+public ID API or allocator hook is introduced. TT02-RSP01 adds the separate
+prepared trait and narrow private fallible copy/finish internals; capacity
+getters alone do not satisfy actual admission or allocation-free finish.
 
 ## Input, work and output rules
 
@@ -756,8 +784,9 @@ public operation phases; dynamic JSON encode/prefix admission; publication.
 Resource failures are CaseErrorCategory::Refused at `admission` (or the actual
 library Inspect/Allocate stage after a call), current step set, Unknown cause,
 errno=None unless a real library error supplies one, empty completion/partial/
-effects. Diagnostic overflow never replaces an intended refusal: the fixed
-128-byte construction path was admitted by new. Checked composition arithmetic
+effects. Diagnostic overflow never replaces an intended refusal: successful
+prepare_response admitted diagnostic storage with at least128 usable bytes;
+new checks numeric minima and the checked B+F reservation. Checked composition arithmetic
 uses `bpf:overflow/admission`; work uses `bpf:limit_exceeded/admission` with no
 required byte demand. Byte/retention caps include exact required bytes in the
 bounded diagnostic. A library Backend/Allocate remains visible, not Malformed.
@@ -773,7 +802,10 @@ retire retains the existing TT02 identity/pending/uncertainty behavior. Normal
 model runs own no native resources. A request with insufficient remaining TT02
 retirement budget is judged by the existing runner's CalledOverBudget/Incomplete
 rules; a provider complete flag cannot override that result. This design changes
-no TT02 engine accounting, report origin or retirement qualification.
+no TT02 report origin or retirement qualification. retire() is a separate
+remaining-budget/identity/pending/uncertainty boundary; variable retirement
+snapshots have no fixed F guarantee. subject()/runner metadata/probe/history
+remain outside prepared execute F/J. Actual unresolved cleanup custody survives.
 
 ## Codec resource contract
 
@@ -934,3 +966,20 @@ with unsupported revision plus bad enum/hex is Unsupported in either order;
 supported schema plus bad semantic fields is Malformed. Add injected allocation
 failure after valid shape/schema/semantics and sufficient budgets; expected is
 Backend/Allocate with no payload, not a setup crash. All are PLANNED/NOT_RUN.
+
+## TT02-RSP01 response and finite-asset successor
+
+Root ratified the exact prepared-response design after independent review; see
+[TT02-RSP01 contract](2026-10-22-scopebase-tt02-prepared-response.md) and
+[successor amendment](bp03-host/tt02-rsp01-amendment.md). This supersedes only the
+old total-adapter/response-F/test-policy authoring assumptions above. Existing
+filter/profile/codec meanings, B/J guards, source admission and native/operator
+owners are unchanged. The [finite successor index](bp03-host/finite-asset-index.json)
+binds all current normative authoring assets; its copied historical predecessors
+remain byte-exact under [TT02-RSP01 support](tt02-rsp01/README.md).
+
+Old binding/dialect/operation CaseError recipes require successful metadata
+preparation. First metadata failure is scalar no-dispatch. The dedicated
+forwarding allocator-observer exception and expected target/policy/source/archive
+registration are planned authoring obligations, not implemented registration.
+TT02-RSP01 and BP03 execution packet bindings remain UNBOUND; BP03 is PLANNED.

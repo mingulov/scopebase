@@ -1,0 +1,1252 @@
+{
+  "kind": "BP03_R2_DELIVERY_RECIPE",
+  "status": "PLANNED_NOT_RUN",
+  "actual_accepted_base": "UNBOUND_AFTER_BP02",
+  "inspected_predecessor_manifest": {
+    "path": ".scopebase/controller/resume-20261022/bp02-v8/focused-workspace/crates/scopebase-bpf/Cargo.toml",
+    "sha256": "816ca0f14aa6332dfb505c36ec2ab04fe60f14e4e97569a596144b2d9583bf73",
+    "acceptance": "CANDIDATE_ONLY"
+  },
+  "inherited_cfg_dependencies": [
+    {
+      "name": "rustix",
+      "version": "=1.1.5",
+      "default_features": false,
+      "features": [
+        "std",
+        "fs",
+        "process",
+        "thread",
+        "linux_4_11"
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "=0.2.191",
+      "default_features": false,
+      "features": [
+        "std"
+      ]
+    },
+    {
+      "name": "sha2",
+      "version": "=0.11.0",
+      "default_features": false,
+      "features": []
+    }
+  ],
+  "additional_bpf_targets": [
+    {
+      "kind": "test",
+      "name": "capability",
+      "path": "tests/capability.rs"
+    },
+    {
+      "kind": "test",
+      "name": "capability_json",
+      "path": "tests/capability_json.rs",
+      "required_features": [
+        "json"
+      ]
+    },
+    {
+      "kind": "example",
+      "name": "capability_cache",
+      "path": "examples/capability_cache.rs",
+      "testkit_dependency": false
+    },
+    {
+      "kind": "example",
+      "name": "filter_assessment",
+      "path": "examples/filter_assessment.rs",
+      "testkit_dependency": false
+    }
+  ],
+  "bpf_include_addition": "fixtures/capability-v1/**",
+  "preserve_autotests": false,
+  "preserve_autoexamples": false,
+  "additional_testkit_target": {
+    "kind": "test",
+    "name": "bpf_host",
+    "path": "tests/bpf_host.rs",
+    "required_features": [
+      "bpf-host"
+    ],
+    "json_groups_cfg": "bpf-host-json"
+  },
+  "testkit_include_existing": [
+    "src/**/*.rs",
+    "tests/*.rs",
+    "tests/fixtures/**"
+  ],
+  "authoritative_client_sources": [
+    {
+      "client": "bp03-cache",
+      "manifest": "tests/fixtures/bp03/clients/cache/Cargo.toml.in",
+      "source": "tests/fixtures/bp03/clients/cache/src/main.rs",
+      "root_copy": "tests/package-policy/fixtures/clients/bp03-cache.rs"
+    },
+    {
+      "client": "bp03-populations",
+      "manifest": "tests/fixtures/bp03/clients/populations/Cargo.toml.in",
+      "source": "tests/fixtures/bp03/clients/populations/src/main.rs",
+      "root_copy": "tests/package-policy/fixtures/clients/bp03-populations.rs",
+      "oracle": "tests/fixtures/bp03/clients/populations/src/oracle.rs",
+      "oracle_root_copy": "tests/package-policy/fixtures/clients/bp03-oracle.rs"
+    }
+  ],
+  "templates": {
+    "allowed_typed_substitutions": [
+      "BPF_PACKAGE_PATH",
+      "TESTKIT_PACKAGE_PATH",
+      "BPF_DEFAULT_FEATURES",
+      "TESTKIT_DEFAULT_FEATURES",
+      "BPF_FEATURES",
+      "TESTKIT_FEATURES"
+    ],
+    "dependencies": [
+      "scopebase-bpf = =0.1.0 local exact path",
+      "scopebase-testkit = =0.1.0 local exact path"
+    ],
+    "archive_patch": "patch.crates-io.scopebase-bpf.path == direct BPF_PACKAGE_PATH",
+    "source_stage": "byte-identical sibling scopebase-bpf/scopebase-testkit",
+    "manifest_mutation": "render client only; do not rewrite input source/archive manifests"
+  },
+  "portable_helper": {
+    "path": "tests/fixtures/bp03/run_consumers.py",
+    "required_args": [
+      "--package",
+      "--testkit-package",
+      "--out",
+      "--toolchain",
+      "--toolchain-root",
+      "--cargo-home",
+      "--cargo-config"
+    ],
+    "optional_args": [
+      "--build-wrapper"
+    ],
+    "modes": "all three: default,no-default,json",
+    "version_discovery": "forbidden; check supplied root/version/digests",
+    "cache_policy": "explicit admitted offline inventory and config, no install/fetch",
+    "route": "one explicit internal wrapper OR explicitly outer-wrapped direct children"
+  },
+  "bpf_controls_helper": {
+    "path": "tests/support/check_bp03_controls.py",
+    "required_args": [
+      "--package",
+      "--out",
+      "--toolchain",
+      "--toolchain-root",
+      "--cargo-home",
+      "--cargo-config"
+    ],
+    "optional_args": [
+      "--build-wrapper"
+    ],
+    "scope": "registered BPF UI/direct-API controls and restored twins only; no testkit or privileged BP02 target"
+  },
+  "effective_config": {
+    "cwd": "fresh owned standalone stage outside repository workspaces",
+    "environment": "explicit allowlist; reject unbound CARGO_/RUST_ overrides",
+    "inventory": "bind every ancestor-discovered Cargo config, CARGO_HOME config and supplied config; reject undeclared effective source/patch/registry/tool overrides"
+  },
+  "lock_phase": {
+    "existing_lock": "bind and preserve any supplied admitted seed; never rewrite original source/archive lockfiles",
+    "new_owned_stage": "cargo generate-lockfile --offline --manifest-path ABS_MANIFEST --config ABS_CONFIG, under the same explicit wrapper/tool/env/cache binding, only after pre-Cargo manifest checks",
+    "admission": "compare produced package/version/source projection with the admitted closure, freeze the exact generated lock SHA before metadata/build/test",
+    "later_commands": "--offline --locked; a missing cache/projection mismatch is NOT_RUN/incomplete, not a fetch or dependency update"
+  },
+  "root_driver": {
+    "path": "tests/package-policy/bp03/execute.py",
+    "required_args": [
+      "--source-bpf",
+      "--source-testkit",
+      "--bpf-archive",
+      "--testkit-archive",
+      "--output",
+      "--config",
+      "--cargo-home",
+      "--toolchain-root",
+      "--build-wrapper"
+    ],
+    "toolchain_root_repeat": "exactly 1.88.0=ABS_ROOT and 1.98.1=ABS_ROOT",
+    "actual_bindings": "UNBOUND"
+  },
+  "testkit_cells": [
+    {
+      "id": "source/1.88.0/testkit/default",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": true,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "source/1.88.0/testkit/minimal",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "minimal",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": false,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "source/1.88.0/testkit/core-default",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "core-default",
+      "args": [
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host",
+        "default"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [
+        "default"
+      ],
+      "client_bpf_default": true,
+      "client_testkit_default": true,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "source/1.88.0/testkit/core-minimal",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "core-minimal",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "source/1.88.0/testkit/json-union",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "json-union",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host,bpf-host-json"
+      ],
+      "features": [
+        "bpf-host",
+        "bpf-host-json"
+      ],
+      "bpf_features": [
+        "json"
+      ],
+      "client_bpf_features": [
+        "json"
+      ],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "source/1.98.1/testkit/default",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": true,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "source/1.98.1/testkit/minimal",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "minimal",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": false,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "source/1.98.1/testkit/core-default",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "core-default",
+      "args": [
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host",
+        "default"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [
+        "default"
+      ],
+      "client_bpf_default": true,
+      "client_testkit_default": true,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "source/1.98.1/testkit/core-minimal",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "core-minimal",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "source/1.98.1/testkit/json-union",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "json-union",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host,bpf-host-json"
+      ],
+      "features": [
+        "bpf-host",
+        "bpf-host-json"
+      ],
+      "bpf_features": [
+        "json"
+      ],
+      "client_bpf_features": [
+        "json"
+      ],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.88.0/testkit/default",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": true,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "archive/1.88.0/testkit/minimal",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "minimal",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": false,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "archive/1.88.0/testkit/core-default",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "core-default",
+      "args": [
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host",
+        "default"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [
+        "default"
+      ],
+      "client_bpf_default": true,
+      "client_testkit_default": true,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.88.0/testkit/core-minimal",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "core-minimal",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.88.0/testkit/json-union",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "json-union",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host,bpf-host-json"
+      ],
+      "features": [
+        "bpf-host",
+        "bpf-host-json"
+      ],
+      "bpf_features": [
+        "json"
+      ],
+      "client_bpf_features": [
+        "json"
+      ],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.98.1/testkit/default",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": true,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "archive/1.98.1/testkit/minimal",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "minimal",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "bpf_features": null,
+      "client_bpf_features": null,
+      "client_bpf_default": null,
+      "client_testkit_default": false,
+      "bp03": false,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": []
+    },
+    {
+      "id": "archive/1.98.1/testkit/core-default",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "core-default",
+      "args": [
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host",
+        "default"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [
+        "default"
+      ],
+      "client_bpf_default": true,
+      "client_testkit_default": true,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.98.1/testkit/core-minimal",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "core-minimal",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host"
+      ],
+      "features": [
+        "bpf-host"
+      ],
+      "bpf_features": [],
+      "client_bpf_features": [],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    },
+    {
+      "id": "archive/1.98.1/testkit/json-union",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "json-union",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "bpf-host,bpf-host-json"
+      ],
+      "features": [
+        "bpf-host",
+        "bpf-host-json"
+      ],
+      "bpf_features": [
+        "json"
+      ],
+      "client_bpf_features": [
+        "json"
+      ],
+      "client_bpf_default": false,
+      "client_testkit_default": false,
+      "bp03": true,
+      "required_checks": [
+        "pre-cargo-manifest-target-projection",
+        "metadata-resolve-targets",
+        "lib-tests",
+        "integration-tests",
+        "doc-tests"
+      ],
+      "retained_clients": [
+        "tt01-inventory",
+        "tt01-selection",
+        "tt02-run",
+        "tt02-receipt"
+      ],
+      "bp03_clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ]
+    }
+  ],
+  "bpf_cells": [
+    {
+      "id": "source/1.88.0/bpf/default",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.88.0/testkit/core-default",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "source/1.88.0/bpf/no-default",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "no-default",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.88.0/testkit/core-minimal",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "source/1.88.0/bpf/json",
+      "input": "source",
+      "compiler": "1.88.0",
+      "mode": "json",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "json"
+      ],
+      "features": [
+        "json"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability",
+        "capability_json"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.88.0/testkit/json-union",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "source/1.98.1/bpf/default",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.98.1/testkit/core-default",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "source/1.98.1/bpf/no-default",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "no-default",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.98.1/testkit/core-minimal",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "source/1.98.1/bpf/json",
+      "input": "source",
+      "compiler": "1.98.1",
+      "mode": "json",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "json"
+      ],
+      "features": [
+        "json"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability",
+        "capability_json"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "source/1.98.1/testkit/json-union",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.88.0/bpf/default",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.88.0/testkit/core-default",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.88.0/bpf/no-default",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "no-default",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.88.0/testkit/core-minimal",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.88.0/bpf/json",
+      "input": "archive",
+      "compiler": "1.88.0",
+      "mode": "json",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "json"
+      ],
+      "features": [
+        "json"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability",
+        "capability_json"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.88.0/testkit/json-union",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.98.1/bpf/default",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "default",
+      "args": [],
+      "features": [
+        "default"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.98.1/testkit/core-default",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.98.1/bpf/no-default",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "no-default",
+      "args": [
+        "--no-default-features"
+      ],
+      "features": [],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.98.1/testkit/core-minimal",
+      "no_new_privileged_probe": true
+    },
+    {
+      "id": "archive/1.98.1/bpf/json",
+      "input": "archive",
+      "compiler": "1.98.1",
+      "mode": "json",
+      "args": [
+        "--no-default-features",
+        "--features",
+        "json"
+      ],
+      "features": [
+        "json"
+      ],
+      "tests": [
+        "api_contract",
+        "maps_pure",
+        "maps_contract",
+        "who_preservation",
+        "capability",
+        "capability_json"
+      ],
+      "lib_tests": true,
+      "doc_tests": true,
+      "examples": [
+        "capability_cache",
+        "filter_assessment"
+      ],
+      "clients": [
+        "bp03-cache",
+        "bp03-populations"
+      ],
+      "corresponding_testkit_cell": "archive/1.98.1/testkit/json-union",
+      "no_new_privileged_probe": true
+    }
+  ],
+  "totals": {
+    "testkit_cells": 20,
+    "retained_testkit_client_executions": 80,
+    "activated_testkit_cells": 12,
+    "bp03_client_executions": 24,
+    "bpf_cells": 12,
+    "bpf_client_executions": 24
+  },
+  "raw_default_marker": "An enabled empty default=[] still produces the raw default resolve feature; do not remove it. Isolated core-default testkit/retained-client BPF features are [], but direct default-enabled BP03 client BPF features are [default].",
+  "reused_execution_rule": "Only exactly identical source/archive/compiler/features/locks/binaries/corpus/oracle/control/subject bindings may reference one actual execution from both inventories.",
+  "no_BPF_testkit_dev_dependency": true,
+  "no_tools_or_cache_discovered_from_HOME_PATH_rustup_mise": true
+}

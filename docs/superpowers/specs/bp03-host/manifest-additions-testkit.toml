@@ -10,3 +10,10 @@ scopebase-bpf = { version = "=0.1.0", path = "../scopebase-bpf", default-feature
 name = "bpf_host"
 path = "tests/bpf_host.rs"
 required-features = ["bpf-host"]
+
+# TT02-RSP01 ratified planned test target; actual registration remains UNBOUND.
+[[test]]
+name = "tt02_rsp01_alloc"
+path = "tests/tt02_rsp01_alloc.rs"
+harness = false
+required-features = ["bpf-host"]

@@ -1,0 +1,161 @@
+{
+  "kind": "BP03_R2_ADAPTER_AUTHORING_CASES",
+  "status": "PLANNED_NOT_RUN",
+  "not_a_new_runtime_schema": true,
+  "explicit_positive_bpf_limits": {
+    "input_bytes": "131072",
+    "retained_bytes": "262144",
+    "work_steps": "8388608",
+    "sites": "0",
+    "live_links": "0",
+    "pending_retirements": "0"
+  },
+  "run_limits": "Explicit complete RunLimitValues in actual run contract, with admitted constructor minima; not inferred from BPF limits.",
+  "cases": [
+    {
+      "id": "constructor-name-minimum",
+      "change": {
+        "run.name_bytes": "255"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "constructor-label-minimum",
+      "change": {
+        "run.label_bytes": "31"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "constructor-diagnostic-minimum",
+      "change": {
+        "run.diagnostic_bytes": "127"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "constructor-core-output-minimum",
+      "change": {
+        "run.observation_bytes": "127"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "constructor-slot-minimum",
+      "change": {
+        "run.input_slots": "1"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "constructor-response-reserve",
+      "change": {
+        "run.retained_bytes": "B+F-1"
+      },
+      "expected": "HarnessError/LimitExceeded",
+      "input_access": false
+    },
+    {
+      "id": "invocation-limits-mismatch",
+      "change": {
+        "invocation.execution_ms": "a different legal value"
+      },
+      "expected": "CaseError/InvalidOutput/binding",
+      "step_id": null,
+      "diagnostic": "run-limits-mismatch",
+      "input_access": false
+    },
+    {
+      "id": "explicit-zero-work",
+      "change": {
+        "bpf.work_steps": "0"
+      },
+      "expected": "CaseError/Refused/admission",
+      "input_byte_scans": "0",
+      "public_operation_entries": "0"
+    },
+    {
+      "id": "input-before-work",
+      "change": {
+        "bpf.input_bytes": "L-1",
+        "bpf.work_steps": "0"
+      },
+      "expected": "CaseError/Refused/admission",
+      "diagnostic_required_size": "L",
+      "input_byte_scans": "0"
+    },
+    {
+      "id": "core-framing-after-resource-admission",
+      "input": "validly delivered but malformed decimal LF framing",
+      "expected": "CaseError/InvalidOutput/input",
+      "public_operation_entries": "0"
+    },
+    {
+      "id": "joint-two-records",
+      "inputs": [
+        "fixture-seeds/codec/valid-base.bytes",
+        "fixture-seeds/codec/valid-base.bytes"
+      ],
+      "select_H": "checked(Dbase+Dcandidate+size_of(Vec<u8>)+actual_true_result_capacity)-1",
+      "precondition": "Each valid decode independently succeeds under selected H and its original complete work allowance; H fits checked outer RunLimits-B-F and hard262144.",
+      "expected": "CaseError/Refused",
+      "assertion": "adapter.joint-retained",
+      "partial_payload": false
+    },
+    {
+      "id": "joint-two-records-restored",
+      "inputs": [
+        "fixture-seeds/codec/valid-base.bytes",
+        "fixture-seeds/codec/valid-base.bytes"
+      ],
+      "select_H": "exact independently measured full joint live peak; all other limits unchanged",
+      "expected": "Observed/true",
+      "assertion": "adapter.joint-retained"
+    },
+    {
+      "id": "prefix-peak-not-final-size",
+      "input": "fixture-seeds/codec/valid-base.bytes",
+      "select_H": "checked(D+size_of(Vec<u8>)+actual_JSON_capacity+size_of(Vec<u8>)+actual_prefixed_capacity)-1",
+      "precondition": "Decoder and direct encoder independently succeed under selected H, and final prefixed Vec fits H; outer RunLimits-B-F/hard caps permit selected H.",
+      "expected": "CaseError/Refused",
+      "assertion": "adapter.prefix-retained",
+      "partial_payload": false
+    },
+    {
+      "id": "prefix-peak-restored",
+      "input": "fixture-seeds/codec/valid-base.bytes",
+      "select_H": "exact independently measured full peak; observation byte cap>=E+9",
+      "expected": "Observed/imported-LF-plus-exact-JSON",
+      "assertion": "adapter.prefix-retained"
+    },
+    {
+      "id": "checked-composition-overflow",
+      "fault": "private checked length/charge addition boundary seam, valid prior setup",
+      "expected": "CaseError/Refused/admission",
+      "diagnostic": "bpf:overflow/admission",
+      "partial_payload": false
+    },
+    {
+      "id": "codec-allocation-failure-preserved",
+      "fault": "codec-owned try_reserve failure after valid shape/schema/semantics/budgets",
+      "expected": "CaseError/Refused/allocate",
+      "diagnostic": "bpf:backend/allocate",
+      "cause": "Unknown",
+      "partial_payload": false
+    }
+  ],
+  "capacity_oracle": "In-crate tests inspect actual reported owned capacities and type sizes independently of production counter; external literal API tests never infer authority from budget reports.",
+  "capacity_boundary_policy": "Target type sizes and actual capacities are bound at test execution, not guessed here. Setup independently proves each stated precondition. If capacity behavior changes so it fails, report the intended boundary case incomplete/NOT_SENSITIVE; a setup refusal cannot count as joint/prefix mutant sensitivity. Literal expected semantic output stays true or imported-LF-plus-exact-JSON as stated.",
+  "ledger_truth": {
+    "kind": "FixedBeforeExecute",
+    "coverage": [],
+    "requires_coverage": [],
+    "observes_runtime_entry_or_return": false
+  },
+  "no_observer_or_verdict_engine_added": true
+}

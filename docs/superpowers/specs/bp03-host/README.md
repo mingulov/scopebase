@@ -6,8 +6,12 @@ They preserve the independently reviewed r2 definitions except the two client
 templates amended by the [client JSON feature correction](client-json-amendment.md).
 That correction adds only literal json=[] with no client default feature;
 dependency substitutions and all original feature graphs remain fixed. Other
-assets preserve the exact independently reviewed r2 bytes, including historical
-PRIVATE/PROPOSAL/kind labels and PLANNED_NOT_RUN status. They are normative
+unamended assets preserve the exact independently reviewed r2 bytes, including
+historical PRIVATE/PROPOSAL/kind labels and PLANNED_NOT_RUN status. The ratified
+[TT02-RSP01 amendment](tt02-rsp01-amendment.md) makes adapter-cases.json,
+manifest-additions-testkit.toml and delivery-recipes.json authoritative successors;
+its [finite index](finite-asset-index.json) binds current bytes. Byte-exact
+predecessors remain under [historical support](../tt02-rsp01/README.md). They are normative
 authoring inputs; no product implementation, package helper, executed result or
 runtime support is claimed by their presence. No private directory is needed
 to recover their finite cases, raw literals, templates or resource definitions.
@@ -18,11 +22,11 @@ to recover their finite cases, raw literals, templates or resource definitions.
 | [profile-cases.json](profile-cases.json) | 23 exact receiving-domain bridge rows |
 | [observation-fixtures.json](observation-fixtures.json) | Full observation object/wire, context mutations, zero-BTF distinction and same-errno descriptive cases |
 | [codec-cases.json](codec-cases.json) | 22 raw literal files with lengths/hashes/expected errors, plus five encoder boundaries |
-| [adapter-cases.json](adapter-cases.json) | 16 closed constructor/binding/work/joint-retention recipes |
+| [adapter-cases.json](adapter-cases.json) | 16 stable constructor/binding/work/joint-retention recipes plus ten prepared-response control recipes |
 | [client-json-amendment.md](client-json-amendment.md) | Client-local JSON feature activation, separate graph bindings and exact controls |
 | [delivery-recipes.json](delivery-recipes.json) | Full source/archive mappings, commands, templates, tools/cache/config rules and all cell definitions |
 | [manifest-additions-bpf.toml](manifest-additions-bpf.toml) | Exact additive target/JSON declarations; preserve inherited manifest |
-| [manifest-additions-testkit.toml](manifest-additions-testkit.toml) | Exact optional edge/features and gated target |
+| [manifest-additions-testkit.toml](manifest-additions-testkit.toml) | Exact optional edge/features and gated targets, including planned isolated observer |
 | [cache.Cargo.toml.in](client-manifests/cache.Cargo.toml.in) | Finite typed cache-client manifest template |
 | [populations.Cargo.toml.in](client-manifests/populations.Cargo.toml.in) | Finite typed population-client manifest template |
 

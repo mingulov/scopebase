@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "kind": "ROOT_SELECTED_TT02_RSP01_R2_CHOICES",
+  "created_utc": "2026-10-22T08:39:04.418188+00:00",
+  "predecessor_index_sha256": "d1554839bab53555c3074d12c94ac8bf68556d979b9b49ef32c297d085c18c59",
+  "choices": [
+    "Strong actual F, unchanged actual B/joint J",
+    "Prepared-only BpfHostAdapter; global legacy TT02 API unchanged",
+    "Additive prepared-call GAT trait with own subject/retire hooks",
+    "Exact borrow schedule and all branch drops before cleanup",
+    "No extra checkpoint or poll; pure prep before existing Prepare.before gate",
+    "Scalar no-dispatch preparation failure with no owned key",
+    "Nonterminal partial-v1 evidence, existing fold/cleanup preserved; outer persisted dispatch receipt deferred",
+    "Maintenance TT02-RSP01 under accepted TT02; no product-task count inflation",
+    "Explicit isolated forwarding allocator observer test-policy exception, no failures/product hooks; target metadata/source/archive registration and real bypass controls required"
+  ],
+  "authority": "Explicit root instructions during this focused review; pending independent critical review and canonical adoption; no implementation dispatched",
+  "updated_utc": "2026-10-22T08:53:06.639488+00:00"
+}

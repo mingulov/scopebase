@@ -1,5 +1,7 @@
 # ScopeBase current handoff
 
+[TT02-RSP01 prepared-response contract](docs/superpowers/specs/2026-10-22-scopebase-tt02-prepared-response.md) and [verification plan](docs/superpowers/plans/2026-10-22-scopebase-tt02-prepared-response-verification.md) ratify exact-r2 scoped maintenance under accepted TT02. Strict BP03 response-F depends on this work; actual execution bindings remain UNBOUND, implementation is not admitted and BP03 remains PLANNED. Prior TT02 acceptance and 86-task/120-requirement/179-mapping inventory are unchanged.
+
 Date: 2026-10-22. Development resumed at the user's request with five concurrent subagents. **Seventeen of 86 tasks are accepted; sixty-nine remain planned.** TT02/LX05 retain accepted subject `04a47f052a7a5783eeaa4e7b81b60be367dc3555`; BP02 retains integrated subject `8f10d948bdd6cf92007870a838d258ee35333eb8`; CP05 is accepted at `7d992e12bd73519610e5b2eac7866993fe83ac16`. No complete runtime/conformance profile is qualified.
 
 ## Resume here

@@ -1,0 +1,191 @@
+{
+  "schema": 1,
+  "checked_utc": "2026-10-22T08:56:06.434348+00:00",
+  "scope": "Private design artifact identity/JSON/structure and explicit selected-choice consistency only; no Rust compiler/API/product execution or qualification",
+  "input_snapshot_count": 32,
+  "input_snapshots_match": true,
+  "local_cases": [
+    "PRP01",
+    "PRP02",
+    "PRP03",
+    "PRP04",
+    "PRP05",
+    "PRP06",
+    "PRP07",
+    "PRP08",
+    "PRP09",
+    "PRP10",
+    "PRP11",
+    "PRP12",
+    "PRP13"
+  ],
+  "tables": [
+    {
+      "columns": 2,
+      "rows": 14
+    },
+    {
+      "columns": 3,
+      "rows": 5
+    },
+    {
+      "columns": 3,
+      "rows": 12
+    },
+    {
+      "columns": 2,
+      "rows": 8
+    },
+    {
+      "columns": 2,
+      "rows": 15
+    },
+    {
+      "columns": 2,
+      "rows": 13
+    }
+  ],
+  "r1_index_sha256": "d1554839bab53555c3074d12c94ac8bf68556d979b9b49ef32c297d085c18c59",
+  "r1_preserved_unchanged": true,
+  "selected_choice_text_checks": 15,
+  "errors": [],
+  "passed": true,
+  "live_observation": [
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/Cargo.toml",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/README.md",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/lib.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/adapter.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/artifact.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/ids.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/observation.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/runner.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/result.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/fixture.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/runner/tests.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/src/bpf/adapter.rs",
+      "live_unchanged": false
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/bpf_host.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/harness_controls.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/verdict.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/fixture_access.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/binding.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/fixtures/bp03/clients/populations/src/main.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/fixtures/bp03/clients/populations/src/oracle.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/crates/scopebase-testkit/tests/fixtures/bp03/run_consumers.py",
+      "live_unchanged": false
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/tests/package-policy/tt02/README.md",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/tests/package-policy/fixtures/clients/tt02-run.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": ".worktrees/bp03-host-20261022-r1/tests/package-policy/fixtures/clients/tt02-receipt.rs",
+      "live_unchanged": true
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-22-scopebase-bp03-host.md",
+      "live_unchanged": true
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-22-scopebase-bp03-verification.md",
+      "live_unchanged": true
+    },
+    {
+      "path": ".scopebase/jobs/bp03-host-20261022-r1/inputs/preparation-r1/delivery-and-policy.md",
+      "live_unchanged": true
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/bp03-response-capacity-review-r1/review.json",
+      "live_unchanged": true
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/bp03-response-capacity-review-r1/artifact-index.json",
+      "live_unchanged": true
+    },
+    {
+      "path": "docs/superpowers/specs/bp03-host/adapter-cases.json",
+      "live_unchanged": true
+    },
+    {
+      "path": "docs/superpowers/specs/bp03-host/README.md",
+      "live_unchanged": true
+    },
+    {
+      "path": "docs/superpowers/specs/bp03-host/manifest-additions-testkit.toml",
+      "live_unchanged": true
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-bp03-packet/host-contract-proposal-r2/artifact-index.json",
+      "live_unchanged": true
+    }
+  ],
+  "not_run": [
+    "Rust syntax/MSRV compile",
+    "source/archive target execution",
+    "allocator observer controls",
+    "all product/regression/receipt/UI/consumer tests",
+    "independent review/canonical adoption/implementation packet"
+  ],
+  "note": "Live writer differences are recorded only; all design/source conclusions bind indexed snapshots."
+}

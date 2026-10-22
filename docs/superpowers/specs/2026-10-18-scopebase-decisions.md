@@ -289,3 +289,20 @@ The K lifetime repair is `2b59c24db0d4ce176980a2858a66001636a5f75e`; `e529862ea8
 ### BP03 descriptive host rulings
 
 Root ratified the exact independently reviewed r2 [host contract](2026-10-22-scopebase-bp03-host.md) and [verification plan](../plans/2026-10-22-scopebase-bp03-verification.md). All eight choices and R1–R4 repairs are normative: complete filter truth, move-only bounded observations with explicit Arc sharing, restricted JSON prepayment/errors, explicit adapter Limits/RunLimits composition, literal-ledger limits, separate descriptive domains and complete inherited-manifest/client/cell/tool/cache delivery. Their finite seeds/templates ship under bp03-host. This is descriptive/model design only; actual execution bindings, implementation, full BP03 native/operator/profile qualification and selected-port receipts remain open.
+
+### TT02-RSP01: strong actual prepared response and scalar no-dispatch
+
+**Status:** SETTLED exact-r2 design by root ratification; maintenance implementation
+not admitted / NOT_RUN / NOT_PACKET_READY. **Owners:** TT02-RSP01 and BP03/root.
+**WHAT:** Independent ResponsePreparedAdapter/GAT consuming call, additive shared
+run_profile_prepared, prepared-only strict BP03, actual R<=F and allocation-free
+response metadata finish. Preserve scalar preparation cause/zero-based position,
+first followup HarnessError and one moved truthful nonterminal partial v1 with
+fixed cleanup and Invalid > Failed > Incomplete. Dedicated forwarding allocation
+observer is the explicit noninjecting test-policy exception. **WHY:** Actual key
+admission itself may fail, so old total keyed return cannot guarantee a bounded
+fallback; fresh clone/format/generic validator would violate strong actual F.
+[Complete contract](2026-10-22-scopebase-tt02-prepared-response.md) preserves
+alternatives, ownership/chronology and all thirteen PRP/delivery gates.
+Existing TT02 acceptance/schema1/public IDs/legacy callers remain unchanged.
+No task/requirement/mapping count changes; actual final packet remains UNBOUND.

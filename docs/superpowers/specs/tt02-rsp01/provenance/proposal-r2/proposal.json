@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "kind": "TT02_RSP01_PREPARED_RESPONSE_DISPATCH_PROPOSAL_R2",
+  "created_utc": "2026-10-22T08:39:04.417458+00:00",
+  "status": "ROOT_CHOICES_SELECTED_PENDING_INDEPENDENT_REVIEW_NOT_RATIFIED_NOT_IMPLEMENTED_NOT_RUN",
+  "root_direction": "Strong actual response-capacity repair; separately testable TT02 prepared response/dispatch task; do not weaken F to logical-only",
+  "recommended_alternative": "A_ADDITIVE_PREPARED_CALL_TRAIT_AND_OPT_IN_RUNNER",
+  "public_additions_proposed": [
+    "PreparedExecution (self-consuming)",
+    "ResponsePreparedAdapter with independent subject/retire hooks and GAT Prepared call, no ConformanceAdapter supertrait",
+    "ResponsePreparationFailure (Copy scalar)",
+    "run_profile_prepared generic entry",
+    "PreparedRunError (Harness or typed preparation position/cause plus optional first followup HarnessError and one moved partial RunReport)",
+    "Opaque BpfPreparedCall borrowing exact adapter/invocation"
+  ],
+  "unchanged_public_contracts": [
+    "ConformanceAdapter signatures",
+    "run_profile dyn caller route",
+    "Public ID parse/Clone/grammar",
+    "Existing Observation/CaseError field/getter/wire shape",
+    "RunContract/schema1 tt02-run-report grammar",
+    "FixtureSession borrowed access and owned cancellation probe"
+  ],
+  "guarantee": {
+    "admission": "All actual context capacities and simultaneous alternatives checked <=F before Ready; post-allocation excess dropped with scalar failure",
+    "execute": "One admitted actual key/context moves once into success or exact refusal with zero new response metadata allocation; actual B and joint J stay enforced",
+    "first_admission_failure": "Allocation-free scalar no-dispatch, not owned executed CaseError",
+    "legacy": "Old TT02 ConformanceAdapter/run_profile callers unchanged; strict BP03 has no legacy impl; F guarantee only on admitted prepared call",
+    "retire": "Separate existing TT02 identity/pending/uncertainty/remaining-budget semantics, no F guarantee",
+    "subject_and_runner": "Existing caller/report/history/metadata allocation boundary, no whole-process OOM/RSS guarantee"
+  },
+  "receipt_minimum": {
+    "success": "Unchanged full v1 receipt and replay",
+    "preparation_failure": "Typed API scalar cause/position plus nonterminal partial v1 report if bookkeeping available; normal tail NotRecorded and cleanup preserved; otherwise clean => Incomplete; existing earlier Invalid/Failed evidence keeps precedence",
+    "not_claimed": "V1 serialization proves precise preparation cause or memory authority",
+    "larger_alternative": "Persisted outer dispatch receipt explicitly deferred; no new scalar fields added to v1"
+  },
+  "local_case_ids": [
+    "PRP01",
+    "PRP02",
+    "PRP03",
+    "PRP04",
+    "PRP05",
+    "PRP06",
+    "PRP07",
+    "PRP08",
+    "PRP09",
+    "PRP10",
+    "PRP11",
+    "PRP12",
+    "PRP13"
+  ],
+  "implementation": "NOT_STARTED",
+  "builds": false,
+  "tests": "PROPOSED_NOT_RUN",
+  "product_source_mutations": false,
+  "canonical_planning_mutations": false,
+  "subagents_spawned": false,
+  "input_index": "input-index.json",
+  "proposal": "proposal.md",
+  "decisions_required_before_fix_dispatch": [
+    "Independent critical review of exact r2 design, signature/ownership/accounting invariants and amendments",
+    "Canonical TT02-RSP01 spec/plan/ledger adoption and concrete resource/input packet binding"
+  ],
+  "required_later_gates": [
+    "Independent exact proposal/contract review",
+    "Canonical spec/plan/TODO/traceability adoption",
+    "Actual accepted TT02 base/API/dependency/output/resource bindings",
+    "Causal repeated-overgrant/fallback and no-metadata-allocation tests",
+    "Affected TT02 regressions/receipt/API/borrow/cleanup tests",
+    "Actual BP03 installed source/archive prepared consumer and same BPF library identity",
+    "Full later source R1 and delivery review",
+    "Real isolated allocator observer controls/source/archive target registration and actual binary identity; no helper-only zero-allocation claim"
+  ],
+  "maintenance_id": "TT02-RSP01",
+  "maintenance_inventory": "Scoped maintenance inside accepted TT02; no new product task or 86-task count inflation; prior acceptance scope preserved",
+  "predecessor": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/tt02-prepared-response-proposal-r1",
+    "index_sha256": "d1554839bab53555c3074d12c94ac8bf68556d979b9b49ef32c297d085c18c59"
+  },
+  "strict_bp03_trait_boundary": "BpfHostAdapter implements only ResponsePreparedAdapter, not ConformanceAdapter; no implicit wrapper or borrowed total execute. Direct admitted prepared call / run_profile_prepared alone advertise strict F.",
+  "borrowing_selected": "Opaque call owns exact adapter/invocation borrows; only engine/probe/fixture work occurs while ready; every early branch drops ready+access and execute consumes ready before phase/subject hooks. Private routes directly delegate metadata/retire after borrow ends; no upcast or field inspection.",
+  "chronology_selected": "Pure prep immediately after invocation construction before existing Prepare.before sample, guarded by existing !e.stopped; no extra sample/poll/checkpoint. Unobserved time/cancellation may precede finite pure prep; existing sample freshly gates effects and includes prep time.",
+  "dual_error_policy": "Preparation failure variant always preserves scalar cause/position plus optional existing first subsequent HarnessError and one moved partial report; nested error.partial normalized out without clone. Malformed cleanup may make replay Err and raw partial Invalid, which is preserved rather than relabeled clean Incomplete.",
+  "finite_assets_amendment": "Reviewed successor for canonical BP03 adapter-cases.json, README and finite index/hashes; existing CaseError recipes conditional on successful metadata admission, stable semantic IDs/results retained; new scalar/capacity/finish controls added.",
+  "preparation_position": "Zero-based RunContract.schedule().enumerate() index, strictly less than schedule length; no owned key/formatted ordinal",
+  "observer_policy": {
+    "authority": "Explicit root-selected TT02-RSP01 test-policy successor exception to prior blanket no-global-allocator prose",
+    "target": "tt02_rsp01_alloc",
+    "path": "tests/tt02_rsp01_alloc.rs",
+    "harness": false,
+    "required_features": [
+      "bpf-host"
+    ],
+    "json_gate": "existing bpf-host-json",
+    "method": "Isolated single-purpose integration executable owns a forwarding std::alloc observer; preinitialized fixed TLS counts real alloc/alloc_zeroed/realloc and separate dealloc only on measured thread around full actual consuming call; no failure injection/product or host allocator change/production hook",
+    "coverage": [
+      "Zero-operation paths zero entries",
+      "Simple filter positive output allocation independently attributed; generic validator mutant exposes extra entry",
+      "Profile/JSON actual direct-operation allocation attribution plus independent literal semantics and actual J",
+      "Fresh clone before finish, generic validator inside finish and format fallback controls plus restored twins"
+    ],
+    "status": "PROPOSED_NOT_RUN"
+  }
+}

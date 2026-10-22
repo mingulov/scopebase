@@ -16,7 +16,7 @@ actual shared source admission is the centrally adopted immutable
 | `filter_original_populations` | Preserve P's (own2,other0), (own1,other0), (own2,other1), (own0,other0), supplying expected2 and independently_executed_excluded1. Results Supported/Incompatible/Incompatible/Unknown, respectively | T0 supplied facts, no original native test execution |
 | `filter_complete_priority_table` | Every literal filter-cases.json row equals its frozen expected state. Independent finite partition enumeration covers E/O equality/zero/order and X/H zero/nonzero, plus all MAX/1 boundary rows. Every typed population returns Ok; no Unsupported/Denied | Enumerator partitions numeric relations; it must not call or transliterate production branch code to construct expected truth |
 | `observation_fields_are_lossless` | Read each public getter after valid construction; retain arbitrary binary reason/diagnostic, signed errno, required_size, every BP01 kind/stage, operation, step and cause method/IDs unchanged | Scalar snapshots only; no source-error inspection/classification |
-| `constructor_bounds_and_error_order` | Hard max/exact max+1 per field; malformed label after an exhausted cap must still report the earlier cap; duplicates/unsorted IDs; all three outcome/error combinations; zero/MAX independent Limits; input/work/retained cap at n and n-1; injected allocation failure | Private fallible allocation seam is test-only; no global allocator or host-limit change |
+| `constructor_bounds_and_error_order` | Hard max/exact max+1 per field; malformed label after an exhausted cap must still report the earlier cap; duplicates/unsorted IDs; all three outcome/error combinations; zero/MAX independent Limits; input/work/retained cap at n and n-1; injected allocation failure | Private fallible seams remain test-only; only the separate TT02-RSP01 forwarding-observer executable has the ratified noninjecting allocator exception; no host-limit change |
 | `borrowed_input_does_not_retain_capacity` | Build caller Strings/Vecs with small lengths and intentionally larger capacities, create observation from borrowed slices, then drop/mutate caller buffers. Getters retain original bytes, returned retained_bytes equals actual owned capacity accounting, and small fitting caps succeed | Does not bound caller memory, allocator overhead or RSS |
 | `context_matches_every_field` | Base match true; mutate exactly object/profile/kernel_build/BTF value/BTF presence/architecture/namespace/security/topology, one at a time: false. Matching None-BTF twin true; Some(zero) differs from None. No case normalizes strings/digests | Matching context is descriptive and has no native effect |
 | `origin_is_local_and_claim_is_preserved` | new origins CallerDescribed/CallerDescribed; import origins Imported/caller_described; re-encode preserves wire claim but repeat import is still Imported. Payload fields match independent literals. Imported object is deliberately not Eq to original local object | No roundtrip-only oracle; no native-observed variant |
@@ -31,7 +31,10 @@ RunLimits minima and invocation equality/mismatch are specified in
 [adapter-resources.md](../specs/2026-10-22-scopebase-bp03-host.md#adapter-resource-contract). Test zero explicit BPF work before
 input scan, disabled byte/retention caps, checked composition overflow, two
 individually fitting records whose sum does not fit, output+prefix peak, actual
-capacity overgrant and guaranteed fixed-error checked construction. The direct
+capacity overgrant and exact fixed-error finish after successful metadata
+admission. First key admission failure is scalar no-dispatch; implement all
+[TT02-RSP01 PRP01–13](2026-10-22-scopebase-tt02-prepared-response-verification.md#causal-regressioncontrol-inventory)
+and the authoritative finite successor cases before strict-F acceptance. The direct
 encoder's zero-work counter excludes only fixed metadata length arithmetic;
 no counting writer/serializer/payload loop may enter. Test byte/work/retained
 multi-fault precedence, allocation-stage preservation and reordered duplicate/
@@ -173,8 +176,10 @@ AssertionOnly. Actual model execution evidence is measured consumer/adapter
 source plus actual runner outcomes, independently wired direct public-API checks,
 and correctly re-bound semantic mutants/restored twins. Receipt import is
 separate. Use existing TT02 artifact/session/intent/cleanup/reimport validation
-and preserve actual oracle_verdict. No observer, fixture engine or verdict engine
-is added.
+and preserve actual oracle_verdict. No observer is added to independent fixture-truth construction, and no
+second fixture engine or verdict engine is added. The dedicated TT02-RSP01
+forwarding allocation observer remains the explicit noninjecting test-policy
+exception and supplies no runtime-truth authority.
 
 ## Semantic controls and restored twins
 
@@ -717,10 +722,13 @@ Root owns shared lib.rs/features/dependencies/lock/catalog registration.
 Root also owns the narrow crate-private IDs footprint helper; no public ID API
 or existing parser behavior changes.
 
-**Interfaces:** Consume actual TT02 ConformanceAdapter/FixtureSession/CaseOracle,
+**Interfaces:** Consume actual TT02-RSP01 ResponsePreparedAdapter/PreparedExecution,
+FixtureSession/CaseOracle,
 Observation/CaseError/RetirementReport/RunLimits and Task1–3 public BPF APIs.
 Produce BpfHostAdapter::new(subject,bpf_limits,run_limits) and the two checked profile bridge
-signatures. Reuse existing run_profile/RunReport; no new verdict implementation.
+signatures and opaque BpfPreparedCall. Implement only the prepared trait; use
+run_profile_prepared/PreparedRunError/RunReport and one shared runner. No legacy
+ConformanceAdapter implementation or borrowed total execute is selected.
 
 - [ ] Implement literal expected/ledger fixtures independent of BPF logic and
   whole-script dialect preflight tests. Unknown schema/op/arity/parameters return
@@ -729,7 +737,10 @@ signatures. Reuse existing run_profile/RunReport; no new verdict implementation.
   explicit BPF input/work charges and the joint per-invocation owned-payload
   ledger exactly as adapter-resources.md. Test two independently fitting records
   whose joint peak fails, JSON+prefix peak, zero-work before scans, arithmetic/
-  observed-capacity refusals and the reserved checked error response.
+  observed-capacity refusals and the actual admitted R<=F context moved once into
+exact success/refusal with zero new response metadata allocation. Add scalar
+first-key failure/no-dispatch, repeated overgrant and true full-call allocation
+controls with restored twins; constructor reservation is not actual admission.
 - [ ] Implement only the closed core/JSON operations in verification.md. Invoke
   actual linked public APIs, preserve current keys/steps/schema/errors and report
   an empty effect ledger. Cause labels in imported descriptions remain data;
@@ -738,13 +749,18 @@ signatures. Reuse existing run_profile/RunReport; no new verdict implementation.
   uncertainty with incomplete status, never fabricating retirement authority.
   Test normal empty complete and unexpected-pending incomplete responses.
 - [ ] Execute all core/JSON required cases through VectorFixtureSession and
-  existing run_profile, then reimport the actual report using the same contract.
+  run_profile_prepared, then reimport the actual report using the same contract.
+  Test direct prepare_response/consuming calls and typed scalar position/cause,
+  first followup HarnessError/one moved partial, prior custody and partial-v1
+  precedence. Compile-fail old run_profile/dyn legacy use of BpfHostAdapter.
   Retain actual oracle_verdict, scope and source bindings. Do not relabel an
   import as fresh case execution or register native planned cases as executable.
 - [ ] Keep TruthKind::FixedBeforeExecute with empty coverage/requires_coverage for
   these AssertionOnly cases. The immutable ledger declares fixed truth; it does
   not observe function entry/return. Establish execution separately through actual
-  measured outcomes/direct clients and sensitive re-bound mutants; add no observer.
+  measured outcomes/direct clients and sensitive re-bound mutants. The separate
+  noninjecting allocation observer measures allocation only, never runtime truth
+  or verdict authority; it leaves FixedBeforeExecute unchanged.
 - [ ] Run source-backed mutants from verification.md with valid setup and
   restored twins; assert each named value/description/profile/origin field.
 
@@ -812,3 +828,24 @@ Produce acceptance only for this host increment, with every later gate explicit.
 Execution method is intentionally not selected in this design-only plan. Root's
 final packet may select an already authorized method; this file does
 not dispatch an executor/reviewer, create a worktree, run a command or commit.
+
+## TT02-RSP01 strict-F and delivery amendment
+
+The [maintenance plan](2026-10-22-scopebase-tt02-prepared-response-verification.md)
+is a necessary strict response-F prerequisite. Its exact thirteen PRP groups,
+observer protocol and full legacy/borrow/cleanup/receipt/source/archive exits
+apply together. The [finite successor](../specs/bp03-host/tt02-rsp01-amendment.md)
+binds conditional existing recipes, scalar admission controls and planned target/
+policy fields. Root must register tt02_rsp01_alloc (tests/tt02_rsp01_alloc.rs,
+harness=false, required-features=["bpf-host"]) in actual testkit Cargo metadata,
+source/archive member/target expectations and BP03 package-policy checks; this
+document implements no registration. Existing bpf-host-json gates JSON; add no
+observer product feature or dependency. Use the actual isolated delivered binary,
+measured public call and independently attributed operation allocations.
+
+Before acceptance migrate the actual populations source and exact root mapping
+byte-identically to run_profile_prepared; retain independent literals/oracle,
+direct public BPF calls and actual same-contract reimport. Add direct prepared
+call plus scalar-failure/partial-v1 delivery. Rebind actual API/source/archive/
+manifest/lock/dependencies/features/tools/cache/binaries/output/resources. Old
+receipts cannot qualify changed bytes. BP03/native/operator/profiles remain open.

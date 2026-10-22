@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "kind": "TT02_RSP01_PREPARED_RESPONSE_REVIEW_CHECKS_R1",
+  "created_utc": "2026-10-22T08:59:45.046402+00:00",
+  "scope": "Private report/input artifact integrity and structure only",
+  "input_snapshot_files_verified": 46,
+  "author_index_entries_verified": 40,
+  "json_files_parsed": 12,
+  "markdown_tables": [
+    {
+      "start_line": 13,
+      "columns": 2,
+      "rows": 10
+    },
+    {
+      "start_line": 30,
+      "columns": 3,
+      "rows": 5
+    }
+  ],
+  "proposal_local_controls": [
+    "PRP01",
+    "PRP02",
+    "PRP03",
+    "PRP04",
+    "PRP05",
+    "PRP06",
+    "PRP07",
+    "PRP08",
+    "PRP09",
+    "PRP10",
+    "PRP11",
+    "PRP12",
+    "PRP13"
+  ],
+  "blocking_findings": 0,
+  "resolved_prefreeze_findings": 3,
+  "errors": [],
+  "passed": true,
+  "compiler_and_product_tests": "NOT_RUN",
+  "canonical_planning_checker": "NOT_RUN_NO_CANONICAL_MUTATIONS",
+  "product_source_mutations": false,
+  "canonical_planning_mutations": false
+}

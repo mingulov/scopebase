@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "kind": "TT02_RSP01_CANONICAL_SUPPORT_INDEX_R1",
+  "self_excluded": true,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 2013,
+      "sha256": "f431101ac069f548b9153ca6a9ed508df2a13947ed09a7c89ac483f8b711e42e"
+    },
+    {
+      "path": "provenance/bp03-before/2026-10-22-scopebase-bp03-host.md.txt",
+      "bytes": 56282,
+      "sha256": "1f2778368555da7cf8c95e506f324118d1ef1d17cd6a3d2734e288a50f49ec57"
+    },
+    {
+      "path": "provenance/bp03-before/2026-10-22-scopebase-bp03-verification.md.txt",
+      "bytes": 57727,
+      "sha256": "24c96f0c8206ac0509722c8c978776b7e19a2636d7276b8db848840ddd907f8e"
+    },
+    {
+      "path": "provenance/bp03-before/README.md.txt",
+      "bytes": 3752,
+      "sha256": "82150a8727c65dc35a20c08f3c763fab7d2164bbf6f788806c65c75f9803b629"
+    },
+    {
+      "path": "provenance/bp03-before/adapter-cases.json",
+      "bytes": 5751,
+      "sha256": "a5a098f7023f7841311ceb808386d62997a2c1d76f89e942268bb8dde583e313"
+    },
+    {
+      "path": "provenance/bp03-before/delivery-recipes.json",
+      "bytes": 31233,
+      "sha256": "1151ce45c148551c2532f8fdce499b003579dfd06be1468d6e4709d6874bf281"
+    },
+    {
+      "path": "provenance/bp03-before/manifest-additions-testkit.toml",
+      "bytes": 383,
+      "sha256": "70a3e5989d8db377a7c3dbfa11b6abf97765195de3a0a49566e025024ada1ab5"
+    },
+    {
+      "path": "provenance/design-review-r1/artifact-index.json",
+      "bytes": 11499,
+      "sha256": "b4812a7ed4e7df41817e177f49020f58ba033950dcbcb3f2d9b8a31750dcec6b"
+    },
+    {
+      "path": "provenance/design-review-r1/checks.json",
+      "bytes": 969,
+      "sha256": "b13aee292f57a6bc13816890195b6937d20b8d75c9f67c387514ec323d9d05a6"
+    },
+    {
+      "path": "provenance/design-review-r1/input-index.json",
+      "bytes": 21519,
+      "sha256": "a90725417763dd8ecee21977365e793ac1f76c73c662f9cc4aa72746aa68e5f2"
+    },
+    {
+      "path": "provenance/design-review-r1/input-verification.json",
+      "bytes": 8803,
+      "sha256": "32e02dfec779aa235dffbd1ac413365cbcb7b4f00693077dafe3446df8417d1a"
+    },
+    {
+      "path": "provenance/design-review-r1/pre-freeze-followup.json",
+      "bytes": 1064,
+      "sha256": "55decc528a18f493ad3d698e2a78ada5ec805a9350ac637d9156b488c2c2800b"
+    },
+    {
+      "path": "provenance/design-review-r1/pre-freeze-notes.json",
+      "bytes": 2350,
+      "sha256": "c7a03498a63867431ef7700f75153fd9581ca496437dcb0a54deab08c3e13b0c"
+    },
+    {
+      "path": "provenance/design-review-r1/report.md",
+      "bytes": 12192,
+      "sha256": "f7f5ec00294fcc5e0e3ab339e8b8eea1f788e7d50d322adabd8dad16215aa8ff"
+    },
+    {
+      "path": "provenance/design-review-r1/review.json",
+      "bytes": 3412,
+      "sha256": "02684110e0cd449320b71d252d8c8b650eae18a1a5bc281a02b53232e0feab8b"
+    },
+    {
+      "path": "provenance/proposal-r2/artifact-index.json",
+      "bytes": 8454,
+      "sha256": "79d270a73554b6772c8c901cc18baae36982d8cdcbf74cf38c7085f90728a78a"
+    },
+    {
+      "path": "provenance/proposal-r2/checks.json",
+      "bytes": 5736,
+      "sha256": "6ecbdb0a6fb1ddea8d021595e8ee00951900ac2e66c3d57c1b3c3e8cafe5fcfb"
+    },
+    {
+      "path": "provenance/proposal-r2/input-index.json",
+      "bytes": 11879,
+      "sha256": "84e55c1ef59af90df9a32ac8c03815fe37d07debf05bc7facf5a4f95196189d2"
+    },
+    {
+      "path": "provenance/proposal-r2/proposal.json",
+      "bytes": 7208,
+      "sha256": "a286639a97b74f04e3b498455e42675b74fb75d4071c081b7b7531d95836ce91"
+    },
+    {
+      "path": "provenance/proposal-r2/proposal.md",
+      "bytes": 53375,
+      "sha256": "d1dbfd6c7499dfd9e5a5a7bdec67f21b61857017607916ab32400176837b1e69"
+    },
+    {
+      "path": "provenance/proposal-r2/revision.json",
+      "bytes": 1235,
+      "sha256": "8f29ae934c6e22a3849ff4f0f7d43b172ea97ed077c1c6f45f6d3b1e88b70477"
+    },
+    {
+      "path": "provenance/root-design-ratification-r1.json",
+      "bytes": 2313,
+      "sha256": "38e812bb623f17c1271d2bb0b1e3720079091848028bbb46afdd60abc1a0cffd"
+    }
+  ]
+}

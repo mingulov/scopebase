@@ -1,5 +1,7 @@
 # Working in this repository
 
+[TT02-RSP01 prepared-response contract](docs/superpowers/specs/2026-10-22-scopebase-tt02-prepared-response.md) and [verification plan](docs/superpowers/plans/2026-10-22-scopebase-tt02-prepared-response-verification.md) ratify exact-r2 scoped maintenance under accepted TT02. Strict BP03 response-F depends on this work; actual execution bindings remain UNBOUND, implementation is not admitted and BP03 remains PLANNED. Prior TT02 acceptance and 86-task/120-requirement/179-mapping inventory are unchanged.
+
 ## Purpose and current state
 
 This is the implementation, specification and research workspace for **ScopeBase**, reusable foundations from p11scope, KryProbe, OSSLscope and MemVeil/libbpf-mojo, including SDK and selective C/Mojo/MojoBPF interoperability. Package names use `scopebase-*`; they are not published or reserved by this work.

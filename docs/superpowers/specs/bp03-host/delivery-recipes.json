@@ -1,5 +1,5 @@
 {
-  "kind": "BP03_R2_DELIVERY_RECIPE",
+  "kind": "BP03_TT02_RSP01_DELIVERY_RECIPE_SUCCESSOR_R1",
   "status": "PLANNED_NOT_RUN",
   "actual_accepted_base": "UNBOUND_AFTER_BP02",
   "inspected_predecessor_manifest": {
@@ -1248,5 +1248,52 @@
   "raw_default_marker": "An enabled empty default=[] still produces the raw default resolve feature; do not remove it. Isolated core-default testkit/retained-client BPF features are [], but direct default-enabled BP03 client BPF features are [default].",
   "reused_execution_rule": "Only exactly identical source/archive/compiler/features/locks/binaries/corpus/oracle/control/subject bindings may reference one actual execution from both inventories.",
   "no_BPF_testkit_dev_dependency": true,
-  "no_tools_or_cache_discovered_from_HOME_PATH_rustup_mise": true
+  "no_tools_or_cache_discovered_from_HOME_PATH_rustup_mise": true,
+  "tt02_rsp01_planned_registration": {
+    "status": "NORMATIVE_PLANNED_NOT_IMPLEMENTED_NOT_RUN",
+    "target": {
+      "kind": "test",
+      "name": "tt02_rsp01_alloc",
+      "path": "tests/tt02_rsp01_alloc.rs",
+      "harness": false,
+      "required_features": [
+        "bpf-host"
+      ],
+      "json_cfg": "bpf-host-json"
+    },
+    "manifest": "crates/scopebase-testkit/Cargo.toml; preserve inherited targets/dependencies/features/autotests",
+    "policy_expectations": [
+      "package-policy expected testkit source/archive member includes tests/tt02_rsp01_alloc.rs and tests/fixtures/** support",
+      "metadata target projection name/path/kind/harness=false/required-features exactly matches the manifest fragment",
+      "tests/package-policy/bp03 execute/controls checks inspect actual source and normalized archive target before Cargo",
+      "reject omitted target, harness=true, wrong required feature, missing support member or wrong executable identity"
+    ],
+    "execution": {
+      "build_argv": [
+        "BOUND_ABSOLUTE_BUILD_WRAPPER",
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "scopebase-testkit",
+        "--test",
+        "tt02_rsp01_alloc",
+        "--features",
+        "BOUND_bpf-host_OR_bpf-host-json"
+      ],
+      "run": "Helper records and runs same actual built isolated executable; bind path/hash/package ID/compiler/features/source-or-archive/cell; no libtest concurrency",
+      "required_cells": "All existing 12 activated testkit cells; core gates bpf-host, JSON-union adds bpf-host-json; bind actual command graph per cell before execution"
+    },
+    "observer": "Forward std::alloc only in dedicated executable; preinitialized fixed TLS; measured thread; external full consuming-call window; alloc/alloc_zeroed/realloc, dealloc separate; no failure injection/production hook/host allocator change",
+    "causal_controls": [
+      "empty window zero and intentional allocation nonzero",
+      "fresh actual key/Label Clone after Ready before finish",
+      "generic Observation::new/unique in actual successful finish",
+      "format fallback on real refusal",
+      "restored twins with independent operation/output attribution and literal semantic oracle"
+    ],
+    "consumers": "Migrate actual populations source and exact root copy byte-identically to run_profile_prepared; direct prepared call/scalar failure/partial-v1 case; preserve independent oracle/direct BPF APIs/reimport and one linked BPF root",
+    "future_packet": "Actual base/API/manifest/lock/dependencies/features/tool/cache/resources/worker/output/client/archive/binary binding remains UNBOUND; no registration or execution admitted by these definitions"
+  }
 }

@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "status": "PREFREEZE_REVIEW_NOT_FINAL",
+  "created_utc": "2026-10-22T08:50:35.465890+00:00",
+  "review_scope": "Independent architecture/source review; no implementation, Cargo, donor/native/runtime/resource effects",
+  "corrections_requested": [
+    {
+      "id": "RSPREV-01",
+      "title": "Retain preparation failure and later harness failure together",
+      "evidence": [
+        "runner.rs:898-950",
+        "runner.rs:1499-1537",
+        "result.rs:1458-1465"
+      ],
+      "issue": "Existing cleanup retention can drop a raw response and produce a first HarnessError; reconstruct may itself reject the partial wire. Scalar preparation cause/index and that follow-up error need an explicit simultaneous return policy.",
+      "author_response": "Accepted; pending final r2 index with followup_harness_error and one moved partial."
+    },
+    {
+      "id": "RSPREV-02",
+      "title": "Measure actual allocations instead of private-copy helper calls only",
+      "evidence": [
+        "artifact.rs:1516-1520",
+        "ids.rs:34-48",
+        "bpf/adapter.rs:177-203"
+      ],
+      "issue": "Derived Clone, format!, and generic Observation::new/unique can allocate without crossing a new private helper. Finish-only observation also needs complementary coverage of metadata copied earlier after Ready.",
+      "author_response": "Accepted; root selected dedicated isolated noninjecting forwarding allocator observer exception; final detail pending."
+    },
+    {
+      "id": "RSPREV-03",
+      "title": "Amend machine-readable authoring cases and delivery targets",
+      "evidence": [
+        "docs/superpowers/specs/bp03-host/adapter-cases.json:invocation-limits-mismatch",
+        "docs/superpowers/specs/bp03-host/README.md:4-12",
+        "docs/superpowers/specs/bp03-host/manifest-additions-testkit.toml"
+      ],
+      "issue": "Existing unconditional binding/operation CaseError recipes and frozen asset hashes/registered target expectations must name successful metadata admission and the new scalar/observer routes.",
+      "author_response": "Accepted; final successor amendment map pending."
+    }
+  ],
+  "preliminary_disposition": "API/GAT/route borrowing, capacity ownership, cleanup and unchanged partial-v1 model appear source-feasible after requested corrections; no compile or runtime evidence claimed."
+}

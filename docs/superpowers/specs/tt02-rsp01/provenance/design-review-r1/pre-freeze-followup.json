@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "status": "PREFREEZE_REVIEW_NOT_FINAL",
+  "created_utc": "2026-10-22T08:54:55.464492+00:00",
+  "finding_id": "RSPREV-02",
+  "followup": "A normal linked integration test cannot externally enter a private finisher or access cfg(test) internals. A finish-only helper observer would also miss earlier post-Ready metadata copies.",
+  "author_response": "Revised design uses the whole public consuming execute call with zero-allocation refusal paths and independently attributed operation/output allocation counts on positive paths. Dedicated harness=false delivered integration target; no private/test/public production hooks or copied finisher.",
+  "evidence": "Latest provisional proposal.md:206-218; final hash pending",
+  "expected_controls": [
+    "fresh current-key/Label clone before finisher",
+    "generic Observation::new/unique on one-step successful finish",
+    "format! fallback refusal",
+    "empty observer window",
+    "intentional actual allocation"
+  ],
+  "execution": "All controls NOT_RUN; architecture/source reasoning only"
+}

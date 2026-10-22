@@ -1,5 +1,5 @@
 {
-  "kind": "BP03_R2_ADAPTER_AUTHORING_CASES",
+  "kind": "BP03_TT02_RSP01_ADAPTER_AUTHORING_SUCCESSOR_R1",
   "status": "PLANNED_NOT_RUN",
   "not_a_new_runtime_schema": true,
   "explicit_positive_bpf_limits": {
@@ -68,7 +68,8 @@
       "expected": "CaseError/InvalidOutput/binding",
       "step_id": null,
       "diagnostic": "run-limits-mismatch",
-      "input_access": false
+      "input_access": false,
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "explicit-zero-work",
@@ -77,7 +78,8 @@
       },
       "expected": "CaseError/Refused/admission",
       "input_byte_scans": "0",
-      "public_operation_entries": "0"
+      "public_operation_entries": "0",
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "input-before-work",
@@ -87,13 +89,15 @@
       },
       "expected": "CaseError/Refused/admission",
       "diagnostic_required_size": "L",
-      "input_byte_scans": "0"
+      "input_byte_scans": "0",
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "core-framing-after-resource-admission",
       "input": "validly delivered but malformed decimal LF framing",
       "expected": "CaseError/InvalidOutput/input",
-      "public_operation_entries": "0"
+      "public_operation_entries": "0",
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "joint-two-records",
@@ -105,7 +109,8 @@
       "precondition": "Each valid decode independently succeeds under selected H and its original complete work allowance; H fits checked outer RunLimits-B-F and hard262144.",
       "expected": "CaseError/Refused",
       "assertion": "adapter.joint-retained",
-      "partial_payload": false
+      "partial_payload": false,
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "joint-two-records-restored",
@@ -115,7 +120,8 @@
       ],
       "select_H": "exact independently measured full joint live peak; all other limits unchanged",
       "expected": "Observed/true",
-      "assertion": "adapter.joint-retained"
+      "assertion": "adapter.joint-retained",
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "prefix-peak-not-final-size",
@@ -124,21 +130,24 @@
       "precondition": "Decoder and direct encoder independently succeed under selected H, and final prefixed Vec fits H; outer RunLimits-B-F/hard caps permit selected H.",
       "expected": "CaseError/Refused",
       "assertion": "adapter.prefix-retained",
-      "partial_payload": false
+      "partial_payload": false,
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "prefix-peak-restored",
       "input": "fixture-seeds/codec/valid-base.bytes",
       "select_H": "exact independently measured full peak; observation byte cap>=E+9",
       "expected": "Observed/imported-LF-plus-exact-JSON",
-      "assertion": "adapter.prefix-retained"
+      "assertion": "adapter.prefix-retained",
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "checked-composition-overflow",
       "fault": "private checked length/charge addition boundary seam, valid prior setup",
       "expected": "CaseError/Refused/admission",
       "diagnostic": "bpf:overflow/admission",
-      "partial_payload": false
+      "partial_payload": false,
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     },
     {
       "id": "codec-allocation-failure-preserved",
@@ -146,7 +155,8 @@
       "expected": "CaseError/Refused/allocate",
       "diagnostic": "bpf:backend/allocate",
       "cause": "Unknown",
-      "partial_payload": false
+      "partial_payload": false,
+      "response_preparation_precondition": "Ready for exact current adapter/invocation; actual R<=F; prepared metadata alternatives and completion storage admitted"
     }
   ],
   "capacity_oracle": "In-crate tests inspect actual reported owned capacities and type sizes independently of production counter; external literal API tests never infer authority from budget reports.",
@@ -157,5 +167,99 @@
     "requires_coverage": [],
     "observes_runtime_entry_or_return": false
   },
-  "no_observer_or_verdict_engine_added": true
+  "no_observer_or_verdict_engine_added": false,
+  "supersedes": "Historical bp03-before/adapter-cases.json under ../tt02-rsp01/provenance/; preserve prior 16 IDs and results. This file is authoritative after canonical adoption.",
+  "response_preparation": "All invocation binding/dialect/operation CaseError and Observed expectations require successful actual metadata admission. First metadata failure is Copy scalar no-dispatch; constructor cases remain constructor outcomes.",
+  "prepared_response_cases": [
+    {
+      "id": "response-first-key-capacity",
+      "control": "PRP01/02",
+      "setup": "Valid current key with short bytes and actual owned capacity forcing R>F at owning-module copy boundary; seam remains active on every attempted copy",
+      "expected": "ResponsePreparationFailure/CapacityExceeded",
+      "fixture_entries": 0,
+      "public_operation_entries": 0,
+      "attempts": 1,
+      "owned_error_key": false,
+      "restored": "Identical valid bytes with fitting actual capacities -> Ready"
+    },
+    {
+      "id": "response-fallible-allocation",
+      "control": "PRP03",
+      "setup": "Owner-local reserve failure per component after valid shape/prior bounds",
+      "expected": "ResponsePreparationFailure/Allocation",
+      "fixture_entries": 0,
+      "public_operation_entries": 0,
+      "formatted_source": false,
+      "restored": "Same metadata without injected failure -> Ready"
+    },
+    {
+      "id": "response-composition-overflow",
+      "control": "PRP03",
+      "setup": "Private checked actual-charge composition overflow after valid setup",
+      "expected": "ResponsePreparationFailure/Overflow",
+      "fixture_entries": 0,
+      "public_operation_entries": 0,
+      "restored": "Fitting exact arithmetic -> Ready"
+    },
+    {
+      "id": "response-actual-capacity-and-handoff",
+      "control": "PRP01/08",
+      "setup": "Independently sum inline once and all owned String/Vec nested capacities and simultaneous alternatives",
+      "expected": "R<=F; returned Q<=R; actual B+F+J within RunLimits; output counted once",
+      "mutants": [
+        "length-only charge",
+        "omitted completion element storage",
+        "omitted unused error alternative"
+      ],
+      "restored": "Full actual charge and minus-one/refused vs restored/fitting twin"
+    },
+    {
+      "id": "response-repeated-copy-no-fallback",
+      "control": "PRP02/04",
+      "setup": "Real excess storage at every attempted key copy, valid bytes; no first-only seam",
+      "expected": "One finite admission attempt; scalar failure; no retry/fresh fallback key; no payload entry",
+      "restored": "Fitting copy -> exact unchanged current-key refusal after consuming call"
+    },
+    {
+      "id": "response-zero-allocation-refusal",
+      "control": "PRP04/06",
+      "setup": "Ready exact binding/preflight/zero-work path; setup outside externally armed full consuming execute window",
+      "expected": "alloc=0; alloc_zeroed=0; realloc=0; exact intended CaseError; dealloc separately counted",
+      "mutants": [
+        "clone actual key/Label after Ready before finish",
+        "format fallback in refusal"
+      ],
+      "restored": "Move same admitted metadata; zero entries"
+    },
+    {
+      "id": "response-success-finish-allocation",
+      "control": "PRP04/07",
+      "setup": "Ready simple filter positive; independently attribute legitimate output Vec reservation and actual J",
+      "expected": "Exact literal output; no allocator entries beyond independently attributed operation/output",
+      "mutant": "Restore generic Observation::new/unique BTreeSet validator on real success finish",
+      "restored": "Narrow invariant-preserving move finish"
+    },
+    {
+      "id": "response-json-profile-attribution",
+      "control": "PRP04/08",
+      "setup": "Actual direct public BPF/ID operations with identical fixed admitted inputs/caps; independent literals and joint J",
+      "expected": "Full consuming call has exactly independently attributed operation/output/prefix entries; no unaccounted metadata allocation",
+      "incomplete": "NOT_SENSITIVE if independent attribution/setup preconditions fail"
+    },
+    {
+      "id": "response-legacy-type-refusal",
+      "control": "PRP05/12",
+      "setup": "Actual exported strict BpfHostAdapter",
+      "expected": "Compile failure for old run_profile and dyn ConformanceAdapter because missing implementation; consuming-call reuse/foreign adapter/invocation/retire borrow also rejected",
+      "restored": "prepare_response then consuming PreparedExecution or run_profile_prepared compiles"
+    },
+    {
+      "id": "response-partial-v1-custody",
+      "control": "PRP09/10/11/13",
+      "setup": "Earlier real owned pending/uncertainty then scalar preparation failure at exact zero-based schedule index",
+      "expected": "No current participation/effects; scalar cause/index plus optional first followup HarnessError and one moved partial; fixed cleanup/custody; clean partial Incomplete, earlier Invalid/Failed retain precedence; malformed raw partial replay Err",
+      "restored": "Successful prep returns unchanged full schema1 and actual reimport"
+    }
+  ],
+  "observer_scope": "Dedicated noninjecting forwarding allocation observer only; no runtime-truth observer or second verdict engine. Normative planned target/delivery fields in delivery-recipes.json."
 }
