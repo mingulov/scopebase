@@ -26,6 +26,7 @@ fn effect(attempted: u64, completed: u64) -> EffectSummary {
 }
 fn charges(syscalls: u64) -> ResourceCharges {
     ResourceCharges {
+        parse: None,
         syscalls,
         acquired: 0,
         peak: 0,
@@ -203,6 +204,7 @@ fn cancel_after_success_preserves_metadata() {
             flags: DescriptorFlagEffect::Unknown,
         },
         ResourceCharges {
+            parse: None,
             syscalls: 3,
             acquired: 2,
             peak: 2,
@@ -283,6 +285,7 @@ fn fixture_write(
     let post = control.checkpoint();
     match result {
         Err(source) => Err(LinuxError {
+            parse_line: None,
             stage: Stage::ValidateFile,
             reason: Reason::Unreadable,
             source: Some(source),
@@ -449,6 +452,7 @@ fn one_read(
     let post = control.checkpoint();
     match result {
         Err(source) => Err(LinuxError {
+            parse_line: None,
             stage: Stage::ValidateFile,
             reason: Reason::Unreadable,
             source: Some(source),

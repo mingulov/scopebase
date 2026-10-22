@@ -1,0 +1,4 @@
+1000-1800 r--p 0000 0b:02 91 /fixtures/alpha
+1800-2400 r-xp 0800 0b:02 91 /fixtures/alpha
+2400-2800 rw-p 1400 0b:02 91 /fixtures/alpha
+broken

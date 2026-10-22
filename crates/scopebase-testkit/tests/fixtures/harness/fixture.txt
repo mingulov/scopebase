@@ -1,0 +1,1 @@
+Apache-2.0. Harness T0 only. Input operands, independent expected vector, independent population ledger.

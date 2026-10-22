@@ -203,6 +203,62 @@
       "code": "E0277",
       "contains": "From",
       "line": 4
+    },
+    {
+      "id": "proc_keys_eq",
+      "source": "tests/ui/proc_keys_eq.rs",
+      "code": "E0308",
+      "contains": "mismatched types",
+      "line": 4
+    },
+    {
+      "id": "proc_key_from_stat",
+      "source": "tests/ui/proc_key_from_stat.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
+    },
+    {
+      "id": "proc_key_private",
+      "source": "tests/ui/proc_key_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "proc_charges_private",
+      "source": "tests/ui/proc_charges_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
+    },
+    {
+      "id": "proc_limits_default",
+      "source": "tests/ui/proc_limits_default.rs",
+      "code": "E0599",
+      "contains": "default",
+      "line": 4
+    },
+    {
+      "id": "proc_owner",
+      "source": "tests/ui/proc_owner.rs",
+      "code": "E0277",
+      "contains": "From",
+      "line": 4
+    },
+    {
+      "id": "proc_borrow_after_drop",
+      "source": "tests/ui/proc_borrow_after_drop.rs",
+      "code": "E0505",
+      "contains": "cannot move out",
+      "line": 5
+    },
+    {
+      "id": "proc_mount_number_eq",
+      "source": "tests/ui/proc_mount_number_eq.rs",
+      "code": "E0308",
+      "contains": "mismatched types",
+      "line": 4
     }
   ]
 }

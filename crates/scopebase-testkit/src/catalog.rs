@@ -267,6 +267,7 @@ pub(crate) struct ExtensionSpec {
 }
 #[derive(Debug)]
 pub struct CaseCatalog {
+    source_sha256: crate::Digest256,
     pub(crate) revision: u32,
     pub(crate) cases: BTreeMap<(CaseId, u32), CaseSpec>,
     pub(crate) profiles: BTreeMap<ProfileId, ProfileSpec>,
@@ -276,6 +277,9 @@ pub struct CaseCatalog {
     pub(crate) max_selected_cells: usize,
 }
 impl CaseCatalog {
+    pub fn source_sha256(&self) -> crate::Digest256 {
+        self.source_sha256
+    }
     pub fn revision(&self) -> u32 {
         self.revision
     }
@@ -921,6 +925,7 @@ impl CaseCatalog {
             }
         }
         let catalog = Self {
+            source_sha256: crate::Digest256::of_bytes(bytes),
             revision: raw.catalog_revision,
             cases,
             profiles,

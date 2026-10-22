@@ -174,6 +174,7 @@ impl Ops {
         flags: DescriptorFlagEffect,
     ) -> LinuxError {
         LinuxError {
+            parse_line: None,
             stage,
             reason,
             source,
@@ -188,6 +189,7 @@ impl Ops {
                 flags,
             },
             charges: ResourceCharges {
+                parse: None,
                 syscalls: self.syscalls,
                 acquired: self.acquired,
                 peak: self.peak,

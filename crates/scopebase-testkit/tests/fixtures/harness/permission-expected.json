@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"tt02-model-expected","expected_outcome":{"kind":"error","stage":"load","category":"refused","errno":1,"cause":"permission","diagnostic_hex":"7065726d697373696f6e2064656e696564"}}

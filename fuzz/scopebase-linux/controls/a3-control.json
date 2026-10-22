@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "status": "NOT_RUN_WRAPPER_LOCK_READ_ONLY",
+  "control": "skip malformed maps row and return the three-entry snapshot",
+  "production_path": "crates/scopebase-linux/src/procfs/maps.rs",
+  "production_sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+  "mutant_sha256": "4ae34390557c51fd8c5eaa33b6eef6f2783380f8440f2c10153868084255f350",
+  "patch_sha256": "7a0dbc1f1379f32c06d0dc6af0c09f478c3c358bd667d390c7c15616c6c91356",
+  "exact_test": "a3_exact_prefix_and_whole_snapshot_refusal",
+  "expected_failure_assertion": "A3 whole-input refusal after three valid rows",
+  "expected_mutant_observation": "parse_maps on exact A3 four-row bytes returns Ok(snapshot) with len 3; assertion fails after positive prefix setup",
+  "command": [
+    "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+    "--",
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "scopebase-linux",
+    "--test",
+    "proc_parsers",
+    "a3_exact_prefix_and_whole_snapshot_refusal",
+    "--",
+    "--exact",
+    "--nocapture"
+  ],
+  "blocked_observation": "scopebase-build: [Errno 30] Read-only file system: build.lock; Cargo/test did not start"
+}

@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "maps": {
+    "entries": 6,
+    "executable": 4,
+    "offsets": [
+      [
+        4096,
+        32
+      ],
+      [
+        6143,
+        2079
+      ],
+      [
+        6144,
+        64
+      ],
+      [
+        9216,
+        96
+      ],
+      [
+        10240,
+        null
+      ]
+    ],
+    "bad_line": 4,
+    "bad_validated": 3
+  },
+  "mounts": {
+    "ids": [
+      17,
+      18,
+      19,
+      2
+    ],
+    "bad_line": 4,
+    "bad_validated": 4,
+    "a1_decoded": [
+      "fuse.demo#tag",
+      "source#tag",
+      "rw,lowerdir=/lower,part",
+      "rw,key=part=value"
+    ],
+    "single_pass_hex": "5c303433"
+  },
+  "authority": "descriptive bytes only; not a live view or file association",
+  "a3": {
+    "positive_fixture": "maps_a3_valid.bin",
+    "negative_fixture": "maps_a3_invalid.bin",
+    "entries": 3,
+    "rows": [
+      {
+        "start": 4096,
+        "end": 6144,
+        "permissions": "r--p",
+        "offset": 0,
+        "major": 11,
+        "minor": 2,
+        "inode": 91,
+        "raw_path": "/fixtures/alpha"
+      },
+      {
+        "start": 6144,
+        "end": 9216,
+        "permissions": "r-xp",
+        "offset": 2048,
+        "major": 11,
+        "minor": 2,
+        "inode": 91,
+        "raw_path": "/fixtures/alpha"
+      },
+      {
+        "start": 9216,
+        "end": 10240,
+        "permissions": "rw-p",
+        "offset": 5120,
+        "major": 11,
+        "minor": 2,
+        "inode": 91,
+        "raw_path": "/fixtures/alpha"
+      }
+    ],
+    "offsets": [
+      [
+        4096,
+        0
+      ],
+      [
+        6143,
+        2047
+      ],
+      [
+        6144,
+        2048
+      ],
+      [
+        9215,
+        5119
+      ],
+      [
+        9216,
+        5120
+      ],
+      [
+        10239,
+        6143
+      ],
+      [
+        10240,
+        null
+      ]
+    ],
+    "refusal": {
+      "stage": "ParseMaps",
+      "reason": "Malformed",
+      "line": 4,
+      "entries_validated": 3,
+      "attempted_operations": 0,
+      "completed_operations": 0
+    }
+  }
+}

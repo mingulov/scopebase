@@ -184,6 +184,7 @@ impl ReadOps {
     }
     fn charges(&self) -> ResourceCharges {
         ResourceCharges {
+            parse: None,
             syscalls: self.attempted,
             acquired: 0,
             peak: 0,
@@ -192,6 +193,7 @@ impl ReadOps {
     }
     fn error(&self, reason: Reason, source: Option<std::io::Error>) -> LinuxError {
         LinuxError {
+            parse_line: None,
             stage: Stage::ReadFile,
             reason,
             source,

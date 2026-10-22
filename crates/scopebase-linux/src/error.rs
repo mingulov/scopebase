@@ -10,6 +10,8 @@ pub enum Stage {
     ReopenHeld,
     ConfigureControl,
     ReadFile,
+    ParseMaps,
+    ParseMounts,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -35,6 +37,8 @@ pub enum LimitKind {
     InputBytes,
     ReadCalls,
     BufferCapacity,
+    Entries,
+    LineBytes,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -83,8 +87,12 @@ pub struct ResourceCharges {
     pub(crate) acquired: u64,
     pub(crate) peak: u64,
     pub(crate) read: Option<crate::file::ReadCharges>,
+    pub(crate) parse: Option<crate::procfs::ParseCharges>,
 }
 impl ResourceCharges {
+    pub fn parse(&self) -> Option<crate::procfs::ParseCharges> {
+        self.parse
+    }
     pub fn read(&self) -> Option<crate::file::ReadCharges> {
         self.read
     }
@@ -101,12 +109,16 @@ impl ResourceCharges {
 #[non_exhaustive]
 pub struct LinuxError {
     pub(crate) stage: Stage,
+    pub(crate) parse_line: Option<usize>,
     pub(crate) reason: Reason,
     pub(crate) source: Option<io::Error>,
     pub(crate) effect: EffectSummary,
     pub(crate) charges: ResourceCharges,
 }
 impl LinuxError {
+    pub fn parse_line(&self) -> Option<usize> {
+        self.parse_line
+    }
     pub fn stage(&self) -> Stage {
         self.stage
     }

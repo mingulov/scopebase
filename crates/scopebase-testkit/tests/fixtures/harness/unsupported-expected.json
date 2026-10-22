@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"tt02-model-expected","expected_outcome":{"kind":"error","stage":"load","category":"refused","errno":95,"cause":"unsupported_operation","diagnostic_hex":"756e737570706f72746564206f7065726174696f6e"}}

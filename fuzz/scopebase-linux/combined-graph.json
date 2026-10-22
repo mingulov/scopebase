@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "status": "STAGED_LOCK_GRAPH_NOT_CARGO_METADATA_VALIDATED",
+  "lock": "Cargo.lock",
+  "packages": [
+    {
+      "name": "arbitrary",
+      "version": "1.5.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/arbitrary-1.5.0.crate",
+        "sha256": "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
+      }
+    },
+    {
+      "name": "bitflags",
+      "version": "2.13.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06",
+      "admitted_archive": null
+    },
+    {
+      "name": "cc",
+      "version": "1.8.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838",
+      "dependencies": [
+        "find-msvc-tools",
+        "jobserver",
+        "libc",
+        "shlex"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/cc-1.8.0.crate",
+        "sha256": "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838"
+      }
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/cfg-if-1.0.5.crate",
+        "sha256": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+      }
+    },
+    {
+      "name": "errno",
+      "version": "0.3.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb",
+      "dependencies": [
+        "libc",
+        "windows-sys"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/errno-0.3.14.crate",
+        "sha256": "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+      }
+    },
+    {
+      "name": "find-msvc-tools",
+      "version": "0.1.14",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/find-msvc-tools-0.1.14.crate",
+        "sha256": "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+      }
+    },
+    {
+      "name": "getrandom",
+      "version": "0.4.3",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099",
+      "dependencies": [
+        "cfg-if",
+        "libc",
+        "r-efi"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/getrandom-0.4.3.crate",
+        "sha256": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+      }
+    },
+    {
+      "name": "jobserver",
+      "version": "0.1.35",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3",
+      "dependencies": [
+        "getrandom",
+        "libc"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/jobserver-0.1.35.crate",
+        "sha256": "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
+      }
+    },
+    {
+      "name": "libc",
+      "version": "0.2.191",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/libc-0.2.191.crate",
+        "sha256": "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+      }
+    },
+    {
+      "name": "libfuzzer-sys",
+      "version": "0.4.13",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2",
+      "dependencies": [
+        "arbitrary",
+        "cc"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/libfuzzer-sys-0.4.13.crate",
+        "sha256": "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+      }
+    },
+    {
+      "name": "linux-raw-sys",
+      "version": "0.12.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/linux-raw-sys-0.12.1.crate",
+        "sha256": "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+      }
+    },
+    {
+      "name": "r-efi",
+      "version": "6.0.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/r-efi-6.0.0.crate",
+        "sha256": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+      }
+    },
+    {
+      "name": "rustix",
+      "version": "1.1.5",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d",
+      "dependencies": [
+        "bitflags",
+        "errno",
+        "libc",
+        "linux-raw-sys",
+        "windows-sys"
+      ],
+      "admitted_archive": null
+    },
+    {
+      "name": "scopebase-linux",
+      "version": "0.1.0",
+      "dependencies": [
+        "rustix"
+      ],
+      "path_package": "../../crates/scopebase-linux"
+    },
+    {
+      "name": "scopebase-linux-fuzz",
+      "version": "0.0.0",
+      "dependencies": [
+        "libfuzzer-sys",
+        "scopebase-linux"
+      ],
+      "path_package": "../.."
+    },
+    {
+      "name": "shlex",
+      "version": "2.0.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/shlex-2.0.1.crate",
+        "sha256": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+      }
+    },
+    {
+      "name": "windows-link",
+      "version": "0.2.1",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/windows-link-0.2.1.crate",
+        "sha256": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+      }
+    },
+    {
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "checksum": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
+      "dependencies": [
+        "windows-link"
+      ],
+      "admitted_archive": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/windows-sys-0.61.2.crate",
+        "sha256": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+      }
+    }
+  ],
+  "package_count": 18,
+  "missing_controller_admitted_archives": [
+    "bitflags@2.13.2",
+    "rustix@1.1.5"
+  ],
+  "direct_feature_requests": {
+    "scopebase-linux": {
+      "default_features": false,
+      "features": []
+    },
+    "libfuzzer-sys": {
+      "default_features": true,
+      "expected": [
+        "default",
+        "link_libfuzzer"
+      ]
+    },
+    "rustix": {
+      "default_features": false,
+      "features": [
+        "std",
+        "fs",
+        "pipe"
+      ]
+    }
+  },
+  "metadata_validation": "NOT_RUN: required controller wrapper cannot open /run/user/1000/scopebase-locks/build.lock for writing in current sandbox"
+}

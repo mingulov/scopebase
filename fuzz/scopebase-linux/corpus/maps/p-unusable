@@ -1,0 +1,3 @@
+1000-2000 r-xp 0000 08:01 1 /tmp/nonutf8-ÿ.so
+2000-3000 r-xp 0000 08:01 2 /tmp/literal\012name.so
+3000-4000 r-xp 0000 08:01 3 /tmp/gone.so (deleted)

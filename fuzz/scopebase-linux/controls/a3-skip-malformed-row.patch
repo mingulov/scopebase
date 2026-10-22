@@ -1,0 +1,18 @@
+--- a/crates/scopebase-linux/src/procfs/maps.rs
++++ b/crates/scopebase-linux/src/procfs/maps.rs
+@@ -159,10 +159,12 @@
+     let mut base = 0;
+     for (row, line) in input.split_inclusive(|b| *b == b'\n').enumerate() {
+         let line = &line[..line.len() - 1];
+-        let record = parse_line(line, base)
++        let Some(record) = parse_line(line, base)
+             .filter(|r| r.offset.checked_add(r.end - r.start - 1).is_some())
+-            .filter(|r| records.last().is_none_or(|prev| prev.end <= r.start))
+-            .ok_or_else(|| error(stage, Reason::Malformed, Some(row + 1), c))?;
++            .filter(|r| records.last().is_none_or(|prev| prev.end <= r.start)) else {
++                base += line.len() + 1;
++                continue;
++            };
+         records.push(record);
+         c.entries_validated += 1;
+         base += line.len() + 1;

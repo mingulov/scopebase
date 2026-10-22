@@ -1,0 +1,2538 @@
+{
+  "$defs": {
+    "ArtifactBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "length": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/ArtifactRole"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest256"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "role",
+        "length",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ArtifactRole": {
+      "enum": [
+        "subject_archive",
+        "consumer_executable",
+        "case_source",
+        "oracle_source",
+        "control_source",
+        "fixture_manifest",
+        "fixture_input",
+        "expected_vector",
+        "fixture_ledger",
+        "worker_executable",
+        "final_object",
+        "source_terms",
+        "elf_license_bytes",
+        "loader_license_bytes"
+      ],
+      "type": "string"
+    },
+    "AssertionCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/CheckStatus"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "AssertionRule": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "requires_coverage": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "requires_positive_twin": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "requires_coverage",
+        "requires_positive_twin"
+      ],
+      "type": "object"
+    },
+    "AssertionVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/CapabilityEvidence"
+        },
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/AssertionCheck"
+          },
+          "type": "array"
+        },
+        "harness": {
+          "$ref": "#/$defs/HarnessValidity"
+        }
+      },
+      "required": [
+        "harness",
+        "checks",
+        "capability"
+      ],
+      "type": "object"
+    },
+    "BackendBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "source_sha256"
+      ],
+      "type": "object"
+    },
+    "BindingProvenance": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "generated_build"
+            },
+            "manifest_sha256": {
+              "$ref": "#/$defs/Digest256"
+            },
+            "measurement_sha256": {
+              "$ref": "#/$defs/Digest256"
+            }
+          },
+          "required": [
+            "kind",
+            "manifest_sha256",
+            "measurement_sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "self_reported"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CapabilityEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "method": {
+          "$ref": "#/$defs/Label"
+        },
+        "state": {
+          "$ref": "#/$defs/CapabilityState"
+        }
+      },
+      "required": [
+        "state",
+        "method",
+        "context",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "CapabilityState": {
+      "enum": [
+        "supported",
+        "unsupported",
+        "denied",
+        "unknown",
+        "incompatible",
+        "not_applicable"
+      ],
+      "type": "string"
+    },
+    "CaseError": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "category": {
+                "const": "unsupported_schema"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "cause": {
+                "properties": {
+                  "cause": {
+                    "const": "unknown"
+                  }
+                }
+              },
+              "completed_steps": {
+                "maxItems": 0
+              },
+              "errno": {
+                "type": "null"
+              },
+              "partial_observation": {
+                "type": "null"
+              },
+              "step_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/CaseErrorCategory"
+        },
+        "cause": {
+          "$ref": "#/$defs/RefusalEvidence"
+        },
+        "completed_steps": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "diagnostic_bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "effects": {
+          "$ref": "#/$defs/EffectBatch"
+        },
+        "errno": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "partial_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartialObservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "$ref": "#/$defs/Label"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "step_id",
+        "stage",
+        "category",
+        "errno",
+        "diagnostic_bytes",
+        "cause",
+        "completed_steps",
+        "partial_observation",
+        "effects"
+      ],
+      "type": "object"
+    },
+    "CaseErrorCategory": {
+      "enum": [
+        "unavailable",
+        "refused",
+        "invalid_output",
+        "unsupported_schema",
+        "cancelled",
+        "timed_out",
+        "io",
+        "other"
+      ],
+      "type": "string"
+    },
+    "CaseId": {
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$",
+      "type": "string"
+    },
+    "CaseInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "fixture_schema": {
+          "$ref": "#/$defs/SchemaBinding"
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "limits": {
+          "$ref": "#/$defs/RunLimits"
+        },
+        "observation_schema": {
+          "$ref": "#/$defs/SchemaBinding"
+        },
+        "script": {
+          "$ref": "#/$defs/OperationScript"
+        }
+      },
+      "required": [
+        "key",
+        "observation_schema",
+        "fixture_schema",
+        "script",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "CaseKey": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/CaseId"
+        },
+        "case_version": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "cell_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_version",
+        "cell_id"
+      ],
+      "type": "object"
+    },
+    "CaseOutcome": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "observed"
+            },
+            "observation": {
+              "$ref": "#/$defs/Observation"
+            }
+          },
+          "required": [
+            "kind",
+            "observation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/CaseError"
+            },
+            "kind": {
+              "const": "operation_error"
+            }
+          },
+          "required": [
+            "kind",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CaseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/CapabilityEvidence"
+        },
+        "case_cleanup_call_ids": {
+          "items": {
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/EffectiveCoverage"
+          },
+          "type": "array"
+        },
+        "effect_batches": {
+          "items": {
+            "$ref": "#/$defs/EffectBatch"
+          },
+          "type": "array"
+        },
+        "effective_checks": {
+          "items": {
+            "$ref": "#/$defs/AssertionCheck"
+          },
+          "type": "array"
+        },
+        "entered_stages": {
+          "items": {
+            "$ref": "#/$defs/EnteredStage"
+          },
+          "type": "array"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "execution_checkpoints": {
+          "$ref": "#/$defs/ExecutionCheckpoints"
+        },
+        "expected_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExpectedEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fixture_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FixtureError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "oracle_verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssertionVerdict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaseOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "script_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaseTerminal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        }
+      },
+      "required": [
+        "key",
+        "script_sha256",
+        "tier",
+        "entered_stages",
+        "execution_checkpoints",
+        "execution",
+        "reason",
+        "outcome",
+        "fixture_failure",
+        "expected_evidence",
+        "oracle_verdict",
+        "effective_checks",
+        "capability",
+        "coverage",
+        "effect_batches",
+        "case_cleanup_call_ids",
+        "terminal"
+      ],
+      "type": "object"
+    },
+    "CaseRule": {
+      "additionalProperties": false,
+      "properties": {
+        "assertions": {
+          "items": {
+            "$ref": "#/$defs/AssertionRule"
+          },
+          "type": "array"
+        },
+        "attempts": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "case_key": {
+          "$ref": "#/$defs/CaseKey"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageRequirement"
+          },
+          "type": "array"
+        },
+        "fixture_schema": {
+          "$ref": "#/$defs/SchemaBinding"
+        },
+        "intent": {
+          "$ref": "#/$defs/ClaimIntent"
+        },
+        "max_effects": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "observation_schema": {
+          "$ref": "#/$defs/SchemaBinding"
+        },
+        "operation_ids": {
+          "items": {
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "script": {
+          "$ref": "#/$defs/OperationScript"
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        }
+      },
+      "required": [
+        "case_key",
+        "tier",
+        "observation_schema",
+        "fixture_schema",
+        "script",
+        "assertions",
+        "coverage",
+        "intent",
+        "attempts",
+        "operation_ids",
+        "max_effects"
+      ],
+      "type": "object"
+    },
+    "CaseTerminal": {
+      "additionalProperties": false,
+      "properties": {
+        "after_cleanup_call_id": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionState"
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        }
+      },
+      "required": [
+        "key",
+        "execution",
+        "after_cleanup_call_id"
+      ],
+      "type": "object"
+    },
+    "CheckStatus": {
+      "enum": [
+        "pass",
+        "fail",
+        "not_judged"
+      ],
+      "type": "string"
+    },
+    "CheckpointPair": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/CheckpointSlot"
+        },
+        "before": {
+          "$ref": "#/$defs/CheckpointSlot"
+        }
+      },
+      "required": [
+        "before",
+        "after"
+      ],
+      "type": "object"
+    },
+    "CheckpointSlot": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sampled"
+            },
+            "sample": {
+              "$ref": "#/$defs/ExecutionCheckpoint"
+            }
+          },
+          "required": [
+            "kind",
+            "sample"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/OmissionCause"
+            },
+            "kind": {
+              "const": "omitted"
+            }
+          },
+          "required": [
+            "kind",
+            "cause"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "not_recorded"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ClaimIntent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "positive_support"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "assertion_only"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/KnownRefusalCause"
+            },
+            "equivalence_assertion": {
+              "$ref": "#/$defs/Label"
+            },
+            "kind": {
+              "const": "expected_refusal"
+            },
+            "positive_twin": {
+              "$ref": "#/$defs/CaseKey"
+            },
+            "stage": {
+              "$ref": "#/$defs/Label"
+            },
+            "step_id": {
+              "$ref": "#/$defs/Label"
+            }
+          },
+          "required": [
+            "kind",
+            "cause",
+            "step_id",
+            "stage",
+            "positive_twin",
+            "equivalence_assertion"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CleanupCallStatus": {
+      "enum": [
+        "called",
+        "called_over_budget",
+        "uncalled_no_participation",
+        "uncalled_budget_exhausted"
+      ],
+      "type": "string"
+    },
+    "CleanupError": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CleanupErrorKind"
+        }
+      },
+      "required": [
+        "kind",
+        "diagnostic"
+      ],
+      "type": "object"
+    },
+    "CleanupErrorKind": {
+      "enum": [
+        "invalid_protocol",
+        "limit_exceeded",
+        "budget_exhausted"
+      ],
+      "type": "string"
+    },
+    "CleanupRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CleanupError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hook_elapsed_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        },
+        "pending_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "phase_elapsed_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "remaining_after_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "remaining_before_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetirementReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/CleanupScope"
+        },
+        "state_at_case_end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CleanupState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state_at_run_end": {
+          "$ref": "#/$defs/CleanupState"
+        },
+        "status": {
+          "$ref": "#/$defs/CleanupCallStatus"
+        },
+        "transition_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "uncertainty_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "call_id",
+        "owner",
+        "scope",
+        "status",
+        "response",
+        "error",
+        "state_at_case_end",
+        "state_at_run_end",
+        "pending_ids",
+        "uncertainty_ids",
+        "hook_elapsed_ns",
+        "remaining_before_ns",
+        "remaining_after_ns",
+        "phase_elapsed_ns",
+        "transition_ids"
+      ],
+      "type": "object"
+    },
+    "CleanupScope": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/InvocationKey"
+            },
+            "kind": {
+              "const": "case"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "run"
+            },
+            "run_id": {
+              "$ref": "#/$defs/RunId"
+            }
+          },
+          "required": [
+            "kind",
+            "run_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CleanupState": {
+      "enum": [
+        "not_required",
+        "complete",
+        "unresolved"
+      ],
+      "type": "string"
+    },
+    "ConsumerBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "build_inputs_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "executable_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "build_inputs_sha256",
+        "executable_sha256"
+      ],
+      "type": "object"
+    },
+    "CoverageEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "achieved": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "step_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "step_ids",
+        "achieved"
+      ],
+      "type": "object"
+    },
+    "CoverageKind": {
+      "enum": [
+        "setup",
+        "trigger",
+        "positive",
+        "active_excluded"
+      ],
+      "type": "string"
+    },
+    "CoverageRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "kind": {
+          "$ref": "#/$defs/CoverageKind"
+        },
+        "minimum": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "step_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "minimum",
+        "step_ids"
+      ],
+      "type": "object"
+    },
+    "Digest256": {
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EffectBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "registrations": {
+          "items": {
+            "$ref": "#/$defs/EffectRegistration"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "registrations",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "EffectRegistration": {
+      "additionalProperties": false,
+      "properties": {
+        "identity_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "kind": {
+          "$ref": "#/$defs/Label"
+        },
+        "origin": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        },
+        "recovery_evidence_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "resource_id",
+        "owner",
+        "origin",
+        "kind",
+        "identity_sha256",
+        "recovery_evidence_id"
+      ],
+      "type": "object"
+    },
+    "EffectTransition": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": {
+          "$ref": "#/$defs/PendingEffectRef"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "to": {
+          "$ref": "#/$defs/TransitionTo"
+        },
+        "transition_id": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "transition_id",
+        "effect",
+        "to",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "EffectiveCoverage": {
+      "additionalProperties": false,
+      "properties": {
+        "effective_achieved": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "raw_achieved": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "step_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "step_ids",
+        "raw_achieved",
+        "effective_achieved"
+      ],
+      "type": "object"
+    },
+    "EnteredStage": {
+      "enum": [
+        "prepare",
+        "execute",
+        "collect",
+        "judge"
+      ],
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "enum": [
+        "T0",
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5"
+      ]
+    },
+    "ExecutionCheckpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "cancelled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "poll_finished_elapsed_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "poll_started_elapsed_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "poll_started_elapsed_ns",
+        "poll_finished_elapsed_ns",
+        "cancelled"
+      ],
+      "type": "object"
+    },
+    "ExecutionCheckpoints": {
+      "additionalProperties": false,
+      "properties": {
+        "collect": {
+          "$ref": "#/$defs/CheckpointPair"
+        },
+        "execute": {
+          "$ref": "#/$defs/CheckpointPair"
+        },
+        "judge": {
+          "$ref": "#/$defs/CheckpointPair"
+        },
+        "prepare": {
+          "$ref": "#/$defs/CheckpointPair"
+        }
+      },
+      "required": [
+        "prepare",
+        "execute",
+        "collect",
+        "judge"
+      ],
+      "type": "object"
+    },
+    "ExecutionState": {
+      "enum": [
+        "completed",
+        "blocked",
+        "not_run",
+        "skipped",
+        "harness_error"
+      ],
+      "type": "string"
+    },
+    "ExpectedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageEvidence"
+          },
+          "type": "array"
+        },
+        "effects": {
+          "$ref": "#/$defs/EffectBatch"
+        },
+        "expected_bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "fixture_schema": {
+          "$ref": "#/$defs/SchemaBinding"
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "ledger_bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "oracle": {
+          "$ref": "#/$defs/OracleBinding"
+        },
+        "truth_kind": {
+          "$ref": "#/$defs/TruthKind"
+        }
+      },
+      "required": [
+        "key",
+        "oracle",
+        "fixture_schema",
+        "truth_kind",
+        "expected_bytes",
+        "ledger_bytes",
+        "coverage",
+        "effects"
+      ],
+      "type": "object"
+    },
+    "FixtureError": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/FixtureErrorCategory"
+        },
+        "diagnostic_bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "effects": {
+          "$ref": "#/$defs/EffectBatch"
+        },
+        "errno": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvocationKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "read_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputReadProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "$ref": "#/$defs/FixtureStage"
+        }
+      },
+      "required": [
+        "key",
+        "stage",
+        "category",
+        "errno",
+        "diagnostic_bytes",
+        "effects",
+        "read_progress"
+      ],
+      "type": "object"
+    },
+    "FixtureErrorCategory": {
+      "enum": [
+        "unavailable",
+        "denied",
+        "invalid_protocol",
+        "cancelled",
+        "timed_out",
+        "io",
+        "other"
+      ],
+      "type": "string"
+    },
+    "FixtureStage": {
+      "enum": [
+        "admission",
+        "prepare",
+        "collect",
+        "retire"
+      ],
+      "type": "string"
+    },
+    "HarnessValidity": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "valid"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "invalid"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImplementationStatus": {
+      "enum": [
+        "UNIMPLEMENTED",
+        "REGISTERED_EXECUTABLE"
+      ]
+    },
+    "InputReadProgress": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_returned": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "expected_length": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "file_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "read_calls": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file_id",
+        "expected_length",
+        "bytes_returned",
+        "read_calls"
+      ],
+      "type": "object"
+    },
+    "InvocationKey": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "case_key": {
+          "$ref": "#/$defs/CaseKey"
+        },
+        "operation_id": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id",
+        "case_key",
+        "attempt",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "KnownRefusalCause": {
+      "enum": [
+        "permission",
+        "verifier",
+        "license",
+        "unsupported_operation"
+      ],
+      "type": "string"
+    },
+    "Label": {
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$",
+      "type": "string"
+    },
+    "OracleMetadataObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoints": {
+          "$ref": "#/$defs/CheckpointPair"
+        },
+        "returned_elapsed_ns": {
+          "anyOf": [
+            {
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OracleBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "checkpoints",
+        "value",
+        "returned_elapsed_ns"
+      ],
+      "type": "object"
+    },
+    "SubjectMetadataObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoints": {
+          "$ref": "#/$defs/CheckpointPair"
+        },
+        "returned_elapsed_ns": {
+          "anyOf": [
+            {
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubjectBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "checkpoints",
+        "value",
+        "returned_elapsed_ns"
+      ],
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "completed_steps": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "effects": {
+          "$ref": "#/$defs/EffectBatch"
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "schema_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "schema_revision": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "schema_id",
+        "schema_revision",
+        "completed_steps",
+        "bytes",
+        "effects"
+      ],
+      "type": "object"
+    },
+    "OmissionCause": {
+      "enum": [
+        "prior_stop",
+        "case_not_executable",
+        "stage_not_reached",
+        "cleanup_unresolved",
+        "no_executable_members",
+        "not_entered"
+      ],
+      "type": "string"
+    },
+    "OperationScript": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "steps-v1"
+        },
+        "schema_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/OperationStep"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "schema_id",
+        "steps"
+      ],
+      "type": "object"
+    },
+    "OperationStep": {
+      "additionalProperties": false,
+      "properties": {
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "$ref": "#/$defs/Label"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/ScriptScalar"
+          },
+          "type": "array"
+        },
+        "step_id": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "step_id",
+        "operation",
+        "inputs",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "OracleBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "provenance": {
+          "$ref": "#/$defs/BindingProvenance"
+        },
+        "revision": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "schema_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/Digest256"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "schema_id",
+        "source_sha256",
+        "artifact_id",
+        "provenance"
+      ],
+      "type": "object"
+    },
+    "Owner": {
+      "enum": [
+        "adapter",
+        "fixture"
+      ],
+      "type": "string"
+    },
+    "PartialObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "maxLength": 16777216,
+          "pattern": "^(?:[0-9a-f]{2})*$",
+          "type": "string"
+        },
+        "schema_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "schema_revision": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_revision",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "PendingEffectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "identity_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "origin": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "resource_id",
+        "owner",
+        "origin",
+        "identity_sha256"
+      ],
+      "type": "object"
+    },
+    "ProfileId": {
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+      "type": "string"
+    },
+    "Qualification": {
+      "enum": [
+        "qualified",
+        "failed",
+        "incomplete",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "RefusalCause": {
+      "enum": [
+        "permission",
+        "verifier",
+        "license",
+        "unsupported_operation",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "RefusalEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/RefusalCause"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        },
+        "method": {
+          "$ref": "#/$defs/Label"
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        }
+      },
+      "required": [
+        "cause",
+        "method",
+        "evidence_ids",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "ReportWire": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBinding"
+          },
+          "type": "array"
+        },
+        "case_results": {
+          "items": {
+            "$ref": "#/$defs/CaseResult"
+          },
+          "type": "array"
+        },
+        "cleanup_records": {
+          "items": {
+            "$ref": "#/$defs/CleanupRecord"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "const": "tt02-run-report"
+        },
+        "run_contract_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "run_terminal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunTerminal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_observations": {
+          "$ref": "#/$defs/RunnerObservations"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "selection": {
+          "$ref": "#/$defs/SelectionBinding"
+        }
+      },
+      "required": [
+        "schema_version",
+        "kind",
+        "run_contract_sha256",
+        "run_id",
+        "selection",
+        "artifacts",
+        "runner_observations",
+        "case_results",
+        "cleanup_records",
+        "run_terminal"
+      ],
+      "type": "object"
+    },
+    "RequiredCellBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/CaseId"
+        },
+        "case_version": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "cell_id": {
+          "type": "string"
+        },
+        "implementation_status": {
+          "$ref": "#/$defs/ImplementationStatus"
+        },
+        "required_by": {
+          "items": {
+            "$ref": "#/$defs/ProfileId"
+          },
+          "type": "array"
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_version",
+        "cell_id",
+        "tier",
+        "implementation_status",
+        "required_by"
+      ],
+      "type": "object"
+    },
+    "RetirementReport": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "discovered": {
+          "items": {
+            "$ref": "#/$defs/EffectRegistration"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        },
+        "pending_snapshot": {
+          "items": {
+            "$ref": "#/$defs/PendingEffectRef"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/CleanupScope"
+        },
+        "transitions": {
+          "items": {
+            "$ref": "#/$defs/EffectTransition"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "call_id",
+        "owner",
+        "scope",
+        "discovered",
+        "transitions",
+        "pending_snapshot",
+        "complete",
+        "diagnostic"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "maxLength": 32,
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "RunLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "assertion_records": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "assertions_per_case": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "attempts_per_case": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "case_attempts": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "coverage_per_case": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "coverage_records": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "diagnostic_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "effects_per_case": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "effects_total": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "execution_ms": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "features": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "input_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "input_slots": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "json_depth": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "json_edges": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "label_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "measure_file_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "measure_total_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "measurement_attempts": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "name_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "observation_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "read_calls": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "receipt_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "resource_views": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "retained_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "retirement_ms": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "scalar_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "script_parameters": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "steps_per_invocation": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "steps_total": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "vector_bytes": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input_bytes",
+        "observation_bytes",
+        "vector_bytes",
+        "receipt_bytes",
+        "retained_bytes",
+        "diagnostic_bytes",
+        "name_bytes",
+        "label_bytes",
+        "measure_file_bytes",
+        "measure_total_bytes",
+        "read_calls",
+        "measurement_attempts",
+        "case_attempts",
+        "steps_per_invocation",
+        "steps_total",
+        "attempts_per_case",
+        "assertions_per_case",
+        "coverage_per_case",
+        "effects_per_case",
+        "assertion_records",
+        "coverage_records",
+        "effects_total",
+        "features",
+        "artifacts",
+        "input_slots",
+        "script_parameters",
+        "resource_views",
+        "scalar_bytes",
+        "json_depth",
+        "json_edges",
+        "execution_ms",
+        "retirement_ms"
+      ],
+      "type": "object"
+    },
+    "RunTerminal": {
+      "additionalProperties": false,
+      "properties": {
+        "after_cleanup_call_id": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "qualification": {
+          "$ref": "#/$defs/Qualification"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/Label"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "qualification",
+        "reasons",
+        "after_cleanup_call_id"
+      ],
+      "type": "object"
+    },
+    "RunnerObservations": {
+      "additionalProperties": false,
+      "properties": {
+        "after_contract": {
+          "$ref": "#/$defs/CheckpointSlot"
+        },
+        "completion": {
+          "$ref": "#/$defs/CheckpointSlot"
+        },
+        "contract_returned_elapsed_ns": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "entry_oracle": {
+          "$ref": "#/$defs/OracleMetadataObservation"
+        },
+        "entry_subject": {
+          "$ref": "#/$defs/SubjectMetadataObservation"
+        },
+        "final_oracle": {
+          "$ref": "#/$defs/OracleMetadataObservation"
+        },
+        "final_subject": {
+          "$ref": "#/$defs/SubjectMetadataObservation"
+        }
+      },
+      "required": [
+        "contract_returned_elapsed_ns",
+        "after_contract",
+        "entry_subject",
+        "entry_oracle",
+        "final_subject",
+        "final_oracle",
+        "completion"
+      ],
+      "type": "object"
+    },
+    "SchemaBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Label"
+        },
+        "revision": {
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "ScriptScalar": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "u64"
+            },
+            "value": {
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "bool"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "hex": {
+              "maxLength": 8192,
+              "pattern": "^(?:[0-9a-f]{2})*$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "bytes"
+            }
+          },
+          "required": [
+            "kind",
+            "hex"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SelectionBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "definition_complete": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "items": {
+            "$ref": "#/$defs/ProfileId"
+          },
+          "type": "array"
+        },
+        "open_owners": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "profiles": {
+          "items": {
+            "$ref": "#/$defs/ProfileId"
+          },
+          "type": "array"
+        },
+        "requested": {
+          "$ref": "#/$defs/ProfileId"
+        },
+        "required": {
+          "items": {
+            "$ref": "#/$defs/RequiredCellBinding"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "requested",
+        "profiles",
+        "extensions",
+        "required",
+        "open_owners",
+        "definition_complete"
+      ],
+      "type": "object"
+    },
+    "SubjectBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackendBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "build_inputs_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "consumer": {
+          "$ref": "#/$defs/ConsumerBinding"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host": {
+          "type": "string"
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/$defs/ArtifactBinding"
+          },
+          "type": "array"
+        },
+        "package_name": {
+          "type": "string"
+        },
+        "package_version": {
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/BindingProvenance"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/Digest256"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_name",
+        "package_version",
+        "source_sha256",
+        "build_inputs_sha256",
+        "features",
+        "backend",
+        "host",
+        "target",
+        "consumer",
+        "objects",
+        "provenance"
+      ],
+      "type": "object"
+    },
+    "TransitionTo": {
+      "enum": [
+        "retired"
+      ],
+      "type": "string"
+    },
+    "TruthKind": {
+      "enum": [
+        "fixed_before_execute",
+        "independent_ledger"
+      ],
+      "type": "string"
+    },
+    "VectorFile": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "length": {
+          "maxLength": 20,
+          "pattern": "^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/VectorRole"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest256"
+        }
+      },
+      "required": [
+        "file_id",
+        "role",
+        "length",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "VectorInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_file": {
+          "$ref": "#/$defs/Label"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/VectorSlot"
+          },
+          "type": "array"
+        },
+        "key": {
+          "$ref": "#/$defs/InvocationKey"
+        },
+        "ledger_file": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "key",
+        "inputs",
+        "expected_file",
+        "ledger_file"
+      ],
+      "type": "object"
+    },
+    "VectorRole": {
+      "enum": [
+        "input",
+        "expected",
+        "ledger"
+      ],
+      "type": "string"
+    },
+    "VectorSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "$ref": "#/$defs/Label"
+        },
+        "slot": {
+          "$ref": "#/$defs/Label"
+        }
+      },
+      "required": [
+        "slot",
+        "file_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://scopebase.invalid/schemas/result-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "$ref": "#/$defs/ReportWire"
+    }
+  ],
+  "description": "Strict structural grammar. The Rust importer additionally enforces the external contract, selection, limit, clock, assertion and ledger relations. No authentication or live authority.",
+  "title": "TT02 descriptive run report major 1"
+}

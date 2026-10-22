@@ -23,3 +23,20 @@ pub mod profile;
 pub use catalog::*;
 pub use ids::*;
 pub use profile::*;
+
+pub mod adapter;
+pub mod artifact;
+pub mod fixture;
+pub mod observation;
+pub mod oracle;
+pub mod result;
+pub mod runner;
+pub use adapter::*;
+pub use artifact::*;
+pub use fixture::*;
+pub use observation::*;
+pub use oracle::*;
+pub use result::*;
+pub use runner::*;
+#[cfg(test)]
+extern crate self as scopebase_testkit;

@@ -1,0 +1,2265 @@
+{
+  "schema_version": 1,
+  "status": "PRE_ADMISSION_SNAPSHOT_SUPERSEDED",
+  "task": "LX05 Task 6, A3 review fix",
+  "candidate_base_commit": "e86ff68aff788fad4396dcfb8f8f33013bc2a103",
+  "snapshot_notice": "The hashes and NOT_RUN fields below preserve the worker pre-admission snapshot. previous_superseded_by preserves historical pre-format root receipts. superseded_by and current_qualification bind the 2026-10-22 post-format executions; this metadata does not accept LX05.",
+  "superseded_by": {
+    "a3_result": ".scopebase/controller/finish-candidates-20261018/lx05-a3-final-r2/result.json",
+    "package_result": ".scopebase/controller/finish-candidates-20261018/lx05-qualification-r3/receipts/result.json",
+    "fuzz_result": ".scopebase/controller/finish-candidates-20261018/lx05-fuzz-final-r2/result.json",
+    "a3_result_sha256": "9058be41062042f281eedeeb86ba905529a73bd2b630e0c09547ccb3c7c353f6",
+    "package_result_sha256": "73707b3e1ef25d99f9012d3579b7f1293a8493980a86ef816588dbcf0fa7ee73",
+    "fuzz_result_sha256": "47488b69ebb45aa5d0664085f980effd97dcae59138292271e2cb79f30923eb3"
+  },
+  "product_crate": {
+    "path": "/home/user/src/m/bpfscope/.worktrees/lx05-proc-20261018/crates/scopebase-linux",
+    "files": [
+      {
+        "path": "Cargo.toml",
+        "bytes": 743,
+        "sha256": "77f91eb0c0ec60e4a1f885345987b57ade9bfd46252e5b510d30b8a9cd05bf04"
+      },
+      {
+        "path": "LICENSE-APACHE",
+        "bytes": 11358,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      {
+        "path": "README.md",
+        "bytes": 16226,
+        "sha256": "70a4e3a2e7d06461719e52584da1a3455aaaad3354a8b5ad7bcaf4daf4a6ea2b"
+      },
+      {
+        "path": "THIRD-PARTY-NOTICES.md",
+        "bytes": 3383,
+        "sha256": "c64d9b9a23fa7ce0059b8c713855c66c8bf2cc92f6a5c789587638dce936901b"
+      },
+      {
+        "path": "src/control/tests.rs",
+        "bytes": 23432,
+        "sha256": "c27433fe3a090d907081dacf39ec782333e935cead423c14a917a0078f8889c0"
+      },
+      {
+        "path": "src/control.rs",
+        "bytes": 6298,
+        "sha256": "42d75629e3c0899e1820a76c2636f7b4354b9b605a47010f9d1b38fadbef9b47"
+      },
+      {
+        "path": "src/error.rs",
+        "bytes": 4288,
+        "sha256": "4283913916c9cc24e1cc60af094a8166a61c9da92a7b158f0b68712a06e3bb12"
+      },
+      {
+        "path": "src/file/held.rs",
+        "bytes": 52645,
+        "sha256": "ad573643417ccbae681c0f546b3752fee5dc85e082f522dc1e309a7067f26ba2"
+      },
+      {
+        "path": "src/file/mod.rs",
+        "bytes": 302,
+        "sha256": "6868e2bfa94ed29295a48ab48d1859a68473d74649ff100b2d8d9f79c6bc289e"
+      },
+      {
+        "path": "src/file/read/tests.rs",
+        "bytes": 39850,
+        "sha256": "3adef9c4380286f8bfee4886e8436795638a8327c973d7eb60946981f05417ac"
+      },
+      {
+        "path": "src/file/read.rs",
+        "bytes": 16340,
+        "sha256": "86c6ec76c0196eb8d945777b6a9d346d4ef1908e43c45a8f4ebe97d1b0f615ee"
+      },
+      {
+        "path": "src/identity.rs",
+        "bytes": 4278,
+        "sha256": "6fd6bdd170c5fc18d4b14f99378007fce6bcc08bf094dcd133fd4a74d5ff5d96"
+      },
+      {
+        "path": "src/lib.rs",
+        "bytes": 1143,
+        "sha256": "b008dfdd4eef9fefbeb157a165ab2fe737cd34e363cd7b07ec20e42eb55bc046"
+      },
+      {
+        "path": "src/procfs/maps.rs",
+        "bytes": 7027,
+        "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38"
+      },
+      {
+        "path": "src/procfs/mod.rs",
+        "bytes": 7330,
+        "sha256": "97763d3540ab2e7505b3444377727dd62158f0ee666cc86e83c6abf14a203b7f"
+      },
+      {
+        "path": "src/procfs/mountinfo.rs",
+        "bytes": 11917,
+        "sha256": "4b4cffd66311eb719d9053eeb0b81de164864b01b5473d0b89dabb562810a165"
+      },
+      {
+        "path": "src/procfs/tests.rs",
+        "bytes": 4281,
+        "sha256": "5fda91b6aaba1b30ea0d8ffbc359856365fd5a06b583b9cbd092613a8133ad87"
+      },
+      {
+        "path": "tests/controls.rs",
+        "bytes": 2126,
+        "sha256": "b8b4ec6fc71f13cba3fe8f536c0df6f04cf408faa58a1903939b65a1ea161118"
+      },
+      {
+        "path": "tests/fixtures/procfs/README.md",
+        "bytes": 597,
+        "sha256": "c1e6719e3305436999ad3305e35880416f32e9664a3722d567578e004167546c"
+      },
+      {
+        "path": "tests/fixtures/procfs/expected.json",
+        "bytes": 2036,
+        "sha256": "42c0b0f49d5915e32ddecd046ccd4bf5f445e013e0c1770f071105d2f242f80b"
+      },
+      {
+        "path": "tests/fixtures/procfs/maps_a3_invalid.bin",
+        "bytes": 142,
+        "sha256": "06801f1e80080b20e0fa965ef3ccb87d3926862920066c998e041c27f24c5eb2"
+      },
+      {
+        "path": "tests/fixtures/procfs/maps_a3_valid.bin",
+        "bytes": 135,
+        "sha256": "2204cb049147e49afd9220c5ba29b67fdcc028e7de0010d446d2325119d8c033"
+      },
+      {
+        "path": "tests/fixtures/procfs/maps_invalid.bin",
+        "bytes": 161,
+        "sha256": "ab26045574b515d93ae833bb66b5537f8fcaa697e46d54a4a7b99aa10be3b9e1"
+      },
+      {
+        "path": "tests/fixtures/procfs/maps_valid.bin",
+        "bytes": 207,
+        "sha256": "083ec1dda44fde90cf9010a82b6eb167e959fac7c66f0c0716565b2ede8b0545"
+      },
+      {
+        "path": "tests/fixtures/procfs/mountinfo_invalid.bin",
+        "bytes": 135,
+        "sha256": "e96b839250c91eec6a4f012a42b2f3a084a3b6db64d9233debcfc346321ba222"
+      },
+      {
+        "path": "tests/fixtures/procfs/mountinfo_valid.bin",
+        "bytes": 294,
+        "sha256": "89a9424c54f73602620160721ec8da82d57c151a6645ce385f51ec103ba7a9c5"
+      },
+      {
+        "path": "tests/held_file.rs",
+        "bytes": 16148,
+        "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3"
+      },
+      {
+        "path": "tests/positional_read.rs",
+        "bytes": 12684,
+        "sha256": "2efcd70c4a145aa22f5e1ac977daa1423ecf487f2e1157f3a1a4cc04c12be872"
+      },
+      {
+        "path": "tests/proc_parsers.rs",
+        "bytes": 35387,
+        "sha256": "9e080e3be4d0a9ca5b4a543671d0c5863d8d80fa4bcab4e9df8a65e8a9da293b"
+      },
+      {
+        "path": "tests/support/fd_probe.rs",
+        "bytes": 2797,
+        "sha256": "3b423496bbb4558d069b4232a6e2c91a6d0d2ea8d5f32a3baf072856fc3c6ad2"
+      },
+      {
+        "path": "tests/support/maps_inventory.rs",
+        "bytes": 3774,
+        "sha256": "7a658beadd227925bcb91d9bcc5700e166400768fc556c29c642b378ce86f742"
+      },
+      {
+        "path": "tests/support/mount_audit.rs",
+        "bytes": 2661,
+        "sha256": "e42490c9b800371d7debf9857a1f14a40db4ed0eab71929af0e98235203cb394"
+      },
+      {
+        "path": "tests/support/proc_reference.rs",
+        "bytes": 10136,
+        "sha256": "28cb7cf07fee04f9af51593bbbaf130acc80685ea42ea1b1914d0b595dbef25e"
+      },
+      {
+        "path": "tests/support/read_adopted.rs",
+        "bytes": 2273,
+        "sha256": "3f7a22c246a48ec0b1893fd6022ed625fe14757157dd03dc6d5a0b137df128cf"
+      },
+      {
+        "path": "tests/support/read_opened.rs",
+        "bytes": 2698,
+        "sha256": "38147231e3ba3029bdbe7b197dd7e90c741443e9c2373844e478b4b3d1c936b5"
+      },
+      {
+        "path": "tests/support/run_proc_parser_checks.py",
+        "bytes": 10736,
+        "sha256": "f2985c626429fdf743f07e65b92be5da1b23e6e2e753035c701da951b992fd73"
+      },
+      {
+        "path": "tests/traits.rs",
+        "bytes": 1010,
+        "sha256": "76f6ade6ed6f93e0491638f5d244e0e4f0c586e6a52cae1fc026458e6a1e883a"
+      },
+      {
+        "path": "tests/ui/borrow_after_drop.rs",
+        "bytes": 349,
+        "sha256": "8e526983dbc2a3b17db4a9d09e112baac79fe90d6d131aa53879cf17d4dc0c23"
+      },
+      {
+        "path": "tests/ui/cases.json",
+        "bytes": 6022,
+        "sha256": "6e301f51e0a7fb4fcb9528f1f9f861a300b3e3a4c19040bcd1e24129c22938dd"
+      },
+      {
+        "path": "tests/ui/charges_private.rs",
+        "bytes": 271,
+        "sha256": "feb9ff726558012e9e9c9b1a2285cedfa064b759f02d18042c6748572a5902b6"
+      },
+      {
+        "path": "tests/ui/control_checkpoint_private.rs",
+        "bytes": 157,
+        "sha256": "b9f19760d91614e80954f58b4ac87e5eb651cdb5de54a5c483158c9b6c5df526"
+      },
+      {
+        "path": "tests/ui/control_construct_private.rs",
+        "bytes": 199,
+        "sha256": "8b65be28284d97891b648bfe53abf06d4ed0c2a8751357f70b8d26df84ea1194"
+      },
+      {
+        "path": "tests/ui/control_inject_clock.rs",
+        "bytes": 174,
+        "sha256": "fd032032e0b1d3d5da1801d423e8e8973cffc4920dfdc8fc4c7d091ba25b7cd3"
+      },
+      {
+        "path": "tests/ui/control_numeric_deadline.rs",
+        "bytes": 185,
+        "sha256": "a97801d49d23f2ac47ac4147e08ac834624a44a5115ae4c876deba8d952164d8"
+      },
+      {
+        "path": "tests/ui/control_positive.rs",
+        "bytes": 589,
+        "sha256": "8203e32fd07aee36dbe01f65bc47261d60cedf92a9aaa8d50097a1c70b3f9d3d"
+      },
+      {
+        "path": "tests/ui/effect_private.rs",
+        "bytes": 270,
+        "sha256": "95d2e2e1e4d20792a10e31379d7af4d79ced63379b15be54b21fe2242553c255"
+      },
+      {
+        "path": "tests/ui/error_private.rs",
+        "bytes": 263,
+        "sha256": "f4eee62d260510318471d1a5358c0a86a51a8ffd17283ff672b67f988df17f73"
+      },
+      {
+        "path": "tests/ui/file_mut.rs",
+        "bytes": 278,
+        "sha256": "cda48dfb61176eaa97907d56c23f083ad8031130be49cc6cebb2dcd360fedb66"
+      },
+      {
+        "path": "tests/ui/file_ref.rs",
+        "bytes": 270,
+        "sha256": "087b4f7bdc7704c3b9847fc268e71dfd4082bdd060aaee3e387f96c78e560355"
+      },
+      {
+        "path": "tests/ui/held_clone.rs",
+        "bytes": 280,
+        "sha256": "78dae039c9c61bc524f27522a15baf4b69ee8980650a78febbf79b16bf6a13af"
+      },
+      {
+        "path": "tests/ui/held_inner.rs",
+        "bytes": 266,
+        "sha256": "418290e6e1af4a742044e5e2bcb00636ca57e08b12eafcdf00a243370a6df118"
+      },
+      {
+        "path": "tests/ui/held_private.rs",
+        "bytes": 260,
+        "sha256": "d0f0f8a3b9e017f1bf8fa69d8b17ba3ee5e714033ef85bb2e7216e22f5da8eb0"
+      },
+      {
+        "path": "tests/ui/held_raw.rs",
+        "bytes": 295,
+        "sha256": "d07749c8c7c157cf25fb4d040c7dadf3647c5ce9d9dffc99b1b0b943cc19799b"
+      },
+      {
+        "path": "tests/ui/key_owner.rs",
+        "bytes": 273,
+        "sha256": "7aa5ecadd10e5590dbb3e1a5149c2e1674a195df856efe7deb1a5d586bf5ee8b"
+      },
+      {
+        "path": "tests/ui/key_private.rs",
+        "bytes": 265,
+        "sha256": "53e7647e6a6f6b02a67706656fa67daa351e894d12b3cb1e7b228a05e047d70b"
+      },
+      {
+        "path": "tests/ui/observation_owner.rs",
+        "bytes": 277,
+        "sha256": "0be8ef682aae3d6b2c2b99476c882dc9ed03d9f37cb238ec1a7599049a6484cc"
+      },
+      {
+        "path": "tests/ui/positive.rs",
+        "bytes": 800,
+        "sha256": "ef6fb4086378eb073ef17175447e307df5000eb0a3adcb9527b655e6713e4d2e"
+      },
+      {
+        "path": "tests/ui/proc_borrow_after_drop.rs",
+        "bytes": 203,
+        "sha256": "b72239ad12a3c7e40e97d32d800b47497e70759e7fefce1b5f9b5a904c2b87c1"
+      },
+      {
+        "path": "tests/ui/proc_charges_private.rs",
+        "bytes": 156,
+        "sha256": "72157c319cbbf675ba703ee5d947a0681d08966a499146416fd3f727d051a7cf"
+      },
+      {
+        "path": "tests/ui/proc_key_from_stat.rs",
+        "bytes": 172,
+        "sha256": "19d06a033a2607cdea1717a587481123e91b2c462cea706e7c994747ee256429"
+      },
+      {
+        "path": "tests/ui/proc_key_private.rs",
+        "bytes": 144,
+        "sha256": "82761d45553d4b6b1e197d2b8789087fbf427fa89b0b1b4520866f793297fb06"
+      },
+      {
+        "path": "tests/ui/proc_keys_eq.rs",
+        "bytes": 171,
+        "sha256": "8c35d5fb30c10f952ceb0f08d24d03b493f139c65bc900e4c031c7e674057c53"
+      },
+      {
+        "path": "tests/ui/proc_limits_default.rs",
+        "bytes": 130,
+        "sha256": "8f5b38f55695b45abfaf7e3fb9b4efc3a0ff4a079502ff97370406bf63e922b9"
+      },
+      {
+        "path": "tests/ui/proc_mount_number_eq.rs",
+        "bytes": 155,
+        "sha256": "50274635a158cf1a23e0e78a71da000c5a715d9db5eb0f931d23206016b54a2d"
+      },
+      {
+        "path": "tests/ui/proc_owner.rs",
+        "bytes": 171,
+        "sha256": "f49c2c83bfbed55dfe0a6562ab9b7192f5dfcf8cc4dbe2254a397afde968ca0c"
+      },
+      {
+        "path": "tests/ui/proc_positive.rs",
+        "bytes": 470,
+        "sha256": "16513fa1901fbfb3f88e13b62de941e1f7e3641bed74f52a0e9b0fad1cc20736"
+      },
+      {
+        "path": "tests/ui/raw_owner.rs",
+        "bytes": 265,
+        "sha256": "f4d9359ca0ca20e11fd95551be68a066ffbc8874b0a36bf2683929cfc20b42a3"
+      },
+      {
+        "path": "tests/ui/read_charges_private.rs",
+        "bytes": 154,
+        "sha256": "60c8f9e377b80c7d7c08ff7b148a96e480ddde08e662fd4d490562ad89a4287e"
+      },
+      {
+        "path": "tests/ui/read_limits_default.rs",
+        "bytes": 191,
+        "sha256": "299910fa25cdac0191b9558f2abe17fa450000d19ef03ea4bb53456bbbb716a0"
+      },
+      {
+        "path": "tests/ui/read_mut.rs",
+        "bytes": 144,
+        "sha256": "d4dbf82d0de911e8a443ecdbc516131c793b18a7e015e861c9f5db773428121f"
+      },
+      {
+        "path": "tests/ui/read_observations_private.rs",
+        "bytes": 160,
+        "sha256": "1369ee6dadebe998e3ffa99e3692a05a4f7bd94335e375e0f189f80beb19a815"
+      },
+      {
+        "path": "tests/ui/read_owner.rs",
+        "bytes": 177,
+        "sha256": "5c4f54d0ea9d64f9be8054735f36162fc1b97fa603a7a36b4d2e71d45549be4c"
+      },
+      {
+        "path": "tests/ui/read_positive.rs",
+        "bytes": 798,
+        "sha256": "9a85882e8e42bacf868b6976819f7ee035126735bb7ec246faaaf7202cae69e5"
+      },
+      {
+        "path": "tests/ui/read_private.rs",
+        "bytes": 142,
+        "sha256": "cbcc0e65be20fd5d76119050df1f08997269793dc2be7b90fbe5570a9eda7bf4"
+      },
+      {
+        "path": "tests/ui/resolver_clone.rs",
+        "bytes": 286,
+        "sha256": "df988bf86935887588ee853eb8bf5e1c8aef821ddd058062e7941aee9caee2ba"
+      },
+      {
+        "path": "tests/ui/resolver_inner.rs",
+        "bytes": 272,
+        "sha256": "21fbbfb128d1546376b93fd942d6876231bc884e07a1559f1dd20432a038b47f"
+      },
+      {
+        "path": "tests/ui/resolver_private.rs",
+        "bytes": 271,
+        "sha256": "50d365fe5c78c36b9ed7a3e3e8f23582fce650d9daea9028aebe94492a0eb67a"
+      },
+      {
+        "path": "tests/ui/resolver_raw.rs",
+        "bytes": 301,
+        "sha256": "e0b2d5d4c22dd9e8ca76a487524b32ca9a3cac4f5a24aae5088c4c6ac58f2623"
+      },
+      {
+        "path": "tests/ui/stat_private.rs",
+        "bytes": 266,
+        "sha256": "aee164f04349c8450be7e6ba47eb309e60e79e2cff8702c3dce5fa14a39a05d5"
+      }
+    ],
+    "file_count": 79,
+    "inventory_sha256": "656b28257463f748e70899b5fcc4b497b08f9024e60b1427217b823180188a13",
+    "library_version": "0.1.0",
+    "feature_request": {
+      "default_features": false,
+      "features": []
+    }
+  },
+  "fuzz_project": {
+    "path": "/home/user/src/m/bpfscope/.worktrees/lx05-proc-20261018/fuzz/scopebase-linux",
+    "file_binding_excludes": [
+      "preparation-index.json (self-hash cycle)"
+    ],
+    "files": [
+      {
+        "path": "Cargo.lock",
+        "bytes": 3848,
+        "sha256": "468c59dd157f08caed430fb536a1168cd21003680597f85b3e40edef39209b5a"
+      },
+      {
+        "path": "Cargo.toml",
+        "bytes": 537,
+        "sha256": "0f2b2d908d1ddfe01f88161e9f043182a32f2a394b15f44a66bc3542a0bd4942"
+      },
+      {
+        "path": "README.md",
+        "bytes": 1636,
+        "sha256": "269251c751fe59cc5eb51c457a59fba37282ce50419452fa4c9259ee1cd0bb2b"
+      },
+      {
+        "path": "combined-graph.json",
+        "bytes": 8868,
+        "sha256": "da92ca5e4dba5b895b51c35c4172da05134fcfb1b2bfa674fa49179144b86a51"
+      },
+      {
+        "path": "controls/a3-control.json",
+        "bytes": 1230,
+        "sha256": "7039aee95d44f70dd3db27b9b7a3734f2cb1bd032327130d6191a2a3e72228ed"
+      },
+      {
+        "path": "controls/a3-skip-malformed-row.patch",
+        "bytes": 868,
+        "sha256": "7a0dbc1f1379f32c06d0dc6af0c09f478c3c358bd667d390c7c15616c6c91356"
+      },
+      {
+        "path": "corpus/manifest.json",
+        "bytes": 54912,
+        "sha256": "7dd977bbab4e7e43d9a7c04ac2ccb9805544f44ab8d8f3c8b731c59610c1b306"
+      },
+      {
+        "path": "corpus/maps/a3-exact-negative",
+        "bytes": 142,
+        "sha256": "06801f1e80080b20e0fa965ef3ccb87d3926862920066c998e041c27f24c5eb2"
+      },
+      {
+        "path": "corpus/maps/a3-exact-positive",
+        "bytes": 135,
+        "sha256": "2204cb049147e49afd9220c5ba29b67fdcc028e7de0010d446d2325119d8c033"
+      },
+      {
+        "path": "corpus/maps/absence",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "corpus/maps/bad-row-one",
+        "bytes": 16,
+        "sha256": "40098dbec0c26afeae52b053621bfd40eb3645238fac1c093d4902683b2f48ec"
+      },
+      {
+        "path": "corpus/maps/bad-row-two",
+        "bytes": 39,
+        "sha256": "f3e75a8fe566173f2d708b5c3d8805ca65539902504e35e1a3ecc2240672ded5"
+      },
+      {
+        "path": "corpus/maps/blank",
+        "bytes": 1,
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      },
+      {
+        "path": "corpus/maps/delivered-invalid",
+        "bytes": 161,
+        "sha256": "ab26045574b515d93ae833bb66b5537f8fcaa697e46d54a4a7b99aa10be3b9e1"
+      },
+      {
+        "path": "corpus/maps/delivered-valid",
+        "bytes": 207,
+        "sha256": "083ec1dda44fde90cf9010a82b6eb167e959fac7c66f0c0716565b2ede8b0545"
+      },
+      {
+        "path": "corpus/maps/entries-64",
+        "bytes": 1185,
+        "sha256": "559b716db1977ad289d080b2b1349c4ce8fc9ad21921424018fe99dce3551c36"
+      },
+      {
+        "path": "corpus/maps/entries-65",
+        "bytes": 1204,
+        "sha256": "6ef0a9625f7d2622b7b13abde6231bdfbf6501bd6748689067d8d0083babc89d"
+      },
+      {
+        "path": "corpus/maps/line-512",
+        "bytes": 513,
+        "sha256": "a9019e49c94fa4a7117d9f5dcfc851cef565a1c3c16c65bc02d43f6fe3eea9f0"
+      },
+      {
+        "path": "corpus/maps/line-513",
+        "bytes": 514,
+        "sha256": "e3a870645e44fd083d092abbf8bd305a8e3c2bc4f0ce9f41125b55e719aa6c88"
+      },
+      {
+        "path": "corpus/maps/max-all",
+        "bytes": 111,
+        "sha256": "9eb8f91a3801c47bdcbed9573d948da59271ca81786f2a0db7b78eb5f15e69e5"
+      },
+      {
+        "path": "corpus/maps/max-single-byte",
+        "bytes": 57,
+        "sha256": "baeaab6428091191ef3f9a91c2e625050a02a1c5a4a16008bad670b90c54fb12"
+      },
+      {
+        "path": "corpus/maps/nul",
+        "bytes": 18,
+        "sha256": "af579c397992dafaea84d86093983cf1cac0fcec3ffb9a541be8127d8c08b48c"
+      },
+      {
+        "path": "corpus/maps/numeric-0-0",
+        "bytes": 18,
+        "sha256": "33f96b5ad9887cbe7820fb2a959af9a4d9ed2a82347c14a005073b268b0f4d58"
+      },
+      {
+        "path": "corpus/maps/numeric-0-1",
+        "bytes": 18,
+        "sha256": "0ce09553def6656667965d80edd948293f7fcc0a2e91f9008c67915e1e0bf132"
+      },
+      {
+        "path": "corpus/maps/numeric-0-2",
+        "bytes": 19,
+        "sha256": "64dcfd1784d78478159fb308d9cfaf92d4815a49d751048f5511eef9f2a014cd"
+      },
+      {
+        "path": "corpus/maps/numeric-0-3",
+        "bytes": 33,
+        "sha256": "f5c56d9e1226273a43693cb86b1a31f0ebe2c3283a5ea884074c399acac518a0"
+      },
+      {
+        "path": "corpus/maps/numeric-1-0",
+        "bytes": 18,
+        "sha256": "e77f8c414f1f62257e11b6d7122166cbb7f8ab47317b798d4452d1ab44018a19"
+      },
+      {
+        "path": "corpus/maps/numeric-1-1",
+        "bytes": 18,
+        "sha256": "c7671885960408c1386c9e39c90e50e3006cee3c129fafa0ba015e8c295caacd"
+      },
+      {
+        "path": "corpus/maps/numeric-1-2",
+        "bytes": 19,
+        "sha256": "22caa3be8d10456db15e5b9f9ca4901765824b67a20fd9b6bb4d809acbafb466"
+      },
+      {
+        "path": "corpus/maps/numeric-1-3",
+        "bytes": 33,
+        "sha256": "a2ce5b5c5a3ab6e19e4ae323ceb06a6eb0b6725c70023f163b0d14c3926e5a09"
+      },
+      {
+        "path": "corpus/maps/numeric-2-0",
+        "bytes": 18,
+        "sha256": "e9b01dc53ade9595316a3402ae1fd3dab81b7deaac1c5080ffba389a22e529fb"
+      },
+      {
+        "path": "corpus/maps/numeric-2-1",
+        "bytes": 18,
+        "sha256": "ed86fce4cfe99ccf3c3c600a6b2d2997d95a25750ae97d4eb9ce053d701d6256"
+      },
+      {
+        "path": "corpus/maps/numeric-2-2",
+        "bytes": 19,
+        "sha256": "53527ebe653d2eac635be8f6427978f4d26e3c780eff5081448ab08c7a9ff281"
+      },
+      {
+        "path": "corpus/maps/numeric-2-3",
+        "bytes": 33,
+        "sha256": "43370f2cfcca4b04952d74a28dd568cbdaebcc60a8b6449cfa83a445447789e9"
+      },
+      {
+        "path": "corpus/maps/numeric-3-0",
+        "bytes": 18,
+        "sha256": "ded693be92ddf40eaa598e9aba34fb63e47c28644dd1c022cd1331878183f56b"
+      },
+      {
+        "path": "corpus/maps/numeric-3-1",
+        "bytes": 18,
+        "sha256": "8aa3652c5d5898a780c50a508004257b3879903f7a86a367b31892d265abdefd"
+      },
+      {
+        "path": "corpus/maps/numeric-3-2",
+        "bytes": 19,
+        "sha256": "c10107ed877381fcb13075d9ea65c4273d7d652daec0969ad3db30d641d5c775"
+      },
+      {
+        "path": "corpus/maps/numeric-3-3",
+        "bytes": 33,
+        "sha256": "c90ce8234ae1114cac40e2f84f429d70d022bc482f08f35539b7e95c8a0604de"
+      },
+      {
+        "path": "corpus/maps/numeric-4-0",
+        "bytes": 18,
+        "sha256": "40516589df7a7579fd60760cb44ca9e4ccfa9aaf105fc6f2afcdfe24a0a67faf"
+      },
+      {
+        "path": "corpus/maps/numeric-4-1",
+        "bytes": 18,
+        "sha256": "1f9431ba1feaa5f1c33118787af66e76ca8667eddafaaa7b26f6bb2b228c71ab"
+      },
+      {
+        "path": "corpus/maps/numeric-4-2",
+        "bytes": 19,
+        "sha256": "d21ccb66aed4bad4d7428349946fdc3963b28b7f6c9bbbc89d7ca80e4bb782f8"
+      },
+      {
+        "path": "corpus/maps/numeric-4-3",
+        "bytes": 33,
+        "sha256": "320bd7d66b3851b7c5941e2e6ca4c2923bcff8efe874e60335deaa67b7806462"
+      },
+      {
+        "path": "corpus/maps/numeric-5-0",
+        "bytes": 18,
+        "sha256": "7111954ec3c4af29193e70a7031b3d190228072931445dc7b0d7d91c417864e1"
+      },
+      {
+        "path": "corpus/maps/numeric-5-1",
+        "bytes": 18,
+        "sha256": "4221cf9f6e06a7af7f8db012959a9cb7cda201a88e7b4bc5a94ff169f5c16132"
+      },
+      {
+        "path": "corpus/maps/numeric-5-2",
+        "bytes": 19,
+        "sha256": "00be48550386b9184c167252a5909d2a51442f102151fb4815b02cd9b783dd10"
+      },
+      {
+        "path": "corpus/maps/p-descending",
+        "bytes": 46,
+        "sha256": "702b9611dfdd784077f0fba45c179542786fec3a3dd8abf78b3957a07c3f2ad4"
+      },
+      {
+        "path": "corpus/maps/p-equal-starts",
+        "bytes": 46,
+        "sha256": "a82e02a4b4c7e4c517bd7478e1c7d2ce5a6b6f2acf60b0124b48d04c09455e7d"
+      },
+      {
+        "path": "corpus/maps/p-five-sorted",
+        "bytes": 320,
+        "sha256": "0973152a3318170183676f4d367a7997e422ea01de339cacb10046bf794bef10"
+      },
+      {
+        "path": "corpus/maps/p-gap-adjacent",
+        "bytes": 153,
+        "sha256": "6211903d4ce97c0def9f8a0201338cc6865bca81bda3f1b41980bd85f08a8b07"
+      },
+      {
+        "path": "corpus/maps/p-invalid-0",
+        "bytes": 1,
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      },
+      {
+        "path": "corpus/maps/p-invalid-1",
+        "bytes": 24,
+        "sha256": "161670e3a355fe477bb2e06f5c5d40877fcb1463beb02285985d2203d112ec7d"
+      },
+      {
+        "path": "corpus/maps/p-invalid-10",
+        "bytes": 35,
+        "sha256": "4d98c8773972ff5bea9b26481ba3804e4e29e92396c42a062bdd203fd62f7fab"
+      },
+      {
+        "path": "corpus/maps/p-invalid-11",
+        "bytes": 51,
+        "sha256": "53594f43ee45a072e9412ad78c55ab860d24ff1f076858bc86a62461ef0b674b"
+      },
+      {
+        "path": "corpus/maps/p-invalid-2",
+        "bytes": 30,
+        "sha256": "00a5fb7d91a02c02e4c5681cf34ca1a9b7856d9b24b057bf2f41fe9331970192"
+      },
+      {
+        "path": "corpus/maps/p-invalid-3",
+        "bytes": 32,
+        "sha256": "7278d96f0df06a9ed5b62fa100ed2fa17c55ed4d74993f4195ec754df7a09eda"
+      },
+      {
+        "path": "corpus/maps/p-invalid-4",
+        "bytes": 30,
+        "sha256": "dd6587cd3ada68e6795abf56d385e30ef01332e2b00548fb28cf27aa465ec5c1"
+      },
+      {
+        "path": "corpus/maps/p-invalid-5",
+        "bytes": 32,
+        "sha256": "2e3f9ec8e55a21d19ef9c08c38403ed80a5bd302d3cf747b747224c04859f15a"
+      },
+      {
+        "path": "corpus/maps/p-invalid-6",
+        "bytes": 32,
+        "sha256": "7f6596404530cd6cdc55700a2ea800e0b3b97b9ae8b9404f6e41dd21d2ac9ebf"
+      },
+      {
+        "path": "corpus/maps/p-invalid-7",
+        "bytes": 31,
+        "sha256": "505f996f771c86135bb5fefad0434327830d47b78b5f12491de4dce69ca432ed"
+      },
+      {
+        "path": "corpus/maps/p-invalid-8",
+        "bytes": 32,
+        "sha256": "9e48a86845186aec5e31b0f930445b56f07fe560cf48bced6ede240880ffacd5"
+      },
+      {
+        "path": "corpus/maps/p-invalid-9",
+        "bytes": 33,
+        "sha256": "d63427a2fd6f7520ae255a64787f5f86a653e64765795deabdf7de16fa5671bf"
+      },
+      {
+        "path": "corpus/maps/p-invalid-snapshot",
+        "bytes": 92,
+        "sha256": "46b65db936fcd251b6706d20b9a1cb04c5c89fe249c0f47f40966e02f1e72d14"
+      },
+      {
+        "path": "corpus/maps/p-lower-device",
+        "bytes": 102,
+        "sha256": "6d84b8556c5f34913ce2ad3b234ecd3d67271d096e2eaab90e10c631f5481b49"
+      },
+      {
+        "path": "corpus/maps/p-max-offset-bad",
+        "bytes": 57,
+        "sha256": "ea6a4b301e4f16faf2888d9cdf98ba58316e07a41846998894faf5cc1189356b"
+      },
+      {
+        "path": "corpus/maps/p-max-offset-good",
+        "bytes": 57,
+        "sha256": "f21a8c7ecb591d768730948e385dd87b5c5e14d22023b3801fd2ebd3e51a630a"
+      },
+      {
+        "path": "corpus/maps/p-original-unsorted",
+        "bytes": 320,
+        "sha256": "f9731763e50a2ef7313e64dd7bf256a7be87ec45bbd2104d4f6f5ffcd1ad3c91"
+      },
+      {
+        "path": "corpus/maps/p-overlap",
+        "bytes": 46,
+        "sha256": "b476f9bb3d564b309016ef080b31f66ac5315090e9f2d23cdf6f6790cdc91dd2"
+      },
+      {
+        "path": "corpus/maps/p-own-range",
+        "bytes": 42,
+        "sha256": "f678554b07fd639a7dd51c1677f00dfd9c96e1ce5db95221b56c1b1208d498ed"
+      },
+      {
+        "path": "corpus/maps/p-swap-first-two",
+        "bytes": 320,
+        "sha256": "ddf0632a50572c12ee3f0b15d287a33e1bb7609b1458a02f32367939350f2019"
+      },
+      {
+        "path": "corpus/maps/p-unusable",
+        "bytes": 149,
+        "sha256": "44b22f0e247a67d146f7bb0b09990b49d63e1d0365fbcdb1fab657fada1d5d98"
+      },
+      {
+        "path": "corpus/maps/p-upper-device",
+        "bytes": 43,
+        "sha256": "29345351edd7ea85e38bab4b1903e28a856f594ea095753dc8b60f7370c1f207"
+      },
+      {
+        "path": "corpus/maps/p-valid-absence",
+        "bytes": 67,
+        "sha256": "9d6f4bcd1ddc6431505b26d8f94f09290100246a422523f7914f349d25ef14df"
+      },
+      {
+        "path": "corpus/maps/path-0",
+        "bytes": 28,
+        "sha256": "df95b3ea10003a8b7abcb06fbf7270a49967cd9b6063c9b425f7bfdc10d51fd6"
+      },
+      {
+        "path": "corpus/maps/path-1",
+        "bytes": 29,
+        "sha256": "e606e224d6354c656738094add08d63de3a4b6055a7c3359a32d9c770ef2c65f"
+      },
+      {
+        "path": "corpus/maps/path-2",
+        "bytes": 34,
+        "sha256": "6d5ec87e48b7ba79b418d75c9e59b77d76509a0d6ee95811b8e9d7fa60c8219f"
+      },
+      {
+        "path": "corpus/maps/path-3",
+        "bytes": 40,
+        "sha256": "1fbfb37a7ee407e390e5d91fd2443be3dfab76370f0d4e6364b319458626ba03"
+      },
+      {
+        "path": "corpus/maps/path-4",
+        "bytes": 41,
+        "sha256": "f2ebeca46398a5ab119a8f42b5c3983a984cf47b230c9fba1f87ec6e523c2712"
+      },
+      {
+        "path": "corpus/maps/path-5",
+        "bytes": 28,
+        "sha256": "0bc61e97f3aa968a9d970f581d56fa5d9269b448c4b2db7500273bd1e083d519"
+      },
+      {
+        "path": "corpus/maps/path-6",
+        "bytes": 24,
+        "sha256": "885dd0420654afd16ed174a4d764fd0f4f16dda0625fc2f49efb1d5daf5c7263"
+      },
+      {
+        "path": "corpus/maps/path-7",
+        "bytes": 22,
+        "sha256": "6fea129900632a8ed13d15838605da2f1ba908073f4080493f482db32cf135ce"
+      },
+      {
+        "path": "corpus/maps/unterminated",
+        "bytes": 16,
+        "sha256": "e145c5a9fbb91d6fa4b4a23189cc9bdbffbc89fcfd5e3e5e8ed0d1e694c1ee3f"
+      },
+      {
+        "path": "corpus/maps/whitespace",
+        "bytes": 3,
+        "sha256": "7d7713ab8ff9ccbfe07f962d3a015e11231859724c83788c38341f4c216cd5c2"
+      },
+      {
+        "path": "corpus/mountinfo/a2-lowest",
+        "bytes": 135,
+        "sha256": "e96b839250c91eec6a4f012a42b2f3a084a3b6db64d9233debcfc346321ba222"
+      },
+      {
+        "path": "corpus/mountinfo/a2-three",
+        "bytes": 171,
+        "sha256": "10c95fb85287890f7b2d7d0ae76b3e292a32cecc044a950fbce924a3116955d3"
+      },
+      {
+        "path": "corpus/mountinfo/a2-unique-one",
+        "bytes": 135,
+        "sha256": "3ae202a6a0f930050399faf8e1109f28775859fb0fd8b490afda3c240045fe6c"
+      },
+      {
+        "path": "corpus/mountinfo/a2-unique-two",
+        "bytes": 168,
+        "sha256": "6b33092944c8a991d5b8819111846b082cc0789ea54801cf23bae56e90a62336"
+      },
+      {
+        "path": "corpus/mountinfo/absence",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-000",
+        "bytes": 29,
+        "sha256": "b34ea88741fd24546c603b6aa04b5df39a3fee39bd31c4d65eabeae482f427fb"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-04",
+        "bytes": 28,
+        "sha256": "9717949e67c05747e6f1cbc7e4c10a1f5e422b37fb86ab74f9c1ea8d9fa7e018"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-099",
+        "bytes": 29,
+        "sha256": "afa837d10fa362d33ab8bc0554fccec30afa525e05df8c63269ad473ce896ee8"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-400",
+        "bytes": 29,
+        "sha256": "c41a03392a8950b7c001c0e816cd429effca9d4d38c89102bad589c1442bebfc"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-777",
+        "bytes": 29,
+        "sha256": "5e7d18506c1931f60907f2a48bc8da4d8c5ff3a1daa039a5919dfc6f92dd44a6"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-bare",
+        "bytes": 26,
+        "sha256": "72936713eb137a636999c1cb1bc501078390969cf2f0e6c87302c36adec08282"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-000",
+        "bytes": 63,
+        "sha256": "3f58f416a0e0d1678f8873602d2e9d001c37c4bd70d5c5b7034de566f0a95911"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-04",
+        "bytes": 62,
+        "sha256": "aa2d2c78c4ffa0c1893a34cb7cd553bb80ea70422728009d71e8fa42315fd96b"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-099",
+        "bytes": 63,
+        "sha256": "c8614250f71e667cc0c2dc411e5dbd6db34a9167907004715a5086f557125295"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-400",
+        "bytes": 63,
+        "sha256": "eee5848f05d4c089c052514e2f526dc9ecc4e41acac91a0977b6d413daa1f555"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-777",
+        "bytes": 63,
+        "sha256": "746a83aeb0c374fc15dbf00885932bf20124bb48449b4680ce8e769cd32e17bb"
+      },
+      {
+        "path": "corpus/mountinfo/bad-escape-second-bare",
+        "bytes": 60,
+        "sha256": "0cc524e13aa7b4f9580bc94dc5ccfdbfa9870ac56efd0c571d74562eaaa8ffdf"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-0",
+        "bytes": 23,
+        "sha256": "2525652897c789c59eb51ff1cfea97e0ffecbdd59d65c056bd8aec6702853884"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-1",
+        "bytes": 32,
+        "sha256": "db5241253efbca92d67079f77c728d3a669d25f79b8036bd81938f17177dba21"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-2",
+        "bytes": 28,
+        "sha256": "526018943a9c45834d9021b2fbf26f1849e2ecf8d435e7c54a122ff1c146b473"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-3",
+        "bytes": 24,
+        "sha256": "88b2a285e40b6910a80f54d550110879beb0db8a47dd3b504e0490a7bba455f7"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-4",
+        "bytes": 27,
+        "sha256": "b9f30dceef6ab89a0063eb7f5a7c77601e1a146f81379b3d754388e741323822"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-5",
+        "bytes": 27,
+        "sha256": "90877f9af969a05c3a0ad77da3ebdd5391634859a31ebed35e001dec8c28314b"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-6",
+        "bytes": 26,
+        "sha256": "eb185265b323bc0a4174aeb12617a1f51191a56da604a32449d69b8bddd54eac"
+      },
+      {
+        "path": "corpus/mountinfo/bad-fixed-7",
+        "bytes": 33,
+        "sha256": "2abd74dba6d461175be009c9c402df2386ccf9643b82111cb9efc4415ac9fd99"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-0",
+        "bytes": 33,
+        "sha256": "ba5a8e6fd9727f8458333d90bad8e4200d0e6a78c23473b9224ecc8462f4182a"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-1",
+        "bytes": 33,
+        "sha256": "70297edb06bf74174707d818e3ed28e47474e07580d83199f183a83b4ef18386"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-10",
+        "bytes": 48,
+        "sha256": "740ea3fe5e3f111edd10d971b2da2c4577ec4393e1ad119fc04cdd82facb8563"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-2",
+        "bytes": 41,
+        "sha256": "49f9c35667eff9a5d3e4c7a89f658e024525b10e460a26bb33be50addb3266f3"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-3",
+        "bytes": 34,
+        "sha256": "ece8d005a826f7b00a3cb449a79fcc894521b814ff96d3803730ae224c938c96"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-4",
+        "bytes": 37,
+        "sha256": "add202424ad5ce4477966797d155355f881058a1002ca98d0e49d48bfe437bc8"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-5",
+        "bytes": 39,
+        "sha256": "46bed3c6f5ebb3f625ccaf836279e003fc708c8396cef85dc6aed19b5d84e269"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-6",
+        "bytes": 45,
+        "sha256": "9d1f7a8afbbebeabf0fbb33ba5375b6287e16e231d73c8373575209af64614bc"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-7",
+        "bytes": 47,
+        "sha256": "c15fd651686402085f0bcefa8554dc0a23ab152922bd3992f2a0d0f8bf8dacb7"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-8",
+        "bytes": 44,
+        "sha256": "13322d3e21cc9b34863ee88833e3a564b7bc0672ce7fdc6b392504e7978a3879"
+      },
+      {
+        "path": "corpus/mountinfo/bad-optional-9",
+        "bytes": 60,
+        "sha256": "75f6e5134c0e6ebfbb2fa36d2f99309131eca019c05b3fc027814b6c5df38db8"
+      },
+      {
+        "path": "corpus/mountinfo/blank",
+        "bytes": 1,
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      },
+      {
+        "path": "corpus/mountinfo/delivered-invalid",
+        "bytes": 135,
+        "sha256": "e96b839250c91eec6a4f012a42b2f3a084a3b6db64d9233debcfc346321ba222"
+      },
+      {
+        "path": "corpus/mountinfo/delivered-valid",
+        "bytes": 294,
+        "sha256": "89a9424c54f73602620160721ec8da82d57c151a6645ce385f51ec103ba7a9c5"
+      },
+      {
+        "path": "corpus/mountinfo/entries-64",
+        "bytes": 1527,
+        "sha256": "1931c2942313a9e8106aaadf163565b3fdb0104eadb735adffcbf125371fb2e9"
+      },
+      {
+        "path": "corpus/mountinfo/entries-65",
+        "bytes": 1551,
+        "sha256": "501b605297bc8e3c04e0a80f43b8c693e701fae381f483c0c3c97dcd944ba74a"
+      },
+      {
+        "path": "corpus/mountinfo/line-512",
+        "bytes": 513,
+        "sha256": "beb7c26924d5ef47018c4c2c454efac65aaa1a104b5ee1daacd9174852201e71"
+      },
+      {
+        "path": "corpus/mountinfo/line-513",
+        "bytes": 514,
+        "sha256": "5dc0a939c01baf50d4b291c711653a1394c077e89e18baaaa5822002bf5ab15b"
+      },
+      {
+        "path": "corpus/mountinfo/max",
+        "bytes": 127,
+        "sha256": "8a865f788036f8680fde02a18d6edf2a2332ed53905b30049da5876621b1f062"
+      },
+      {
+        "path": "corpus/mountinfo/nul",
+        "bytes": 35,
+        "sha256": "9e9095f5779aed8e07dd6a42b1206da570477f4fdbf9b74c46c32de6662ac0b8"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-0-0",
+        "bytes": 40,
+        "sha256": "b92314e40af78354b828d05d16b4f0d90c23055418fbfe06cc6fb8fd7b1ec567"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-0-1",
+        "bytes": 40,
+        "sha256": "88b4e07cb73e06f3e975638f5972a964b0f521ed6493c3bdfd8794dfc524b549"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-0-2",
+        "bytes": 41,
+        "sha256": "49af2685b36c946cfae0f37f0f2e3c4b0b5731b6e4cd1bbc04b8835e0610673e"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-0-3",
+        "bytes": 58,
+        "sha256": "f416c1a7b82530b45418fb8a6b3e5bef5ab3429102d69a15e10cc50d59f0d410"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-1-0",
+        "bytes": 40,
+        "sha256": "625cb691b3bf6c407db11f58e37a76f37f5621382e09fa8826e47a80975b4738"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-1-1",
+        "bytes": 40,
+        "sha256": "a9c07b910a4054a0a6aa4c55d5b88787011ba6e229e95d262202b598152d24fa"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-1-2",
+        "bytes": 41,
+        "sha256": "206eed36c4bcc012127ff37d26dcf0c0676d3eb08657199269b4daca5eabe757"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-1-3",
+        "bytes": 58,
+        "sha256": "7d41febfa3776ae9f9ffc59e7073711f6c895759e3023426119ffcc4c7d53624"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-2-0",
+        "bytes": 40,
+        "sha256": "5d2c1e0643ac637d4bcfb6b01f85d0d0cfce7770b8af27a8bddffcaf55fc314c"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-2-1",
+        "bytes": 40,
+        "sha256": "b0359e46b0f8b946fa75254c72ad77f4544f00eb69045b67c09b510616506c30"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-2-2",
+        "bytes": 41,
+        "sha256": "7a7293b8a2ce09fcdb19ba5c03125dadc2a761a683b51d70225bae13696f9705"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-2-3",
+        "bytes": 58,
+        "sha256": "463fd24cc03833396a97ee242d5e92f781769560f7a73d5b0cbad5ebfdcf77ae"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-3-0",
+        "bytes": 40,
+        "sha256": "9cf8eb219c7a67a3b91e18b3d046ce5e8d3d567b82d493cd31ac091b77f04c74"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-3-1",
+        "bytes": 40,
+        "sha256": "4aa953bb05d43687cd104631cbf1ba4d43701c5e6244771f5beedfb10b63e900"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-3-2",
+        "bytes": 41,
+        "sha256": "7f85c5863413bd1c12c60026f201afa44935cd034d2e8176c1e104f0891cf268"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-3-3",
+        "bytes": 58,
+        "sha256": "39fba04af9068a5a72e63d62e0f00f9535aef4a0393692f664aa4128dd0b0864"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-4-0",
+        "bytes": 40,
+        "sha256": "e2aadf941f2a9cf4411c541e65654833c586cc5fb80d8db7628e1216400ce600"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-4-1",
+        "bytes": 40,
+        "sha256": "e69b5912c015512fd9fd148b66c0acf4ccaa072182a21cb708d46b561f4416f6"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-4-2",
+        "bytes": 41,
+        "sha256": "8f3842c26bfc4fbe9eb4e47e7620652d62df37d0c442d4093d3526dbad294195"
+      },
+      {
+        "path": "corpus/mountinfo/numeric-4-3",
+        "bytes": 58,
+        "sha256": "7db268317dab449b6dff55c5864e3c23aa14bc9ebd49e1a93b4be1d2351b58b0"
+      },
+      {
+        "path": "corpus/mountinfo/self-parent",
+        "bytes": 25,
+        "sha256": "4e1252d73420e1a5556f0f15fd6ae9668e2acbb3ea62c909ef2c55adcc77efbf"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-001",
+        "bytes": 46,
+        "sha256": "c1c21de6eced8524ad5abbbb9d3246c9a23987c210cb9d2d227a39447761154b"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-011",
+        "bytes": 46,
+        "sha256": "40225a17d56c05051ba0752187f0156bf105eb25f939c01f0d1242e9fd6787f8"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-012",
+        "bytes": 46,
+        "sha256": "76fca574892d9da231e2718d74cfa5b5d73aefcc077083cf347008d00566344f"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-040",
+        "bytes": 46,
+        "sha256": "0ae2dca27b466deb5d9ba1fcd4495cd00f3d9994a949c0fbac543425f3735d66"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-043",
+        "bytes": 46,
+        "sha256": "a83c2607df1c5b972662494aef8af7100c02f36cedf5afe11f8891d4aa547580"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-0437",
+        "bytes": 47,
+        "sha256": "91ab169553775c3bb00bb02af1eb95200dc44f69598f0dcf1667ecd2baf80965"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-054",
+        "bytes": 46,
+        "sha256": "c7917794c5cc3c699aa8d9dcf9fad9f724d4830efdfdc04638205149b6f34b44"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-075",
+        "bytes": 46,
+        "sha256": "39059aacb5d1d03a569ed4da1bd96a66fa11f417e4e02e97c17b9b27fd16c9e3"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-134",
+        "bytes": 46,
+        "sha256": "5a8bb5742414f9e03af2bea9e1098977ecf6811a3a7265a84632854a5a9a2a3d"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-134040",
+        "bytes": 49,
+        "sha256": "887f7ea8e9bbf38a4692db8b80f7b0a9ed2591977a78035d25c86ebe93b56f07"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-134043",
+        "bytes": 49,
+        "sha256": "236a959e3ab5df152390da8b4569fd6e23ca0d2e3460f61eca0688dc2da06a49"
+      },
+      {
+        "path": "corpus/mountinfo/slot-0-377",
+        "bytes": 46,
+        "sha256": "e0b6ff16ae61e79beeb4b6f2212e6834b50490829c0d7d5bebadd411eafcee6d"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-001",
+        "bytes": 46,
+        "sha256": "6232ae0d61def695ce440cd7013593c58ae490e43267521110f6bc500cc3db27"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-011",
+        "bytes": 46,
+        "sha256": "40fb7e526df0fa849c965c24c54729b7af6ae39954cac509cdbf0a14570c3972"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-012",
+        "bytes": 46,
+        "sha256": "3ad10c60cb74cc8feaa6c72562d18bb3591676cdd0ed95c356e5b33185b493f3"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-040",
+        "bytes": 46,
+        "sha256": "63099a6d7c0a8b0b1b10d21ae64450c9ecb3c000b9e4579a991237eab8804047"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-043",
+        "bytes": 46,
+        "sha256": "bb7fd2c922007f95e0ad1b13ebe9fad2c499b138cb0e7cf0a46f2161bb69f5f2"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-0437",
+        "bytes": 47,
+        "sha256": "481c3cd2ea2b44edfb89b653c4aa9762093c284048da7d6c786b85d7fc437e90"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-054",
+        "bytes": 46,
+        "sha256": "fbbcafe43b995eb6fadb96c2c1e9927473b419cea503be7384a4e73faf9649e7"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-075",
+        "bytes": 46,
+        "sha256": "326ce19d561f58c56fde1428818c517a41ae95dcc3d897afdb79ea74530a5862"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-134",
+        "bytes": 46,
+        "sha256": "201bb4a10128fc73978218aa500bfebdae0823c56e6743df7a4124c49bf89455"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-134040",
+        "bytes": 49,
+        "sha256": "b72ce190025d1c338ceb7c0253096a45249808283036bc35eeb7c477c470030f"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-134043",
+        "bytes": 49,
+        "sha256": "49762d120dedc84bf1270e075ec94c531d1e445a12b09fbc8494c3dbf223a272"
+      },
+      {
+        "path": "corpus/mountinfo/slot-1-377",
+        "bytes": 46,
+        "sha256": "3c31bfe71bccf8f22ab5ab3434da7c4e2ab641d4d86dc7d6d8e870e19243877a"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-001",
+        "bytes": 44,
+        "sha256": "999e6d888ba497ab75dde784bead9534566fe283a6e090c3f1f2ea6ca91f3b81"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-011",
+        "bytes": 44,
+        "sha256": "b2ef5d86ed87374ce8492aa3ded008312253caee59e58fa4d3ef853fe5b0db85"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-012",
+        "bytes": 44,
+        "sha256": "1c4614dd538dfd4871810771281780c4a80766577a2de3d3164af320914d8e7e"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-040",
+        "bytes": 44,
+        "sha256": "97035eb53595877055c161c4b08fa85a79eb7a137495447d0bd67656e6709d24"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-043",
+        "bytes": 44,
+        "sha256": "83cfdb44fe80a87958007f90fe0084ef597e3837c08075aa794bcceb0463912c"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-0437",
+        "bytes": 45,
+        "sha256": "df4266349f0a2edd4bcacbd5491c13ffd1af29ec4a906de005d9decac7d5d4e0"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-054",
+        "bytes": 44,
+        "sha256": "a41bb83548d0abd463afce5fc1d007498dccc765400554264b728cb5f96b7f90"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-075",
+        "bytes": 44,
+        "sha256": "906895ea47f5a7b1993e685adc0ae692e8bc57b04d609f88d920838d4d9d7191"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-134",
+        "bytes": 44,
+        "sha256": "4bd14cb3d7b879da0693f7c92b20af0bec0e69532d111ea644a064b1d8de8e06"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-134040",
+        "bytes": 47,
+        "sha256": "8f1b261e0b3e88da7ed80cc3c5bc704dac604c7c19023817aa13ca71d91a1aeb"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-134043",
+        "bytes": 47,
+        "sha256": "2102e352abbfa2b098441a45959d7045de00609d8f0e43c2e599c2ac1260d40f"
+      },
+      {
+        "path": "corpus/mountinfo/slot-2-377",
+        "bytes": 44,
+        "sha256": "f409a9585580ff9552890fc8ae960732e53a2ab702a5e6e4aa98fb6ec86ac7e6"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-001",
+        "bytes": 45,
+        "sha256": "980d6fd21da1cc12d01b8a2df8081a5a8e34eecfe462c07f6398356e71a126b1"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-011",
+        "bytes": 45,
+        "sha256": "066b8688ac455d406263dabf00ebe9024570d7bcec36bedeb0260cc84ca6f8dc"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-012",
+        "bytes": 45,
+        "sha256": "5e88b4e9ea895be5cde305db933d2f11f9386dfba9ae18a39d8415e34f2fc956"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-040",
+        "bytes": 45,
+        "sha256": "3d7eed8109a425871828926f06931dfceb82551c694188a469bef71783c21954"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-043",
+        "bytes": 45,
+        "sha256": "41f1bdc38f60563923f9878dd8f9c85ad3478ef0e9959aab0f4fec224400a65a"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-0437",
+        "bytes": 46,
+        "sha256": "6d67dc5452cebcd08b3f163f93901519d4e1e99b1dd7da34ba23b432430ecaca"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-054",
+        "bytes": 45,
+        "sha256": "d6c2130d774cdf78200ee544b040cd2eceed63709f1fad145d9382589deb48cf"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-075",
+        "bytes": 45,
+        "sha256": "41d00c767a8ab753280cbd7411cea0c7eaf14d8d6585cad42969856fd162d9ec"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-134",
+        "bytes": 45,
+        "sha256": "d7db112e13ac82e6f51adf1743751d1cabd28dbe68c647e422033ce4ddbff3bc"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-134040",
+        "bytes": 48,
+        "sha256": "75ca97f7e16a5476d60037c039d5678f991d8922c6a211e8488858808cbe667b"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-134043",
+        "bytes": 48,
+        "sha256": "800c3ad1595710ce64c47bc1f90684a31ab5d4f62ca140f2505aa5c302cd4f16"
+      },
+      {
+        "path": "corpus/mountinfo/slot-3-377",
+        "bytes": 45,
+        "sha256": "8835c98497175d53a0ff60a6194c339dcb99f57757ac75e7f496ef5ee118919e"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-001",
+        "bytes": 45,
+        "sha256": "4c52c492ab1c6b865e328bcf9152aeeb6f96bd7250e5fe13d9bba0cfab0571d3"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-011",
+        "bytes": 45,
+        "sha256": "db1760a9ed8df89e305e31e70275db5cdb98923bbfe4c0ffe51a0071b5530112"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-012",
+        "bytes": 45,
+        "sha256": "ad480faf9a17a3296a8d627b62925699f0bb3793653faf7ed19d85f099570600"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-040",
+        "bytes": 45,
+        "sha256": "2fcbca4abad40a9a4b9d83f6325a8596fd18053dee2a3664dd0c8085148ce723"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-043",
+        "bytes": 45,
+        "sha256": "d504d2c4537d22fc6436dd6ca2b470f04b48615d2f69032a54244994d94d3809"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-0437",
+        "bytes": 46,
+        "sha256": "cc6a0d2788e96f7ad999c51bb64dc3dfc0f079381c787c6bb54f6ed20edf23ce"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-054",
+        "bytes": 45,
+        "sha256": "512c0c5bb1a58e2bf5c52ced735f1b456654e88a7badc85ca9bd0962377a1790"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-075",
+        "bytes": 45,
+        "sha256": "e06d260a727ea18cbe537b88f440e872bd7672a607b38f031c5ed293b9713255"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-134",
+        "bytes": 45,
+        "sha256": "147801854bc30d6d56aca99d45b903c5ea7e67a414cd77d469c5a6bf188e16ce"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-134040",
+        "bytes": 48,
+        "sha256": "08c34d6e113e6f48f513c78e6226f51c77bc36916d83be91c85c546845c4cad0"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-134043",
+        "bytes": 48,
+        "sha256": "98617c30974284485602e2802272875a9085f18f379a83ca62478003f06a8922"
+      },
+      {
+        "path": "corpus/mountinfo/slot-4-377",
+        "bytes": 45,
+        "sha256": "9127a8b56bcd9f4b2d3b3b0fb194700e04afd058978252a6bd988f626ce126e2"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-001",
+        "bytes": 44,
+        "sha256": "f63717a9dafd7050bf252c0d0ac5dae689780b80bef079ec84b1e9e881640021"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-011",
+        "bytes": 44,
+        "sha256": "26b8f9d3dae3d5bd92e23fe116b6a8df7ad91024af6b53b704009757aed26e0c"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-012",
+        "bytes": 44,
+        "sha256": "b1a3523a4a6989a8ef7ea5bda1bb8a5714a4407b83979a2c73745bdfbb38ace3"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-040",
+        "bytes": 44,
+        "sha256": "1e1f07ab7b311745c26b27663db6191d691b78cab6bd72863744d95bdfed2165"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-043",
+        "bytes": 44,
+        "sha256": "bfbe5b12a0fc516d96b526a1a52721de283ef756e9d9b27a9d2a46b7deca5f50"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-0437",
+        "bytes": 45,
+        "sha256": "683a3358cd0c7ba1820076018dcb2b78ba9408034d265ab37fe2bf2976dea8f9"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-054",
+        "bytes": 44,
+        "sha256": "4e83c068d497f629fcb717977490e2364ebf5e0a5381d82602fc88a944d7a055"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-075",
+        "bytes": 44,
+        "sha256": "6d1d4540bc8796e05a98aea93ab3da94331a87af239977d1dbef1e497da8643a"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-134",
+        "bytes": 44,
+        "sha256": "ffd9855420aa17586189c95c80548f8983dd05e82eeb1716519da707f3b71844"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-134040",
+        "bytes": 47,
+        "sha256": "ea78fa30c328d2dded779d66b51d9c31d64627d65739cd4738ac80ead0dc6009"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-134043",
+        "bytes": 47,
+        "sha256": "46e133b9e02d7ed8481e4aec60b7d6ecab325f217bb56960033b5728593374d2"
+      },
+      {
+        "path": "corpus/mountinfo/slot-5-377",
+        "bytes": 44,
+        "sha256": "d80fb97d1aafe28df22038813e627ccbc92245d36c65b6f1fbdb0508f23e7330"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-001",
+        "bytes": 40,
+        "sha256": "8acc769c2cef92b8e0c6c05c0ab9f716f342ac73bc7f5741cbfa20c370519cb1"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-011",
+        "bytes": 40,
+        "sha256": "eddef02f5f3dcce187b204f4b12f8403fd86701426be6eb1bece64277082d38e"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-012",
+        "bytes": 40,
+        "sha256": "972686b60b46df1ea2698a240708e36c68abd00e953cadd640b2336fbfc4bc40"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-040",
+        "bytes": 40,
+        "sha256": "8c6c307b3690f617063f682ce659c6f92f1b398df9f1ea8228e8b586695bfd95"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-043",
+        "bytes": 40,
+        "sha256": "b326e6759afc7d79314670ad2f920bb98447f29c13aa04313c121f02a6d976fd"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-0437",
+        "bytes": 41,
+        "sha256": "6762bcfcc1eac8ffaed5ef0a5b49e9733ded84cda988bf190fb920125c513460"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-054",
+        "bytes": 40,
+        "sha256": "7e41bf5dbaecb50c0f0b4b2ef9dba44d71809996ab5bf7d1ae83cd0c0512c9a6"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-075",
+        "bytes": 40,
+        "sha256": "16e3efd4ae3f744721ed40d6bdea05620e10797829fcb918e44b564b325a8bba"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-134",
+        "bytes": 40,
+        "sha256": "17af3f65bf0e171f897073dcffcf529c6bf38b79c2f4e183796a96ae60ef3464"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-134040",
+        "bytes": 43,
+        "sha256": "e81ec65b1eddb620e55a7ad85bee56645793dace70600987e0bf2eedee19bc79"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-134043",
+        "bytes": 43,
+        "sha256": "49c8f1296e643054a48079eb4e3268a818b25f0d746ffded7803112a31c72073"
+      },
+      {
+        "path": "corpus/mountinfo/slot-6-377",
+        "bytes": 40,
+        "sha256": "7190a5fffe70735d127529655c44951d9df6d323eba691fcdce7dcd5f06ae9c2"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-001",
+        "bytes": 41,
+        "sha256": "a2777c0f1a2e6f12a52f1671e8fb1167da5f06c4a8af20dc68f772a7a694ba2b"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-011",
+        "bytes": 41,
+        "sha256": "b64a9be50f278e692f53640f346c0b0b9713fd6622e69c1067380de5f4ae467c"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-012",
+        "bytes": 41,
+        "sha256": "69a5bb25f578ac84676ebe7a236fad43dd0b1f450bacb0c74e037890094b8508"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-040",
+        "bytes": 41,
+        "sha256": "3cec207a22f9de45432bf58602f6c4f267c4a4881597ff2717219ef1c011e7a7"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-043",
+        "bytes": 41,
+        "sha256": "ac875c2c1e804d7a968724d2d16e7033bef3dbcc7e0292031fc54a5161ad2fab"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-0437",
+        "bytes": 42,
+        "sha256": "bc69cdc62d480a5974a9f552a690a1c01fb2bc9afffdc49ee1fd3bdec725e4c5"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-054",
+        "bytes": 41,
+        "sha256": "8bef47275989e52aea0d406d3ef81b2068ed559ffb7439488d52b122a097c094"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-075",
+        "bytes": 41,
+        "sha256": "23a7f7d3ac3e3f2c091515153aab723ec2a10d4e3663f09d08f74b96e748a8ac"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-134",
+        "bytes": 41,
+        "sha256": "f6d284d17dc90ae8a664d8f76b797234625287e13f856f562a72d0301a1853f2"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-134040",
+        "bytes": 44,
+        "sha256": "2911b410a1e83dfb210cf49aa9a211977c1c64d777632b2d0235d39ebc76dfd7"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-134043",
+        "bytes": 44,
+        "sha256": "6bb6873f5b0607605c846fdfde38509b732d367a9e883559d7436a86032701dd"
+      },
+      {
+        "path": "corpus/mountinfo/slot-7-377",
+        "bytes": 41,
+        "sha256": "a09a1993d7386df59657e52712ab2f23eec0a07cb939968b846ea962be1e506a"
+      },
+      {
+        "path": "corpus/mountinfo/table-a",
+        "bytes": 34,
+        "sha256": "fc05aa64e3cf29dd0a1f4c6f82c61586dd2147675f14aaac3cc167404ddde4f6"
+      },
+      {
+        "path": "corpus/mountinfo/table-b",
+        "bytes": 34,
+        "sha256": "061f45bdf58ab306d1c84a00873f865bf3e0cff450e7e6328b0dbb7486ca40f0"
+      },
+      {
+        "path": "corpus/mountinfo/unterminated",
+        "bytes": 33,
+        "sha256": "5103eddff1a574770cd7001e1cf6651c407f1b1e54e88672f5fe16b2f59a2c14"
+      },
+      {
+        "path": "corpus/mountinfo/whitespace",
+        "bytes": 3,
+        "sha256": "7d7713ab8ff9ccbfe07f962d3a015e11231859724c83788c38341f4c216cd5c2"
+      },
+      {
+        "path": "fuzz_targets/maps.rs",
+        "bytes": 2035,
+        "sha256": "5a1a577109b0d146788c404e22172296b2fd6d4c6f120e85a31251f92aba6302"
+      },
+      {
+        "path": "fuzz_targets/mountinfo.rs",
+        "bytes": 2079,
+        "sha256": "a210523f82f103dde258c0637e6e693fb06d9478e4a92b4030f8a3a2d73a965b"
+      },
+      {
+        "path": "oracle/proc_reference.rs",
+        "bytes": 10136,
+        "sha256": "28cb7cf07fee04f9af51593bbbaf130acc80685ea42ea1b1914d0b595dbef25e"
+      },
+      {
+        "path": "review-fix-report.md",
+        "bytes": 6018,
+        "sha256": "df811d1e22e6a7c22a253ad3be3fc7b3a6fb7aa5fd82197d94c4b1593609980b"
+      }
+    ],
+    "file_count_excluding_index": 252,
+    "inventory_sha256": "d32173d2eb0b7885fc4e344940aaa1f16e335cb7bf87448c010e0b557e806b45",
+    "standalone_workspace": true
+  },
+  "oracle": {
+    "project_path": "oracle/proc_reference.rs",
+    "source_path": "/home/user/src/m/bpfscope/.worktrees/lx05-proc-20261018/crates/scopebase-linux/tests/support/proc_reference.rs",
+    "sha256": "28cb7cf07fee04f9af51593bbbaf130acc80685ea42ea1b1914d0b595dbef25e",
+    "same_bytes_as_delivered_oracle": true
+  },
+  "seeds": {
+    "manifest_path": "corpus/manifest.json",
+    "manifest_sha256": "7dd977bbab4e7e43d9a7c04ac2ccb9805544f44ab8d8f3c8b731c59610c1b306",
+    "cases": 241,
+    "maps_cases": 75,
+    "mountinfo_cases": 166,
+    "all_manifest_hashes_match": true,
+    "a3_positive_sha256": "2204cb049147e49afd9220c5ba29b67fdcc028e7de0010d446d2325119d8c033",
+    "a3_negative_sha256": "06801f1e80080b20e0fa965ef3ccb87d3926862920066c998e041c27f24c5eb2"
+  },
+  "combined_graph": {
+    "lock_path": "Cargo.lock",
+    "lock_sha256": "468c59dd157f08caed430fb536a1168cd21003680597f85b3e40edef39209b5a",
+    "graph_path": "combined-graph.json",
+    "graph_sha256": "da92ca5e4dba5b895b51c35c4172da05134fcfb1b2bfa674fa49179144b86a51",
+    "packages": 18,
+    "source_admission_missing": [
+      "bitflags@2.13.2",
+      "rustix@1.1.5"
+    ],
+    "direct_feature_requests": {
+      "scopebase-linux": {
+        "default_features": false,
+        "features": []
+      },
+      "libfuzzer-sys": {
+        "default_features": true,
+        "expected": [
+          "default",
+          "link_libfuzzer"
+        ]
+      },
+      "rustix": {
+        "default_features": false,
+        "features": [
+          "std",
+          "fs",
+          "pipe"
+        ]
+      }
+    },
+    "cargo_metadata_status": "NOT_RUN: controller wrapper lock inaccessible"
+  },
+  "tool_admission": {
+    "decision_path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-build-admission-20261018/decision.json",
+    "decision_sha256": "b2be97343a81e55bbc7761647fdb36a19a359aab38c75cb5a2a111d7574c2401",
+    "proposal_path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/admission-proposal.json",
+    "proposal_sha256": "621dbdcf59492d2f2583ac36b3f85fa4d22b8141b44bfb894647df85901d417e",
+    "source_inventory_sha256": "dea8bc8adaa4bed55d1d8fe42eebc5d942f5f5169a211f79a4877c292a9f8f1a",
+    "execution_inputs_sha256": "fe9c0b7bb42da9c60bf8bb07ea0cd505f09b81d0765f6cb9e33068228968da6d",
+    "native_tool_inventory_sha256": "e77ace9cf33ed0c181a63d6ad461714f84cb8ec7c9abcbe53ac8a42b5451a759",
+    "admitted_source_archives": {
+      "cargo-fuzz-0.13.2.crate": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/cargo-fuzz-0.13.2.crate",
+        "sha256": "5acfd01930e49823e58c30dd8012d3338a620377d7c7d4cc140ca4b2169400e2"
+      },
+      "libfuzzer-sys-0.4.13.crate": {
+        "path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/archives/libfuzzer-sys-0.4.13.crate",
+        "sha256": "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+      }
+    },
+    "cargo_fuzz_binary": {
+      "expected_path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/execution-after-admission/tool-target/release/cargo-fuzz",
+      "status": "NOT_BUILT_NOT_HASHABLE"
+    },
+    "nightly_toolchain": "nightly-2026-05-20-x86_64-unknown-linux-gnu",
+    "stable_toolchain": "1.98.1-x86_64-unknown-linux-gnu",
+    "selected_installed_file_identities": [
+      {
+        "path": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustc",
+        "resolved": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustc",
+        "bytes": 645952,
+        "sha256": "859254978c0a0402c32f949f6de0d99aee73be8d15f45aac00ae1448aac51e74"
+      },
+      {
+        "path": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustc",
+        "resolved": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustc",
+        "bytes": 646136,
+        "sha256": "dda736acee78d113c750124148a72bf40f8565bfeaa8d30acfb86fa5a3cf1aaa"
+      },
+      {
+        "path": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo",
+        "resolved": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo",
+        "bytes": 40680304,
+        "sha256": "da77c8b33849312255ccde3179198ada4c8deb370488d050286146b1d1b27e14"
+      },
+      {
+        "path": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/cargo",
+        "resolved": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/cargo",
+        "bytes": 42860712,
+        "sha256": "51419bbc5de06cbfbf8da1f908080b6c9076f4258b88992ec8ead15e534ddcd3"
+      },
+      {
+        "path": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "resolved": "/home/user/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "bytes": 12803440,
+        "sha256": "3ff7fed6d1064d8d75d24ae8beff9fe1d68031d3d819966481d22c3c9002b709"
+      },
+      {
+        "path": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "resolved": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "bytes": 13691112,
+        "sha256": "d4e50b09ed4b343497a13de3594ba60abb861d7d45e0af86384402a32337678f"
+      },
+      {
+        "path": "/usr/bin/clang-18",
+        "resolved": "/usr/lib/llvm-18/bin/clang",
+        "bytes": 140672,
+        "sha256": "690ac43e62210d7816e8d2c6a828549b5e690368c8c8b24dc1aa30fb5530b4c4"
+      },
+      {
+        "path": "/usr/bin/clang++-18",
+        "resolved": "/usr/lib/llvm-18/bin/clang",
+        "bytes": 140672,
+        "sha256": "690ac43e62210d7816e8d2c6a828549b5e690368c8c8b24dc1aa30fb5530b4c4"
+      },
+      {
+        "path": "/usr/bin/ar",
+        "resolved": "/usr/bin/x86_64-linux-gnu-ar",
+        "bytes": 55944,
+        "sha256": "531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c"
+      },
+      {
+        "path": "/usr/bin/ranlib",
+        "resolved": "/usr/bin/x86_64-linux-gnu-ranlib",
+        "bytes": 31368,
+        "sha256": "369cf0d60a6167b11f39ed9b4bbb3d93903cc364975b244e1d084aaccf48dc92"
+      },
+      {
+        "path": "/usr/bin/llvm-symbolizer-18",
+        "resolved": "/usr/lib/llvm-18/bin/llvm-symbolizer",
+        "bytes": 101784,
+        "sha256": "a8b1915268ea465969695603bca4288753c6f987d7bdd3740fe802a4a41cf138"
+      }
+    ],
+    "native_translation_units": [
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerCrossOver.cpp",
+        "sha256": "5bf910d4c8aea8a888eebddfb68250e521d0aba30c9f22bedc8624bcb3cd30c6"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerDataFlowTrace.cpp",
+        "sha256": "22996430dba1be545504e552eca11ad26bccf5b69ec95679316c08d0a258c828"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerDriver.cpp",
+        "sha256": "9f0ff17b5ede0670ea5c23e4eaef96e28af6d9744ea085c9701077968562034e"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtFunctionsDlsym.cpp",
+        "sha256": "1f778d077c895651956fe8923f2f7601395d5c5cfd1d5bce0054db5a77a7e0fc"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtFunctionsWeak.cpp",
+        "sha256": "2decf5d7713268ba720101c2387e31147a69e3ed0d3918cbe02aa5d8b80c94f2"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtFunctionsWindows.cpp",
+        "sha256": "ec59de4c4b9ebeb9e94b65f5b8421309705810615b792edd02931145664bfb74"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtraCounters.cpp",
+        "sha256": "bb7aa6b0319a2756a146ae2f8b8b4be78a1942e7b67cdaec727c6d3b978dccc5"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtraCountersDarwin.cpp",
+        "sha256": "ad2e4ba43dbbc5b584771d4fc4df013498a8c8b28c4db7b4263e7b7b46aa6539"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerExtraCountersWindows.cpp",
+        "sha256": "e4e6bca52b76046676f0d8db6305f649a525cc3812bfb0fcf1410d5b837f801c"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerFork.cpp",
+        "sha256": "f4c53e469aefef482f0614cf59a0b818e77cfacc4c4f43b80f58cb3c61ab39d2"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerIO.cpp",
+        "sha256": "ab62b3b4c2af6ca8126deed6481f3edb55d69e95007c761ed5797d2bc8d30814"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerIOPosix.cpp",
+        "sha256": "6ab501ca1d35a731542ac01bf0ab28d27f13d393fd221f16641829060fb44dbd"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerIOWindows.cpp",
+        "sha256": "464a596346443ec5b3abe55080a8efc4ef07cab4dd834cbe02bba64d16559a31"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerInterceptors.cpp",
+        "sha256": "9f6a427e5eb498416a969dcffa65e53205615e0a69cb115227f46fd437b36b66"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerLoop.cpp",
+        "sha256": "40a274123c4a391316155c2d0d93502a9db9a9df6833af854a6d19030a69f784"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerMain.cpp",
+        "sha256": "273d432cac2fb564ca05760ee776503e26bfa35d0f06f263a4fb2493ad1d58be"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerMerge.cpp",
+        "sha256": "4866a3a40c17772dcc02bdbe985c8bb9e4a780b03dd2278e56d5bb20f6e8b4ae"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerMutate.cpp",
+        "sha256": "5762ce216a70ed36160c7ec455e5c29d9a7da700f17fcdda362d0106e8e675b6"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerSHA1.cpp",
+        "sha256": "18296f57c7342d6952d37266031b60036220645db8dbb0c70f6b1e602c97150f"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerTracePC.cpp",
+        "sha256": "04d0f8adddac269564d91ba155964bfcc0dd232b617e3f7235a01fe86593618e"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtil.cpp",
+        "sha256": "cf0e9217539c77117a739e47e9e9f35e43141db291ab6167deae365b3ef496be"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtilDarwin.cpp",
+        "sha256": "a47741b0a0aa90b3232eb955cacbb9340f79301a82709ea8249cc1888b762f01"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtilFuchsia.cpp",
+        "sha256": "aca42134cf54d5f8e5a0c38fab2e82d401d5631854a23ca652b98e8ddb9a94c7"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtilLinux.cpp",
+        "sha256": "5885dd9462a62d09e9cf5c627b68d80b53a694d0f69e380d607058a13fa1a4ec"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtilPosix.cpp",
+        "sha256": "36841be411c3305102a14dc4942ac459a865d43bcdab5ad55a1751c4dd36daef"
+      },
+      {
+        "path": "sources/libfuzzer-sys-0.4.13/libfuzzer/FuzzerUtilWindows.cpp",
+        "sha256": "13f754e2e7553cf9aae245620d15a3cebd6451ffd4529ef4d380a8bf9af30362"
+      }
+    ],
+    "guard_script": {
+      "source_path": "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/scripts/cargo-nightly-locked",
+      "sha256": "6aff4282b92964cefb58381707e91a82cb44f85a877f240fc537f1ee281e71c9",
+      "future_private_path": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/bin/cargo"
+    }
+  },
+  "proposed_header_dependency_capture": {
+    "status": "NOT_RUN",
+    "method": "After admitted native compilation, retain every emitted Clang/cc .d depfile, normalize each actual include path, hash the included source/header bytes, compare against source-inventory/native-tool-inventory, and bind depfile and compiler command hashes. Missing depfiles or unadmitted headers require a new controller decision.",
+    "output_path": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/native-header-dependencies.json"
+  },
+  "parser_limits": {
+    "max_bytes": 4096,
+    "max_entries": 64,
+    "max_line_bytes": 512
+  },
+  "campaigns": {
+    "maps": {
+      "status": "NOT_RUN_PENDING_ROOT_ADMISSION",
+      "seed": 500501,
+      "corpus_source": "/home/user/src/m/bpfscope/.worktrees/lx05-proc-20261018/fuzz/scopebase-linux/corpus/maps",
+      "corpus_private_copy": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/corpus",
+      "artifact_dir": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/artifacts",
+      "target_dir": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/target",
+      "environment": {
+        "HOME": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/home",
+        "CARGO_HOME": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/cargo-home",
+        "PATH": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/bin:/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "CARGO": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/bin/cargo",
+        "RUSTC": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustc",
+        "RUSTDOC": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_TERM_COLOR": "never",
+        "CARGO_BUILD_JOBS": "2",
+        "CC": "/usr/bin/clang-18",
+        "CXX": "/usr/bin/clang++-18",
+        "AR": "/usr/bin/ar",
+        "RANLIB": "/usr/bin/ranlib",
+        "CXXSTDLIB": "stdc++",
+        "CXXSTDLIB_STATIC": "0",
+        "CC_ENABLE_DEBUG_OUTPUT": "1",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/clang-18",
+        "RUSTFLAGS": "-Clinker=/usr/bin/clang-18 -Clink-arg=-fuse-ld=bfd",
+        "ASAN_SYMBOLIZER_PATH": "/usr/bin/llvm-symbolizer-18",
+        "LANG": "C.UTF-8",
+        "TMPDIR": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/tmp",
+        "SCOPEBASE_CARGO_GUARD_LOG": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/cargo-guard.jsonl"
+      },
+      "inner_cargo_fuzz_argv": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/execution-after-admission/tool-target/release/cargo-fuzz",
+        "fuzz",
+        "run",
+        "--fuzz-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/project",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--target-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/target",
+        "--sanitizer",
+        "address",
+        "--jobs",
+        "1",
+        "--verbose",
+        "maps",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/corpus",
+        "--",
+        "-runs=10000",
+        "-seed=500501",
+        "-max_len=4096",
+        "-timeout=2",
+        "-rss_limit_mb=512",
+        "-fork=0",
+        "-artifact_prefix=/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/artifacts/"
+      ],
+      "final_outer_argv": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--timeout",
+        "600",
+        "--",
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "--kill-after=10s",
+        "1800s",
+        "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/execution-after-admission/tool-target/release/cargo-fuzz",
+        "fuzz",
+        "run",
+        "--fuzz-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/project",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--target-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/target",
+        "--sanitizer",
+        "address",
+        "--jobs",
+        "1",
+        "--verbose",
+        "maps",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/corpus",
+        "--",
+        "-runs=10000",
+        "-seed=500501",
+        "-max_len=4096",
+        "-timeout=2",
+        "-rss_limit_mb=512",
+        "-fork=0",
+        "-artifact_prefix=/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/maps/artifacts/"
+      ],
+      "limits": {
+        "runs": 10000,
+        "max_len": 4096,
+        "timeout_seconds_per_input": 2,
+        "rss_limit_mb": 512,
+        "fork": 0,
+        "jobs": 1,
+        "outer_timeout_seconds": 1800,
+        "outer_kill_grace_seconds": 10,
+        "lease_wait_timeout_seconds": 600
+      }
+    },
+    "mountinfo": {
+      "status": "NOT_RUN_PENDING_ROOT_ADMISSION",
+      "seed": 500502,
+      "corpus_source": "/home/user/src/m/bpfscope/.worktrees/lx05-proc-20261018/fuzz/scopebase-linux/corpus/mountinfo",
+      "corpus_private_copy": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/corpus",
+      "artifact_dir": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/artifacts",
+      "target_dir": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/target",
+      "environment": {
+        "HOME": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/home",
+        "CARGO_HOME": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/cargo-home",
+        "PATH": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/bin:/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+        "CARGO": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/bin/cargo",
+        "RUSTC": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustc",
+        "RUSTDOC": "/home/user/.rustup/toolchains/nightly-2026-05-20-x86_64-unknown-linux-gnu/bin/rustdoc",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_TERM_COLOR": "never",
+        "CARGO_BUILD_JOBS": "2",
+        "CC": "/usr/bin/clang-18",
+        "CXX": "/usr/bin/clang++-18",
+        "AR": "/usr/bin/ar",
+        "RANLIB": "/usr/bin/ranlib",
+        "CXXSTDLIB": "stdc++",
+        "CXXSTDLIB_STATIC": "0",
+        "CC_ENABLE_DEBUG_OUTPUT": "1",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/clang-18",
+        "RUSTFLAGS": "-Clinker=/usr/bin/clang-18 -Clink-arg=-fuse-ld=bfd",
+        "ASAN_SYMBOLIZER_PATH": "/usr/bin/llvm-symbolizer-18",
+        "LANG": "C.UTF-8",
+        "TMPDIR": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/tmp",
+        "SCOPEBASE_CARGO_GUARD_LOG": "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/cargo-guard.jsonl"
+      },
+      "inner_cargo_fuzz_argv": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/execution-after-admission/tool-target/release/cargo-fuzz",
+        "fuzz",
+        "run",
+        "--fuzz-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/project",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--target-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/target",
+        "--sanitizer",
+        "address",
+        "--jobs",
+        "1",
+        "--verbose",
+        "mountinfo",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/corpus",
+        "--",
+        "-runs=10000",
+        "-seed=500502",
+        "-max_len=4096",
+        "-timeout=2",
+        "-rss_limit_mb=512",
+        "-fork=0",
+        "-artifact_prefix=/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/artifacts/"
+      ],
+      "final_outer_argv": [
+        "/home/user/src/m/bpfscope/.scopebase/controller/build-routing-20261018/scopebase-build",
+        "--timeout",
+        "600",
+        "--",
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "--kill-after=10s",
+        "1800s",
+        "/home/user/src/m/bpfscope/.scopebase/controller/lx05-fuzz-admission-20261018/execution-after-admission/tool-target/release/cargo-fuzz",
+        "fuzz",
+        "run",
+        "--fuzz-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/project",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--target-dir",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/target",
+        "--sanitizer",
+        "address",
+        "--jobs",
+        "1",
+        "--verbose",
+        "mountinfo",
+        "/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/corpus",
+        "--",
+        "-runs=10000",
+        "-seed=500502",
+        "-max_len=4096",
+        "-timeout=2",
+        "-rss_limit_mb=512",
+        "-fork=0",
+        "-artifact_prefix=/home/user/src/m/bpfscope/.scopebase/jobs/lx05-proc-20261018/evidence/fuzz-campaign-final/mountinfo/artifacts/"
+      ],
+      "limits": {
+        "runs": 10000,
+        "max_len": 4096,
+        "timeout_seconds_per_input": 2,
+        "rss_limit_mb": 512,
+        "fork": 0,
+        "jobs": 1,
+        "outer_timeout_seconds": 1800,
+        "outer_kill_grace_seconds": 10,
+        "lease_wait_timeout_seconds": 600
+      }
+    }
+  },
+  "cleanup_expectations": {
+    "tracked_seed_corpus_immutable": true,
+    "run_corpora_are_private_copies": true,
+    "expected_child_retirement": "Observe cargo-fuzz, Cargo, rustc, native linker, libFuzzer and timeout child exit; preserve process/command logs and inspect any remaining process before reporting completion. Timeout alone is not retirement proof.",
+    "artifacts_private": true
+  },
+  "test_and_build_status": {
+    "a3_positive": "NOT_RUN",
+    "a3_skip_row_red": "NOT_RUN",
+    "a3_restored": "NOT_RUN",
+    "crate_full_suite": "NOT_RUN",
+    "source_archive_delivery": "NOT_RUN",
+    "cargo_metadata": "NOT_RUN",
+    "fuzz_build": "NOT_RUN",
+    "fuzz_link": "NOT_RUN",
+    "fuzz_startup": "NOT_RUN",
+    "maps_campaign": "NOT_RUN",
+    "mountinfo_campaign": "NOT_RUN"
+  },
+  "blockers": [
+    "Required controller wrapper fails before Cargo launch: [Errno 30] Read-only file system: build.lock",
+    "LX05 job evidence directory is read-only in this sandbox; index staged in owned fuzz project",
+    "Controller fuzz source admission omits rustix@1.1.5 and bitflags@2.13.2 needed by the bound product lock",
+    "Git shared worktree index is read-only; git add exits 128 and no commit can be created"
+  ],
+  "source_archive_delivery": {
+    "status": "NOT_RUN_AFTER_A3_CHANGE",
+    "package_include_pattern": "tests/**",
+    "a3_positive": {
+      "path": "tests/fixtures/procfs/maps_a3_valid.bin",
+      "sha256": "2204cb049147e49afd9220c5ba29b67fdcc028e7de0010d446d2325119d8c033"
+    },
+    "a3_negative": {
+      "path": "tests/fixtures/procfs/maps_a3_invalid.bin",
+      "sha256": "06801f1e80080b20e0fa965ef3ccb87d3926862920066c998e041c27f24c5eb2"
+    },
+    "required_named_test": "a3_exact_prefix_and_whole_snapshot_refusal",
+    "previous_archive_sha256": "27356b9b0f2a8f9a8a88070367e176af062406a87db16d1b248a918b3166fc96",
+    "new_archive": "NOT_RUN"
+  },
+  "a3_control": {
+    "patch_path": "controls/a3-skip-malformed-row.patch",
+    "patch_sha256": "7a0dbc1f1379f32c06d0dc6af0c09f478c3c358bd667d390c7c15616c6c91356",
+    "metadata_path": "controls/a3-control.json",
+    "metadata_sha256": "7039aee95d44f70dd3db27b9b7a3734f2cb1bd032327130d6191a2a3e72228ed",
+    "production_source_sha256_before_and_after": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+    "red_status": "NOT_RUN",
+    "restored_status": "NOT_RUN"
+  },
+  "static_check_results": {
+    "seed_hash_and_length_validation": "PASS: 241 unique named seeds, all <=4096 bytes and hash matched",
+    "package_test_declarations": 29,
+    "executed_rust_tests": 0,
+    "admitted_registry_archive_checksums_matched": 14,
+    "required_missing_admissions": 2,
+    "rustfmt_syntax_parse": "PASS: five changed/staged Rust files, no compilation"
+  },
+  "git_status": {
+    "commit": "NONE",
+    "stage": "BLOCKED_ENVIRONMENT",
+    "reason": "git add cannot create /home/user/src/m/bpfscope/.git/worktrees/lx05-proc-20261018/index.lock: Read-only file system"
+  },
+  "previous_superseded_by": {
+    "a3_result": ".scopebase/controller/finish-candidates-20261018/lx05-a3-final-r1/result.json",
+    "a3_result_sha256": "eddd4f748ad774ca740d00aefcc8d1ec70d82041808c22a2f4aa1a18c58dc884",
+    "package_result": ".scopebase/controller/finish-candidates-20261018/lx05-qualification-r2/receipts/result.json",
+    "package_result_sha256": "e1ec3cda1b606b6895bfd703142f6db9304a82916d1e1e2f3369e583ba820e4d",
+    "fuzz_result": ".scopebase/controller/finish-candidates-20261018/lx05-fuzz-final-r1/result.json",
+    "fuzz_result_sha256": "c7f218ad924b65edb219541b6c4aa7b47a71f242b36f3356c35a2da93a4c1995"
+  },
+  "current_qualification": {
+    "date": "2026-10-22",
+    "status": "RERUNS_PASSED_PENDING_INDEPENDENT_REVIEW",
+    "candidate_base_commit": "e86ff68aff788fad4396dcfb8f8f33013bc2a103",
+    "source_baseline": ".scopebase/controller/resume-20261022/lx05/baseline.json",
+    "source_baseline_sha256": "fedf9a9e1904f4070595716819ffe097ef1485e90e529af6b4c29592f7be17c6",
+    "rust_inputs_unchanged": true,
+    "package_cells": 6,
+    "gate_pass_rows": 56,
+    "gate_report": ".scopebase/controller/finish-candidates-20261018/lx05-qualification-r3/receipts/gate-report.json",
+    "gate_report_sha256": "de37b2d28127671703775716baf92b12b97d3598ef371460190b27933ca3cd1d",
+    "archive": ".scopebase/controller/finish-candidates-20261018/lx05-qualification-r3/archive/scopebase-linux-0.1.0.crate",
+    "archive_sha256": "e54ad4010dc1681fd33c68dcc44adcbfcbb16cf98c42766455406f134260327b",
+    "source_archive_helpers": 12,
+    "client_executions": 24,
+    "fuzz_campaigns": 2,
+    "fuzz_runs_each": 10000,
+    "fuzz_seed_populations": {
+      "maps": 75,
+      "mountinfo": 166,
+      "positive": 128,
+      "active_negative": 113
+    },
+    "rustfmt_result": ".scopebase/controller/resume-20261022/lx05/rustfmt-r2-result.json",
+    "rustfmt_result_sha256": "a0841f24b1bc66110e6665f460c1fbadcfa273d478cac5cce4bd22ada30397c6",
+    "metadata_rebinding_notice": "The fuzz result project_files binds the pre-receipt documentation snapshot preserved at .scopebase/controller/resume-20261022/lx05/pre-rebind-documents. Only qualification.md, preparation-index.json and review-fix-report.md change after execution; parser/oracle/target/lock/corpus bytes remain unchanged.",
+    "remaining_gates": [
+      "Final independent Daybreak review",
+      "Controller selected-port validation, commit, canonical integration and acceptance"
+    ]
+  }
+}

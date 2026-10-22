@@ -72,6 +72,7 @@ fn deadline_after_at(start: Instant, duration: Duration) -> Result<MonotonicDead
         .checked_add(duration)
         .map(|at| MonotonicDeadline { at })
         .ok_or_else(|| LinuxError {
+            parse_line: None,
             stage: Stage::ConfigureControl,
             reason: Reason::InvalidInput,
             source: None,
@@ -82,6 +83,7 @@ fn deadline_after_at(start: Instant, duration: Duration) -> Result<MonotonicDead
                 flags: DescriptorFlagEffect::NotAttempted,
             },
             charges: ResourceCharges {
+                parse: None,
                 syscalls: 0,
                 acquired: 0,
                 peak: 0,
@@ -146,6 +148,7 @@ impl ControlStop {
         charges: ResourceCharges,
     ) -> LinuxError {
         LinuxError {
+            parse_line: None,
             stage,
             reason: match self {
                 Self::Cancelled => Reason::Cancelled,

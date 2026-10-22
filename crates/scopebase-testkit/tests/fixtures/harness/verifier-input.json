@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"tt02-model-outcome","outcome":{"kind":"error","stage":"load","category":"refused","errno":13,"cause":"verifier","diagnostic_hex":"756e696e697469616c697a656420737461636b"}}

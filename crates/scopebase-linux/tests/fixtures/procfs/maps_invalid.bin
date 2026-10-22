@@ -1,0 +1,4 @@
+1200-1600 r-xp 0010 0b:02 91 /fixtures/alpha/one
+1600-1a00 rw-p 0050 0b:03 92 /fixtures/alpha/two
+2100-2500 r--s 0090 0b:04 93 /fixtures/alpha/three
+broken-tail

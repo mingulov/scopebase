@@ -119,3 +119,46 @@ mod tests {
         }
     }
 }
+
+/// Lexical maps tuple only; never a physical-file identity or stat device.
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct MapsFileKey {
+    pub(crate) major: u64,
+    pub(crate) minor: u64,
+    pub(crate) inode: u64,
+}
+impl MapsFileKey {
+    pub fn device_major(&self) -> u64 {
+        self.major
+    }
+    pub fn device_minor(&self) -> u64 {
+        self.minor
+    }
+    pub fn inode(&self) -> u64 {
+        self.inode
+    }
+}
+impl fmt::Debug for MapsFileKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MapsFileKey")
+    }
+}
+/// Decimal mountinfo device components, with no cross-domain conversion.
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct MountDevice {
+    pub(crate) major: u64,
+    pub(crate) minor: u64,
+}
+impl MountDevice {
+    pub fn major(&self) -> u64 {
+        self.major
+    }
+    pub fn minor(&self) -> u64 {
+        self.minor
+    }
+}
+impl fmt::Debug for MountDevice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MountDevice")
+    }
+}

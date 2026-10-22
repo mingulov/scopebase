@@ -131,3 +131,27 @@ fixtures, privacy cases, and independently wired public client sources in
 `cargo test --locked`; a downstream dependency's tests do not run automatically.
 
 Selected user-owned p11scope and OSSLscope host mechanisms and regression shapes are adapted under the owner-authorized Apache-2.0 destination terms. Their historical GPL-3.0-or-later source labels remain recorded in ScopeBase source-admission and selected-port receipts LX02, LX04 and LX03; the destination grant does not relicense unrelated third-party or kernel/BPF source. LX03 preserves positional/short-read handling, bounded allocation and EOF checks, final-stat raced-read refusal, shared payloads and checked work accounting. Application policies and broader mapped-image behavior remain separate.
+
+## Strict bounded proc observations
+
+`procfs::parse_maps(&[u8], ParseLimits)` and `parse_mountinfo(&[u8], ParseLimits)` validate complete caller-supplied byte snapshots without acquiring files or process authority. All three limits (bytes, entries, line bytes excluding LF) must be nonzero. Empty bytes are valid absence; nonempty inputs require final LF. Every malformed row refuses the entire table, with a one-based `LinuxError::parse_line()` and historical `charges().parse()` counters. Maps are ordered half-open intervals with checked offsets. Raw path bytes, deleted suffixes and ambiguous literal `\012` markers remain descriptive evidence. Maps keys differ from stat keys; matching tuples do not prove physical-file identity.
+
+Mount fields expose raw and single-pass decoded octal bytes; options stay opaque. Entries retain input order with logarithmic numeric lookup and duplicate refusal. `ParsedMountId` equality requires the same borrowed table object and number; it conveys no runtime namespace/view identity. Snapshots are immutable, Send + Sync, and deliberately have no allocating Clone.
+
+Parsing uses two/four fallible exact vector reserves after shape validation, bounded accepted logical capacities and O(bytes) / O(bytes + entries log entries) work. Allocator overgrant refuses with historical peak capacity charged. Input storage, allocator overhead, RSS and elapsed time are separate; no hard runtime bound is promised. Existing file/read/control behavior is unchanged.
+
+The delivered package includes independent literal fixtures, public/private tests, a maps inventory client and a distinct mount auditor. From a standalone extracted archive (outside repositories or Cargo workspaces), run:
+
+```sh
+python3 /absolute/scopebase-linux-0.1.0/tests/support/run_proc_parser_checks.py \
+  --package-root /absolute/scopebase-linux-0.1.0 \
+  --cargo /absolute/toolchain/bin/cargo \
+  --rustc /absolute/toolchain/bin/rustc \
+  --rustdoc /absolute/toolchain/bin/rustdoc \
+  --cargo-home /absolute/prepared-offline-cargo-home \
+  --target-dir /absolute/fresh-target \
+  --output-dir /absolute/fresh-results \
+  --configuration minimal
+```
+
+Python 3.11+ and a prepared offline Cargo closure are required. Configurations are `minimal`, `default`, `union`; tools are explicit, no installation occurs. The helper creates an enclosing resolver-2 workspace and separate clients, freezes locks before offline locked executions, binds metadata/features and compiler diagnostics, and verifies package bytes unchanged. The subject parent must be writable and have no Cargo manifest. Source projections require a bound Linux-only lock prepared from the workspace lock before invocation; do not change an archive's delivered lock/manifest. Results qualify this pure parser increment only, not live filesystem mapping support or a runtime conformance profile.

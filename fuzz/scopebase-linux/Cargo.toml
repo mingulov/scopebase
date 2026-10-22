@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-linux-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+scopebase-linux = { path = "../../crates/scopebase-linux", version = "=0.1.0", default-features = false }
+
+[[bin]]
+name = "maps"
+path = "fuzz_targets/maps.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mountinfo"
+path = "fuzz_targets/mountinfo.rs"
+test = false
+doc = false
+bench = false

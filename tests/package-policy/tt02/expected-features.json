@@ -1,0 +1,130 @@
+{
+  "basis": "independent finite literal selected from exact admitted manifest feature/dependency declarations; never generated from the build metadata being checked",
+  "packages": [
+    {
+      "features": [],
+      "manifest_sha256": "f21191120ab1d04327657b7125f25b0e3f2bce34af5e921d3c66d24de11d5e60",
+      "name": "block-buffer"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "d646663ec1bd4e8e795bd6a386cff9c374880d6237bbfa36bbac08b7f26ce65c",
+      "name": "cfg-if"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "2e82ee61a94e8ef99197ca59723e9794d0f08363f28bacab680292af6ccdde61",
+      "name": "cpufeatures"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "1b47561054dd2fe13246f2f6e19c29eac256269e02c96162fd6efed28247e78a",
+      "name": "crypto-common"
+    },
+    {
+      "features": [
+        "block-api",
+        "default"
+      ],
+      "manifest_sha256": "59c4f2cba7e34831c87e8f4844718d91d0f276af7bd192de76fda7d5a8978eb9",
+      "name": "digest"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "0f4ca21a2707a25425c1b7f8977a7534bd350c0c650cdea4c49497397a5a8aa8",
+      "name": "hybrid-array"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "894c215e4e7e973b556b0e9627bf9b6a719a043fac9b5af9838660816392a09f",
+      "name": "itoa"
+    },
+    {
+      "features": [
+        "alloc",
+        "std"
+      ],
+      "manifest_sha256": "a14f68b8fa55f15fd03b15dced37bcf66a0a628f568eedc82817cdb7f9281951",
+      "name": "memchr"
+    },
+    {
+      "features": [
+        "proc-macro"
+      ],
+      "manifest_sha256": "6bdbe54a7f052e552dcfca90351764476e2767237ec3f954df8bd9f602861056",
+      "name": "proc-macro2"
+    },
+    {
+      "features": [
+        "proc-macro"
+      ],
+      "manifest_sha256": "13d8c50837f14aff48cd622349f98fb2c46350b7a0c08fd574cf7de4def27d06",
+      "name": "quote"
+    },
+    {
+      "features": [
+        "derive",
+        "serde_derive",
+        "std"
+      ],
+      "manifest_sha256": "6883caefd46e86eb15d22d3a6d274ad304c5e7934ab70eb58d81b7c4a29ef9db",
+      "name": "serde"
+    },
+    {
+      "features": [
+        "result",
+        "std"
+      ],
+      "manifest_sha256": "c6049e170e4f7c2b48749fefab59db583bfac4e466cde6d0c53e4f49bc5044f7",
+      "name": "serde_core"
+    },
+    {
+      "features": [
+        "default"
+      ],
+      "manifest_sha256": "d2581160ffa61baa386f882e08b0db20051dc3c782a82268d6473998b61c926e",
+      "name": "serde_derive"
+    },
+    {
+      "features": [
+        "std"
+      ],
+      "manifest_sha256": "00b920255c320a278bf25b962b491263a19d8c90e12e4a91c1d823db71eabb2f",
+      "name": "serde_json"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "bb187fe9b788b66dc91c717ace2a41b5da5518672a302696ab79bf4619d510a9",
+      "name": "sha2"
+    },
+    {
+      "features": [
+        "clone-impls",
+        "derive",
+        "parsing",
+        "printing",
+        "proc-macro"
+      ],
+      "manifest_sha256": "b6f7f6069d92142d3e294f84855a68049bebc5b886c557ed4ae980ddbc866e1c",
+      "name": "syn"
+    },
+    {
+      "features": [
+        "const-generics"
+      ],
+      "manifest_sha256": "00785a81eae34b3298dfdde78a6bd96fe3ec000de46edd509bd13b7cab7a9870",
+      "name": "typenum"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "c0e96a9c7ee62f5f9ab12de69e0ad44826ad753911d47638f605c936f7ea2c1c",
+      "name": "unicode-ident"
+    },
+    {
+      "features": [],
+      "manifest_sha256": "b31420c7a806fae5b9ea2438dd4cbb99dcb3a22da67697fdf2776cc44a69527e",
+      "name": "zmij"
+    }
+  ],
+  "schema_version": 1
+}

@@ -1,0 +1,1 @@
+{"schema_version":1,"kind":"tt02-independent-truth","sum":"5","decimal_length":"1","bad_sum":"6","tier":"T0","malformed":["duplicate.bytes","invalid-utf8.bin"]}

@@ -1,0 +1,383 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "LX05-20261022-proc",
+  "task_id": "LX05",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-18-lx05-proc.json",
+    "sha256": "9cef97b541284a32455019e1b05dd60b614b211d0d8e154601e034d45faaca71"
+  },
+  "mappings": [
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          9,
+          54
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/identity.rs",
+          "sha256": "6fd6bdd170c5fc18d4b14f99378007fce6bcc08bf094dcd133fd4a74d5ff5d96",
+          "symbols": [
+            "MapsFileKey"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "MapRecord",
+            "MapsEntry::{file_key,raw_path,permissions}"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/maps_inventory.rs",
+          "sha256": "099eca9b945559bb8d4823a5ad6690d02596daeacbf5788805bce1a37905a7eb",
+          "symbols": [
+            "main (new consumer of lexical map keys/raw fields)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          56,
+          67
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "parse_maps",
+            "parse_inner (whole-input refusal)"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_malformed_nonempty_line_is_rejected",
+            "complete_absence_and_unterminated_are_distinct"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          85,
+          162
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "field",
+            "parse_line"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/procfs/mod.rs",
+          "sha256": "97763d3540ab2e7505b3444377727dd62158f0ee666cc86e83c6abf14a203b7f",
+          "symbols": [
+            "split_once",
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          213,
+          261
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "parse_inner (ordered/nonoverlap/extent admission)",
+            "MapsSnapshot::{entries,containing}"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/maps_inventory.rs",
+          "sha256": "099eca9b945559bb8d4823a5ad6690d02596daeacbf5788805bce1a37905a7eb",
+          "symbols": [
+            "main (new literal address/offset inventory consumer)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          268,
+          287
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "MapsEntry::{raw_path,path_kind,path_evidence}",
+            "MapsPathEvidence::{is_utf8,has_escaped_newline,has_deleted_suffix}"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          294,
+          297
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/maps.rs",
+          "sha256": "76212790b25c2a4db48c84576a1a83830ada1b8fdabbba87c21b5de6b2f46d38",
+          "symbols": [
+            "MapsEntry::file_offset_at"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/maps_inventory.rs",
+          "sha256": "099eca9b945559bb8d4823a5ad6690d02596daeacbf5788805bce1a37905a7eb",
+          "symbols": [
+            "main (new consumer of checked segment offsets)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          320,
+          420
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "SORTED",
+            "ported_parses_entries_and_preserves_path_bytes",
+            "ported_resolves_with_segment_offset_arithmetic",
+            "ported_classifies_anonymous_and_unmapped",
+            "ported_unusable_file_paths_remain_file_evidence",
+            "ported_malformed_nonempty_line_is_rejected"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          429,
+          499
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_map_index_requires_sorted_non_overlapping_intervals"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          502,
+          546
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_invalid_snapshot_is_distinguishable_from_valid_absence"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          549,
+          576
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_map_index_rejects_file_offset_overflow"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/maps.rs",
+      "source_scope": [
+        [
+          579,
+          606
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_map_index_resolves_gaps_adjacency_and_exclusive_ends"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          607,
+          631
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/mod.rs",
+          "sha256": "97763d3540ab2e7505b3444377727dd62158f0ee666cc86e83c6abf14a203b7f",
+          "symbols": [
+            "split_once",
+            "number"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "numeric_grammar_and_full_range_overflow",
+            "numeric_domains_each_reject_sign_prefix_and_overflow"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/proc_reference.rs",
+          "sha256": "28cb7cf07fee04f9af51593bbbaf130acc80685ea42ea1b1914d0b595dbef25e",
+          "symbols": [
+            "number (new independent u128 test oracle)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          139,
+          158
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/src/procfs/mountinfo.rs",
+          "sha256": "4b4cffd66311eb719d9053eeb0b81de164864b01b5473d0b89dabb562810a165",
+          "symbols": [
+            "parse_line (decimal mount number/device facts)",
+            "MountTableSnapshot::entry_by_number",
+            "MountEntry::device"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/src/identity.rs",
+          "sha256": "6fd6bdd170c5fc18d4b14f99378007fce6bcc08bf094dcd133fd4a74d5ff5d96",
+          "symbols": [
+            "MountDevice"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/mount_audit.rs",
+          "sha256": "e42490c9b800371d7debf9857a1f14a40db4ed0eab71929af0e98235203cb394",
+          "symbols": [
+            "main (new lexical table/device consumer)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          674,
+          697
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "table_local_numbers_preserve_device (pure vector counterpart only)"
+          ]
+        },
+        {
+          "path": "crates/scopebase-linux/tests/support/mount_audit.rs",
+          "sha256": "e42490c9b800371d7debf9857a1f14a40db4ed0eab71929af0e98235203cb394",
+          "symbols": [
+            "main (new equal-number/different-table device audit)"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "P:crates/manifest/src/identity.rs",
+      "source_scope": [
+        [
+          991,
+          1056
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+          "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+          "symbols": [
+            "ported_probed_maps_line_parses_hex_devices_and_decimal_inodes",
+            "ported_probed_maps_line_matches_only_its_own_range",
+            "ported_malformed_probed_maps_lines_fail_closed"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/LX05-preservation-20261022.md",
+    "sha256": "ee8e9cdf9959e7d4cba608e540f53fdcecf9b14b1688288b9df673aa429e6c02"
+  },
+  "supersedes": null
+}

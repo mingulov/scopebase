@@ -18,6 +18,7 @@ pub mod error;
 /// Retained file authority and bounded positional reads with observation-only results.
 pub mod file;
 pub mod identity;
+pub mod procfs;
 
 // Unit fixtures which inspect retired numeric slots must coordinate every
 // competing descriptor allocation in this test process. This is not runtime

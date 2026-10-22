@@ -1,0 +1,4 @@
+17 1 0:42 / /mnt rw shared:7 x:\377 - fuse.demo\043tag source\043tag rw
+18 1 0:43 / /merged rw - overlay overlay rw,lowerdir=/lower\054part
+19 1 0:44 / /mnt rw - tmpfs none rw,key\075part=value
+2 2 8:1 /root\040dir /mount\011point rw master:3 propagate_from:4 unbindable opaque - fs \134043 rw

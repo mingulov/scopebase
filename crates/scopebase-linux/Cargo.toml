@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
 license = "Apache-2.0"
-description = "ScopeBase retained regular-file acquisition, bounded positional reads and descriptor observations"
+description = "ScopeBase retained file acquisition, bounded reads and strict raw-byte proc parsers"
 publish = false
 readme = "README.md"
 build = false
@@ -24,3 +24,7 @@ rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"
 [[example]]
 name = "fd_probe"
 path = "tests/support/fd_probe.rs"
+
+[[test]]
+name = "proc_parsers"
+path = "tests/proc_parsers.rs"
