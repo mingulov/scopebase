@@ -1,0 +1,52 @@
+{
+  "schema": "scopebase.capture.closure-v1",
+  "version": 1,
+  "note": "Scripted T1 closure vectors. Predicates are caller labels; serials order reports without proving any boundary occurred. No live settlement is qualified.",
+  "predicates": [
+    {"id": 1, "name": "baseline"},
+    {"id": 2, "name": "admission"},
+    {"id": 3, "name": "closed"},
+    {"id": 4, "name": "quiescence"},
+    {"id": 5, "name": "drain"},
+    {"id": 6, "name": "sample"}
+  ],
+  "edges": [[1, 2], [2, 3], [3, 4], [4, 5], [5, 6]],
+  "cases": [
+    {
+      "id": "full-script",
+      "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 5, 0], [6, 6, 0]],
+      "invalidations": [],
+      "expected": {"satisfied": [1, 2, 3, 4, 5, 6], "missing": [], "invalidated": []}
+    },
+    {
+      "id": "baseline-after-admission",
+      "observations": [[1, 2, 0], [2, 1, 0], [3, 3, 0]],
+      "invalidations": [],
+      "expected": {"satisfied": [1], "missing": [4, 5, 6], "invalidated": [2, 3]}
+    },
+    {
+      "id": "dropped-quiescence",
+      "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [5, 5, 0], [6, 6, 0]],
+      "invalidations": [],
+      "expected": {"satisfied": [1, 2, 3], "missing": [4], "invalidated": [5, 6]}
+    },
+    {
+      "id": "sample-before-drain",
+      "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 5, 0], [6, 4, 0]],
+      "invalidations": [],
+      "expected": {"satisfied": [1, 2, 3, 4, 5], "missing": [], "invalidated": [6]}
+    },
+    {
+      "id": "late-submit-invalidates-drain-sample",
+      "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 5, 0], [6, 6, 0]],
+      "invalidations": [[5, "LateEvidence"]],
+      "expected": {"satisfied": [1, 2, 3, 4], "missing": [], "invalidated": [5, 6]}
+    },
+    {
+      "id": "quiet-poll-settles-nothing",
+      "observations": [],
+      "invalidations": [],
+      "expected": {"satisfied": [], "missing": [1, 2, 3, 4, 5, 6], "invalidated": []}
+    }
+  ]
+}
