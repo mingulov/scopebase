@@ -32,6 +32,7 @@ pub mod prepared;
 pub mod oracle;
 pub mod result;
 pub mod runner;
+pub mod select;
 pub use adapter::*;
 pub use artifact::*;
 pub use fixture::*;

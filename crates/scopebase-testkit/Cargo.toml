@@ -29,3 +29,7 @@ name = "tt02_rsp01_alloc"
 path = "tests/tt02_rsp01_alloc.rs"
 harness = false
 required-features = ["bpf-host"]
+
+[[test]]
+name = "selection"
+path = "tests/selection.rs"
