@@ -6,7 +6,7 @@ Read the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisio
 
 ## Development resumed — 2026-10-22
 
-The user resumed TT02/BP02/LX05 development from the preserved handoff using five concurrent subagents. TT02 and LX05 are now accepted after changed-byte qualification, independent Daybreak approval and root integration. **71 tasks remain: BP02 in progress and 70 planned.** BP02's pre-guest review blocks the v7-r2 candidate because failed native children can bypass temporary-root cleanup. V8 repair and affected rebinding are active; the stopped v7-r2 guest is superseded and must not run. Required actual live cells and final acceptance remain. Current controller records are under `.scopebase/controller/resume-20261022/`. The transfer section below is historical.
+The user resumed TT02/BP02/LX05 development from the preserved handoff using five concurrent subagents. TT02 and LX05 are now accepted after changed-byte qualification, independent Daybreak approval and root integration. **71 tasks remain: BP02 in progress and 70 planned.** BP02 v8-r2 repair, local gates and fresh stopped packaging pass; its independent product pre-guest review is running. The stopped v7-r2 guest is superseded and must not run. Required actual live cells, post-run review and root acceptance remain. Current controller records are under `.scopebase/controller/resume-20261022/`. The transfer section below is historical.
 
 ## Historical transfer checkpoint — 2026-10-18
 
