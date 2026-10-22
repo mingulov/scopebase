@@ -890,7 +890,7 @@
       "anchor": "task-cp05-explicit-generations-and-bounded-lifecycle-histories",
       "lane": "capture",
       "milestone": "M4",
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "depends_on": [
         "CP02"
       ],
@@ -901,7 +901,12 @@
         "CP-R15",
         "CP-R18"
       ],
-      "profile_gates": []
+      "profile_gates": [],
+      "acceptance": {
+        "subject_commit": "7d992e12bd73519610e5b2eac7866993fe83ac16",
+        "reviewed_candidate_commit": "336a4d3879bbd5de2c033096fb94cafd8aa8e1ff",
+        "evidence_record": "docs/reviews/2026-10-22-cp05-generations.md"
+      }
     },
     {
       "id": "CP06",

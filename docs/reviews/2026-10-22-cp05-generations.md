@@ -1,0 +1,31 @@
+# CP05 scoped generation package acceptance
+
+Date: 2026-10-22. **CP05 accepted** at integrated subject `7d992e12bd73519610e5b2eac7866993fe83ac16`, from reviewed candidate `336a4d3879bbd5de2c033096fb94cafd8aa8e1ff`. The original executable candidate is `80b3847542b6424e1b09c259536fe81a8bf000be`; its successor changes three prose files only.
+
+`ObjectKey<K>` preserves the complete caller-supplied epoch, raw identity and generation. Zero and MAX are valid; checked advancement refuses overflow before invoking Clone, and matching checks epoch/generation before one raw comparison. Conditional traits and redacted Debug preserve caller callback and ownership boundaries. The primitive issues no identity or native authority. Distinct transform and mapping models/examples retain bounded history, entry-bound attribution and nonjoinable unknown observations.
+
+The [contract](../superpowers/specs/2026-10-22-scopebase-cp05-generations.md), [verification plan](../superpowers/plans/2026-10-22-scopebase-cp05-verification.md), [issue](../issues/capture/generations.md), [selected-port receipt](../provenance/ports/CP05-20261022-initial.json) and [preservation map](../provenance/ports/CP05-preservation-20261022.md) bind eight frozen source files, seventeen named original subsets and forty-eight destination symbol slices. Thirteen earlier CP02/CP03/CP04 destinations remain unchanged. The immutable e29 source admission remains authoritative for this port despite the later CP06 intake successor.
+
+| Evidence | Observed result | SHA256 |
+|---|---|---|
+| Independent source R1 index | Original source approved; unchanged executable evidence reused through explicit equality | `b2631749a1b7cec8ebff27e8c2fc18a5c91d24f18c778f6302fa3ad2021396cd` |
+| Scoped successor review index | Notice suffix moved losslessly to README; A24/B01 issue wording corrected | `ba9c1537717c373b3de341167c1a9d0b7dc29a2f53f5b0008efc98e1ddcb1795` |
+| Candidate delivery R2 index | Actual archive/helper/client/custody evidence approved for root integration | `9cf549f3160df290b023217247953ed4754d576e708d682ffbfc6f70eb7e7aac` |
+| Fresh root archive matrix | 57 PASS rows, six selected cells of twenty declared | `3ca7e19e7d3dd25e5b3baecba56452dc6d7deb391d70de640d8384afd81923bc` |
+| Actual candidate/root archive | Fifty-two members; all fifty declared source representations equal | `32cab5770eca2a841c24ed62162bc5b48dbbb8c637c29cba246056f5718d2d11` |
+| Root port/policy/archive/reuse review index | No findings; 546 port/policy and 1,961 archive/reuse predicates passed | `51381906b262ac401cab8d02152bfa2d01eb3596a4e227cdec58292e86dfe161` |
+| Controller acceptance | Exact integrated source, archive, policy, reviews, reuse limits and custody | `e6f5f5624e831fdf8401f8a7bc3e6d59d2737f60f5f01ddd3b596fd5715e7f9b` |
+
+Each root Rust 1.88.0/1.98.1 × minimal/default/JSON cell passed 105 tests and four doctests, with zero failures or ignored tests. Root rehashed 144 command checkpoints and 96 logs for 48 completed commands, verified the common build lease and confirmed all command groups absent. Eight generic archive-client executions and twelve actual archive process-failure cases are included. Three unchanged package gates are explicitly omitted; this is no new complete twenty-cell matrix.
+
+The candidate's six actual archive helper configurations plus one standalone route retain 1,218 commands, 266 intended semantic failures with restored positives, four compiler-control groups per run and fourteen distinct reference-client binaries. The independent finite oracle enumerates 55,987 scripts and 324,726 actions with at most six journal rows/eighteen facts. Literal populations preserve 690 reuse, 60,248 unbound, 2,456 overlap and 916 eviction triggers. The two clients exercise materially different real library paths; they are synthetic reference consumers rather than migrated applications.
+
+The standalone archive helper ran under one outer common lease, with no inner wrapper. It needs only the delivered package plus the declared Python/compiler/offline dependency inputs. The packaged collector and twelve failure tests preserve structured command/log/cleanup evidence. Ordinary downstream dependency tests do not run these checks automatically; the package README gives the explicit developer route. This delivery observation does not qualify an installed conformance profile.
+
+Candidate helper results are **reused by explicit reference**, not relabeled as fresh root executions. All declared source, extracted archive, normalized manifest, lock, dependency/feature, compiler, tool and client inputs match. The frozen whole-directory reuse checker correctly rejected unequal fingerprints: the candidate source directory also contains two generated, unshipped `__pycache__` records. A separately reviewed supplement admits only those exact named/hash-bound records; neither actual archive contains them. Changed source, extra unknown files, different bytecode paths/hashes, declared bytecode, new transformation fields and changed generated locks are rejected by independent controls. The original rejection remains preserved.
+
+Two earlier candidate gates stopped before archive cells: host-filtered metadata exposed 28 versus the required full 30-package root closure, then strict notice parsing rejected appended provenance prose. The narrow driver repair and lossless prose successor retain those failures and their exact scope. No old result is relabeled as testing changed bytes. Root activated only the capture package-file inventory over the accepted policy, preserving TT02 additions and root lock `f6c25f000ee1446a0654b1b92e303244cd2e51abf3db963f22e8fd3eb956d16b`.
+
+Planning checks passed for 120 requirements, 86 tasks and 179 mappings; the actual selected-port receipt validated, and 122 planning-tool unit tests passed. These are development-tool results. Controller evidence is under `.scopebase/controller/resume-20261022/`; candidate source, failed attempts, reports, targets and binaries remain under `.scopebase/jobs/cp05-generations-20261022-r1/` and its retained worktree.
+
+CP08 ordering, CP10 replay, CP11 actual application adapters, CP13/TT07 installed consumer conformance, UC14 and migration/duplicate retirement retain their later owners. No runtime identity, native behavior, complete profile, release or publication is qualified.
