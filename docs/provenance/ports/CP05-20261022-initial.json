@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "CP05-20261022-initial",
+  "task_id": "CP05",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+    "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+  },
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+      "source_scope": [
+        [
+          569,
+          575
+        ],
+        [
+          590,
+          594
+        ],
+        [
+          636,
+          640
+        ],
+        [
+          660,
+          670
+        ],
+        [
+          963,
+          976
+        ],
+        [
+          983,
+          985
+        ],
+        [
+          999,
+          1005
+        ],
+        [
+          1014,
+          1020
+        ],
+        [
+          1057,
+          1061
+        ],
+        [
+          1139,
+          1149
+        ],
+        [
+          1150,
+          1153
+        ],
+        [
+          1215,
+          1245
+        ],
+        [
+          1247,
+          1250
+        ],
+        [
+          1304,
+          1313
+        ],
+        [
+          1349,
+          1367
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/generation.rs",
+          "sha256": "96fe64b569268d4b797b036f10aa77f5ba0a267a4fe66035de98b9e8b45c064c",
+          "symbols": [
+            "ObjectKey::matches",
+            "PartialEq for ObjectKey",
+            "require_generation"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/generation_models.rs",
+          "sha256": "bed1e7331b62451b184e7977006ce05cac2a389b16de4e8f8f595e81200e4b2c",
+          "symbols": [
+            "Pending",
+            "KModel::current",
+            "KModel::allocate",
+            "KModel::submit_alloc",
+            "KModel::complete_alloc",
+            "KModel::submit_destroy",
+            "KModel::complete_destroy",
+            "KModel::proved_retire",
+            "KModel::submit_config",
+            "KModel::complete_config",
+            "KModel::compact"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transform_generations.rs",
+          "sha256": "04153604869b401167cd626ee8b5b7eca2e8ca1aaa85b7372f39db204000fd81",
+          "symbols": [
+            "Transforms::occupant",
+            "Transforms::allocate",
+            "Transforms::submit",
+            "Transforms::finish"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+      "source_scope": [
+        [
+          146,
+          172
+        ],
+        [
+          226,
+          235
+        ],
+        [
+          593,
+          610
+        ],
+        [
+          613,
+          632
+        ],
+        [
+          816,
+          839
+        ],
+        [
+          842,
+          863
+        ],
+        [
+          866,
+          883
+        ],
+        [
+          886,
+          901
+        ],
+        [
+          904,
+          917
+        ],
+        [
+          920,
+          951
+        ],
+        [
+          1129,
+          1147
+        ],
+        [
+          1150,
+          1172
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/generation_histories.rs",
+          "sha256": "b7798a8f25d7a3f9b9c114a8493bf3511f0dc27aae35cf2e08d4dfec0f3f8de4",
+          "symbols": [
+            "k_alloc_pair_assigns_generation_with_provenance",
+            "k_pending_table_bound_refuses",
+            "k_alloc_after_proved_retire_assigns_fresh_id",
+            "k_alloc_for_live_base_forces_retire_as_ambiguous",
+            "k_destroy_return_after_realloc_retires_nothing",
+            "k_destroy_entry_unmapped_then_live_refuses",
+            "k_overlapping_destroy_second_return_goes_stale",
+            "k_config_return_after_realloc_unlinks",
+            "k_config_entry_unmapped_then_live_unlinks",
+            "k_config_after_retire_admits_fresh_never_merges",
+            "k_d4_live_cap_refuses_new_generations",
+            "k_d4_retired_history_is_fifo_bounded"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/model/identity.mojo",
+      "source_scope": [
+        [
+          38,
+          42
+        ],
+        [
+          130,
+          132
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/generation_models.rs",
+          "sha256": "bed1e7331b62451b184e7977006ce05cac2a389b16de4e8f8f595e81200e4b2c",
+          "symbols": [
+            "RawDomain",
+            "PartialEq for RawDomain",
+            "local_lineage"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/mapping_generations.rs",
+          "sha256": "707074d0510a3dacbcdb31e6062152823ac4a1e2d2f118db7d9047be2416bfb4",
+          "symbols": [
+            "Domain"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_identity.mojo",
+      "source_scope": [
+        [
+          89,
+          96
+        ],
+        [
+          114,
+          121
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/generation_histories.rs",
+          "sha256": "b7798a8f25d7a3f9b9c114a8493bf3511f0dc27aae35cf2e08d4dfec0f3f8de4",
+          "symbols": [
+            "m_test_pairing_key_namespaces",
+            "m_test_generation_positive"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/analysis/mappings.mojo",
+      "source_scope": [
+        [
+          490,
+          510
+        ],
+        [
+          536,
+          538
+        ],
+        [
+          540,
+          540
+        ],
+        [
+          544,
+          548
+        ],
+        [
+          669,
+          671
+        ],
+        [
+          673,
+          680
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/generation_models.rs",
+          "sha256": "bed1e7331b62451b184e7977006ce05cac2a389b16de4e8f8f595e81200e4b2c",
+          "symbols": [
+            "Mappings::map_unknown",
+            "Mappings::map",
+            "Mappings::unmap",
+            "Mappings::continuity"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/mapping_generations.rs",
+          "sha256": "707074d0510a3dacbcdb31e6062152823ac4a1e2d2f118db7d9047be2416bfb4",
+          "symbols": [
+            "MappingJournal::open",
+            "MappingJournal::close"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_mappings.mojo",
+      "source_scope": [
+        [
+          544,
+          559
+        ],
+        [
+          848,
+          899
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/generation_histories.rs",
+          "sha256": "b7798a8f25d7a3f9b9c114a8493bf3511f0dc27aae35cf2e08d4dfec0f3f8de4",
+          "symbols": [
+            "m_test_reused_generation_two_samples",
+            "m_test_retired_history_bounded"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/capture/reader.mojo",
+      "source_scope": [
+        [
+          403,
+          409
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/support/generation_models.rs",
+          "sha256": "bed1e7331b62451b184e7977006ce05cac2a389b16de4e8f8f595e81200e4b2c",
+          "symbols": [
+            "Reader::observe"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/mapping_generations.rs",
+          "sha256": "707074d0510a3dacbcdb31e6062152823ac4a1e2d2f118db7d9047be2416bfb4",
+          "symbols": [
+            "MappingJournal::observation"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_reader.mojo",
+      "source_scope": [
+        [
+          1912,
+          1942
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/generation_histories.rs",
+          "sha256": "b7798a8f25d7a3f9b9c114a8493bf3511f0dc27aae35cf2e08d4dfec0f3f8de4",
+          "symbols": [
+            "m_test_multiple_unassigned_map_results",
+            "unknown_ids_are_nonjoinable"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/CP05-preservation-20261022.md",
+    "sha256": "b7574ff2412ac1a69ade26fcf2c2a3e317fa9eb3b4b5cbe599df1303d133cb94"
+  },
+  "supersedes": null
+}
