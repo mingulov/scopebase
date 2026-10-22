@@ -2,7 +2,7 @@
 
 **Ratified private implementation design; implementation/native/C7
 checks NOT_RUN.** Root adopted the expert translation in
-[creator-context-translation.md](../../../../../../.scopebase/controller/resume-20261022/tt03-context-custody-review-r1/creator-context-translation.md).
+`.scopebase/controller/resume-20261022/tt03-context-custody-review-r1/creator-context-translation.md`.
 Its final source hash965eb9a5f3cacc983f53251568a5ea492917bf99854ef8eaefd7f9aa8199f466
 and root ruling2072302ddaaf1cf3575076b4174d81866fd96f0fc406ec4d0c79cc1a7cb56b36
 are bound by inputs.json. The algorithm below is the selected

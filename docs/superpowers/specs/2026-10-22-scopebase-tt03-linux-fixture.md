@@ -210,7 +210,7 @@ pidfd/control authority or a fresh liveness check.
 
 ### Accepted TT02 maintenance prerequisite
 
-Root acceptance [tt02-borrow-root-acceptance-r1.json](../../../../../.scopebase/controller/resume-20261022/tt02-borrow-root-acceptance-r1.json)
+Root acceptance [recorded in the TT02 fixture-borrow review](../../../docs/reviews/2026-10-22-tt02-fixture-borrow.md); private receipt: `.scopebase/controller/resume-20261022/tt02-borrow-root-acceptance-r1.json`
 SHA256 `dd9362f4bbdc7b0c55180f3cae47ccb4ab6961956e587cf0f21f372e64ad9e0a`
 binds source `2921606362b8d6eaed15a4c190e0c0623f7d0912`, identical fixture
 bytes to candidate `309190e01c977b481519abe4ed94a29dbea6ba61`, fixture SHA256
