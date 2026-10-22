@@ -1,0 +1,76 @@
+{
+  "source": "tools/build/common.py",
+  "source_sha256": "121b5e023ce7f0a473469b6f620e7978d8ee9669ca90f55e981d8e464e503dc7",
+  "source_acceptance": "2026-10-18 source-copy-bound accepted common helper; TT02 accepted integration retains same hash",
+  "extraction": "Exact unchanged MAX_LOG, sha, run, stdout and rust_refusal segments; only module header/imports added",
+  "segments": [
+    {
+      "name": "MAX_LOG",
+      "source_lines": [
+        25,
+        25
+      ],
+      "exact_segment_sha256": "be32939c0d0b9bea36fd7c44377093ee6a98b4f514f5361054801858d0993b31",
+      "delivered_lines": [
+        15,
+        15
+      ],
+      "diff": ""
+    },
+    {
+      "name": "sha",
+      "source_lines": [
+        48,
+        53
+      ],
+      "exact_segment_sha256": "19e387ac9a0f51f5d634ee4ff8ab4f4e2ccc7e80e2baa7d5c0a5795c8edbb7e6",
+      "delivered_lines": [
+        18,
+        23
+      ],
+      "diff": ""
+    },
+    {
+      "name": "run",
+      "source_lines": [
+        561,
+        644
+      ],
+      "exact_segment_sha256": "e5282c79d39e498298ad550e3ebd01f04febc2b4f532cd59334f01864fa0a730",
+      "delivered_lines": [
+        26,
+        109
+      ],
+      "diff": ""
+    },
+    {
+      "name": "stdout",
+      "source_lines": [
+        647,
+        648
+      ],
+      "exact_segment_sha256": "fec36d09c6fafb9dec86d0bd7288ce6f2557be90b21c789a02314cb737afceaf",
+      "delivered_lines": [
+        112,
+        113
+      ],
+      "diff": ""
+    },
+    {
+      "name": "rust_refusal",
+      "source_lines": [
+        488,
+        546
+      ],
+      "exact_segment_sha256": "a2a1943d65c675be39bcfa4bad1feaffb9cdf0bf4d2897363731d413f5f90953",
+      "delivered_lines": [
+        116,
+        174
+      ],
+      "diff": ""
+    }
+  ],
+  "delivered_module_sha256": "81e371cec788e07df9139695f8f52b07fa653b1b93d36bbf8fd41ce2d8ef5bdd",
+  "segment_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "runtime_repository_dependency": false
+}

@@ -67,6 +67,30 @@ impl<'a> FixtureResource<'a> {
 /// use scopebase_testkit::FixtureAccess;
 /// let a = FixtureAccess { inputs: vec![], resources: vec![] };
 /// ```
+/// Entry arrays may be local to a provider's prepare call. Their labels are
+/// copied; only the supplied bytes and actual resource owners remain borrowed.
+/// Returning access cannot extend an underlying owner's lifetime:
+/// ```compile_fail,E0515
+/// use scopebase_testkit::{EffectBatch, FixtureAccess, FixtureInput, FixtureResource, Label, RunLimits};
+/// fn forbidden<'a>(bytes: &'a [u8]) -> FixtureAccess<'a> {
+///     let limits = RunLimits::default();
+///     let owner = String::from("retained owner");
+///     let inputs = [FixtureInput::new(Label::parse("input").unwrap(), bytes)];
+///     let resources = [FixtureResource::new(Label::parse("owner").unwrap(), &owner)];
+///     FixtureAccess::new(&inputs, &resources, EffectBatch::empty(&limits), &limits).unwrap()
+/// }
+/// ```
+/// Nor can access outlive the input allocation:
+/// ```compile_fail,E0515
+/// use scopebase_testkit::{EffectBatch, FixtureAccess, FixtureInput, FixtureResource, Label, RunLimits};
+/// fn forbidden<'a>(owner: &'a dyn std::any::Any) -> FixtureAccess<'a> {
+///     let limits = RunLimits::default();
+///     let bytes = vec![1, 2, 3];
+///     let inputs = [FixtureInput::new(Label::parse("input").unwrap(), &bytes)];
+///     let resources = [FixtureResource::new(Label::parse("owner").unwrap(), owner)];
+///     FixtureAccess::new(&inputs, &resources, EffectBatch::empty(&limits), &limits).unwrap()
+/// }
+/// ```
 pub struct FixtureAccess<'a> {
     inputs: Vec<(Label, &'a [u8])>,
     resources: Vec<(Label, &'a dyn Any)>,
@@ -74,8 +98,8 @@ pub struct FixtureAccess<'a> {
 }
 impl<'a> FixtureAccess<'a> {
     pub fn new(
-        inputs: &'a [FixtureInput<'a>],
-        resources: &'a [FixtureResource<'a>],
+        inputs: &[FixtureInput<'a>],
+        resources: &[FixtureResource<'a>],
         effects: EffectBatch,
         l: &RunLimits,
     ) -> Result<Self, FixtureError> {

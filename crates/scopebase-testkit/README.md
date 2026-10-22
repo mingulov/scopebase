@@ -93,3 +93,32 @@ own integration tests and doctests explicitly; downstream dependency tests do no
 run them automatically. Repository `tools/qualification/bind_consumer.py` measures
 actual linked consumers from retained build records without invoking Cargo or
 fetching. Package hashes identify bytes and do not authenticate their authors.
+
+
+A custom provider may build local `FixtureInput`/`FixtureResource` entry arrays
+and return checked `FixtureAccess` borrowing its retained bytes and actual owners.
+Entry-array lifetimes end after construction; underlying bytes/owners must remain
+alive until access ends. Names and effects still pass the checked constructor.
+The archive's `fixture_access` integration test exercises the public boundary;
+two doctests retain the underlying owner/input lifetime refusal rules.
+
+For an independent downstream positive and semantic compiler refusal checks,
+run the delivered standard-library Python helper from this source or unpacked
+archive, supplying an installed toolchain, prepared offline Cargo home and fresh
+output outside this package:
+
+```sh
+python3 tests/fixtures/fixture-access/check.py \
+  --toolchain-root /absolute/installed/1.88.0-x86_64-unknown-linux-gnu \
+  --cargo-home /absolute/prepared-offline-cargo-home \
+  --output /absolute/new-fixture-access-check \
+  --feature default
+```
+
+Repeat with the admitted current compiler and `--feature no-default` as needed.
+The helper never installs/fetches; the supplied cache must contain this package's
+exact locked dependency closure. Cooperative build coordinators may supply
+`--build-wrapper /absolute/wrapper`; every nested Cargo/native invocation then
+uses that explicit wrapper. Run all ordinary tests/doctests separately with the
+package's pinned lock and dependencies. These checks establish safe Rust API
+borrowing behavior, not a native fixture or runtime profile.
