@@ -9,12 +9,17 @@ publish = false
 build = false
 readme = "README.md"
 description = "ScopeBase host BPF error and budget contracts"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**"]
 autotests = false
 autoexamples = false
 
 [features]
 default = []
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))'.dependencies]
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process", "thread", "linux_4_11"] }
@@ -56,3 +61,20 @@ path="examples/who_map_reader.rs"
 [[example]]
 name="bp02_live_fixture"
 path="examples/bp02_live_fixture.rs"
+
+[[test]]
+name = "capability"
+path = "tests/capability.rs"
+
+[[test]]
+name = "capability_json"
+path = "tests/capability_json.rs"
+required-features = ["json"]
+
+[[example]]
+name = "capability_cache"
+path = "examples/capability_cache.rs"
+
+[[example]]
+name = "filter_assessment"
+path = "examples/filter_assessment.rs"

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "bp03-host-binding-recipe",
+  "core_profile": "bp03-host-models-v1",
+  "json_profile": "bp03-host-json-models-v1",
+  "runs": 38,
+  "cases": [
+    {
+      "id": "H22.model-filter",
+      "operation": "assess-filter",
+      "assertions": [
+        "filter.state",
+        "filter.not-native-support"
+      ]
+    },
+    {
+      "id": "H22.model-profile-bridge",
+      "operation": "to-testkit-profile",
+      "assertions": [
+        "profile.result",
+        "profile.bytes-unchanged"
+      ]
+    },
+    {
+      "id": "H22.model-context",
+      "operation": "context-applies",
+      "assertions": [
+        "context.applies",
+        "context.not-authority"
+      ]
+    },
+    {
+      "id": "H22.model-origin",
+      "operation": "import-observation",
+      "assertions": [
+        "origin.imported",
+        "origin.claim-preserved"
+      ]
+    },
+    {
+      "id": "H33.model-description",
+      "operation": "import-observation",
+      "assertions": [
+        "description.fields",
+        "cause.not-authenticated"
+      ]
+    },
+    {
+      "id": "H22.model-json",
+      "operation": "import-observation",
+      "assertions": [
+        "json.result",
+        "json.no-authority"
+      ]
+    }
+  ],
+  "bpf_limits": {
+    "input_bytes": 131072,
+    "retained_bytes": 262144,
+    "work_steps": 8388608,
+    "sites": 0,
+    "live_links": 0,
+    "pending_retirements": 0
+  },
+  "truth_kind": "fixed-before-execute",
+  "coverage": [],
+  "requires_coverage": [],
+  "observes_runtime_entry_or_return": false
+}

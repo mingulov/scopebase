@@ -28,6 +28,7 @@ pub mod adapter;
 pub mod artifact;
 pub mod fixture;
 pub mod observation;
+pub mod prepared;
 pub mod oracle;
 pub mod result;
 pub mod runner;
@@ -35,8 +36,12 @@ pub use adapter::*;
 pub use artifact::*;
 pub use fixture::*;
 pub use observation::*;
+pub use prepared::*;
 pub use oracle::*;
 pub use result::*;
 pub use runner::*;
 #[cfg(test)]
 extern crate self as scopebase_testkit;
+
+#[cfg(feature = "bpf-host")]
+pub mod bpf;

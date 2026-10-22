@@ -803,10 +803,10 @@ impl<C: Clock> Engine<'_, C> {
             }
         }
     }
-    fn phase(
+    fn phase<D: DispatchRoute>(
         &mut self,
         index: usize,
-        adapter: &mut dyn ConformanceAdapter,
+        adapter: &mut D,
         fixtures: &mut dyn FixtureSession,
     ) {
         let scope = if index < self.c.schedule().len() {
@@ -1082,9 +1082,94 @@ fn invocation(c: &RunContract, key: &InvocationKey) -> CaseInvocation {
     )
     .expect("admitted invocation")
 }
-fn run_engine<C: Clock>(
+// Both public routes use the same scheduling, evidence and cleanup engine.
+trait DispatchRoute {
+    type Call<'a>: PreparedExecution
+    where
+        Self: 'a;
+    fn subject(&self) -> SubjectBinding;
+    fn prepare_call<'a>(
+        &'a mut self,
+        invocation: &'a CaseInvocation,
+    ) -> Result<Self::Call<'a>, ResponsePreparationFailure>;
+    fn retire(&mut self, request: &RetireRequest) -> RetirementReport;
+}
+struct LegacyRoute<'a>(&'a mut dyn ConformanceAdapter);
+struct LegacyCall<'a> {
+    adapter: &'a mut dyn ConformanceAdapter,
+    invocation: &'a CaseInvocation,
+}
+impl PreparedExecution for LegacyCall<'_> {
+    fn execute(self, fixture: &FixtureAccess<'_>) -> Result<Observation, CaseError> {
+        self.adapter.execute(self.invocation, fixture)
+    }
+}
+impl DispatchRoute for LegacyRoute<'_> {
+    type Call<'a>
+        = LegacyCall<'a>
+    where
+        Self: 'a;
+    fn subject(&self) -> SubjectBinding {
+        self.0.subject()
+    }
+    fn prepare_call<'a>(
+        &'a mut self,
+        invocation: &'a CaseInvocation,
+    ) -> Result<Self::Call<'a>, ResponsePreparationFailure> {
+        // The legacy route adds no allocation, adapter hook, clock or poll.
+        Ok(LegacyCall {
+            adapter: self.0,
+            invocation,
+        })
+    }
+    fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        self.0.retire(request)
+    }
+}
+struct PreparedRoute<'a, A>(&'a mut A);
+impl<A: ResponsePreparedAdapter> DispatchRoute for PreparedRoute<'_, A> {
+    type Call<'a>
+        = A::Prepared<'a>
+    where
+        Self: 'a;
+    fn subject(&self) -> SubjectBinding {
+        self.0.subject()
+    }
+    fn prepare_call<'a>(
+        &'a mut self,
+        invocation: &'a CaseInvocation,
+    ) -> Result<Self::Call<'a>, ResponsePreparationFailure> {
+        self.0.prepare_response(invocation)
+    }
+    fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        self.0.retire(request)
+    }
+}
+fn unrecorded_metadata<T: Serialize>() -> MetadataObservation<T> {
+    MetadataObservation {
+        checkpoints: CheckpointPair {
+            before: CheckpointSlot::NotRecorded,
+            after: CheckpointSlot::NotRecorded,
+        },
+        value: None,
+        returned_elapsed_ns: None,
+    }
+}
+fn unrecorded_execution() -> ExecutionCheckpoints {
+    let pair = || CheckpointPair {
+        before: CheckpointSlot::NotRecorded,
+        after: CheckpointSlot::NotRecorded,
+    };
+    ExecutionCheckpoints {
+        prepare: pair(),
+        execute: pair(),
+        collect: pair(),
+        judge: pair(),
+    }
+}
+fn run_engine<C: Clock, D: DispatchRoute>(
     plan: &ProfilePlan,
-    adapter: &mut dyn ConformanceAdapter,
+    adapter: &mut D,
     fixtures: &mut dyn FixtureSession,
     oracle: &dyn CaseOracle,
     c: RunContract,
@@ -1092,6 +1177,7 @@ fn run_engine<C: Clock>(
     contract_returned: u64,
     probe: &dyn Fn() -> bool,
     clock: &C,
+    preparation_failure: &mut Option<(usize, ResponsePreparationFailure)>,
 ) -> Result<RunReport, HarnessError> {
     if c.selection() != &SelectionBinding::plan(plan) {
         return Err(he(HarnessErrorKind::InvalidSelection, "external plan"));
@@ -1160,6 +1246,12 @@ fn run_engine<C: Clock>(
     };
     let mut rows = Vec::with_capacity(c.schedule().len());
     for (index, key) in c.schedule().iter().enumerate() {
+        if preparation_failure.is_some() {
+            // No later normal-work row/checkpoint follows the truncated prefix.
+            // Cleanup still uses every original fixed case/run slot.
+            e.phase(index, adapter, fixtures);
+            continue;
+        }
         let r = c.rule(key.case_key());
         let executable = c.0.cases[key.case_key()].implementation_status()
             != ImplementationStatus::Unimplemented;
@@ -1198,151 +1290,116 @@ fn run_engine<C: Clock>(
         };
         if executable && !e.stopped {
             let i = invocation(&c, key);
-            let before = e.sample();
-            x.execution_checkpoints.prepare.before = before;
-            if !e.stopped {
-                x.entered_stages.push(EnteredStage::Prepare);
-                e.ledger.participants.insert((Owner::Fixture, key.clone()));
-                x.execution = ExecutionState::Blocked;
-                x.reason = None;
-                let access = fixtures.prepare(&i);
-                match access {
-                    Ok(access) => {
-                        if let Some(batch) =
-                            e.capture_batch(key, EnteredStage::Prepare, access.effects())
-                        {
-                            x.effect_batches.push(batch);
-                        }
-                        x.execution_checkpoints.prepare.after = e.sample();
-                        if !e.stopped {
-                            let before = e.sample();
-                            x.execution_checkpoints.execute.before = before;
-                            if !e.stopped {
-                                if e.used
-                                    .checked_add(c.limits().observation_bytes())
-                                    .is_none_or(|n| n > c.limits().retained_bytes())
-                                {
-                                    e.reject(he(
-                                        HarnessErrorKind::LimitExceeded,
-                                        "next observation allowance",
-                                    ))
-                                } else {
-                                    x.entered_stages.push(EnteredStage::Execute);
-                                    e.ledger.participants.insert((Owner::Adapter, key.clone()));
-                                    let outcome = match adapter.execute(&i, &access) {
-                                        Ok(o) => CaseOutcome::Observed(o),
-                                        Err(err) => CaseOutcome::OperationError(err),
-                                    };
-                                    let keep = e.retain(&outcome);
-                                    if let Some(batch) = e.capture_batch(
-                                        key,
-                                        EnteredStage::Execute,
-                                        outcome.effects(),
-                                    ) {
-                                        x.effect_batches.push(batch);
-                                    }
-                                    if keep.is_ok() {
-                                        x.outcome = Some(outcome);
-                                    }
-                                    x.execution_checkpoints.execute.after = e.sample();
-                                    if let Err(error) = keep {
-                                        e.reject(error)
-                                    }
-                                    if let Some(outcome) = &x.outcome {
-                                        if let Err(error) = crate::result::validate_outcome(
-                                            key,
-                                            r,
-                                            outcome,
-                                            c.limits(),
-                                        ) {
-                                            e.reject(error)
-                                        }
-                                        if matches!(outcome,CaseOutcome::OperationError(err)if matches!(err.category(),CaseErrorCategory::Cancelled|CaseErrorCategory::TimedOut))
-                                        {
-                                            e.stopped = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        drop(access);
-                    }
-                    Err(err) => {
-                        let category = *err.category();
-                        let retained = e.retain(&err);
-                        let keep = retained.is_ok();
-                        let validation =
-                            validate_fixture_failure(key, FixtureStage::Prepare, &err, &c)
-                                .and(retained);
-                        if let Some(batch) =
-                            e.capture_batch(key, EnteredStage::Prepare, err.effects())
-                        {
-                            x.effect_batches.push(batch);
-                        }
-                        if keep {
-                            x.fixture_failure = Some(err);
-                        }
-                        x.reason = Some("fixture prepare failed".into());
-                        x.execution_checkpoints.prepare.after = e.sample();
-                        if let Err(error) = validation {
-                            e.ledger
-                                .uncertain_at(Owner::Fixture, key, "prepare-invalid");
-                            e.reject(error)
-                        }
-                        if matches!(
-                            category,
-                            FixtureErrorCategory::Cancelled
-                                | FixtureErrorCategory::TimedOut
-                                | FixtureErrorCategory::InvalidProtocol
-                        ) {
-                            e.stopped = true;
-                        }
-                        if category == FixtureErrorCategory::InvalidProtocol {
-                            x.execution = ExecutionState::HarnessError
-                        }
-                    }
+            // Pure admission is charged by the existing next Prepare.before
+            // sample. No new normal checkpoint or probe poll is introduced.
+            let prepared = adapter.prepare_call(&i);
+            match prepared {
+                Err(failure) => {
+                    *preparation_failure = Some((index, failure));
+                    e.stopped = true;
+                    x.reason = None;
+                    x.execution_checkpoints = unrecorded_execution();
                 }
-                if !e.stopped && x.outcome.is_some() {
-                    x.execution_checkpoints.collect.before = e.sample();
+                Ok(call) => {
+                    let mut ready = Some(call);
+                    let before = e.sample();
+                    x.execution_checkpoints.prepare.before = before;
                     if !e.stopped {
-                        x.entered_stages.push(EnteredStage::Collect);
-                        match fixtures.collect(&i) {
-                            Ok(expected) => {
-                                let validation =
-                                    crate::result::validate_expected(&c, key, r, &expected);
-                                let retained = e.retain(&expected);
+                        x.entered_stages.push(EnteredStage::Prepare);
+                        e.ledger.participants.insert((Owner::Fixture, key.clone()));
+                        x.execution = ExecutionState::Blocked;
+                        x.reason = None;
+                        let access = fixtures.prepare(&i);
+                        match access {
+                            Ok(access) => {
                                 if let Some(batch) =
-                                    e.capture_batch(key, EnteredStage::Collect, expected.effects())
+                                    e.capture_batch(key, EnteredStage::Prepare, access.effects())
                                 {
                                     x.effect_batches.push(batch);
                                 }
-                                if retained.is_ok() {
-                                    x.expected_evidence = Some(expected);
+                                x.execution_checkpoints.prepare.after = e.sample();
+                                if !e.stopped {
+                                    let before = e.sample();
+                                    x.execution_checkpoints.execute.before = before;
+                                    if !e.stopped {
+                                        if e.used
+                                            .checked_add(c.limits().observation_bytes())
+                                            .is_none_or(|n| n > c.limits().retained_bytes())
+                                        {
+                                            e.reject(he(
+                                                HarnessErrorKind::LimitExceeded,
+                                                "next observation allowance",
+                                            ))
+                                        } else {
+                                            x.entered_stages.push(EnteredStage::Execute);
+                                            e.ledger
+                                                .participants
+                                                .insert((Owner::Adapter, key.clone()));
+                                            if let Some(call) = ready.take() {
+                                                let outcome = match call.execute(&access) {
+                                                    Ok(o) => CaseOutcome::Observed(o),
+                                                    Err(err) => CaseOutcome::OperationError(err),
+                                                };
+                                                let keep = e.retain(&outcome);
+                                                if let Some(batch) = e.capture_batch(
+                                                    key,
+                                                    EnteredStage::Execute,
+                                                    outcome.effects(),
+                                                ) {
+                                                    x.effect_batches.push(batch);
+                                                }
+                                                if keep.is_ok() {
+                                                    x.outcome = Some(outcome);
+                                                }
+                                                x.execution_checkpoints.execute.after = e.sample();
+                                                if let Err(error) = keep {
+                                                    e.reject(error)
+                                                }
+                                                if let Some(outcome) = &x.outcome {
+                                                    if let Err(error) =
+                                                        crate::result::validate_outcome(
+                                                            key,
+                                                            r,
+                                                            outcome,
+                                                            c.limits(),
+                                                        )
+                                                    {
+                                                        e.reject(error)
+                                                    }
+                                                    if matches!(outcome,CaseOutcome::OperationError(err)if matches!(err.category(),CaseErrorCategory::Cancelled|CaseErrorCategory::TimedOut))
+                                                    {
+                                                        e.stopped = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                let check = validation.and(retained);
-                                if let Err(error) = check {
-                                    e.reject(error)
-                                }
+                                drop(access);
                             }
                             Err(err) => {
+                                // Release the opaque adapter borrow before processing
+                                // fixture failure and before any cleanup reborrow.
+                                drop(ready.take());
                                 let category = *err.category();
                                 let retained = e.retain(&err);
                                 let keep = retained.is_ok();
                                 let validation =
-                                    validate_fixture_failure(key, FixtureStage::Collect, &err, &c)
+                                    validate_fixture_failure(key, FixtureStage::Prepare, &err, &c)
                                         .and(retained);
                                 if let Some(batch) =
-                                    e.capture_batch(key, EnteredStage::Collect, err.effects())
+                                    e.capture_batch(key, EnteredStage::Prepare, err.effects())
                                 {
                                     x.effect_batches.push(batch);
                                 }
                                 if keep {
                                     x.fixture_failure = Some(err);
                                 }
-                                x.reason = Some("fixture collect failed".into());
+                                x.reason = Some("fixture prepare failed".into());
+                                x.execution_checkpoints.prepare.after = e.sample();
                                 if let Err(error) = validation {
                                     e.ledger
-                                        .uncertain_at(Owner::Fixture, key, "collect-invalid");
+                                        .uncertain_at(Owner::Fixture, key, "prepare-invalid");
                                     e.reject(error)
                                 }
                                 if matches!(
@@ -1358,51 +1415,122 @@ fn run_engine<C: Clock>(
                                 }
                             }
                         }
-                        x.execution_checkpoints.collect.after = e.sample();
+                        drop(ready.take());
+                        if !e.stopped && x.outcome.is_some() {
+                            x.execution_checkpoints.collect.before = e.sample();
+                            if !e.stopped {
+                                x.entered_stages.push(EnteredStage::Collect);
+                                match fixtures.collect(&i) {
+                                    Ok(expected) => {
+                                        let validation =
+                                            crate::result::validate_expected(&c, key, r, &expected);
+                                        let retained = e.retain(&expected);
+                                        if let Some(batch) = e.capture_batch(
+                                            key,
+                                            EnteredStage::Collect,
+                                            expected.effects(),
+                                        ) {
+                                            x.effect_batches.push(batch);
+                                        }
+                                        if retained.is_ok() {
+                                            x.expected_evidence = Some(expected);
+                                        }
+                                        let check = validation.and(retained);
+                                        if let Err(error) = check {
+                                            e.reject(error)
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let category = *err.category();
+                                        let retained = e.retain(&err);
+                                        let keep = retained.is_ok();
+                                        let validation = validate_fixture_failure(
+                                            key,
+                                            FixtureStage::Collect,
+                                            &err,
+                                            &c,
+                                        )
+                                        .and(retained);
+                                        if let Some(batch) = e.capture_batch(
+                                            key,
+                                            EnteredStage::Collect,
+                                            err.effects(),
+                                        ) {
+                                            x.effect_batches.push(batch);
+                                        }
+                                        if keep {
+                                            x.fixture_failure = Some(err);
+                                        }
+                                        x.reason = Some("fixture collect failed".into());
+                                        if let Err(error) = validation {
+                                            e.ledger.uncertain_at(
+                                                Owner::Fixture,
+                                                key,
+                                                "collect-invalid",
+                                            );
+                                            e.reject(error)
+                                        }
+                                        if matches!(
+                                            category,
+                                            FixtureErrorCategory::Cancelled
+                                                | FixtureErrorCategory::TimedOut
+                                                | FixtureErrorCategory::InvalidProtocol
+                                        ) {
+                                            e.stopped = true;
+                                        }
+                                        if category == FixtureErrorCategory::InvalidProtocol {
+                                            x.execution = ExecutionState::HarnessError
+                                        }
+                                    }
+                                }
+                                x.execution_checkpoints.collect.after = e.sample();
+                            }
+                        }
+                        if !e.stopped && x.outcome.is_some() && x.expected_evidence.is_some() {
+                            x.execution_checkpoints.judge.before = e.sample();
+                            if !e.stopped {
+                                x.entered_stages.push(EnteredStage::Judge);
+                                let v = oracle.evaluate(
+                                    &c.0.cases[key.case_key()],
+                                    x.expected_evidence.as_ref().unwrap(),
+                                    x.outcome.as_ref().unwrap(),
+                                );
+                                let check = v.check_bounds(c.limits()).and_then(|_| e.retain(&v));
+                                let harness_invalid =
+                                    matches!(v.harness(), HarnessValidity::Invalid { .. });
+                                // The raw capability is retained once here. The pure
+                                // fold reserves its derived owned copy before cloning.
+                                x.capability = crate::result::unjudged(c.limits());
+                                x.oracle_verdict = Some(v);
+                                x.execution = if harness_invalid {
+                                    ExecutionState::HarnessError
+                                } else {
+                                    ExecutionState::Completed
+                                };
+                                if harness_invalid {
+                                    e.stopped = true;
+                                }
+                                x.reason = None;
+                                x.execution_checkpoints.judge.after = e.sample();
+                                if let Err(error) = check {
+                                    e.reject(error)
+                                }
+                                if x.oracle_verdict.as_ref().is_some_and(|v| {
+                                    v.checks().len() != r.assertions().len()
+                                        || v.checks().iter().any(|a| {
+                                            !r.assertions().iter().any(|r| r.id() == a.id())
+                                        })
+                                }) {
+                                    e.reject(he(
+                                        HarnessErrorKind::InvalidProtocol,
+                                        "oracle assertion set",
+                                    ));
+                                    x.capability = crate::result::unjudged(c.limits());
+                                }
+                            }
+                        }
                     }
-                }
-                if !e.stopped && x.outcome.is_some() && x.expected_evidence.is_some() {
-                    x.execution_checkpoints.judge.before = e.sample();
-                    if !e.stopped {
-                        x.entered_stages.push(EnteredStage::Judge);
-                        let v = oracle.evaluate(
-                            &c.0.cases[key.case_key()],
-                            x.expected_evidence.as_ref().unwrap(),
-                            x.outcome.as_ref().unwrap(),
-                        );
-                        let check = v.check_bounds(c.limits()).and_then(|_| e.retain(&v));
-                        let harness_invalid =
-                            matches!(v.harness(), HarnessValidity::Invalid { .. });
-                        // The raw capability is retained once here. The pure
-                        // fold reserves its derived owned copy before cloning.
-                        x.capability = crate::result::unjudged(c.limits());
-                        x.oracle_verdict = Some(v);
-                        x.execution = if harness_invalid {
-                            ExecutionState::HarnessError
-                        } else {
-                            ExecutionState::Completed
-                        };
-                        if harness_invalid {
-                            e.stopped = true;
-                        }
-                        x.reason = None;
-                        x.execution_checkpoints.judge.after = e.sample();
-                        if let Err(error) = check {
-                            e.reject(error)
-                        }
-                        if x.oracle_verdict.as_ref().is_some_and(|v| {
-                            v.checks().len() != r.assertions().len()
-                                || v.checks()
-                                    .iter()
-                                    .any(|a| !r.assertions().iter().any(|r| r.id() == a.id()))
-                        }) {
-                            e.reject(he(
-                                HarnessErrorKind::InvalidProtocol,
-                                "oracle assertion set",
-                            ));
-                            x.capability = crate::result::unjudged(c.limits());
-                        }
-                    }
+                    drop(ready);
                 }
             }
             if e.invalid.is_some() {
@@ -1415,7 +1543,7 @@ fn run_engine<C: Clock>(
                 EnteredStage::Collect,
                 EnteredStage::Judge,
             ] {
-                if !x.entered_stages.contains(&stage) {
+                if preparation_failure.is_none() && !x.entered_stages.contains(&stage) {
                     let pair = x.execution_checkpoints.pair_mut(stage);
                     if !matches!(pair.before, CheckpointSlot::Sampled { .. }) {
                         pair.before = CheckpointSlot::omitted(if e.stopped {
@@ -1429,11 +1557,13 @@ fn run_engine<C: Clock>(
             }
         }
         e.phase(index, adapter, fixtures);
-        x.terminal = Some(CaseTerminal {
-            key: key.clone(),
-            execution: x.execution,
-            after_cleanup_call_id: 2 * index as u64 + 2,
-        });
+        if preparation_failure.is_none() {
+            x.terminal = Some(CaseTerminal {
+                key: key.clone(),
+                execution: x.execution,
+                after_cleanup_call_id: 2 * index as u64 + 2,
+            });
+        }
         rows.push(x);
     }
     e.phase(c.schedule().len(), adapter, fixtures);
@@ -1452,7 +1582,9 @@ fn run_engine<C: Clock>(
             });
         e.ledger.state(owner, &scope, called, called) == CleanupState::Unresolved
     });
-    let (final_subject, final_oracle) = if noexec {
+    let (final_subject, final_oracle) = if preparation_failure.is_some() {
+        (unrecorded_metadata(), unrecorded_metadata())
+    } else if noexec {
         (
             MetadataObservation::omitted(OmissionCause::NoExecutableMembers),
             MetadataObservation::omitted(OmissionCause::NoExecutableMembers),
@@ -1491,11 +1623,15 @@ fn run_engine<C: Clock>(
         runner_observations: obs,
         case_results: rows,
         cleanup_records: std::mem::take(&mut e.records),
-        run_terminal: Some(RunTerminal {
-            qualification: Qualification::Incomplete,
-            reasons: vec![],
-            after_cleanup_call_id: 2 * c.schedule().len() as u64 + 2,
-        }),
+        run_terminal: if preparation_failure.is_some() {
+            None
+        } else {
+            Some(RunTerminal {
+                qualification: Qualification::Incomplete,
+                reasons: vec![],
+                after_cleanup_call_id: 2 * c.schedule().len() as u64 + 2,
+            })
+        },
     };
     // Compute the case/ledger fold before the last custom checkpoint as required.
     let terminal = w.run_terminal.take();
@@ -1505,7 +1641,9 @@ fn run_engine<C: Clock>(
         e.reject(error)
     }
 
-    w.runner_observations.completion = e.sample();
+    if preparation_failure.is_none() {
+        w.runner_observations.completion = e.sample();
+    }
     let q = match reconstruct(&c, &mut w, false) {
         Ok(q) => q,
         Err(error) => {
@@ -1553,34 +1691,80 @@ fn run_with_clock<C: Clock>(
     oracle: &dyn CaseOracle,
     clock: &C,
 ) -> Result<RunReport, HarnessError> {
-    let entry = clock.now();
-    let c = fixtures.contract().clone();
-    let returned = checked_elapsed(entry, clock.now())?;
-    if c.selection() != &SelectionBinding::plan(plan) {
-        return Err(he(HarnessErrorKind::InvalidSelection, "external plan"));
-    }
-    let duration = Duration::from_millis(c.limits().execution_ms());
-    entry.checked_add(duration).ok_or_else(|| {
-        he(
-            HarnessErrorKind::LimitExceeded,
-            "execution deadline overflow",
+    run_route_with_clock(plan, &mut LegacyRoute(adapter), fixtures, oracle, clock).0
+}
+/// Run the same frozen sequential profile through fallible response admission.
+/// Preparation failure stops dispatch and retains a nonterminal strict-v1 prefix.
+pub fn run_profile_prepared<A: ResponsePreparedAdapter>(
+    plan: &ProfilePlan,
+    adapter: &mut A,
+    fixtures: &mut dyn FixtureSession,
+    oracle: &dyn CaseOracle,
+) -> Result<RunReport, PreparedRunError> {
+    run_prepared_with_clock(plan, adapter, fixtures, oracle, &SystemClock)
+}
+fn run_prepared_with_clock<A: ResponsePreparedAdapter, C: Clock>(
+    plan: &ProfilePlan,
+    adapter: &mut A,
+    fixtures: &mut dyn FixtureSession,
+    oracle: &dyn CaseOracle,
+    clock: &C,
+) -> Result<RunReport, PreparedRunError> {
+    let (result, preparation) =
+        run_route_with_clock(plan, &mut PreparedRoute(adapter), fixtures, oracle, clock);
+    PreparedRunError::from_engine(result, preparation)
+}
+fn run_route_with_clock<D: DispatchRoute, C: Clock>(
+    plan: &ProfilePlan,
+    adapter: &mut D,
+    fixtures: &mut dyn FixtureSession,
+    oracle: &dyn CaseOracle,
+    clock: &C,
+) -> (
+    Result<RunReport, HarnessError>,
+    Option<(usize, ResponsePreparationFailure)>,
+) {
+    let mut preparation_failure = None;
+    let result = (|| {
+        let entry = clock.now();
+        let c = fixtures.contract().clone();
+        let returned = checked_elapsed(entry, clock.now())?;
+        if c.selection() != &SelectionBinding::plan(plan) {
+            return Err(he(HarnessErrorKind::InvalidSelection, "external plan"));
+        }
+        let duration = Duration::from_millis(c.limits().execution_ms());
+        entry.checked_add(duration).ok_or_else(|| {
+            he(
+                HarnessErrorKind::LimitExceeded,
+                "execution deadline overflow",
+            )
+        })?;
+        let probe_elapsed = checked_elapsed(entry, clock.now())?;
+        let probe = if Duration::from_nanos(probe_elapsed) >= duration {
+            None
+        } else {
+            Some(fixtures.cancellation_probe())
+        };
+        let poll = || {
+            probe
+                .as_ref()
+                .expect("unexpired checkpoint requires acquired owned probe")
+                .cancellation_requested()
+        };
+        run_engine(
+            plan,
+            adapter,
+            fixtures,
+            oracle,
+            c,
+            entry,
+            returned,
+            &poll,
+            clock,
+            &mut preparation_failure,
         )
-    })?;
-    let probe_elapsed = checked_elapsed(entry, clock.now())?;
-    let probe = if Duration::from_nanos(probe_elapsed) >= duration {
-        None
-    } else {
-        Some(fixtures.cancellation_probe())
-    };
-    let poll = || {
-        probe
-            .as_ref()
-            .expect("unexpired checkpoint requires acquired owned probe")
-            .cancellation_requested()
-    };
-    run_engine(
-        plan, adapter, fixtures, oracle, c, entry, returned, &poll, clock,
-    )
+    })();
+    (result, preparation_failure)
 }
 #[cfg(test)]
 mod tests;

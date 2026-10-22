@@ -1,0 +1,523 @@
+{
+  "base_wire_object": {
+    "schema_version": 1,
+    "kind": "scopebase-bpf-capability-observation",
+    "schema_revision": 1,
+    "claimed_origin": "caller_described",
+    "object": "0101010101010101010101010101010101010101010101010101010101010101",
+    "profile": "bpf-host-v1",
+    "context": {
+      "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+      "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+      "architecture": "x86_64",
+      "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+      "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+      "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "state": "denied",
+    "stage": "load",
+    "hazard": "clean",
+    "operation": "BPF_PROG_LOAD",
+    "step_id": "load",
+    "outcome": "refused",
+    "error": {
+      "kind": "denied",
+      "stage": "execute",
+      "raw_errno": 13,
+      "required_size": "128"
+    },
+    "reason": "000a7fff",
+    "diagnostic": "00656163636573ff",
+    "cause": {
+      "kind": "permission",
+      "method": "caller-description",
+      "evidence_ids": [
+        "model-evidence-a",
+        "model-evidence-b"
+      ]
+    }
+  },
+  "base_wire_ascii": "{\"schema_version\":1,\"kind\":\"scopebase-bpf-capability-observation\",\"schema_revision\":1,\"claimed_origin\":\"caller_described\",\"object\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"profile\":\"bpf-host-v1\",\"context\":{\"kernel_build\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"btf\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"architecture\":\"x86_64\",\"namespace_context\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"security_context\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"topology\":\"5555555555555555555555555555555555555555555555555555555555555555\"},\"state\":\"denied\",\"stage\":\"load\",\"hazard\":\"clean\",\"operation\":\"BPF_PROG_LOAD\",\"step_id\":\"load\",\"outcome\":\"refused\",\"error\":{\"kind\":\"denied\",\"stage\":\"execute\",\"raw_errno\":13,\"required_size\":\"128\"},\"reason\":\"000a7fff\",\"diagnostic\":\"00656163636573ff\",\"cause\":{\"kind\":\"permission\",\"method\":\"caller-description\",\"evidence_ids\":[\"model-evidence-a\",\"model-evidence-b\"]}}",
+  "same_errno_descriptive_cause_cases": [
+    {
+      "id": "permission-errno-1",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "denied",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 1,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "permission",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "denied",
+      "expected_retained_cause": "permission",
+      "expected_retained_errno": 1,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "verifier-errno-1",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "incompatible",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 1,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "verifier",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "incompatible",
+      "expected_retained_cause": "verifier",
+      "expected_retained_errno": 1,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "license-errno-1",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "incompatible",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 1,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "license",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "incompatible",
+      "expected_retained_cause": "license",
+      "expected_retained_errno": 1,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "unsupported_operation-errno-1",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "unsupported",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 1,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "unsupported_operation",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "unsupported",
+      "expected_retained_cause": "unsupported_operation",
+      "expected_retained_errno": 1,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "unknown-errno-1",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "unknown",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 1,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "unknown",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "unknown",
+      "expected_retained_cause": "unknown",
+      "expected_retained_errno": 1,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "permission-errno-13",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "denied",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 13,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "permission",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "denied",
+      "expected_retained_cause": "permission",
+      "expected_retained_errno": 13,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "verifier-errno-13",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "incompatible",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 13,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "verifier",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "incompatible",
+      "expected_retained_cause": "verifier",
+      "expected_retained_errno": 13,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "license-errno-13",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "incompatible",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 13,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "license",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "incompatible",
+      "expected_retained_cause": "license",
+      "expected_retained_errno": 13,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "unsupported_operation-errno-13",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "unsupported",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 13,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "unsupported_operation",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "unsupported",
+      "expected_retained_cause": "unsupported_operation",
+      "expected_retained_errno": 13,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    },
+    {
+      "id": "unknown-errno-13",
+      "input": {
+        "schema_version": 1,
+        "kind": "scopebase-bpf-capability-observation",
+        "schema_revision": 1,
+        "claimed_origin": "caller_described",
+        "object": "0101010101010101010101010101010101010101010101010101010101010101",
+        "profile": "bpf-host-v1",
+        "context": {
+          "kernel_build": "1111111111111111111111111111111111111111111111111111111111111111",
+          "btf": "2222222222222222222222222222222222222222222222222222222222222222",
+          "architecture": "x86_64",
+          "namespace_context": "3333333333333333333333333333333333333333333333333333333333333333",
+          "security_context": "4444444444444444444444444444444444444444444444444444444444444444",
+          "topology": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "state": "unknown",
+        "stage": "load",
+        "hazard": "clean",
+        "operation": "BPF_PROG_LOAD",
+        "step_id": "load",
+        "outcome": "refused",
+        "error": {
+          "kind": "denied",
+          "stage": "execute",
+          "raw_errno": 13,
+          "required_size": "128"
+        },
+        "reason": "000a7fff",
+        "diagnostic": "00656163636573ff",
+        "cause": {
+          "kind": "unknown",
+          "method": "caller-description",
+          "evidence_ids": [
+            "model-evidence-a",
+            "model-evidence-b"
+          ]
+        }
+      },
+      "expected_retained_state": "unknown",
+      "expected_retained_cause": "unknown",
+      "expected_retained_errno": 13,
+      "expected_bp01_stage": "execute",
+      "expected_evidence_stage": "load",
+      "actual_cause_established": false,
+      "actual_environment_capability": "unknown"
+    }
+  ]
+}

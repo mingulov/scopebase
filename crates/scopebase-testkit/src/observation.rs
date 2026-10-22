@@ -320,3 +320,441 @@ impl Decode for ExpectedEvidence {
         )
     }
 }
+
+// The following crate-private construction is restricted to the one-step,
+// empty-effects prepared dialect. General public record validators stay intact.
+// All buffers are admitted before dispatch; these finishers move them directly.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub(crate) enum OneStepResponseStage {
+    Binding,
+    Preflight,
+    Input,
+    Admission,
+    Metadata,
+    Allocate,
+    Read,
+    Attach,
+    Drain,
+    Retire,
+    BtfQuery,
+    Compile,
+    Inspect,
+    Execute,
+}
+const RESPONSE_STAGES: [&str; 14] = [
+    "binding",
+    "preflight",
+    "input",
+    "admission",
+    "metadata",
+    "allocate",
+    "read",
+    "attach",
+    "drain",
+    "retire",
+    "btf_query",
+    "compile",
+    "inspect",
+    "execute",
+];
+#[allow(dead_code)]
+impl OneStepResponseStage {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+/// Fixed stack diagnostic scratch. No truncation, formatting allocation or growth.
+#[allow(dead_code)]
+pub(crate) struct OneStepDiagnostic {
+    bytes: [u8; 128],
+    len: usize,
+}
+#[allow(dead_code)]
+impl OneStepDiagnostic {
+    pub(crate) fn new(bytes: &[u8]) -> Result<Self, ()> {
+        let mut value = Self {
+            bytes: [0; 128],
+            len: 0,
+        };
+        value.extend(bytes)?;
+        Ok(value)
+    }
+    pub(crate) fn extend(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        let end = self
+            .len
+            .checked_add(bytes.len())
+            .filter(|n| *n <= 128)
+            .ok_or(())?;
+        self.bytes[self.len..end].copy_from_slice(bytes);
+        self.len = end;
+        Ok(())
+    }
+    pub(crate) fn decimal(&mut self, mut value: usize) -> Result<(), ()> {
+        let mut digits = [0u8; usize::BITS as usize];
+        let mut start = digits.len();
+        loop {
+            start -= 1;
+            digits[start] = b'0' + (value % 10) as u8;
+            value /= 10;
+            if value == 0 {
+                break;
+            }
+        }
+        self.extend(&digits[start..])
+    }
+}
+#[allow(dead_code)]
+pub(crate) struct OneStepOutput(Vec<u8>);
+#[allow(dead_code)]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum OneStepOutputFailure {
+    Length { required: usize },
+    Capacity { required: usize },
+    Overflow,
+}
+struct OneStepStorage {
+    key: InvocationKey,
+    stages: Vec<Label>,
+    method: Label,
+    diagnostic: Vec<u8>,
+    completed: Vec<Label>,
+    observation_ceiling: u64,
+    charge: usize,
+}
+#[allow(dead_code)]
+pub(crate) struct OneStepResponse {
+    storage: OneStepStorage,
+    schema: Label,
+    revision: u32,
+    step: Label,
+}
+/// Error-only preparation never reads a script/schema/step. It is used for
+/// stored-limit binding and closed dialect refusal before operation admission.
+#[allow(dead_code)]
+pub(crate) struct OneStepErrorResponse {
+    storage: OneStepStorage,
+}
+fn response_vec<T>(
+    count: usize,
+    budget: &mut crate::prepared::ResponseBudget,
+    component: ResponsePreparationComponent,
+) -> Result<Vec<T>, ResponsePreparationFailure> {
+    use ResponsePreparationFailureKind as Kind;
+    let requested =
+        count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(ResponsePreparationFailure {
+                kind: Kind::Overflow,
+                component,
+                requested_bytes: Some(count),
+                observed_bytes: None,
+            })?;
+    budget.reserve_minimum(requested, component)?;
+    let mut vector = Vec::new();
+    vector
+        .try_reserve_exact(count)
+        .map_err(|_| ResponsePreparationFailure {
+            kind: Kind::Allocation,
+            component,
+            requested_bytes: Some(requested),
+            observed_bytes: None,
+        })?;
+    let actual = vector
+        .capacity()
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(ResponsePreparationFailure {
+            kind: Kind::Overflow,
+            component,
+            requested_bytes: Some(requested),
+            observed_bytes: None,
+        })?;
+    budget.observe_capacity(requested, actual, component)?;
+    Ok(vector)
+}
+impl OneStepStorage {
+    fn prepare(
+        key: &InvocationKey,
+        limits: &RunLimits,
+        ceiling: usize,
+        inline: usize,
+    ) -> Result<(Self, crate::prepared::ResponseBudget), ResponsePreparationFailure> {
+        use ResponsePreparationComponent as Part;
+        if limits.diagnostic_bytes() < 128 || limits.steps_per_invocation() < 1 {
+            return Err(ResponsePreparationFailure {
+                kind: ResponsePreparationFailureKind::InvalidInvocation,
+                component: Part::Total,
+                requested_bytes: None,
+                observed_bytes: None,
+            });
+        }
+        let inline = inline
+            .max(std::mem::size_of::<Observation>())
+            .max(std::mem::size_of::<CaseError>());
+        let mut budget = crate::prepared::ResponseBudget::new(inline, ceiling)?;
+        let key = crate::ids::rsp01_copy_key(key, limits, &mut budget)?;
+        let mut stages = response_vec(RESPONSE_STAGES.len(), &mut budget, Part::Stage)?;
+        for text in RESPONSE_STAGES {
+            stages.push(crate::ids::rsp01_copy_label(
+                text,
+                limits,
+                &mut budget,
+                Part::Stage,
+            )?);
+        }
+        let method = crate::ids::rsp01_copy_label("bp03-model", limits, &mut budget, Part::Method)?;
+        let diagnostic = response_vec(128, &mut budget, Part::Diagnostic)?;
+        let completed = response_vec(1, &mut budget, Part::CompletionStorage)?;
+        Ok((
+            Self {
+                key,
+                stages,
+                method,
+                diagnostic,
+                completed,
+                observation_ceiling: limits.observation_bytes(),
+                charge: 0,
+            },
+            budget,
+        ))
+    }
+    fn finish_error(
+        mut self,
+        step: Option<Label>,
+        category: CaseErrorCategory,
+        stage: OneStepResponseStage,
+        diagnostic: OneStepDiagnostic,
+        errno: Option<i32>,
+    ) -> CaseError {
+        // Diagnostic scratch is <=128 and admission retained >=128 usable bytes.
+        self.diagnostic
+            .extend_from_slice(&diagnostic.bytes[..diagnostic.len]);
+        let dialect = category == CaseErrorCategory::UnsupportedSchema;
+        let stage = self.stages.swap_remove(stage.index());
+        CaseError(CaseErrorValues {
+            key: self.key,
+            step_id: if dialect { None } else { step },
+            stage,
+            category,
+            errno: if dialect { None } else { errno },
+            diagnostic_bytes: self.diagnostic,
+            cause: RefusalEvidence(RefusalEvidenceValues {
+                cause: RefusalCause::Unknown,
+                method: self.method,
+                evidence_ids: Vec::new(),
+                tier: EvidenceTier::T0,
+            }),
+            completed_steps: Vec::new(),
+            partial_observation: None,
+            effects: EffectBatch(EffectBatchValues {
+                registrations: Vec::new(),
+                complete: true,
+            }),
+        })
+    }
+}
+#[allow(dead_code)]
+impl OneStepResponse {
+    // actual_call_inline is the complete opaque call, including its enum/context
+    // and both borrows. Replacing the component inline avoids double counting.
+    pub(crate) fn prepare(
+        key: &InvocationKey,
+        schema: &SchemaBinding,
+        step: &Label,
+        limits: &RunLimits,
+        ceiling: usize,
+        actual_call_inline: usize,
+    ) -> Result<Self, ResponsePreparationFailure> {
+        use ResponsePreparationComponent as Part;
+        if *schema.revision() == 0 {
+            return Err(ResponsePreparationFailure {
+                kind: ResponsePreparationFailureKind::InvalidInvocation,
+                component: Part::Schema,
+                requested_bytes: None,
+                observed_bytes: None,
+            });
+        }
+        let (mut storage, mut budget) = OneStepStorage::prepare(
+            key,
+            limits,
+            ceiling,
+            std::mem::size_of::<Self>().max(actual_call_inline),
+        )?;
+        let schema_copy =
+            crate::ids::rsp01_copy_label(schema.id().as_str(), limits, &mut budget, Part::Schema)?;
+        let step = crate::ids::rsp01_copy_label(step.as_str(), limits, &mut budget, Part::Step)?;
+        storage.charge = budget.used();
+        Ok(Self {
+            storage,
+            schema: schema_copy,
+            revision: *schema.revision(),
+            step,
+        })
+    }
+    pub(crate) fn admitted_bytes(&self) -> usize {
+        self.storage.charge
+    }
+    pub(crate) fn admit_output(
+        &self,
+        bytes: Vec<u8>,
+        joint_payload_ceiling: usize,
+    ) -> Result<OneStepOutput, OneStepOutputFailure> {
+        self.check_output(&bytes, joint_payload_ceiling)?;
+        Ok(OneStepOutput(bytes))
+    }
+    fn check_output(
+        &self,
+        bytes: &Vec<u8>,
+        joint_payload_ceiling: usize,
+    ) -> Result<(), OneStepOutputFailure> {
+        if bytes.len() as u64 > self.storage.observation_ceiling {
+            return Err(OneStepOutputFailure::Length {
+                required: bytes.len(),
+            });
+        }
+        // J counts the actual output Vec inline plus its heap capacity once.
+        let demand = std::mem::size_of::<Vec<u8>>()
+            .checked_add(bytes.capacity())
+            .ok_or(OneStepOutputFailure::Overflow)?;
+        if demand > joint_payload_ceiling {
+            return Err(OneStepOutputFailure::Capacity { required: demand });
+        }
+        Ok(())
+    }
+    pub(crate) fn finish_observation(
+        mut self,
+        output: OneStepOutput,
+        joint_payload_ceiling: usize,
+    ) -> Result<Observation, (Self, OneStepOutputFailure)> {
+        // A token may come from another context or an earlier joint ceiling.
+        // Recheck this receiver and current J without allocating metadata. On
+        // refusal, retain this exact key/storage for the caller's error finish.
+        if let Err(failure) = self.check_output(&output.0, joint_payload_ceiling) {
+            return Err((self, failure));
+        }
+        // Exactly one element fits the admitted completion backing. Moving the
+        // single step and output never invokes generic allocating unique().
+        self.storage.completed.push(self.step);
+        Ok(Observation(ObservationValues {
+            key: self.storage.key,
+            schema_id: self.schema,
+            schema_revision: self.revision,
+            completed_steps: self.storage.completed,
+            bytes: output.0,
+            effects: EffectBatch(EffectBatchValues {
+                registrations: Vec::new(),
+                complete: true,
+            }),
+        }))
+    }
+    pub(crate) fn finish_error(
+        self,
+        category: CaseErrorCategory,
+        stage: OneStepResponseStage,
+        diagnostic: OneStepDiagnostic,
+        attempted_step: bool,
+        errno: Option<i32>,
+    ) -> CaseError {
+        self.storage.finish_error(
+            if attempted_step {
+                Some(self.step)
+            } else {
+                None
+            },
+            category,
+            stage,
+            diagnostic,
+            errno,
+        )
+    }
+}
+#[allow(dead_code)]
+impl OneStepErrorResponse {
+    pub(crate) fn prepare(
+        key: &InvocationKey,
+        limits: &RunLimits,
+        ceiling: usize,
+        actual_call_inline: usize,
+    ) -> Result<Self, ResponsePreparationFailure> {
+        let (mut storage, budget) = OneStepStorage::prepare(
+            key,
+            limits,
+            ceiling,
+            std::mem::size_of::<Self>().max(actual_call_inline),
+        )?;
+        storage.charge = budget.used();
+        Ok(Self { storage })
+    }
+    pub(crate) fn admitted_bytes(&self) -> usize {
+        self.storage.charge
+    }
+    pub(crate) fn finish_error(
+        self,
+        category: CaseErrorCategory,
+        stage: OneStepResponseStage,
+        diagnostic: OneStepDiagnostic,
+    ) -> CaseError {
+        self.storage
+            .finish_error(None, category, stage, diagnostic, None)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod rsp01_test_support {
+    use super::*;
+    // The independent test sum reads the actual owned buffers, never the
+    // admission budget/recorded charge. All simultaneous alternatives count.
+    pub(crate) fn context_bytes(response: &OneStepResponse) -> usize {
+        let s = &response.storage;
+        std::mem::size_of::<OneStepResponse>()
+            .max(std::mem::size_of::<Observation>())
+            .max(std::mem::size_of::<CaseError>())
+            + crate::ids::rsp01_key_capacities(&s.key)
+                .iter()
+                .sum::<usize>()
+            + s.stages.capacity() * std::mem::size_of::<Label>()
+            + s.stages
+                .iter()
+                .map(crate::ids::rsp01_label_capacity)
+                .sum::<usize>()
+            + crate::ids::rsp01_label_capacity(&s.method)
+            + s.diagnostic.capacity()
+            + s.completed.capacity() * std::mem::size_of::<Label>()
+            + crate::ids::rsp01_label_capacity(&response.schema)
+            + crate::ids::rsp01_label_capacity(&response.step)
+    }
+    pub(crate) fn observation_bytes(response: &Observation) -> usize {
+        // Output payload belongs to J; its Vec inline is already in the header.
+        std::mem::size_of::<Observation>()
+            + crate::ids::rsp01_key_capacities(response.key())
+                .iter()
+                .sum::<usize>()
+            + crate::ids::rsp01_label_capacity(response.schema_id())
+            + response.completed_steps().capacity() * std::mem::size_of::<Label>()
+            + response
+                .completed_steps()
+                .iter()
+                .map(crate::ids::rsp01_label_capacity)
+                .sum::<usize>()
+    }
+    // Error-only twin of context_bytes: the same owned storage buffers read
+    // back from the actual error response. Error preparation never reads a
+    // script/schema/step, so there are no schema/step terms to add.
+    pub(crate) fn error_context_bytes(response: &OneStepErrorResponse) -> usize {
+        let s = &response.storage;
+        std::mem::size_of::<OneStepErrorResponse>()
+            .max(std::mem::size_of::<Observation>())
+            .max(std::mem::size_of::<CaseError>())
+            + crate::ids::rsp01_key_capacities(&s.key)
+                .iter()
+                .sum::<usize>()
+            + s.stages.capacity() * std::mem::size_of::<Label>()
+            + s.stages
+                .iter()
+                .map(crate::ids::rsp01_label_capacity)
+                .sum::<usize>()
+            + crate::ids::rsp01_label_capacity(&s.method)
+            + s.diagnostic.capacity()
+            + s.completed.capacity() * std::mem::size_of::<Label>()
+    }
+}

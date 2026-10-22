@@ -1,0 +1,431 @@
+{
+  "new_origin": "caller_described",
+  "import_origin": "imported",
+  "import_claim": "caller_described",
+  "codec_cases": [
+    {
+      "id": "valid-base",
+      "path": "fixture-seeds/codec/valid-base.bytes",
+      "bytes": 1026,
+      "sha256": "21872dee5907d2aa8bfbd2d6c7d1be04ecedff99249a39a9e5ee79eb346ba17f",
+      "expected": {
+        "result": "ok",
+        "kind": null,
+        "stage": null,
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": "Imported",
+        "partial_payload": false,
+        "phase": "publish"
+      }
+    },
+    {
+      "id": "valid-reordered",
+      "path": "fixture-seeds/codec/valid-reordered.bytes",
+      "bytes": 1026,
+      "sha256": "94f3adb55af867572c599b74364627ccaac9c81a740a100b5bb1fda295c22689",
+      "expected": {
+        "result": "ok",
+        "kind": null,
+        "stage": null,
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": "Imported",
+        "partial_payload": false,
+        "phase": "publish"
+      }
+    },
+    {
+      "id": "valid-whitespace",
+      "path": "fixture-seeds/codec/valid-whitespace.bytes",
+      "bytes": 1148,
+      "sha256": "cfd9ba7dd3ccfd64a82cc3ee33252b1547fb38f3a5ba18452a4e888919dd0b56",
+      "expected": {
+        "result": "ok",
+        "kind": null,
+        "stage": null,
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": "Imported",
+        "partial_payload": false,
+        "phase": "publish"
+      }
+    },
+    {
+      "id": "duplicate-plus-version-first",
+      "path": "fixture-seeds/codec/duplicate-plus-version-first.bytes",
+      "bytes": 1046,
+      "sha256": "f947e3c58e4cf4cd26ca4a8ab570b3a37038b7436187704b80c53d33608c617f",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "unknown-plus-version-first",
+      "path": "fixture-seeds/codec/unknown-plus-version-first.bytes",
+      "bytes": 1039,
+      "sha256": "d9c4ec71a13dde3b51cfdae2a8d4b7689c053b2ccdca62b9a2be71711979f7e1",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "version-plus-bad-enum-hex-first",
+      "path": "fixture-seeds/codec/version-plus-bad-enum-hex-first.bytes",
+      "bytes": 1022,
+      "sha256": "b08a91d756118c1f9c3c914e19b454771288a64ecbc538de07b0ab11e1e88690",
+      "expected": {
+        "result": "error",
+        "kind": "Unsupported",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "schema"
+      }
+    },
+    {
+      "id": "missing-null-plus-version-first",
+      "path": "fixture-seeds/codec/missing-null-plus-version-first.bytes",
+      "bytes": 1004,
+      "sha256": "ad8ae498db3e9ab0fc511cf1665d0614105ddc4c504909ad0d769dcbeb72e201",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "version-plus-errno-overflow-first",
+      "path": "fixture-seeds/codec/version-plus-errno-overflow-first.bytes",
+      "bytes": 1034,
+      "sha256": "848d2d0b9881e2c89ec9fbb466e41c41108c8d4d753114c21403f357c4f16147",
+      "expected": {
+        "result": "error",
+        "kind": "Unsupported",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "schema"
+      }
+    },
+    {
+      "id": "duplicate-plus-version-last",
+      "path": "fixture-seeds/codec/duplicate-plus-version-last.bytes",
+      "bytes": 1046,
+      "sha256": "39e2731e40ee17723968320e4fb64ac05c87b7a373675c96bcb1bb94d78713a5",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "unknown-plus-version-last",
+      "path": "fixture-seeds/codec/unknown-plus-version-last.bytes",
+      "bytes": 1039,
+      "sha256": "072b40300bec0ab44702aca04226658f6135f733d6df2efce3219f053f6f9264",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "version-plus-bad-enum-hex-last",
+      "path": "fixture-seeds/codec/version-plus-bad-enum-hex-last.bytes",
+      "bytes": 1022,
+      "sha256": "ae76451016b372e4f1055058f99113fe1b255ad501080af3aa42382dd00e58b2",
+      "expected": {
+        "result": "error",
+        "kind": "Unsupported",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "schema"
+      }
+    },
+    {
+      "id": "missing-null-plus-version-last",
+      "path": "fixture-seeds/codec/missing-null-plus-version-last.bytes",
+      "bytes": 1004,
+      "sha256": "5e4cf16109fa87f65cdbea1ef8e2d99175452af7b32228239ab2b8530c4d463d",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "version-plus-errno-overflow-last",
+      "path": "fixture-seeds/codec/version-plus-errno-overflow-last.bytes",
+      "bytes": 1034,
+      "sha256": "01f9de267c043d26a096189519c898843e2c79a367164bb13e243fdc4f71c8ba",
+      "expected": {
+        "result": "error",
+        "kind": "Unsupported",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "schema"
+      }
+    },
+    {
+      "id": "bad-enum",
+      "path": "fixture-seeds/codec/bad-enum.bytes",
+      "bytes": 1028,
+      "sha256": "47507f4799142251f541666e243477208e85de53a71cad1b6b0f84dd26e4f15d",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "semantic"
+      }
+    },
+    {
+      "id": "bad-hex",
+      "path": "fixture-seeds/codec/bad-hex.bytes",
+      "bytes": 1020,
+      "sha256": "f46cbda20c6df8d2be90759b6074fe8242a251bee64ff98b0f50a0ddd2e2add7",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "semantic"
+      }
+    },
+    {
+      "id": "errno-overflow",
+      "path": "fixture-seeds/codec/errno-overflow.bytes",
+      "bytes": 1034,
+      "sha256": "b2855b4ac4a7345904dbd1b896631a24d6504ff7bcb4efd43daa25ddcd4aedb6",
+      "expected": {
+        "result": "error",
+        "kind": "Overflow",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "semantic"
+      }
+    },
+    {
+      "id": "required-size-overflow",
+      "path": "fixture-seeds/codec/required-size-overflow.bytes",
+      "bytes": 1043,
+      "sha256": "2e35a498c0c005acf5bffa5d9cf19f88732e696f5253e54762396bed70ae16b2",
+      "expected": {
+        "result": "error",
+        "kind": "Overflow",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "semantic"
+      }
+    },
+    {
+      "id": "noncanonical-decimal",
+      "path": "fixture-seeds/codec/noncanonical-decimal.bytes",
+      "bytes": 1025,
+      "sha256": "ce971ebfa96949c00b4a16dc2575852c7e231db02e5f5bc00fe2525bd5a6f339",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "semantic"
+      }
+    },
+    {
+      "id": "escaped-profile-alias",
+      "path": "fixture-seeds/codec/escaped-profile-alias.bytes",
+      "bytes": 1031,
+      "sha256": "ccd8544df7a51c8174fa6df957fe5d16bb3270bd8376d62e64554e605ca95d88",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "ascii"
+      }
+    },
+    {
+      "id": "invalid-utf8",
+      "path": "fixture-seeds/codec/invalid-utf8.bytes",
+      "bytes": 1027,
+      "sha256": "48669cff3b7ceb644ca274384f0f58340c058b45b0c514c5e93b6023161e2e20",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "ascii"
+      }
+    },
+    {
+      "id": "trailing-value",
+      "path": "fixture-seeds/codec/trailing-value.bytes",
+      "bytes": 1029,
+      "sha256": "aeccb84741daba41cd3357c268145e38f57757e0317a87c2973a82693b029ebc",
+      "expected": {
+        "result": "error",
+        "kind": "Malformed",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    },
+    {
+      "id": "too-many-evidence-ids",
+      "path": "fixture-seeds/codec/too-many-evidence-ids.bytes",
+      "bytes": 1080,
+      "sha256": "9a2d98fcc937d1a40602b7bd06a0cf2041cd8a3ba9297551e333ff9673abd2a9",
+      "expected": {
+        "result": "error",
+        "kind": "LimitExceeded",
+        "stage": "Inspect",
+        "errno": null,
+        "source_present": false,
+        "required_size": null,
+        "import_origin": null,
+        "partial_payload": false,
+        "phase": "shape"
+      }
+    }
+  ],
+  "encoder_literal": {
+    "fixture": "fixture-seeds/codec/valid-base.bytes",
+    "E": 1026,
+    "exact_prepaid_work": 33856,
+    "canonical_payload_matches_literal": true
+  },
+  "encoder_boundaries": [
+    {
+      "id": "byte-before-work-retained",
+      "wire_cap": "E-1",
+      "work_cap": "0",
+      "retained_cap": "0",
+      "expected": "LimitExceeded/Inspect",
+      "required_size": "E",
+      "payload_entries": "0"
+    },
+    {
+      "id": "work-before-retained",
+      "wire_cap": "E",
+      "work_cap": "0",
+      "retained_cap": "0",
+      "expected": "LimitExceeded/Inspect",
+      "required_size": null,
+      "payload_entries": "0"
+    },
+    {
+      "id": "exact-work-retained-short",
+      "wire_cap": "E",
+      "work_cap": "1024+32*E",
+      "retained_cap": "D+size_of(Vec<u8>)+E-1",
+      "expected": "LimitExceeded/Inspect",
+      "required_size": "D+size_of(Vec<u8>)+E",
+      "payload_entries": "0"
+    },
+    {
+      "id": "exact-minima-restored",
+      "wire_cap": "E",
+      "work_cap": "1024+32*E",
+      "retained_cap": "D+size_of(Vec<u8>)+actual_output_capacity",
+      "expected": "Ok",
+      "payload_entries": "one serialization"
+    },
+    {
+      "id": "allocation-failure-after-valid-admission",
+      "fault": "first codec-owned allocation",
+      "expected": "Backend/Allocate",
+      "required_size": null,
+      "payload_entries": "0"
+    }
+  ]
+}

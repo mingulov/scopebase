@@ -162,3 +162,98 @@ impl PartialOrd for InvocationKey {
         Some(self.cmp(o))
     }
 }
+
+// BP03 adapter accounting inspects only the existing private String capacity.
+#[cfg(feature = "bpf-host")]
+pub(crate) fn bp03_profile_capacity(value: &ProfileId) -> usize {
+    value.0.capacity()
+}
+
+#[cfg(feature = "bpf-host")]
+pub(crate) fn bp03_label_capacity(value: &Label) -> usize {
+    value.0.capacity()
+}
+
+#[cfg(feature = "bpf-host")]
+pub(crate) fn bp03_case_id_capacity(value: &CaseId) -> usize {
+    value.0.capacity()
+}
+
+#[cfg(feature = "bpf-host")]
+pub(crate) fn bp03_run_id_capacity(value: &RunId) -> usize {
+    value.0.capacity()
+}
+
+// Fallible prepared-response copies stay inside the private String-owning module.
+// Public parsers/Clone/serde and accepted cell-name validity are unchanged.
+#[allow(dead_code)]
+pub(crate) fn rsp01_copy_key(
+    key: &InvocationKey,
+    limits: &RunLimits,
+    budget: &mut crate::prepared::ResponseBudget,
+) -> Result<InvocationKey, crate::ResponsePreparationFailure> {
+    rsp01_copy_key_with(key, limits, budget, &mut crate::prepared::response_string_storage)
+}
+#[allow(dead_code)]
+pub(crate) fn rsp01_copy_key_with<F>(
+    key: &InvocationKey,
+    limits: &RunLimits,
+    budget: &mut crate::prepared::ResponseBudget,
+    allocate: &mut F,
+) -> Result<InvocationKey, crate::ResponsePreparationFailure>
+where F: FnMut(usize) -> Result<String, ()> {
+    use crate::{ResponsePreparationComponent as Part, ResponsePreparationFailure as Failure,
+        ResponsePreparationFailureKind as Kind};
+    let invalid = |component| Failure { kind: Kind::InvalidInvocation, component,
+        requested_bytes: None, observed_bytes: None };
+    let run = key.run_id().as_str();
+    if run.len() != 32 || !run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err(invalid(Part::RunId));
+    }
+    let case = key.case_key();
+    if check(case.case_id().as_str(), 96).is_err() || *case.case_version() == 0 {
+        return Err(invalid(Part::CaseId));
+    }
+    // CaseKey::new accepts arbitrary nonempty cell bytes up to both ceilings.
+    // In particular slash, spaces and non-ASCII must not acquire ID grammar.
+    if case.cell_id().is_empty() || case.cell_id().len() > 65536
+        || case.cell_id().len() as u64 > limits.name_bytes()
+        || case.cell_id().len() as u64 > limits.retained_bytes() {
+        return Err(invalid(Part::CellId));
+    }
+    if *key.attempt() == 0 || *key.operation_id() == 0 {
+        return Err(invalid(Part::Total));
+    }
+    let run_id = RunId(budget.copy_string_with(run, Part::RunId, allocate)?);
+    let case_id = CaseId(budget.copy_string_with(case.case_id().as_str(), Part::CaseId, allocate)?);
+    let cell_id = budget.copy_string_with(case.cell_id(), Part::CellId, allocate)?;
+    Ok(InvocationKey(InvocationKeyValues {
+        run_id,
+        case_key: CaseKey(CaseKeyValues { case_id, case_version: *case.case_version(), cell_id }),
+        attempt: *key.attempt(), operation_id: *key.operation_id(),
+    }))
+}
+#[allow(dead_code)]
+pub(crate) fn rsp01_copy_label(
+    text: &str,
+    limits: &RunLimits,
+    budget: &mut crate::prepared::ResponseBudget,
+    component: crate::ResponsePreparationComponent,
+) -> Result<Label, crate::ResponsePreparationFailure> {
+    if check(text, 96).is_err() || text.len() as u64 > limits.label_bytes() {
+        return Err(crate::ResponsePreparationFailure {
+            kind: crate::ResponsePreparationFailureKind::InvalidInvocation,
+            component, requested_bytes: None, observed_bytes: None,
+        });
+    }
+    Ok(Label(budget.copy_string(text, component)?))
+}
+
+// Actual recursively owned capacities for independent finite-header accounting.
+#[allow(dead_code)]
+pub(crate) fn rsp01_key_capacities(key: &InvocationKey) -> [usize; 3] {
+    [key.0.run_id.0.capacity(), key.0.case_key.0.case_id.0.capacity(),
+        key.0.case_key.0.cell_id.capacity()]
+}
+#[allow(dead_code)]
+pub(crate) fn rsp01_label_capacity(label: &Label) -> usize { label.0.capacity() }

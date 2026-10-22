@@ -1,0 +1,94 @@
+[
+  {
+    "id": "to-small",
+    "expected_bytes_ascii": "ok:a"
+  },
+  {
+    "id": "from-small",
+    "expected_bytes_ascii": "ok:a"
+  },
+  {
+    "id": "to-lower-punctuation",
+    "expected_bytes_ascii": "ok:abc-01._"
+  },
+  {
+    "id": "from-lower-punctuation",
+    "expected_bytes_ascii": "ok:abc-01._"
+  },
+  {
+    "id": "to-64",
+    "expected_bytes_ascii": "ok:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "id": "from-64",
+    "expected_bytes_ascii": "ok:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "id": "to-65",
+    "expected_bytes_ascii": "receiving-id-error"
+  },
+  {
+    "id": "from-65",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-128",
+    "expected_bytes_ascii": "receiving-id-error"
+  },
+  {
+    "id": "from-128",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-129",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-slash",
+    "expected_bytes_ascii": "receiving-id-error"
+  },
+  {
+    "id": "from-slash",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-uppercase",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "from-uppercase",
+    "expected_bytes_ascii": "receiving-id-error"
+  },
+  {
+    "id": "to-empty",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "from-empty",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-first-dot",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "from-first-dot",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-nonascii",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "from-nonascii",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "to-space",
+    "expected_bytes_ascii": "source-id-error"
+  },
+  {
+    "id": "from-space",
+    "expected_bytes_ascii": "source-id-error"
+  }
+]

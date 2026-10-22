@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "original_bp02_manifest_utf8": "# SPDX-License-Identifier: Apache-2.0\n[package]\nname = \"scopebase-bpf\"\nversion = \"0.1.0\"\nedition = \"2021\"\nrust-version = \"1.88.0\"\nlicense = \"Apache-2.0\"\npublish = false\nbuild = false\nreadme = \"README.md\"\ndescription = \"ScopeBase host BPF error and budget contracts\"\ninclude = [\"Cargo.toml\", \"README.md\", \"LICENSE-APACHE\", \"THIRD-PARTY-NOTICES.md\", \"src/**\", \"tests/**\", \"examples/**\"]\nautotests = false\nautoexamples = false\n\n[features]\ndefault = []\n\n[target.'cfg(all(target_os = \"linux\", target_arch = \"x86_64\", target_env = \"gnu\", target_pointer_width = \"64\", target_endian = \"little\"))'.dependencies]\nrustix = { version = \"=1.1.5\", default-features = false, features = [\"std\", \"fs\", \"process\", \"thread\", \"linux_4_11\"] }\nlibc = { version = \"=0.2.191\", default-features = false, features = [\"std\"] }\nsha2 = { version = \"=0.11.0\", default-features = false }\n\n[[test]]\nname=\"api_contract\"\npath=\"tests/api_contract.rs\"\n\n[[test]]\nname=\"maps_pure\"\npath=\"tests/maps_pure.rs\"\n\n[[test]]\nname=\"maps_contract\"\npath=\"tests/maps_contract.rs\"\n\n[[test]]\nname=\"maps_live\"\npath=\"tests/maps_live.rs\"\n\n[[test]]\nname=\"maps_mounts\"\npath=\"tests/maps_mounts.rs\"\n\n[[test]]\nname=\"who_preservation\"\npath=\"tests/who_preservation.rs\"\n\n[[example]]\nname=\"possible_topology\"\npath=\"examples/possible_topology.rs\"\n\n[[example]]\nname=\"who_map_reader\"\npath=\"examples/who_map_reader.rs\"\n\n[[example]]\nname=\"bp02_live_fixture\"\npath=\"examples/bp02_live_fixture.rs\"\n",
+  "original_bp02_manifest_sha256": "816ca0f14aa6332dfb505c36ec2ab04fe60f14e4e97569a596144b2d9583bf73",
+  "bpf": {
+    "default": [
+      "default"
+    ],
+    "minimal": [],
+    "json": [
+      "json"
+    ]
+  },
+  "testkit": {
+    "default": [
+      "default"
+    ],
+    "minimal": [],
+    "core-default": [
+      "bpf-host",
+      "default"
+    ],
+    "core-minimal": [
+      "bpf-host"
+    ],
+    "json-union": [
+      "bpf-host",
+      "bpf-host-json"
+    ]
+  }
+}

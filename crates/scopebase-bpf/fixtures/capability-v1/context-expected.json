@@ -1,0 +1,42 @@
+[
+  {
+    "id": "exact-base-match",
+    "expected_applies": true
+  },
+  {
+    "id": "object",
+    "expected_applies": false
+  },
+  {
+    "id": "profile",
+    "expected_applies": false
+  },
+  {
+    "id": "kernel-build",
+    "expected_applies": false
+  },
+  {
+    "id": "btf-value",
+    "expected_applies": false
+  },
+  {
+    "id": "btf-presence",
+    "expected_applies": false
+  },
+  {
+    "id": "architecture",
+    "expected_applies": false
+  },
+  {
+    "id": "namespace",
+    "expected_applies": false
+  },
+  {
+    "id": "security",
+    "expected_applies": false
+  },
+  {
+    "id": "topology",
+    "expected_applies": false
+  }
+]

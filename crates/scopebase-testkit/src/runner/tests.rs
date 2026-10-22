@@ -513,7 +513,7 @@ fn review_b5_retirement_raw_response_obeys_remaining_payload() {
             last_elapsed: 0,
         };
         e.ledger.participants.insert((Owner::Adapter, key.clone()));
-        e.phase(0, &mut a, &mut s);
+        e.phase(0, &mut LegacyRoute(&mut a), &mut s);
         if full {
             assert!(
                 e.records[0].response.is_none(),
@@ -585,12 +585,591 @@ fn review_a1_retirement_error_diagnostic_fits_selected_limit() {
         last_elapsed: 0,
     };
     e.ledger.participants.insert((Owner::Adapter, key.clone()));
-    let result =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.phase(0, &mut a, &mut s)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.phase(0, &mut LegacyRoute(&mut a), &mut s)
+    }));
     assert!(
         result.is_ok(),
         "selected retirement diagnostics must be representable without a panic"
     );
     assert!(e.invalid.is_some());
     assert!(e.records[0].error.as_ref().unwrap().diagnostic().len() <= 41);
+}
+
+#[test]
+fn prp01_response_budget_counts_spare_and_checked_overflow() {
+    use crate::prepared::{
+        ResponseBudget, ResponsePreparationComponent as Part,
+        ResponsePreparationFailureKind as Kind,
+    };
+    let mut b = ResponseBudget::new(64, 100).unwrap();
+    b.reserve_minimum(16, Part::CellId).unwrap();
+    let error = b.observe_capacity(16, 48, Part::CellId).unwrap_err();
+    assert_eq!(error.kind, Kind::CapacityExceeded);
+    assert_eq!(error.component, Part::CellId);
+    assert_eq!(error.requested_bytes, Some(16));
+    assert_eq!(error.observed_bytes, Some(112));
+    let mut b = ResponseBudget::new(64, 112).unwrap();
+    b.reserve_minimum(16, Part::CellId).unwrap();
+    b.observe_capacity(16, 48, Part::CellId).unwrap();
+    assert_eq!(b.used(), 112);
+    let mut b = ResponseBudget::new(usize::MAX - 1, usize::MAX).unwrap();
+    let error = b.reserve_minimum(2, Part::Total).unwrap_err();
+    assert_eq!(error.kind, Kind::Overflow);
+    assert_eq!(error.component, Part::Total);
+    assert_eq!(error.requested_bytes, Some(2));
+    assert_eq!(error.observed_bytes, None);
+}
+
+#[test]
+fn prp02_owned_key_real_overgrant_has_no_fallback() {
+    use crate::prepared::ResponseBudget;
+    use crate::{ResponsePreparationComponent as Part, ResponsePreparationFailureKind as Kind};
+    let (_, _, c) = support::load();
+    let source = &c.schedule()[0];
+    for (excess_at, component) in [(0, Part::RunId), (1, Part::CaseId), (2, Part::CellId)] {
+        let mut attempts = 0;
+        let mut capacities = vec![];
+        let mut allocate = |minimum: usize| {
+            let mut text = String::new();
+            let request = if attempts == excess_at {
+                minimum + 128
+            } else {
+                minimum
+            };
+            text.try_reserve_exact(request).map_err(|_| ())?;
+            capacities.push(text.capacity());
+            attempts += 1;
+            Ok(text)
+        };
+        let mut b = ResponseBudget::new(0, 64).unwrap();
+        let error =
+            crate::ids::rsp01_copy_key_with(source, c.limits(), &mut b, &mut allocate).unwrap_err();
+        assert_eq!(error.kind, Kind::CapacityExceeded);
+        assert_eq!(error.component, component);
+        assert_eq!(error.observed_bytes, Some(capacities.iter().sum()));
+        assert_eq!(
+            attempts,
+            excess_at + 1,
+            "capacity refusal must never attempt a fresh fallback key"
+        );
+    }
+    let mut b = ResponseBudget::new(0, 4096).unwrap();
+    assert_eq!(
+        crate::ids::rsp01_copy_key(source, c.limits(), &mut b).unwrap(),
+        *source
+    );
+}
+#[test]
+fn prp03_copy_allocation_refusal_and_original_cell_grammar() {
+    use crate::prepared::ResponseBudget;
+    use crate::{ResponsePreparationComponent as Part, ResponsePreparationFailureKind as Kind};
+    let (_, _, c) = support::load();
+    let source = &c.schedule()[0];
+    let mut budget = ResponseBudget::new(0, 4096).unwrap();
+    let error = crate::ids::rsp01_copy_key_with(source, c.limits(), &mut budget, &mut |_| Err(()))
+        .unwrap_err();
+    assert_eq!(error.kind, Kind::Allocation);
+    assert_eq!(error.component, Part::RunId);
+    assert_eq!(error.requested_bytes, Some(32));
+    assert_eq!(error.observed_bytes, None);
+    let key = InvocationKey::new(
+        InvocationKeyValues {
+            run_id: source.run_id().clone(),
+            case_key: CaseKey::new(
+                CaseKeyValues {
+                    case_id: source.case_key().case_id().clone(),
+                    case_version: 1,
+                    cell_id: "cell / λ".into(),
+                },
+                c.limits(),
+            )
+            .unwrap(),
+            attempt: 1,
+            operation_id: 2,
+        },
+        c.limits(),
+    )
+    .unwrap();
+    let mut budget = ResponseBudget::new(0, 4096).unwrap();
+    let copy = crate::ids::rsp01_copy_key(&key, c.limits(), &mut budget).unwrap();
+    assert_eq!(copy, key);
+    assert_eq!(copy.case_key().cell_id(), "cell / λ");
+}
+
+#[test]
+fn prp07_cross_context_output_obeys_receiving_limit() {
+    use crate::observation::{
+        OneStepDiagnostic, OneStepOutputFailure, OneStepResponse, OneStepResponseStage,
+    };
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let mut values = c.limits().values();
+    values.observation_bytes = 256;
+    let high = RunLimits::new(values).unwrap();
+    let mut values = high.values();
+    values.observation_bytes = 128;
+    let low = RunLimits::new(values).unwrap();
+    let prepare = |limits: &RunLimits| {
+        OneStepResponse::prepare(
+            i.key(),
+            i.observation_schema(),
+            i.script().steps()[0].step_id(),
+            limits,
+            8192,
+            std::mem::size_of::<OneStepResponse>(),
+        )
+        .unwrap()
+    };
+    let admitting = prepare(&high);
+    let receiving = prepare(&low);
+    let output = admitting
+        .admit_output(Vec::from([b'x'; 129]), 4096)
+        .unwrap();
+    let (receiving, failure) = match receiving.finish_observation(output, 4096) {
+        Err(refusal) => refusal,
+        Ok(_) => panic!("finishing context must not publish 129 bytes under its 128-byte limit"),
+    };
+    assert_eq!(failure, OneStepOutputFailure::Length { required: 129 });
+    let error = receiving.finish_error(
+        CaseErrorCategory::InvalidOutput,
+        OneStepResponseStage::Execute,
+        OneStepDiagnostic::new(b"bpf:limit_exceeded/execute;required=129").unwrap(),
+        true,
+        None,
+    );
+    assert_eq!(error.key(), i.key(), "refusal retains the receiving key");
+    assert!(error.check_bounds(&low).is_ok());
+}
+
+#[test]
+fn prp07_same_context_length_boundary_preserves_response_custody() {
+    use crate::observation::{
+        OneStepDiagnostic, OneStepOutputFailure, OneStepResponse, OneStepResponseStage,
+    };
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let mut values = c.limits().values();
+    values.observation_bytes = 128;
+    let limits = RunLimits::new(values).unwrap();
+    let prepare = || {
+        OneStepResponse::prepare(
+            i.key(),
+            i.observation_schema(),
+            i.script().steps()[0].step_id(),
+            &limits,
+            8192,
+            std::mem::size_of::<OneStepResponse>(),
+        )
+        .unwrap()
+    };
+    let response = prepare();
+    let bytes = Vec::from([b'x'; 128]);
+    let pointer = bytes.as_ptr();
+    let joint = std::mem::size_of::<Vec<u8>>() + bytes.capacity();
+    let output = response.admit_output(bytes, joint).unwrap();
+    let observation = response
+        .finish_observation(output, joint)
+        .unwrap_or_else(|_| panic!("exact length and joint boundaries must finish"));
+    assert_eq!(observation.bytes(), &[b'x'; 128]);
+    assert_eq!(observation.bytes().as_ptr(), pointer);
+    assert_eq!(observation.key(), i.key());
+    assert!(observation.check_bounds(&limits).is_ok());
+
+    let response = prepare();
+    assert_eq!(
+        response.admit_output(Vec::from([b'x'; 129]), 4096).err(),
+        Some(OneStepOutputFailure::Length { required: 129 })
+    );
+    let error = response.finish_error(
+        CaseErrorCategory::InvalidOutput,
+        OneStepResponseStage::Execute,
+        OneStepDiagnostic::new(b"bpf:limit_exceeded/execute;required=129").unwrap(),
+        true,
+        None,
+    );
+    assert_eq!(error.key(), i.key());
+    assert!(error.check_bounds(&limits).is_ok());
+}
+
+#[test]
+fn prp07_finish_rechecks_current_joint_capacity() {
+    use crate::observation::{
+        OneStepDiagnostic, OneStepOutputFailure, OneStepResponse, OneStepResponseStage,
+    };
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let prepare = || {
+        OneStepResponse::prepare(
+            i.key(),
+            i.observation_schema(),
+            i.script().steps()[0].step_id(),
+            c.limits(),
+            8192,
+            std::mem::size_of::<OneStepResponse>(),
+        )
+        .unwrap()
+    };
+    for fits in [true, false] {
+        let response = prepare();
+        let mut bytes = Vec::with_capacity(256);
+        bytes.push(b'x');
+        let pointer = bytes.as_ptr();
+        let required = std::mem::size_of::<Vec<u8>>() + bytes.capacity();
+        let output = response.admit_output(bytes, 4096).unwrap();
+        let result = response.finish_observation(output, required - usize::from(!fits));
+        if fits {
+            let observation =
+                result.unwrap_or_else(|_| panic!("exact actual capacity must fit current J"));
+            assert_eq!(observation.bytes(), b"x");
+            assert_eq!(observation.bytes().as_ptr(), pointer);
+            assert!(observation.check_bounds(c.limits()).is_ok());
+        } else {
+            let (response, failure) = match result {
+                Err(refusal) => refusal,
+                Ok(_) => panic!("minus-one current J must refuse actual spare capacity"),
+            };
+            assert_eq!(failure, OneStepOutputFailure::Capacity { required });
+            let error = response.finish_error(
+                CaseErrorCategory::InvalidOutput,
+                OneStepResponseStage::Execute,
+                OneStepDiagnostic::new(b"bpf:limit_exceeded/execute").unwrap(),
+                true,
+                None,
+            );
+            assert_eq!(error.key(), i.key(), "joint refusal retains the same key");
+            assert!(error.check_bounds(c.limits()).is_ok());
+        }
+    }
+}
+
+#[test]
+fn prp01_finish_result_fits_existing_admitted_inline_basis() {
+    use crate::observation::{OneStepOutputFailure, OneStepResponse};
+    let response = std::mem::size_of::<OneStepResponse>();
+    let observation = std::mem::size_of::<Observation>();
+    let error = std::mem::size_of::<CaseError>();
+    let result =
+        std::mem::size_of::<Result<Observation, (OneStepResponse, OneStepOutputFailure)>>();
+    let basis = response.max(observation).max(error);
+    println!("finish inline: response={response} observation={observation} error={error} result={result} basis={basis}");
+    assert!(
+        result <= basis,
+        "consuming result carrier must fit the actual admitted inline basis"
+    );
+}
+
+#[test]
+fn prp07_narrow_finish_moves_exact_fields_and_rejects_unadmitted_output() {
+    use crate::observation::{OneStepDiagnostic, OneStepResponse, OneStepResponseStage};
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let response = OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        8192,
+        std::mem::size_of::<OneStepResponse>(),
+    )
+    .unwrap();
+    let charge = response.admitted_bytes();
+    assert!(charge <= 8192);
+    let bytes = Vec::from(b"fixed-output".as_slice());
+    let pointer = bytes.as_ptr();
+    let output = response.admit_output(bytes, 4096).unwrap();
+    let observation = response
+        .finish_observation(output, 4096)
+        .unwrap_or_else(|_| panic!("same-context admitted output must finish"));
+    assert_eq!(observation.key(), i.key());
+    assert_eq!(observation.schema_id(), i.observation_schema().id());
+    assert_eq!(*observation.schema_revision(), 1);
+    assert_eq!(
+        observation.completed_steps(),
+        &vec![Label::parse("sum").unwrap()]
+    );
+    assert_eq!(observation.bytes(), b"fixed-output");
+    assert_eq!(
+        observation.bytes().as_ptr(),
+        pointer,
+        "output buffer must move once"
+    );
+    assert!(observation.effects().registrations().is_empty());
+    assert!(*observation.effects().complete());
+    let mut oversized = Vec::new();
+    oversized.reserve_exact(4096);
+    oversized.extend_from_slice(b"x");
+    assert!(
+        OneStepResponse::prepare(
+            i.key(),
+            i.observation_schema(),
+            i.script().steps()[0].step_id(),
+            c.limits(),
+            8192,
+            std::mem::size_of::<OneStepResponse>()
+        )
+        .unwrap()
+        .admit_output(oversized, 64)
+        .is_err(),
+        "spare output capacity must fit joint J"
+    );
+    let response = OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        8192,
+        std::mem::size_of::<OneStepResponse>(),
+    )
+    .unwrap();
+    let error = response.finish_error(
+        CaseErrorCategory::Refused,
+        OneStepResponseStage::Read,
+        OneStepDiagnostic::new(b"bpf:denied/read;required=32").unwrap(),
+        true,
+        Some(13),
+    );
+    assert_eq!(error.key(), i.key());
+    assert_eq!(error.step_id().as_ref().unwrap().as_str(), "sum");
+    assert_eq!(error.stage().as_str(), "read");
+    assert_eq!(*error.category(), CaseErrorCategory::Refused);
+    assert_eq!(*error.errno(), Some(13));
+    assert_eq!(error.diagnostic_bytes(), b"bpf:denied/read;required=32");
+    assert_eq!(*error.cause().cause(), RefusalCause::Unknown);
+    assert_eq!(error.cause().method().as_str(), "bp03-model");
+    assert_eq!(*error.cause().tier(), EvidenceTier::T0);
+    assert!(error.completed_steps().is_empty());
+    assert!(error.partial_observation().is_none());
+    assert!(error.effects().registrations().is_empty());
+}
+
+struct PreparationDelay {
+    inner: TimedAdapter,
+    prepare_ns: u64,
+    calls: usize,
+    drops: Rc<Cell<usize>>,
+}
+struct DelayedPreparedCall<'a> {
+    adapter: &'a mut PreparationDelay,
+    invocation: &'a CaseInvocation,
+}
+impl Drop for DelayedPreparedCall<'_> {
+    fn drop(&mut self) {
+        self.adapter.drops.set(self.adapter.drops.get() + 1);
+    }
+}
+impl PreparedExecution for DelayedPreparedCall<'_> {
+    fn execute(self, access: &FixtureAccess<'_>) -> Result<Observation, CaseError> {
+        self.adapter.inner.execute(self.invocation, access)
+    }
+}
+impl ResponsePreparedAdapter for PreparationDelay {
+    fn subject(&self) -> SubjectBinding {
+        self.inner.subject()
+    }
+    type Prepared<'a>
+        = DelayedPreparedCall<'a>
+    where
+        Self: 'a;
+    fn prepare_response<'a>(
+        &'a mut self,
+        invocation: &'a CaseInvocation,
+    ) -> Result<Self::Prepared<'a>, ResponsePreparationFailure> {
+        self.calls += 1;
+        self.inner
+            .clock
+            .set(self.inner.clock.get() + self.prepare_ns);
+        Ok(DelayedPreparedCall {
+            adapter: self,
+            invocation,
+        })
+    }
+    fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        self.inner.retire(request)
+    }
+}
+#[test]
+fn prp09_existing_gate_charges_preparation_time_without_new_poll() {
+    let clock = Deterministic::new();
+    let (plan, mut session, inner, oracle) = setup(&clock);
+    let c = session.inner.c.clone();
+    let mut adapter = PreparationDelay {
+        inner,
+        prepare_ns: 30_000_000_000,
+        calls: 0,
+        drops: Rc::new(Cell::new(0)),
+    };
+    let report =
+        run_prepared_with_clock(&plan, &mut adapter, &mut session, &oracle, &clock).unwrap();
+    assert_eq!(adapter.calls, 1);
+    assert_eq!(adapter.drops.get(), 1);
+    assert_eq!(adapter.inner.inner.inner.calls, 0);
+    assert!(!session.inner.events.borrow().iter().any(|e| e == "prepare"));
+    assert!(
+        matches!(report.case_results()[0].execution_checkpoints().prepare().before(),
+        CheckpointSlot::Sampled { sample } if sample.cancelled().is_none() && *sample.poll_started_elapsed_ns() >= 30_000_000_000)
+    );
+    assert_eq!(
+        session
+            .inner
+            .polls
+            .load(std::sync::atomic::Ordering::Acquire),
+        5,
+        "preparation adds no poll; expired before gate skips cancellation"
+    );
+    assert_eq!(report.qualification(), Qualification::Incomplete);
+    let bytes = report.to_json(c.limits().clone()).unwrap();
+    assert_eq!(
+        RunReport::from_json(&c, &bytes, c.limits().clone())
+            .unwrap()
+            .qualification(),
+        Qualification::Incomplete
+    );
+}
+
+#[test]
+fn prp01_all_simultaneous_context_capacities_and_header_fit() {
+    use crate::observation::{rsp01_test_support, OneStepResponse};
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let context = OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        8192,
+        std::mem::size_of::<OneStepResponse>(),
+    )
+    .unwrap();
+    let actual = rsp01_test_support::context_bytes(&context);
+    assert_eq!(
+        context.admitted_bytes(),
+        actual,
+        "every owned capacity and inline shape counts exactly once"
+    );
+    assert!(
+        OneStepResponse::prepare(
+            i.key(),
+            i.observation_schema(),
+            i.script().steps()[0].step_id(),
+            c.limits(),
+            actual - 1,
+            std::mem::size_of::<OneStepResponse>()
+        )
+        .is_err(),
+        "minus-one rejects actual context"
+    );
+    let context = OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        actual,
+        std::mem::size_of::<OneStepResponse>(),
+    )
+    .unwrap();
+    let output = context
+        .admit_output(Vec::from(b"x".as_slice()), 4096)
+        .unwrap();
+    let response = context
+        .finish_observation(output, 4096)
+        .unwrap_or_else(|_| panic!("same-context admitted output must finish"));
+    assert!(
+        rsp01_test_support::observation_bytes(&response) <= actual,
+        "returned header Q <= admitted R <= F"
+    );
+}
+
+#[test]
+fn prp07_error_only_finish_and_decimal_are_finite() {
+    use crate::observation::{OneStepDiagnostic, OneStepErrorResponse, OneStepResponseStage};
+    let (_, _, c) = support::load();
+    let key = &c.schedule()[0];
+    let mut diagnostic = OneStepDiagnostic::new(b"bpf:limit_exceeded/read;required=").unwrap();
+    diagnostic.decimal(usize::MAX).unwrap();
+    let response = OneStepErrorResponse::prepare(
+        key,
+        c.limits(),
+        8192,
+        std::mem::size_of::<OneStepErrorResponse>(),
+    )
+    .unwrap();
+    assert!(response.admitted_bytes() <= 8192);
+    let error = response.finish_error(
+        CaseErrorCategory::UnsupportedSchema,
+        OneStepResponseStage::Preflight,
+        diagnostic,
+    );
+    assert_eq!(error.key(), key);
+    assert!(error.step_id().is_none());
+    assert!(error.errno().is_none());
+    assert!(error.completed_steps().is_empty());
+    assert!(error.partial_observation().is_none());
+    assert_eq!(
+        error.diagnostic_bytes(),
+        format!("bpf:limit_exceeded/read;required={}", usize::MAX).as_bytes()
+    );
+    assert!(OneStepDiagnostic::new(&[0; 129]).is_err());
+    let mut full = OneStepDiagnostic::new(&[b'a'; 128]).unwrap();
+    assert!(
+        full.extend(b"b").is_err(),
+        "overflow must refuse rather than grow or truncate"
+    );
+}
+
+#[test]
+fn prp01_full_outer_inline_is_counted_once() {
+    use crate::observation::{rsp01_test_support, OneStepResponse};
+    let (_, _, c) = support::load();
+    let i = invocation(&c, &c.schedule()[0]);
+    let base_inline = std::mem::size_of::<OneStepResponse>()
+        .max(std::mem::size_of::<Observation>())
+        .max(std::mem::size_of::<CaseError>());
+    // This is a synthetic outer shape, not an actual BP03 call measurement.
+    let outer_inline = base_inline + 64;
+    let context = OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        8192,
+        outer_inline,
+    )
+    .unwrap();
+    let independently_measured = rsp01_test_support::context_bytes(&context) + 64;
+    assert_eq!(
+        context.admitted_bytes(),
+        independently_measured,
+        "outer inline storage replaces the component inline once"
+    );
+    assert!(OneStepResponse::prepare(
+        i.key(),
+        i.observation_schema(),
+        i.script().steps()[0].step_id(),
+        c.limits(),
+        independently_measured - 1,
+        outer_inline
+    )
+    .is_err());
+}
+
+#[test]
+fn prp01_error_only_outer_inline_is_counted_once() {
+    use crate::observation::OneStepErrorResponse;
+    let (_, _, c) = support::load();
+    let inline = std::mem::size_of::<OneStepErrorResponse>()
+        .max(std::mem::size_of::<Observation>())
+        .max(std::mem::size_of::<CaseError>());
+    let component =
+        OneStepErrorResponse::prepare(&c.schedule()[0], c.limits(), 8192, inline).unwrap();
+    let outer =
+        OneStepErrorResponse::prepare(&c.schedule()[0], c.limits(), 8192, inline + 64).unwrap();
+    assert_eq!(outer.admitted_bytes(), component.admitted_bytes() + 64);
+    assert!(OneStepErrorResponse::prepare(
+        &c.schedule()[0],
+        c.limits(),
+        outer.admitted_bytes() - 1,
+        inline + 64
+    )
+    .is_err());
 }

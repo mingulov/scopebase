@@ -1,0 +1,230 @@
+[
+  {
+    "id": "all-zero",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "zero-own-with-excluded-population",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "unexpected-own-no-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "unexpected-own-active-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "disabled-own-trigger-no-excluded",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "disabled-own-trigger-active-excluded",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "original-quiet-owned",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "short-own-no-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "original-thread-exact",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "extra-own-no-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "extra-own-active-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "matched-own-missing-excluded",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "small-supported-model",
+    "result": "ok",
+    "state": "supported",
+    "adapter_bytes_ascii": "supported"
+  },
+  {
+    "id": "original-positive-model",
+    "result": "ok",
+    "state": "supported",
+    "adapter_bytes_ascii": "supported"
+  },
+  {
+    "id": "more-excluded-executions",
+    "result": "ok",
+    "state": "supported",
+    "adapter_bytes_ascii": "supported"
+  },
+  {
+    "id": "excluded-hit-with-all-other-zero",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hit-with-disabled-trigger",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hit-with-disabled-owned-active-excluded",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hit-with-unexpected-own",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hit-with-short-own",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hit-with-missing-excluded-ledger",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "original-widened-filter",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "excluded-hits-exceed-ledger",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "all-max-except-zero-excluded-hits",
+    "result": "ok",
+    "state": "supported",
+    "adapter_bytes_ascii": "supported"
+  },
+  {
+    "id": "max-own-missing-excluded",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "max-expected-disabled-trigger",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "max-short-own",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "max-extra-own",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "max-own-unexpected",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "max-excluded-hits-other-zero",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "all-max",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "max-excluded-population-no-hits",
+    "result": "ok",
+    "state": "supported",
+    "adapter_bytes_ascii": "supported"
+  },
+  {
+    "id": "max-vs-one-short",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "one-vs-max-extra",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "max-expected-zero-observations",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "max-excluded-population-zero-own",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  },
+  {
+    "id": "max-excluded-with-hit-zero-own",
+    "result": "ok",
+    "state": "incompatible",
+    "adapter_bytes_ascii": "incompatible"
+  },
+  {
+    "id": "disabled-own-trigger-max-excluded",
+    "result": "ok",
+    "state": "unknown",
+    "adapter_bytes_ascii": "unknown"
+  }
+]

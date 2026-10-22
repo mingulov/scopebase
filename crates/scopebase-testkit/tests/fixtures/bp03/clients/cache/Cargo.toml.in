@@ -1,0 +1,25 @@
+# Private finite-template proposal; markers are entire typed TOML values.
+[package]
+name = "bp03-cache"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+publish = false
+build = false
+autobins = false
+
+[workspace]
+
+[features]
+json = []
+
+[[bin]]
+name = "bp03-cache"
+path = "src/main.rs"
+
+[dependencies]
+scopebase-bpf = { version = "=0.1.0", path = __BPF_PACKAGE_PATH__, default-features = __BPF_DEFAULT_FEATURES__, features = __BPF_FEATURES__ }
+scopebase-testkit = { version = "=0.1.0", path = __TESTKIT_PACKAGE_PATH__, default-features = __TESTKIT_DEFAULT_FEATURES__, features = __TESTKIT_FEATURES__ }
+
+[patch.crates-io]
+scopebase-bpf = { path = __BPF_PACKAGE_PATH__ }

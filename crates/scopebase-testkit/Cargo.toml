@@ -11,7 +11,21 @@ readme = "README.md"
 include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**/*.rs", "tests/*.rs", "tests/fixtures/**"]
 [features]
 default = []
+bpf-host = ["dep:scopebase-bpf"]
+bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
 [dependencies]
+scopebase-bpf = { version = "=0.1.0", path = "../scopebase-bpf", default-features = false, optional = true }
 serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 sha2 = { version = "=0.11.0", default-features = false }
+
+[[test]]
+name = "bpf_host"
+path = "tests/bpf_host.rs"
+required-features = ["bpf-host"]
+
+[[test]]
+name = "tt02_rsp01_alloc"
+path = "tests/tt02_rsp01_alloc.rs"
+harness = false
+required-features = ["bpf-host"]

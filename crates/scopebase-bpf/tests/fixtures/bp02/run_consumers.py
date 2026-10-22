@@ -9,14 +9,41 @@ def arguments():
     p=argparse.ArgumentParser();p.add_argument('--package',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--toolchain',required=True,choices=['1.88.0','1.98.1']);p.add_argument('--toolchain-root',type=Path);p.add_argument('--cargo-home',type=Path);p.add_argument('--build-wrapper',type=Path);p.add_argument('--native',action='store_true');p.add_argument('--prebuilt',type=Path);return p
 
 def inspect(package):
-    p=package/'Cargo.toml';d=tomllib.loads(p.read_text());assert d['package']['name']=='scopebase-bpf' and d['package']['version']=='0.1.0';assert d['features']=={'default':[]}
+    p=package/'Cargo.toml';d=tomllib.loads(p.read_text());assert d['package']['name']=='scopebase-bpf' and d['package']['version']=='0.1.0'
+    # Closed exact alternatives: accepted BP02 or the ratified BP03 additions.
+    original=d['features']=={'default':[]}
+    bp03=d['features']=={'default':[],'json':['dep:serde','dep:serde_json']}
+    assert original or bp03,'unknown feature declarations'
     expected={'rustix':('=1.1.5',{'std','fs','process','thread','linux_4_11'}),'libc':('=0.2.191',{'std'}),'sha2':('=0.11.0',set())}
-    targets=d.get('target',{});assert len(targets)==1
+    targets=d.get('target',{});assert list(targets)==['cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))']
     edges=next(iter(targets.values()))['dependencies'];assert set(edges)==set(expected)
-    for n,(v,features) in expected.items():assert edges[n]['version']==v and edges[n]['default-features'] is False and set(edges[n].get('features',[]))==features
-    tests={x['name']:x['path'] for x in d.get('test',[])};examples={x['name']:x['path'] for x in d.get('example',[])}
-    assert set(tests)=={'api_contract','maps_pure','maps_contract','maps_live','maps_mounts','who_preservation'}
-    assert set(examples)=={'possible_topology','who_map_reader','bp02_live_fixture'}
+    for n,(v,features) in expected.items():
+        assert edges[n]['version']==v and edges[n]['default-features'] is False and set(edges[n].get('features',[]))==features
+        assert set(edges[n])<= {'version','default-features','features'}
+    direct=d.get('dependencies',{})
+    if original:assert direct=={}
+    else:
+        assert direct=={'serde':{'version':'=1.0.229','default-features':False,'features':['std'],'optional':True},'serde_json':{'version':'=1.0.151','default-features':False,'features':['std'],'optional':True}}
+    assert not d.get('dev-dependencies') and not d.get('build-dependencies')
+    wanted_tests={name:{'name':name,'path':'tests/'+name+'.rs'} for name in ['api_contract','maps_pure','maps_contract','maps_live','maps_mounts','who_preservation']}
+    wanted_examples={name:{'name':name,'path':'examples/'+name+'.rs'} for name in ['possible_topology','who_map_reader','bp02_live_fixture']}
+    if bp03:
+        wanted_tests['capability']={'name':'capability','path':'tests/capability.rs'}
+        wanted_tests['capability_json']={'name':'capability_json','path':'tests/capability_json.rs','required-features':['json']}
+        wanted_examples.update({name:{'name':name,'path':'examples/'+name+'.rs'} for name in ['capability_cache','filter_assessment']})
+    def declarations(kind,wanted):
+        rows=d.get(kind,[]);assert len(rows)==len(wanted)
+        for row in rows:
+            row=dict(row)
+            # Cargo may materialize this explicit default in a normalized file.
+            if 'doc-scrape-examples' in row:assert row.pop('doc-scrape-examples') is False
+            assert row==wanted.get(row.get('name')),'target declaration differs'
+        assert {row['name'] for row in rows}==set(wanted)
+        return {row['name']:row['path'] for row in rows}
+    tests=declarations('test',wanted_tests);examples=declarations('example',wanted_examples)
+    include=d['package']['include'];base_include=['Cargo.toml','README.md','LICENSE-APACHE','THIRD-PARTY-NOTICES.md','src/**','tests/**','examples/**']
+    assert include==base_include+(['fixtures/capability-v1/**'] if bp03 else [])
+    assert d['package']['autotests'] is False and d['package']['autoexamples'] is False
     for rel in [*tests.values(),*examples.values()]:assert (package/rel).is_file() and '..' not in Path(rel).parts
     # Cargo omits nested packages; delivered manifests are inert .in files
     # until materialized in an independently owned downstream project.

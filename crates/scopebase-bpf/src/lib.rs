@@ -48,3 +48,10 @@ pub use maps::{LiveCpuTopology, ValidatedMap};
 
 #[cfg(test)]
 extern crate self as scopebase_bpf;
+
+pub mod capability;
+pub use capability::{
+    assess_filter_probe, CapabilityObservation, CapabilityObservationInput, CapabilityState,
+    CauseDescriptionInput, DescribedCause, EvidenceStage, HazardState, ObservationOrigin,
+    ObservationOutcome, OperationErrorSnapshot, ProbeContext, ProbePopulation, ProfileId,
+};

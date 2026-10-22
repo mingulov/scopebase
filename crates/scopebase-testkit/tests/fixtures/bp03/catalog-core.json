@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 1,
+  "tasks": [
+    "BP03"
+  ],
+  "obligations": [
+    {
+      "kind": "regression_family",
+      "id": "H22",
+      "description": "T0 supplied descriptive model only",
+      "owners": [
+        "BP03"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "H22",
+      "short_contract": "T0 descriptive model; no native support",
+      "obligations": [
+        {
+          "kind": "regression_family",
+          "id": "H22"
+        }
+      ]
+    }
+  ],
+  "cells": [
+    {
+      "id": "model",
+      "tier": "T0",
+      "description": "descriptive supplied model",
+      "binding": "LOGICAL_ONLY"
+    }
+  ],
+  "cases": [
+    {
+      "id": "H22.model-filter",
+      "family": "H22",
+      "version": 1,
+      "implementation_status": "REGISTERED_EXECUTABLE",
+      "owners": [
+        "BP03"
+      ],
+      "obligations": [],
+      "required_cells": [
+        "model"
+      ],
+      "registration": {
+        "executable": {
+          "id": "case-source",
+          "revision": 1,
+          "path": "src/bpf/adapter.rs",
+          "sha256": "1f89f71a342bcdcb792453f0ec5fd28093709cf46597efb5163b284ec1a371d3",
+          "entrypoint": "BpfHostAdapter.execute"
+        },
+        "fixture": {
+          "id": "fixture-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/bundle-template.json",
+          "sha256": "571f7a04820bc6d4cdca26f5fce852788acbce12978acb37b085c6d3860ad640",
+          "entrypoint": "VectorFixtureSession.prepare"
+        },
+        "oracle": {
+          "id": "oracle-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/clients/populations/src/oracle.rs",
+          "sha256": "5ea997a70972e8613eba9e485a2a000d64746b01f7d11f136b573b40e15d7fd1",
+          "entrypoint": "LiteralOracle.evaluate"
+        },
+        "bad_control": {
+          "id": "control-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/run_consumers.py",
+          "sha256": "d9355513e43b75753f75386dcdb00d51c300a7dadb17878b2050a4989ca3e3b1",
+          "entrypoint": "adapter_controls"
+        },
+        "oracle_basis": "independent-literal-vector",
+        "control_assertion": "filter.state"
+      }
+    },
+    {
+      "id": "H22.model-profile-bridge",
+      "family": "H22",
+      "version": 1,
+      "implementation_status": "REGISTERED_EXECUTABLE",
+      "owners": [
+        "BP03"
+      ],
+      "obligations": [],
+      "required_cells": [
+        "model"
+      ],
+      "registration": {
+        "executable": {
+          "id": "case-source",
+          "revision": 1,
+          "path": "src/bpf/adapter.rs",
+          "sha256": "1f89f71a342bcdcb792453f0ec5fd28093709cf46597efb5163b284ec1a371d3",
+          "entrypoint": "BpfHostAdapter.execute"
+        },
+        "fixture": {
+          "id": "fixture-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/bundle-template.json",
+          "sha256": "571f7a04820bc6d4cdca26f5fce852788acbce12978acb37b085c6d3860ad640",
+          "entrypoint": "VectorFixtureSession.prepare"
+        },
+        "oracle": {
+          "id": "oracle-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/clients/populations/src/oracle.rs",
+          "sha256": "5ea997a70972e8613eba9e485a2a000d64746b01f7d11f136b573b40e15d7fd1",
+          "entrypoint": "LiteralOracle.evaluate"
+        },
+        "bad_control": {
+          "id": "control-source",
+          "revision": 1,
+          "path": "tests/fixtures/bp03/run_consumers.py",
+          "sha256": "d9355513e43b75753f75386dcdb00d51c300a7dadb17878b2050a4989ca3e3b1",
+          "entrypoint": "adapter_controls"
+        },
+        "oracle_basis": "independent-literal-vector",
+        "control_assertion": "profile.result"
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "id": "bp03-host-models-v1",
+      "definition_state": "FROZEN",
+      "requires_profiles": [],
+      "requires_extensions": [],
+      "required_cases": [
+        {
+          "case_id": "H22.model-filter",
+          "case_version": 1,
+          "when_extensions": []
+        },
+        {
+          "case_id": "H22.model-profile-bridge",
+          "case_version": 1,
+          "when_extensions": []
+        }
+      ],
+      "open_owners": []
+    }
+  ],
+  "extensions": []
+}
