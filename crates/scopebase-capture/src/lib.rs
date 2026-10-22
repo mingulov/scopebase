@@ -23,6 +23,7 @@ pub mod counter;
 pub mod loss;
 pub mod domain;
 pub mod error;
+pub mod generation;
 pub mod quantity;
 pub mod time;
 pub use error::ContractError;

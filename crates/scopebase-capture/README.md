@@ -78,7 +78,7 @@ Exact source/range mappings and broader original regressions remain in the
 repository's `docs/issues/capture/` register. These representation tests do not run
 the donors' reducers, validated wire decoding or native adapters.
 
-CP05–CP13 still own lifetime/reducer/replay behavior, real reference
+CP06–CP13 still own reducer/replay behavior, real reference
 applications and the installed conformance route. This pure foundation does not
 qualify complete capture profiles, live/native behavior, product migration or
 publication. THIRD-PARTY-NOTICES.md retains the distinct optional dependency terms.
@@ -251,3 +251,105 @@ cleanup or live support. BP02/BP07, CP05/CP06/CP10/CP11/CP13 and MG03 retain tho
 obligations; no runtime profile or product migration is qualified here. The
 preexisting CP03 helper's explicit-wrapper portability limitation remains later
 TT07/CP13 work; CP04 does not change that accepted helper or its receipts.
+
+CP05 adds `generation::{ObjectKey, require_generation}`. Construction moves a
+complete caller-supplied epoch, raw identity and generation; raw zero and supplied
+generation zero/MAX are valid. `next_generation` refuses MAX with
+`ArithmeticOverflow` before invoking the payload's Clone, and clones exactly once
+on success. A caller's Clone result is retained without an equality check.
+Matching compares the complete epoch, object generation and complete raw identity
+in that order. Metadata mismatch invokes no raw equality; otherwise PartialEq,
+`matches` and `require_generation` each invoke it exactly once. Every false
+`require_generation` relation returns `GenerationMismatch`.
+
+Put all necessary raw identity domains in `K`: device, namespace and token, for
+example. ScopeBase adds no process birth, filesystem, BTF, source binding,
+configuration revision or identity authority. Unknown observations keep separate
+event IDs outside the known-key registry. A generic constructor cannot recognize
+an arbitrary caller-supplied unknown sentinel. Two equal Unknown reasons must not
+be converted into one shared object key.
+
+Clone/PartialEq/Eq require only their corresponding payload trait; Debug requires
+no payload Debug and never formats the raw value. Send/Sync follow the fields.
+The wrapper adds fixed metadata work and no syscalls or lifecycle effects.
+Caller Eq/Clone may allocate, block, panic or mutate shared interior state; those
+effects cannot be undone. Borrowed wrapper fields remain in place on refusal or
+unwind. There is no payload-byte, callback-time, OOM or native cleanup bound.
+
+From the extracted package, run CP05 explicitly with the prepared offline inputs:
+
+```sh
+cargo test --offline --locked --no-default-features --test generation_histories
+cargo run --offline --locked --no-default-features --example transform_generations
+cargo run --offline --locked --no-default-features --example mapping_generations
+CARGO_HOME=/absolute/prepared/offline-home \
+python3 tests/support/check_cp05_controls.py run \
+  --source-root /absolute/path/to/scopebase-capture-0.1.0 \
+  --cargo /absolute/toolchain/bin/cargo --rustc /absolute/toolchain/bin/rustc \
+  --feature-set no-default --output-dir /new/private/output
+```
+
+Repeat with defaults and `--no-default-features --features json`; the helper's
+feature selections are `no-default`, `default` and `json`. The declared compiler
+cells are 1.88.0 and 1.98.1. The helper uses direct tools by default. For coordinated
+builds, explicitly pass `--build-wrapper /absolute/path/to/scopebase-build`
+without holding an outer lease. For the standalone route under an external
+lease, omit that option. Every compiler/Cargo/binary child follows the selected
+route. The helper rejects existing or unsafe output roots before mutation,
+generates offline lockfiles in disposable copies, and records exact source,
+changed/restored hashes, diagnostics, commands, tool identities and child-group
+retirement. A wrapper refusal is NOT_RUN; setup errors, a wrong compiler site,
+timeout or unresolved cleanup never qualify a semantic mutation. Its command
+watchdog is 2400 seconds, including wrapper acquisition. The bounded collector
+uses a separate two-second direct-child wait and another two-second wait after
+an attempted kill; it conservatively retains unresolved group/resource cleanup.
+These are harness controls, not product callback bounds.
+
+The delivered `tests/support/cp05_bounded_process.py` is a byte-for-byte copy of
+the accepted ScopeBase testkit `tests/fixtures/fixture-access/bounded_process.py`
+(SHA256 `81e371cec788e07df9139695f8f52b07fa653b1b93d36bbf8fd41ce2d8ef5bdd`),
+itself exact accepted `tools/build/common.py` excerpts. It captures at most
+4 MiB per stdout/stderr stream and hashes in fixed-size chunks. The CP05 adapter
+reserves and checkpoints a command row before launch, attaches the collector's
+PID/primary error/cleanup facts before lease parsing, and refuses incomplete
+collection, resource closure or postprocessing. Lease metadata is limited to
+16384 bytes. A successful child exit does not erase a collection or cleanup error.
+The helper runs twelve delivered failure checks with owned tiny children; run
+them separately with a fresh output when diagnosing the harness:
+
+```sh
+python3 tests/support/test_cp05_process.py --output-dir /new/private/process-checks
+```
+
+These checks inject collection/read/write/wait/close/hash/group/lease errors and
+exercise setup, timeout and numeric log bounds. They retain reserved rows, exact
+primary/cleanup outcomes and logs. Each external client also has its own target
+directory; both compiled executables remain available at distinct recorded paths
+with their original hashes after the second client runs.
+
+The delivered target contains ten direct cases, seventeen named normalized donor
+subsets and additional literal limits/domain/compaction cases. Its independent
+journal compares all 55,987 scripts/324,726 actions at every prefix; each script
+has at most six action rows and eighteen facts. K pending/live/retired tables
+each have capacity two in that population. Separate longer K/M originals and
+multi-raw/capacity/foreign-epoch vectors remain necessary; these count/work bounds
+do not bound generic payload bytes or whole-process memory. K submit-bound IDs
+survive retired-only storage compaction, forced old boundaries stay ambiguous,
+and scripted first-seen unknown creation is counted once at admission. M retains
+its own identity-present reader gate and retired ring with sticky uncertainty.
+
+The helper checks nine direct production mutations, separate adapter mutations,
+fixed no-Debug/Send compiler controls and restored positives. It also creates two
+distinct external packages from the examples, each with its own manifest, lock,
+metadata, actual subject version/features and literal journal outcomes. The
+transform client owns submit/reuse/config/retire handling; the mapping client
+owns structured domains, distinct unknown events and a bounded retired ring.
+Neither imports test support or a shared reducer. Ordinary dependency tests do
+not run these checks; invoke the unpacked package and helper directly.
+
+These are pure scripted T0/T1 and scoped package/reference-consumer evidence.
+The local positive-generation fixture does not restrict generic ObjectKey's
+zero/MAX values. K first-seen implementation bodies, wire/refcount handling and
+M text validation/rendering are deliberately deferred. CP08 ordering, CP10 replay,
+CP11 actual application adapters, CP13/TT07 installed conformance, full profiles,
+UC14 and MG runtime/duplicate retirement remain separate gates.
