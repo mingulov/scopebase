@@ -1,0 +1,770 @@
+{
+  "schema_version": 1,
+  "kind": "SELECTED_PORT_RECEIPT",
+  "id": "CP06-20261022-views",
+  "task_id": "CP06",
+  "copy_state": "PORTED_SELECTED_SCOPE",
+  "admission": {
+    "path": "docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2"
+  },
+  "mappings": [
+    {
+      "file_id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "source_scope": [
+        [
+          252,
+          255
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/feeds.rs",
+          "sha256": "f03bda6fc7570524d3ffcb6fde9e81ae4b4b17d2e0494b5b666ba0811ada15d5",
+          "symbols": [
+            "FeedRegistry::new",
+            "FeedRegistry::feed",
+            "FeedRegistry::finish"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "source_scope": [
+        [
+          259,
+          281
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/feeds.rs",
+          "sha256": "f03bda6fc7570524d3ffcb6fde9e81ae4b4b17d2e0494b5b666ba0811ada15d5",
+          "symbols": [
+            "FeedRegistry::new",
+            "FeedRegistry::feed",
+            "FeedRegistry::finish"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "source_scope": [
+        [
+          349,
+          359
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/feeds.rs",
+          "sha256": "f03bda6fc7570524d3ffcb6fde9e81ae4b4b17d2e0494b5b666ba0811ada15d5",
+          "symbols": [
+            "FeedRegistry::new",
+            "FeedRegistry::feed",
+            "FeedRegistry::finish"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "source_scope": [
+        [
+          419,
+          442
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/feeds.rs",
+          "sha256": "f03bda6fc7570524d3ffcb6fde9e81ae4b4b17d2e0494b5b666ba0811ada15d5",
+          "symbols": [
+            "FeedRegistry::new",
+            "FeedRegistry::feed",
+            "FeedRegistry::finish"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "source_scope": [
+        [
+          98,
+          142
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "source_scope": [
+        [
+          193,
+          207
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "source_scope": [
+        [
+          51,
+          83
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "source_scope": [
+        [
+          85,
+          107
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "source_scope": [
+        [
+          109,
+          121
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/analysis/engine.mojo",
+      "source_scope": [
+        [
+          291,
+          318
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/view.rs",
+          "sha256": "061fbc0ee447547c0c27b7a5b6083733f635926df8d5c160bfc77f634725c2cc",
+          "symbols": [
+            "ClaimLedger::record_loss",
+            "ClaimLedger::record_signal",
+            "ClaimLedger::snapshot",
+            "QueryOverlay::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/fact_views.rs",
+          "sha256": "ede5067114db9c73fdcd65f51786fa897bcade77dd961e61857e15f750386d47",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/analysis/mappings.mojo",
+      "source_scope": [
+        [
+          265,
+          299
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/view.rs",
+          "sha256": "061fbc0ee447547c0c27b7a5b6083733f635926df8d5c160bfc77f634725c2cc",
+          "symbols": [
+            "ClaimLedger::record_loss",
+            "ClaimLedger::record_signal",
+            "ClaimLedger::snapshot",
+            "QueryOverlay::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/fact_views.rs",
+          "sha256": "ede5067114db9c73fdcd65f51786fa897bcade77dd961e61857e15f750386d47",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/analysis/mappings.mojo",
+      "source_scope": [
+        [
+          789,
+          856
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/view.rs",
+          "sha256": "061fbc0ee447547c0c27b7a5b6083733f635926df8d5c160bfc77f634725c2cc",
+          "symbols": [
+            "ClaimLedger::record_loss",
+            "ClaimLedger::record_signal",
+            "ClaimLedger::snapshot",
+            "QueryOverlay::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/fact_views.rs",
+          "sha256": "ede5067114db9c73fdcd65f51786fa897bcade77dd961e61857e15f750386d47",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:src/memveil/analysis/mappings.mojo",
+      "source_scope": [
+        [
+          999,
+          1012
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/view.rs",
+          "sha256": "061fbc0ee447547c0c27b7a5b6083733f635926df8d5c160bfc77f634725c2cc",
+          "symbols": [
+            "ClaimLedger::record_loss",
+            "ClaimLedger::record_signal",
+            "ClaimLedger::snapshot",
+            "QueryOverlay::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/fact_views.rs",
+          "sha256": "ede5067114db9c73fdcd65f51786fa897bcade77dd961e61857e15f750386d47",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          291,
+          312
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          315,
+          331
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          575,
+          585
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          762,
+          802
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          805,
+          842
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          845,
+          887
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          890,
+          916
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "M:tests/unit/test_engine.mojo",
+      "source_scope": [
+        [
+          919,
+          930
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/scan/oracle.rs",
+      "source_scope": [
+        [
+          690,
+          700
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/scan/oracle.rs",
+      "source_scope": [
+        [
+          1594,
+          1608
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          307,
+          315
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          4990,
+          4997
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          7490,
+          7503
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          10444,
+          10506
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:src/capture.rs",
+      "source_scope": [
+        [
+          11264,
+          11294
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/src/correction.rs",
+          "sha256": "82b5855ac31362a7070a60a993482eebe138715e04bb86cc6e51520f61e73dda",
+          "symbols": [
+            "Versioned::apply",
+            "Correction::new"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/examples/transport_corrections.rs",
+          "sha256": "3f314cf86851dfaa83477e43bb9111947ce504dc21bfef956a82c78f4b1e8485",
+          "symbols": [
+            "main"
+          ]
+        }
+      ]
+    },
+    {
+      "file_id": "O:tests/scan_oracle.rs",
+      "source_scope": [
+        [
+          1190,
+          1238
+        ]
+      ],
+      "destinations": [
+        {
+          "path": "crates/scopebase-capture/tests/cp06_donor_subsets.rs",
+          "sha256": "1ca47a0a1ba14a880d6b29495ef424a8e899a748a94e4edbb796fd62dc3b8337",
+          "symbols": [
+            "m_s01_copy_loss_preserves_valued_occupancy"
+          ]
+        },
+        {
+          "path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+          "sha256": "28a873d0bda91723b2152074c7546626cdc19656127bae478e28717c8d279111",
+          "symbols": [
+            "REQUIRED_JOURNAL_TESTS"
+          ]
+        }
+      ]
+    }
+  ],
+  "preservation_map": {
+    "path": "docs/provenance/ports/CP06-preservation-20261022.md",
+    "sha256": "5d4ac6a0d4595e4cc994123d2fb40051bb333f51f348dee5a5e2e233fa4074b6"
+  },
+  "supersedes": null
+}
