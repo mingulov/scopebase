@@ -4,7 +4,7 @@
 
 This is the implementation, specification and research workspace for **ScopeBase**, reusable foundations from p11scope, KryProbe, OSSLscope and MemVeil/libbpf-mojo, including SDK and selective C/Mojo/MojoBPF interoperability. Package names use `scopebase-*`; they are not published or reserved by this work.
 
-The current integration contains `scopebase-linux` held-file acquisition/bounded reads/cooperative controls, `scopebase-capture` pure values/counter/loss and insertion-provenance protocols, `scopebase-testkit` versioned registry and `scopebase-bpf` host error/limit configuration. Thirteen tasks are accepted: SB01, SB02, SB03, LX01, LX02, LX03, LX04, CP01, CP02, CP03, CP04, BP01 and TT01. BP01, LX04, CP03, LX03 and CP04 passed four, six, six, six and six affected archive cells after independent review; unchanged packages retain prior evidence. No new complete twenty-cell matrix or runtime/conformance profile is qualified. Do not describe a proposed command, catalog entry, donor test or historical receipt as an implemented or passing ScopeBase product test.
+The current integration contains `scopebase-linux` held-file acquisition/bounded reads/cooperative controls, `scopebase-capture` pure values/counter/loss and insertion-provenance protocols, `scopebase-testkit` versioned registry plus subject-bound execution/receipt engine, strict Linux proc parsers and `scopebase-bpf` host error/limit configuration. Fifteen tasks are accepted: SB01, SB02, SB03, LX01, LX02, LX03, LX04, LX05, CP01, CP02, CP03, CP04, BP01, TT01 and TT02. BP01, LX04, CP03, LX03 and CP04 passed four, six, six, six and six affected archive cells after independent review; unchanged packages retain prior evidence. No new complete twenty-cell matrix or runtime/conformance profile is qualified. Do not describe a proposed command, catalog entry, donor test or historical receipt as an implemented or passing ScopeBase product test.
 
 The user's priorities are:
 
@@ -16,7 +16,7 @@ The user requires deep, proactive gap analysis, preservation of hard-won fixes, 
 
 ## Where to start
 
-- [Current transfer checkpoint](handoff.md#resume-here) and [transfer record](docs/reviews/2026-10-18-scopebase-transfer.md): the product goal is paused for transfer. Thirteen tasks remain accepted; TT02/BP02/LX05 candidates are preserved with explicit remaining gates. Follow the user's resume instruction before new product execution; do not repeat donor intake or unchanged campaigns. [Explicit access-program routing](DEVELOPMENT.md#explicit-access-program-routing) prevents the observed Daybreak/model dispatch failures.
+- [Current development checkpoint](handoff.md#resume-here) and [historical transfer record](docs/reviews/2026-10-18-scopebase-transfer.md): development resumed on 2026-10-22. Fifteen tasks are accepted; BP02 has a new packaged stopped guest awaiting required independent admission/live/final gates. Preserve the original candidates/evidence and finish BP02 before new product implementation. [Explicit access-program routing](DEVELOPMENT.md#explicit-access-program-routing) prevents the observed Daybreak/model dispatch failures.
 
 - [LX05 parser contract](docs/superpowers/specs/2026-10-18-scopebase-lx05-proc-contract.md) and [verification plan](docs/superpowers/plans/2026-10-18-scopebase-lx05-verification.md): frozen maps/mountinfo grammar, source preservation, bounds and delivered parser checks; runtime identity remains with its later owners.
 

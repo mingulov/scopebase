@@ -1200,7 +1200,7 @@
       "anchor": "lx05-strict-bounded-mapsmount-observations",
       "lane": "linux",
       "milestone": "M1/M2",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "LX02"
       ],
@@ -1208,13 +1208,20 @@
         "LX-R07"
       ],
       "profile_gates": [],
-      "execution": {
-        "job_id": "lx05-proc-20261018",
-        "base_commit": "1b50923eaa0651801ae963e4a0562bb6c7a3bda0",
-        "candidate_commit": "e86ff68aff788fad4396dcfb8f8f33013bc2a103",
-        "checkpoint": "PAUSED_FOR_TRANSFER_REVIEW_AND_FUZZ_PENDING",
-        "handoff": "handoff.md#lx05-exact-continuation",
-        "qualification": "NOT_EVALUATED"
+      "execution_history": [
+        {
+          "job_id": "lx05-proc-20261018",
+          "base_commit": "1b50923eaa0651801ae963e4a0562bb6c7a3bda0",
+          "candidate_commit": "e86ff68aff788fad4396dcfb8f8f33013bc2a103",
+          "checkpoint": "PAUSED_FOR_TRANSFER_REVIEW_AND_FUZZ_PENDING",
+          "handoff": "handoff.md#lx05-exact-continuation",
+          "qualification": "NOT_EVALUATED"
+        }
+      ],
+      "acceptance": {
+        "subject_commit": "04a47f052a7a5783eeaa4e7b81b60be367dc3555",
+        "reviewed_candidate_commit": "c8e2faf21411b014193deb86e946b8c17a59b600",
+        "evidence_record": "docs/reviews/2026-10-22-lx05-proc.md"
       }
     },
     {
@@ -2024,7 +2031,7 @@
       "anchor": "tt02-subject-binding-independent-oracles-and-verdict-engine",
       "lane": "testing",
       "milestone": "cross-cutting",
-      "status": "IN_PROGRESS",
+      "status": "ACCEPTED",
       "depends_on": [
         "TT01"
       ],
@@ -2040,20 +2047,27 @@
         "TC-R10"
       ],
       "profile_gates": [],
-      "execution": {
-        "job_id": "tt02-engine-20261018",
-        "base_commit": "4c4e170b57b04c918bf84e167695034f0f6233f4",
-        "candidate_commit": "e7de89165765d295a1e0519436daeb64de1ae8f8",
-        "checkpoint": "PAUSED_FOR_TRANSFER_PARTIAL_MATRIX",
-        "passed_required_rows": 40,
-        "required_rows": 64,
-        "pause_receipt": ".scopebase/jobs/tt02-engine-20261018/evidence/pause-handoff-20261018.json",
-        "pause_receipt_sha256": "68148d95e48c0bb8c64884495477a8ecf38a3b4a34c8dd7d4cf0d9abd73ce5ff",
-        "handoff": "handoff.md#tt02-exact-continuation",
-        "role": "implementer",
-        "model": "gpt-6.1-sol",
-        "reasoning_effort": "xhigh",
-        "qualification": "NOT_EVALUATED"
+      "execution_history": [
+        {
+          "job_id": "tt02-engine-20261018",
+          "base_commit": "4c4e170b57b04c918bf84e167695034f0f6233f4",
+          "candidate_commit": "e7de89165765d295a1e0519436daeb64de1ae8f8",
+          "checkpoint": "PAUSED_FOR_TRANSFER_PARTIAL_MATRIX",
+          "passed_required_rows": 40,
+          "required_rows": 64,
+          "pause_receipt": ".scopebase/jobs/tt02-engine-20261018/evidence/pause-handoff-20261018.json",
+          "pause_receipt_sha256": "68148d95e48c0bb8c64884495477a8ecf38a3b4a34c8dd7d4cf0d9abd73ce5ff",
+          "handoff": "handoff.md#tt02-exact-continuation",
+          "role": "implementer",
+          "model": "gpt-6.1-sol",
+          "reasoning_effort": "xhigh",
+          "qualification": "NOT_EVALUATED"
+        }
+      ],
+      "acceptance": {
+        "subject_commit": "04a47f052a7a5783eeaa4e7b81b60be367dc3555",
+        "reviewed_candidate_commit": "0a88ef4517541a5317f46c308b80bb74f35aaba4",
+        "evidence_record": "docs/reviews/2026-10-22-tt02-engine.md"
       }
     },
     {

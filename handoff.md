@@ -1,10 +1,58 @@
 # ScopeBase current handoff
 
-Date: 2026-10-18. **Current transfer checkpoint: the user requested a documentation-only freeze after the bounded TT02, BP02 and LX05 repair work returned.** The M0–M6 goal still reports `paused`. No new package, guest or fuzz run was launched after that request. **Thirteen of 86 tasks are accepted:** SB01, SB02, SB03, LX01, LX02, LX03, LX04, CP01, CP02, CP03, CP04, BP01 and TT01. TT02, BP02 and LX05 remain `IN_PROGRESS`; 70 tasks remain `PLANNED`. These are task counts, not an effort estimate. Latest accepted integrated product subject is `f2952ee8661e27e90e1f965550021d615a31f96a`. No complete runtime/conformance profile is qualified.
+Date: 2026-10-22. Development resumed at the user's request using five concurrent subagents, with further independent expert lanes as work completed. **Fifteen of 86 tasks are accepted.** TT02 and LX05 join the thirteen prior accepted increments at integrated source subject `04a47f052a7a5783eeaa4e7b81b60be367dc3555`. BP02 remains `IN_PROGRESS`; seventy tasks remain `PLANNED`. No complete runtime/conformance profile is qualified.
+
+## Resume here
+
+Controller integration is `/home/user/src/m/bpfscope/.worktrees/m0-integration`, branch `feat/m0-foundations`; main may lag. Preserve all task worktrees and evidence. Current controller records are under `.scopebase/controller/resume-20261022/`, with current state in `controller-state.json` and the controller's `.superpowers/sdd/2026-10-17-scopebase/progress.md`. The current goal-tool lookup returned no goal; preserve the original M0–M6 objective and resumed authorization without creating a replacement or inferring a budget.
+
+| Task | Current evidence and custody | Remaining work |
+|---|---|---|
+| TT02 | [Accepted engine](docs/reviews/2026-10-22-tt02-engine.md); reviewed task commit `0a88ef4517541a5317f46c308b80bb74f35aaba4`. Observed semantic RED/GREEN, 64 current required rows, 48 linked controls, four root package cells and 24 explicit archive client/bound rows. Root re-audited 110 commands and 220 logs | No repair gate remains for this accepted increment. Retain historical indexes/reports and the dedicated four-client route; later native fixtures/operator/profiles retain their owners |
+| LX05 | [Accepted pure parsers](docs/reviews/2026-10-22-lx05-proc.md); reviewed task commit `c8e2faf21411b014193deb86e946b8c17a59b600`. Exact post-format A3, six root package cells, 24 client executions and two 10,000-run ASan campaigns; new LX05 port and three prior-port successors validated | Retain fuzz outputs and unresolved global FD-inactivity boundary; do not delete targets or release administrative ownership on package acceptance. Runtime identity and ready mapped-image support remain later |
+| BP02 | Frozen 60-file v7-r2 candidate, original 54-file staged index preserved. Both compilers' source/archive tests, 16 client executions, 48 semantic mutants/restored positives and 22 native preparations pass. Fresh guest `bp02-v7-r2-20261022-001` is packaged and stopped | Required pre-guest Daybreak review, actual N1–N9/R1/source/archive native route, cleanup/result inspection, post-run independent review, commit and root integration remain |
+
+### TT02 exact continuation
+
+TT02 is accepted. Do not repeat the unchanged 64-row campaign or reconstruct its source. The final root generic policy retains the accepted TT01 inventory/selection pair because its checker supplies no fixture arguments. The separately delivered route executes all four TT01/TT02 clients with explicit harness inputs and bound executable measurements. Source/archive testkit package identities, the admitted eight-package SHA closure, notices and lock edge are activated. Root acceptance is `resume-20261022/tt02-root-acceptance.json`, SHA256 `5c22d166b7bc57b039568e85b23f729459a0d1b7a05835df1e75b78edee54a66`.
+
+### LX05 exact continuation
+
+LX05 is accepted within the pure parser/package scope. Preserve the fifteen selected P ranges and sixteen reference-only ranges, including S16's pure table counterpart and its deferred original runtime test. The four current receipt paths are `LX05-20261022-proc.json` and `LX02/LX03/LX04-20261022-proc-charges-followup.json` under `docs/provenance/ports/`. Root acceptance is `resume-20261022/lx05-root-acceptance.json`, SHA256 `c2efe730b739694ab4d506504584be7c9277722b376c6523bcdb3f94d07ff44f`. The target-retention record explains the inaccessible `/proc` FD scan; no source/test byte needs another formatting or fuzz campaign.
+
+### BP02 exact continuation
+
+Read `resume-20261022/bp02/root-handoff.json` and `report.md`. The final archive is SHA256 `fa7110643aacfc0dbe20736256b97b8d45fae1de704219c344ccf495a107b3ca`; candidate index is `64fe8a51243215217d71f3ec6d397f89e964747a1c7d5e1a10e149753737263c`. The additional log-I/O custody defect is fixed and independently checked; the source/model-tier and three intended stale-80 markers are now observed on both compilers.
+
+The actual local payload is `.scopebase/jobs/bp02-maps-20261018/evidence/payload-v7-r2-20261022-001`; product manifest SHA256 `680b338532c8221d834fd1e826b01775913c4974dc6b2d76080694a65932e790`. All 780 payload files match the newly packaged rootfs. New initramfs SHA256 is `f04e43de5dae7caf25d13da5680348fc3f27444960355b6f739c19ae2a22aad9` (107,875,337 bytes). Packaging returned zero with complete process-group cleanup and no unresolved custody. Details and GNU/runtime manifests are in `resume-20261022/guest/transport-r2-run-001/`; old v5 product/guest IDs must not execute.
+
+The original private `guest/transport-and-package.py` was never executed: its immediate-child timeout could bypass packaging descendant custody. The independently reviewed/executed successor `transport-and-package-r2.py` uses the exact accepted common helper and retains failed/unresolved results before lease release, plus explicit ambiguous SSH outcomes. Its stopped-packaging approval is separate from product live admission.
+
+The current pre-guest review is `resume-20261022/bp02-final-review-pre-guest-r1/run/`; inspect its final disposition and completion bindings before any run. Source and payload remain frozen. After explicit admission, recheck exact owner/kernel/config/runner/initramfs bindings and the independent guest lease, then use the reviewed resource route with fresh run ID:
+
+```sh
+ssh -l agent um790 '/work/scopebase-bp02-20261018/runner-v3/run-guest-v3.py bp02-v7-r2-20261022-001 bp02-v7-r2-run-20261022-001'
+```
+
+This is an unexecuted continuation command. Root owns the lease and actual execution. Inspect every required native case, intended marker, restored positive, source default/no-default binding, both archive native clients, child/namespace/map cleanup, summary and QEMU collection/retirement evidence. Missing activity, setup/cleanup failure or unresolved custody stays incomplete. Obtain the post-run independent disposition before BP02 acceptance. Root integration must merge only the BPF lock/member record and retain testkit's `sha2` edge; do not copy the historical whole BP02 lock proposal.
+
+## Next packets and evidence boundaries
+
+Finish BP02 before new product implementation. Private CP05, LX08 and BP03 expert packets are under `resume-20261022/next-*-packet/` and remain `NEEDS_DECISION`. Source-admission drafts are unadopted; public API/error/support/oracle choices need controller rulings and a frozen executor packet. They are preparation, not additional accepted tasks or a new inventory campaign. Do not re-poll live donors.
+
+The root lock is `ac93660cdbadf486b7e6bcf5094cb9bb372e85d2554d5f9d8d01a2cc3384a16b`; policy v2 is `8869752a8c31d4109f8bcce3a174ce867f624cec2a925e47d15ec9c243570e6a`. Linux qualification preceded an unrelated testkit-only policy correction; its Linux member/source/lock stayed exact. No complete twenty-cell matrix, exact-tip CI, installed operator or full mapped-image/runtime profile is claimed. All local Cargo/native launches retain the absolute controller-bound build wrapper, with one writer per candidate and root ownership of shared policy/lock/acceptance.
+
+Model routing remains explicit fresh Sol6.1 high/xhigh for implementation and Sol max for architecture/critical review; the verified sensitive CLI uses gpt-6-sol max with daybreak_blue. No Astra consultation or global authentication/configuration change was needed. Preserve the original goal and all evidence; migrations/publication remain later.
+
+## Historical 2026-10-18 transfer record
+
+The following is preserved history. The current acceptance states and continuation commands above supersede its paused-state routes.
+
+Date: 2026-10-18. **Historical transfer checkpoint: the user requested a documentation-only freeze after the bounded TT02, BP02 and LX05 repair work returned.** The M0–M6 goal still reports `paused`. No new package, guest or fuzz run was launched after that request. **Thirteen of 86 tasks are accepted:** SB01, SB02, SB03, LX01, LX02, LX03, LX04, CP01, CP02, CP03, CP04, BP01 and TT01. TT02, BP02 and LX05 remain `IN_PROGRESS`; 70 tasks remain `PLANNED`. These are task counts, not an effort estimate. Latest accepted integrated product subject is `f2952ee8661e27e90e1f965550021d615a31f96a`. No complete runtime/conformance profile is qualified.
 
 Model routing remains: GPT-6.1-Sol high/xhigh for implementation, Sol max for architecture and critical/adversarial review, and Luna for bounded mechanical work. The verified sensitive-review route is `gpt-6-sol --cyber-access-program daybreak_blue` at max effort. Astra remains exceptional for a serious unresolved problem after a recorded Sol max investigation; none of the three current candidates requires Astra at this checkpoint.
 
-## Resume here
+### Historical resume instructions
 
 This is the single current restart route. [Transfer evidence and limits](docs/reviews/2026-10-18-scopebase-transfer.md) records the exact review findings, repair state and evidence boundary. [TODO](TODO.md) and the [traceability registry](docs/superpowers/plans/2026-10-17-scopebase-traceability.json) remain the canonical product ledger and dependency map. A paused goal and a completed repair draft do not change a task to accepted or blocked.
 
@@ -18,7 +66,7 @@ Use `/home/user/src/m/bpfscope/.worktrees/m0-integration`, branch `feat/m0-found
 
 At the freeze check, no matching local task runner, Cargo, QEMU, Muse or Codex worker process was observed. All bounded review/repair invocations had returned. No remote BP02 guest payload has run. The older prepared v5 guest and run names are now stale because the repaired delivery contract requires a fresh v7 lineage.
 
-### TT02 exact continuation
+### Historical TT02 repair route
 
 The authoritative baseline receipts are `.scopebase/jobs/tt02-engine-20261018/evidence/final-matrix-r1-v2/results.json`, SHA-256 `26f213480e1826ad0b2ebe49c72d80228360f35ac560d3ec182d5fa6bc6c6f93`, and `linked-controls-final-v1/results.json`, SHA-256 `2cb525ea2dc4e73d9048bcb8ac12d01769be9537f6b3af7b37f564cb394749c6`. They prove the committed `e7de8916` baseline, including 64/64 current required rows; the retained earlier interrupted row stays historical. They do **not** qualify the uncommitted repair.
 
@@ -28,7 +76,7 @@ The repair shares contract-aware progress validation between the live runner and
 
 After focused RED/GREEN, select and run all affected fixture-failure, receipt, retirement and runner tests plus the affected source/archive and linked-control cells. Reconcile the successor indexes from `tt02-review-fix-evidence/`, retain the original indexes and interrupted row, obtain a fresh independent Daybreak disposition, then commit the task. Root alone owns testkit member/dependency policy, notices, workspace lock activation and acceptance bookkeeping.
 
-### BP02 exact continuation
+### Historical BP02 repair route
 
 Start with `.scopebase/controller/finish-candidates-20261018/bp02-release-review-daybreak-run05/final.txt`, SHA-256 `7373127ede527623872ad4992db2f619cbd955ad506f2fd1f8c2f59add2ed77a`, verdict `BLOCK_OWNED_GUEST_RUN`, and the task worktree's `bp02-review-fix-report.md`. The repair worker output is `bp02-review-fix-daybreak-run02/final.txt`, SHA-256 `a448efb6bba62c66ce2dbbe0da945e8d2d2bf9ba44c06fdd8678b67df3c1ef21`. Preserve both the staged original candidate and the unstaged/untracked repair; do not reset or clean.
 
@@ -36,7 +84,7 @@ The repair labels each mutant `production-library` or `test-model`, requires 12 
 
 Resume by making a fresh v7 candidate and package workspace. Rebind the selected-port receipt for the changed `who_preservation.rs`; run the focused WHO positive and both compilers' complete mutation campaigns; require the three intended markers, restored positives, and 12 library plus 12 model rows per compiler. Rerun source/archive consumers and confirm both payload files ship. Then run a fresh `prepare-native-v7`, create a new root-owned `stage-product-v7.py`, validate the staged script and summary controls, rebuild and transfer a fresh initramfs, and use new payload/run IDs. Inspect binding, semantic-control, child-reaped, cleanup and archive-native rows before independent final review. Do not use `bp02-final-001` or `bp02-final-run-001`.
 
-### LX05 exact continuation
+### Historical LX05 repair route
 
 Daybreak review `.scopebase/controller/finish-candidates-20261018/lx05-review-daybreak-run02/final.txt`, SHA-256 `a10a962bdbe982c1fec4be427967e94dd9403ff87a7f771a9e775dfb988c2c4a`, found the required exact A3 population missing and no additional parser defect. The worktree now contains the exact A3 positive/negative fixtures, literal assertions, independent oracle agreement, a skip-malformed-row mutant, a locked 18-package fuzz graph and 241 bound seeds.
 
