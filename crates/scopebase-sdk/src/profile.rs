@@ -158,6 +158,13 @@ impl Profile {
         self.id
     }
 
+    /// Whether `id` names a declared prerequisite capability, required or
+    /// optional. The application context refuses observations for undeclared
+    /// ids; optional capabilities must be declared too.
+    pub fn declares(&self, id: &str) -> bool {
+        self.requirements.iter().any(|r| r.id == id)
+    }
+
     /// Whether the profile admits `effect`. The caller checks this before
     /// its selected component operation and owns ordering and recovery.
     pub fn permits(&self, effect: Effect) -> bool {
