@@ -16,7 +16,7 @@
     ]
   },
   "selection": {
-    "selected_file_count": 132,
+    "selected_file_count": 136,
     "selected_file_ids": [
       "P:crates/manifest/src/identity.rs",
       "P:crates/manifest/src/maps.rs",
@@ -149,7 +149,11 @@
       "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
       "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
       "M:src/memveil/capture/reader.mojo",
-      "P:src/pidns.rs"
+      "P:src/pidns.rs",
+      "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "M:src/memveil/analysis/engine.mojo",
+      "O:src/scan/oracle.rs",
+      "O:tests/scan_oracle.rs"
     ],
     "unselected_disposition": "RESEARCH_ONLY_NOT_ADOPTED",
     "unselected_scope": "All other refs, worktrees, untracked experiments and source paths remain research references. No merging or source publication is authorized by intake.",
@@ -298,7 +302,8 @@
         "docs/decisions/ADR-0013.md": "f19f9c25256c81b0dc676ebcdb3b67ef7d6b6bef69bbf1b3b8f2293cd2a6c336",
         "docs/decisions/ADR-0011.md": "027b3daf0b894e86eb3a9d35690bd610013a45031e81427a02d03d837f286009",
         "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
-        "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5"
+        "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5",
+        "crates/kryprobe-core/tests/shared_losses.rs": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b"
       }
     },
     {
@@ -401,7 +406,9 @@
         "tests/evidence_model.rs": "e1d7af0513904ce62e69e759de2e496acb54c73a823120bd7f6e9524bbcb49ea",
         "tests/d_btf_load.rs": "b91c8d2f7863e1de255a17b94c7c4e04f47ac6892fa476ca5e58897062179564",
         "src/args.rs": "72dc0e30e878dddc6714550643b839d6a53357e12170df3c85187862e9859c14",
-        "tests/cli_limits.rs": "47a62735e4781291b67f6126de764268544143ecb0cd984a641ecac5993fdfbf"
+        "tests/cli_limits.rs": "47a62735e4781291b67f6126de764268544143ecb0cd984a641ecac5993fdfbf",
+        "src/scan/oracle.rs": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+        "tests/scan_oracle.rs": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1"
       }
     },
     {
@@ -450,7 +457,8 @@
         "tests/fixtures/attempts/corpus.txt": "9f102cc50daa7b397efe13249eb3cd2e5bbe4cdd4f0973108cd2eed9a982a0be",
         "tests/native/test_attempt_decode.c": "74626ac868d5b51a3d380d7f00237adf19445770d7e8228a296632e04e87b73e",
         "toolchain.lock.json": "e3e16e2786fc0cf527708ad4aa5b61e44f4dee809631a0bac417ace7cf051976",
-        "src/memveil/capture/reader.mojo": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8"
+        "src/memveil/capture/reader.mojo": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8",
+        "src/memveil/analysis/engine.mojo": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996"
       }
     },
     {
@@ -8519,8 +8527,16 @@
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
+            98,
+            142
+          ],
+          [
             172,
             191
+          ],
+          [
+            193,
+            207
           ],
           [
             235,
@@ -8693,14 +8709,31 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-core/src/backend/driver.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            252,
+            255
+          ],
+          [
+            259,
+            281
+          ],
+          [
+            349,
+            359
+          ],
+          [
+            419,
+            442
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -13156,7 +13189,8 @@
       "dirty_sha256": null,
       "owner": "BP07",
       "intended_contracts": [
-        "writer-domain-and-closure"
+        "writer-domain-and-closure",
+        "capture-independent-facts-and-replay"
       ],
       "references": {
         "H": [
@@ -13199,7 +13233,8 @@
         "tasks": [
           "BP07",
           "BP08",
-          "CP09"
+          "CP09",
+          "CP06"
         ]
       },
       "license": {
@@ -13244,6 +13279,10 @@
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
+            307,
+            315
+          ],
+          [
             1504,
             1515
           ],
@@ -13256,8 +13295,24 @@
             4584
           ],
           [
+            4990,
+            4997
+          ],
+          [
+            7490,
+            7503
+          ],
+          [
             8881,
             8890
+          ],
+          [
+            10444,
+            10506
+          ],
+          [
+            11264,
+            11294
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -13283,7 +13338,8 @@
       },
       "source_issue_test": {
         "issues": [
-          "writer-domain-and-closure"
+          "writer-domain-and-closure",
+          "capture-independent-facts-and-replay"
         ],
         "existing_symbols": [
           {
@@ -16987,6 +17043,10 @@
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
+            265,
+            299
+          ],
+          [
             490,
             510
           ],
@@ -16997,6 +17057,14 @@
           [
             663,
             680
+          ],
+          [
+            789,
+            856
+          ],
+          [
+            999,
+            1012
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -18145,16 +18213,49 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_engine.mojo; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            291,
+            312
+          ],
+          [
+            315,
+            331
+          ],
+          [
+            575,
+            585
+          ],
+          [
+            762,
+            802
+          ],
+          [
+            805,
+            842
+          ],
+          [
+            845,
+            887
+          ],
+          [
+            890,
+            916
+          ],
+          [
+            919,
+            930
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -24614,6 +24715,545 @@
         "evidence": "Read from the named completed frozen w003 file and independent r001.git commit, not a refreshed live donor. Fourteen original tests and seven implementation symbols are source observations only; no execution or complete capability claim."
       },
       "intake_mapping_note": "LX08 adds this formerly omitted row from completed private capture p11scope-ws/tree/.worktrees/v040-integration (w003), history p11scope-ws/history/r001.git, commit 2c2713e66292b0d2688508a25f79e813ae823d81. Selected bytes match the commit; no selected WIP delta. Exact proposed line scopes are in adoption. Preserve the older pidns variant as reference. Existing OWNER-2026-10-18 authorizes only selected owned host contributions; initial-only versus matched-nested support, global-cache replacement, API and runtime results remain separate controller decisions."
+    },
+    {
+      "id": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-core/tests/shared_losses.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+      "dirty_sha256": null,
+      "owner": "CP06",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H23",
+          "H24",
+          "H25",
+          "H26",
+          "H27"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G12",
+          "G14",
+          "G16",
+          "G17",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC11",
+          "UC14"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L09",
+          "Q01",
+          "Q02",
+          "Q04",
+          "Q05",
+          "S01",
+          "T01",
+          "T02",
+          "T03",
+          "U07",
+          "X01"
+        ],
+        "tasks": [
+          "CP06"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/kryprobe-core/tests/shared_losses.rs",
+            "sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-or-later.txt",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/kryprobe-core/Cargo.toml",
+            "sha256": "95d3ae52de4dca3c5ebda45a844234ce02577fb3385c80c97cdf92ebb48cef08",
+            "declarations": [
+              "true"
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "297ba19b03dcbb89d42c2cc3a540fabe89eceacc08075c100b285eb99fb513cf",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "VECTORS_ONLY",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            51,
+            83
+          ],
+          [
+            85,
+            107
+          ],
+          [
+            109,
+            121
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+        "observed_sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 4382,
+        "observation_scope": "Named immutable frozen commit/blob; no live-donor status claim."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [
+          {
+            "name": "shared_losses_accrue_exactly_once_in_session_total",
+            "line": 52
+          },
+          {
+            "name": "duplicate_shared_feed_refused_without_double_count",
+            "line": 86
+          },
+          {
+            "name": "missing_shared_feed_fails_checked_total_but_not_lenient_rollup",
+            "line": 110
+          }
+        ],
+        "evidence": "Named frozen source inspected only; symbols/tests NOT_RUN."
+      }
+    },
+    {
+      "id": "M:src/memveil/analysis/engine.mojo",
+      "donor": "M",
+      "path": "src/memveil/analysis/engine.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+      "dirty_sha256": null,
+      "owner": "CP06",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H23",
+          "H24",
+          "H25",
+          "H26",
+          "H27"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G12",
+          "G14",
+          "G16",
+          "G17",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC11",
+          "UC14"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L09",
+          "Q01",
+          "Q02",
+          "Q04",
+          "Q05",
+          "S01",
+          "T01",
+          "T02",
+          "T03",
+          "U07",
+          "X01"
+        ],
+        "tasks": [
+          "CP06"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/memveil/analysis/engine.mojo",
+            "sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            291,
+            318
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+        "observed_sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 14645,
+        "observation_scope": "Named immutable frozen commit/blob; no live-donor status claim."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [],
+        "evidence": "Named frozen source inspected only; symbols/tests NOT_RUN."
+      }
+    },
+    {
+      "id": "O:src/scan/oracle.rs",
+      "donor": "O",
+      "path": "src/scan/oracle.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+      "dirty_sha256": null,
+      "owner": "CP06",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H23",
+          "H24",
+          "H25",
+          "H26",
+          "H27"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G12",
+          "G14",
+          "G16",
+          "G17",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC11",
+          "UC14"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L09",
+          "Q01",
+          "Q02",
+          "Q04",
+          "Q05",
+          "S01",
+          "T01",
+          "T02",
+          "T03",
+          "U07",
+          "X01"
+        ],
+        "tasks": [
+          "CP06"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/scan/oracle.rs",
+            "sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "e791d495780ed43a41cdbe2fd4cf3536939c3e010c8c05bf35588557bd8ec852",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            690,
+            700
+          ],
+          [
+            1594,
+            1608
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+        "observed_sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 106152,
+        "observation_scope": "Named immutable frozen commit/blob; no live-donor status claim."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [],
+        "evidence": "Named frozen source inspected only; symbols/tests NOT_RUN."
+      }
+    },
+    {
+      "id": "O:tests/scan_oracle.rs",
+      "donor": "O",
+      "path": "tests/scan_oracle.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+      "dirty_sha256": null,
+      "owner": "CP06",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H23",
+          "H24",
+          "H25",
+          "H26",
+          "H27"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G12",
+          "G14",
+          "G16",
+          "G17",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC11",
+          "UC14"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L09",
+          "Q01",
+          "Q02",
+          "Q04",
+          "Q05",
+          "S01",
+          "T01",
+          "T02",
+          "T03",
+          "U07",
+          "X01"
+        ],
+        "tasks": [
+          "CP06"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "tests/scan_oracle.rs",
+            "sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "e791d495780ed43a41cdbe2fd4cf3536939c3e010c8c05bf35588557bd8ec852",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "VECTORS_ONLY",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1190,
+            1238
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+        "observed_sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 99954,
+        "observation_scope": "Named immutable frozen commit/blob; no live-donor status claim."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [
+          {
+            "name": "fix3_consumed_taint_corrects",
+            "line": 1195
+          }
+        ],
+        "evidence": "Named frozen source inspected only; symbols/tests NOT_RUN."
+      }
     }
   ],
   "port_groups": [
@@ -27565,7 +28205,12 @@
         "M:tests/fixtures/attempts/corpus.txt",
         "M:tests/native/test_attempt_decode.c",
         "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
-        "M:src/memveil/capture/reader.mojo"
+        "M:src/memveil/capture/reader.mojo",
+        "K:crates/kryprobe-core/tests/shared_losses.rs",
+        "M:src/memveil/analysis/engine.mojo",
+        "O:src/scan/oracle.rs",
+        "O:src/capture.rs",
+        "O:tests/scan_oracle.rs"
       ],
       "selected_regressions_to_port_or_adapt": [
         {
@@ -28028,6 +28673,69 @@
           "path": "tests/unit/test_mappings.mojo",
           "name": "test_retired_history_bounded",
           "line": 848,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-core/tests/shared_losses.rs",
+          "name": "shared_losses_accrue_exactly_once_in_session_total",
+          "line": 52,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-core/tests/shared_losses.rs",
+          "name": "duplicate_shared_feed_refused_without_double_count",
+          "line": 86,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-core/tests/shared_losses.rs",
+          "name": "missing_shared_feed_fails_checked_total_but_not_lenient_rollup",
+          "line": 110,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_engine.mojo",
+          "name": "test_split_producer_copy_loss_preserves_occupancy",
+          "line": 291,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_engine.mojo",
+          "name": "test_split_producer_mapping_loss_withholds_occupancy",
+          "line": 315,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_engine.mojo",
+          "name": "test_snapshot_finish_equivalence",
+          "line": 575,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "tests/scan_oracle.rs",
+          "name": "fix3_consumed_taint_corrects",
+          "line": 1195,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "src/capture.rs",
+          "name": "fix3_apply_corrections_rewrites_by_key",
+          "line": 10445,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "src/capture.rs",
+          "name": "traversal_capture_merge_applies_corrections",
+          "line": 11265,
           "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
         }
       ],
