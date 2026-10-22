@@ -1,0 +1,4241 @@
+{
+  "schema_version": "2.0.0",
+  "kind": "SCOPEBASE_SOURCE_INTAKE",
+  "status": "SOURCE_INTAKE_NOT_PRODUCTION_PORT",
+  "qualification": "NOT_RUN",
+  "authorizations": [
+    {
+      "id": "OWNER-2026-10-18",
+      "authority": "USER_DECLARED_AUTHOR",
+      "status": "PROVISIONAL",
+      "scope": "USER_CONTRIBUTIONS_IN_SELECTED_FILES",
+      "decision_ref": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md#d03--license-by-code-ownership-and-actual-build-destination",
+      "allowed_destinations": {
+        "host": "Apache-2.0",
+        "bpf-target": "GPL-2.0-only",
+        "shared-target-source": "Apache-2.0 OR GPL-2.0-only",
+        "host-build-tool": "Apache-2.0",
+        "data-document": "Apache-2.0"
+      }
+    }
+  ],
+  "case_family_inputs": {
+    "H01": {
+      "short_contract": "Successful exec advances image lineage; fork and thread creation have distinct identity effects.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/native/image_identity_fork.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "tests/exec_task_continuity.rs:171",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:2224",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Owned workload ledger records fork, CLONE_THREAD, leader/nonleader successful exec and failed exec with explicit operation IDs; expected lineage changes follow the operation script, not observed events.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Advance image generation on failed exec or mint a process birth for CLONE_THREAD.",
+        "required_failure_layer": "identity transition assertion after the scripted operation is independently witnessed"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G11",
+          "G12"
+        ],
+        "TODO": [
+          "B09",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "scope_limits": "A userspace model or polling PID set cannot qualify actual BPF/connector exec continuity; task replacement and observed image are separate."
+    },
+    "H02": {
+      "short_contract": "Acquisition races and denied pidfd never retarget authority or promote weak observation to signaling rights.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/process.rs:719-756",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "src/pin.rs:144-176",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Fixture controls original child lifetime and acquisition barriers; independent child handles distinguish original and replacement, and a foreign sentinel must remain alive.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Reuse a numeric PID after death or attach signaling rights to a proc-stat-only fallback.",
+        "required_failure_layer": "authority/type or controlled signaling refusal, with foreign sentinel preserved"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC05",
+          "UC10"
+        ],
+        "G": [
+          "G03",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "TODO": [
+          "L02",
+          "L05",
+          "T01",
+          "T04"
+        ]
+      },
+      "scope_limits": "Deterministic acquisition seam and real process fixture are separate; forced PID reuse requires an admitted isolated environment."
+    },
+    "H03": {
+      "short_contract": "Session/map domains and generations reject foreign/stale/exhausted tokens while preserving field-specific valid zero.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/native/image_identity.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/attach/native_retirement_tests.rs:274,329",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_identity.mojo",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Independent token ledger names issuer domain, epoch, generation and exhausted allocation boundary; fixtures explicitly designate cookie zero invalid and exec zero valid only in their own contracts.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Erase issuer domain, accept a stale generation or wrap an exhausted token allocator into a live identifier.",
+        "required_failure_layer": "token admission or retirement authorization assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC11"
+        ],
+        "G": [
+          "G06",
+          "G12",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "L02",
+          "L09",
+          "B09",
+          "T01",
+          "T02"
+        ]
+      },
+      "scope_limits": "Restart starts a new domain unless a separately implemented recovery protocol exists; no persistent crash-resume claim."
+    },
+    "H04": {
+      "short_contract": "Replacement, unlink and aliases do not retarget a held file; attachment retains its original file through retirement.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/count_deadline.rs:552,599",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/site_identity.rs:261,320",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "P",
+          "location": "src/discovery/identity.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Fixture opens distinct A/B inodes with independently known bytes and synchronizes A-to-B-to-A renames/unlink/hardlink; actual owned target executes distinguishable sites for live attach checks.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Reopen the original path after acquisition, or release the retained file before link retirement.",
+        "required_failure_layer": "held-object binding assertion; live attach must fail the A-site/B-site attribution assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC08",
+          "UC11",
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G02",
+          "G06",
+          "G08",
+          "G10"
+        ],
+        "TODO": [
+          "L03",
+          "L07",
+          "B02",
+          "T01",
+          "T04",
+          "U02",
+          "U06"
+        ]
+      },
+      "scope_limits": "T4 applies when advertising attachment; file-only custody checks do not qualify live attachment. In-place content mutation is a separate limit."
+    },
+    "H05": {
+      "short_contract": "Stat, mount, namespace and maps identities remain tagged; mappings require justified match, mismatch or inconclusive evidence.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/discovery/identity.rs:3322-3381",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "tests/identity_domain_audit.rs:105",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent worker opens/maps known held objects and records raw fstat, correct namespace mount-table data and address-containing maps lines; declared Btrfs/overlay/churn fixtures verify actual split or collision triggers.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Substitute stat device for maps device or treat equal raw maps keys as unique file identity.",
+        "required_failure_layer": "domain/relation assertion in an actually triggered split or collision subcase"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC02",
+          "UC03",
+          "UC04",
+          "UC05",
+          "UC06",
+          "UC07",
+          "UC10",
+          "UC11",
+          "UC14"
+        ],
+        "G": [
+          "G02",
+          "G06",
+          "G12",
+          "G18"
+        ],
+        "TODO": [
+          "L04",
+          "U01",
+          "U02",
+          "U05",
+          "U06",
+          "U07",
+          "U08",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "T4 only for corresponding live-attachment claims. Required real split/collision/copy-up branches cannot PASS when their trigger is absent; aligned controls are distinct. No generic kernel-version oracle."
+    },
+    "H06": {
+      "short_contract": "Reads reject oversize before expensive allocation and expose promised growth, truncation, identity and budget failures.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/site_identity.rs:1247,1287,1322,1382",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/capture_controller.rs:7487,8782",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Scripted source/allocator independently counts requested reads and peak allocations at cap N/N+1; real owned files use known byte patterns and controlled growth/truncation barriers.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Allocate advertised length before checking cap, bypass remaining cache budget, or return successful bytes after a promised detectable read race.",
+        "required_failure_layer": "before-allocation/read-budget assertion or explicit changed-source result assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC01",
+          "UC04",
+          "UC09",
+          "UC10",
+          "UC13",
+          "UC14"
+        ],
+        "G": [
+          "G01",
+          "G03",
+          "G04",
+          "G05",
+          "G18"
+        ],
+        "TODO": [
+          "L03",
+          "L07",
+          "L08",
+          "Q06",
+          "T01",
+          "T03",
+          "U03"
+        ]
+      },
+      "scope_limits": "Metadata-only schemes do not prove same-size/restored-mtime mutation impossible; byte bounds do not prove syscall latency bounds."
+    },
+    "H07": {
+      "short_contract": "Local section-symbol relocation resolves each exact map definition and rejects interior, missing or ambiguous offsets.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/bpf_map_contracts.rs:61-100",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "third-party/patches/aya-obj-0.3.0/aya-obj-map-relocation.patch:149-178",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Two actual object map definitions receive independently assigned distinct sentinel FDs; expected relocation-to-definition table is authored from fixture layout, with signed-addend boundary vectors.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Resolve both section-symbol references to one arbitrary map FD or accept an interior/ambiguous definition offset.",
+        "required_failure_layer": "relocated-instruction sentinel-FD assertion or loader rejection before load"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B05",
+          "B06",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Actual live map IDs are required for replacement-loader live claims; legal section-symbol emission is not itself an LLVM defect."
+    },
+    "H08": {
+      "short_contract": "Task-storage metadata, guarded CO-RE shapes and initialized padding admit only safe compiled paths.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/exec_task_continuity.rs:171,245",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "tests/python/test_bpf_map_defs.py",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "scripts/check-stop-gate-object.py",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Independently authored target-BTF scalar/bitmap/missing/unknown layouts and byte-level padding expectations are compared with the final object; oldest supported verifier and owned identity workload supply separate outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Remove a field-existence/shape guard or leave a padding byte uninitialized while retaining a nominal object build.",
+        "required_failure_layer": "object structural/shape assertion; separate oldest-cell verifier or live semantic assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "B04",
+          "B09",
+          "B10",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Synthetic relocation/interpreter success, host verifier load and live identity behavior remain separate evidence."
+    },
+    "H09": {
+      "short_contract": "Concurrent uprobes never observe another task START key; workaround removal is qualified per kernel cell.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "tests/python/test_bpf_map_defs.py:274",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "crates/ebpf/src/main.rs:173-205",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Owned concurrent workload ledger supplies unique per-thread keys and exact entry/return joins; final object checker separately verifies the selected stack-preserving pattern.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Remove the stack-preserving path from the affected object; run the resulting mutant only in the declared affected-kernel reproduction cell.",
+        "required_failure_layer": "current structural rule rejects the mutant; live per-thread key oracle rejects cross-task contamination in affected cell"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC12"
+        ],
+        "G": [
+          "G12",
+          "G14",
+          "G15"
+        ],
+        "TODO": [
+          "B08",
+          "B10",
+          "C04",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "A mutant not reproducing corruption on the pinned affected environment is inconclusive; a repaired-kernel control may support removal after independent semantics and remaining gates pass."
+    },
+    "H10": {
+      "short_contract": "Object graph transformations preserve valid calls, callback metadata and exact intended callback execution.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "xtask/src/bpf/strip.rs:1019-1193",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "O",
+          "location": "src/loader.rs:3110-3611",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "O",
+          "location": "tests/d_btf_load.rs:250,405,452,652,706",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Fixture independently specifies reachable functions, instruction boundaries, relocation ownership and N inputs times M callback executions; inspect final and translated images and compare live count with workload ledger.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Keep a dead builtin/call target, shift a relocation onto the wrong owner, or strip required callback BTF while preserving build exit zero.",
+        "required_failure_layer": "object/loader structural rejection; separate live exact callback-count assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B05",
+          "C04",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Successful parsing, transformation or verifier load cannot substitute for the live callback population."
+    },
+    "H11": {
+      "short_contract": "Bounded BTF queries resolve exact base/split type identities and reject cycles, escapes and wrong prototypes/linkage.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/btf.rs:1966,2088,2394,2460",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "J",
+          "location": "tests/elf/test_map_btf.py",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#mojobpf-limited-future-integration-reconnaissance"
+        }
+      ],
+      "independent_oracle": "Hand-authored bounded graph fixtures specify expected parent/string/type/prototype relations independent of parser traversal; actual emitted map definitions and kernel map type linkage are checked separately.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Accept a same-name wrong type, follow a wrapper cycle indefinitely, or accept .BTF presence despite missing map type linkage.",
+        "required_failure_layer": "bounded semantic query refusal or explicit final-object/kernel type-linkage assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G18",
+          "G21"
+        ],
+        "TODO": [
+          "B04",
+          "C04",
+          "T01",
+          "T03",
+          "X03"
+        ]
+      },
+      "scope_limits": "Type IDs are local to their base/module context. Differential parser agreement is supplemental; J branch source does not imply the consumed MemVeil toolchain contains it."
+    },
+    "H12": {
+      "short_contract": "Bounded ring consumption handles busy/discard/wrap and fixed boundaries without claiming premature completion.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "third-party/patches/aya-0.14.0/aya-ring-reader.patch:655-860",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/drain/frame.rs:86-144",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Controlled real-reader mappings use a separately computed cursor/frame ledger across wrap, busy, discard and producer extension; an actual owned producer supplies the independent live record population.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Treat BUSY as complete, advance past the fixed stop boundary, or advance/drop a record twice on wrap.",
+        "required_failure_layer": "cursor/conservation/boundary assertion in the maintained reader; live record ledger for producer claims"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G08",
+          "G10",
+          "G15"
+        ],
+        "TODO": [
+          "B05",
+          "B07",
+          "Q03",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "scope_limits": "Controlled mappings do not prove kernel aliasing/producer memory order; snapshot cursor does not prove writer quiescence."
+    },
+    "H13": {
+      "short_contract": "Held ring bytes survive short retry/source mutation and are delivered once with disjoint transport accounting.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "L",
+          "location": "tests/native/ring_conformance.c:216-392,447-577",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_ring.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Fixture authors immutable source bytes and independently tracks received = delivered + held + malformed + dropped; mutation occurs after native callback and before repeated short destination retries.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Retain a borrowed callback pointer, consume/drop held bytes on short output, or count callback-negative consumption as kernel loss.",
+        "required_failure_layer": "byte identity and exactly-once transport conservation assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G06",
+          "G10",
+          "G18"
+        ],
+        "TODO": [
+          "B07",
+          "Q01",
+          "T01",
+          "T03",
+          "X01",
+          "X02"
+        ]
+      },
+      "scope_limits": "Transport staging loss and kernel producer loss remain separate. Native/Mojo package conformance is later priority."
+    },
+    "H14": {
+      "short_contract": "Writer slots protect same-CPU cross-program and guarded same-program updates; refusals have independent miss accounting.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "docs/decisions/ADR-0013.md",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_fence.rs:406,534",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/bpf-kcrypto/src/bin/kcrypto.rs:815",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Small explicit interleaving schedule and owned live program/workload ledger specify expected increments, entries/refusals and writer partition; plain-store countermodel is separate from host atomic model.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Share a plain-load/store per-CPU slot across two program writers and schedule read/read/write/write.",
+        "required_failure_layer": "lost-update/reference-state assertion; independently triggered live total/miss conservation assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G10",
+          "G15"
+        ],
+        "TODO": [
+          "B08",
+          "Q03",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "scope_limits": "Per-CPU does not imply exclusive writer. Host atomics/Loom cannot qualify plain-store BPF semantics or an untested architecture."
+    },
+    "H15": {
+      "short_contract": "Insertion identity stays frozen across CPU migration and every per-CPU ABI lane is consumed at the correct stride.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_who.rs:532,585,637,661,677",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-abi/src/kcrypto_agg.rs:1172",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Independent task/operation ledger fixes first-insert identity including valid zero fields; synthetic byte layouts author lane sentinels for old/new ABI and live migration/first-insert barriers produce expected totals.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Overwrite insertion identity on migration, interpret valid UID/stack zero as unknown, or decode 88-byte lanes using 80-byte stride.",
+        "required_failure_layer": "identity provenance and independently expected lane-sum assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G16",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "B01",
+          "B08",
+          "Q01",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Model mirrors are not real migration proof; inventory every consumer changed by ABI evolution."
+    },
+    "H16": {
+      "short_contract": "Per-CPU buffers use checked aligned value stride times possible CPUs, preserving offline lanes or refusing malformed topology.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/mapops.rs:526-616",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_maps.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:2528,2571",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Explicit independent topology snapshots include sparse/overlap/invalid ranges and offline lanes; protected output buffers with sentinel values verify align8(1/7/8/9/13) times possible CPU count.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use online CPU count, accept overlapping topology, skip an offline lane or multiply without overflow checking.",
+        "required_failure_layer": "geometry refusal before syscall/copy or protected-buffer/lane extent assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G15",
+          "G16",
+          "G18"
+        ],
+        "TODO": [
+          "B01",
+          "B08",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Changed-topology close must use its declared snapshot policy; generic feature names or guessed hardware counts are not geometry evidence."
+    },
+    "H17": {
+      "short_contract": "Loss signaling survives full identity maps and caps degrade exactness without fabricating omitted counts.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_who.rs:783-1021",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-abi/src/kcrypto_agg.rs:133-154",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Independent attempted insertion ledger controls exact capacity, preexisting loss, repeated/cross-CPU failures and cap boundary; below-capacity positive twin proves normal admission.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Store diagnostic failure only in the already full map, erase prior loss, or present the capped flag as an exact omitted-event count.",
+        "required_failure_layer": "independent loss-presence/bound assertion after confirmed map exhaustion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G16",
+          "G22",
+          "G23"
+        ],
+        "TODO": [
+          "Q01",
+          "B08",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Each recipient must identify a real loss site and independent channel; no universal same-mechanism support is inferred."
+    },
+    "H18": {
+      "short_contract": "Final settlement requires declared admission, writer, drain and post-drain sample predicates; late work invalidates early closure.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_fence.rs:534-627",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_stop.mojo:96-194,320-503",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/count_deadline.rs:1273-1284",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent schedule admits a writer before stop and completes it after an initial drain/sample; expected final population and proof predicates come from schedule, with stuck-writer and stale-sample branches.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Return an exact settlement receipt after detach/quiet poll/timeout or before the delayed admitted writer and final sample complete.",
+        "required_failure_layer": "terminal proof-predicate assertion; known weak close must refuse deliberately requested exact closure"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G07",
+          "G08",
+          "G14",
+          "G17",
+          "G23"
+        ],
+        "TODO": [
+          "B07",
+          "B08",
+          "Q03",
+          "Q04",
+          "T01",
+          "T02",
+          "T03"
+        ]
+      },
+      "scope_limits": "No universal close engine: x86 assumptions, owned-child death/reap and live/model boundaries remain named. A timeout is not quiescence."
+    },
+    "H19": {
+      "short_contract": "Pending/failed retirement keeps original owner/file; foreign tickets and failed transfers cannot settle it.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "src/attach/native_retirement_tests.rs:100,274,329,490",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/attach/cleanup_worker.rs:416",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Capability/retirement ledger independently tracks exact original file/link ownership and ticket issuer at every acquisition/transfer/cancel/close point, including genuine native close failure.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Drop original file on pending close, settle with a foreign ticket, or count dropped owners as proven successful native detach.",
+        "required_failure_layer": "custody/ticket/explicit unresolved-result assertion; live detach outcome separate from fake destructor count"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC08",
+          "UC11",
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G06",
+          "G07",
+          "G08",
+          "G09",
+          "G10"
+        ],
+        "TODO": [
+          "B02",
+          "L07",
+          "T01",
+          "T02",
+          "T04",
+          "U06"
+        ]
+      },
+      "scope_limits": "Bounded caller return does not mean resources vanished; quarantine capacity/Drop behavior must follow selected public contract."
+    },
+    "H20": {
+      "short_contract": "Stalled setup and late publishers have bounded caller cancellation while preserving successor output and foreign-process authority.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "O",
+          "location": "tests/target_lifecycle.rs:802,865,1247,1386,1653,1740,1901",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/workload_launch.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Owned subprocess/FIFO and publisher barriers independently track custody, FDs, worker liveness and successor sentinel bytes; outer watchdog bounds harness, not the semantic expected result.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Wait on a stuck publication lock during cancellation, let an abandoned publisher truncate successor output, or signal unproven recycled PID/PGID.",
+        "required_failure_layer": "bounded caller-return/custody assertion and preserved successor/foreign-target sentinel assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC13"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G13"
+        ],
+        "TODO": [
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T04"
+        ]
+      },
+      "scope_limits": "Thread abandonment is not syscall interruption or completed cleanup; unresolved workers/handles remain accounted. Output publication is separate from child custody."
+    },
+    "H21": {
+      "short_contract": "Attach isolation is bounded by 2n-1 attempts and permission/exhaustion policy preserves explicit partial-effect rollback.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/bpf-multi/src/lib.rs:268,398,408",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "O",
+          "location": "src/plan.rs:675-707",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/attach_rollback.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Pre-authored site/error tree and fake-link custody ledger enumerate successful leaves, refused indices, exact attempt count and terminal effects; owned live good/bad sites supply independent hit population.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Bisect permission errors, exceed the attempt bound, misalign cookie/site arrays or lose successful leaf custody on later fatal error.",
+        "required_failure_layer": "attempt-policy/site-index/rollback-custody assertion; live binding and detach outcome independently checked"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC13"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G08",
+          "G18",
+          "G23"
+        ],
+        "TODO": [
+          "B02",
+          "T01",
+          "T03",
+          "T04"
+        ]
+      },
+      "scope_limits": "Preserve policy differences; destructor invocation count is not proof that fallible native close succeeded."
+    },
+    "H22": {
+      "short_contract": "Capability evidence requires independently executed admitted positives and active excluded negatives.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/bpf-multi/src/lib.rs:600-620",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "P",
+          "location": "src/uretprobe_hazard.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "K",
+          "location": "scripts/test_sudo_lane.py on active selftest branch",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        }
+      ],
+      "independent_oracle": "Owned workload ledger proves own-thread triggers and an independently active excluded child; expected process/thread populations are fixed before probe execution.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Disable attach or trigger, widen PID filter, or accept an all-zero canary as clean/supported.",
+        "required_failure_layer": "non-vacuity or excluded-population assertion after independently verified trigger activity"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC10",
+          "UC12"
+        ],
+        "G": [
+          "G12",
+          "G13",
+          "G14",
+          "G22"
+        ],
+        "TODO": [
+          "B03",
+          "B10",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Unsupported, denied, affected and unknown remain distinct; raw kernel release and an empty observation do not establish safety."
+    },
+    "H23": {
+      "short_contract": "Strict receipt parsing rejects malformed, ambiguous or contradictory records before evidence promotion.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "tests/kcrypto_perf/test_successor.py:316,335,386,393,570",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": null,
+          "location": "doc/validation/2026-10-15-f02-fullmatch-boundary.md",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#mojobpf-limited-future-integration-reconnaissance",
+          "source_context": "MojoBPF coordination workspace /work/mojobpf-ws as recorded in memveil.md; the matrix does not place this documentation under product alias J.",
+          "source_resolution_status": "RESOLVE_FULL_COORDINATION_SHA_AND_DOCUMENT_PATH_BEFORE_PORTING"
+        }
+      ],
+      "independent_oracle": "Immutable malicious corpus has independently authored expected rejection category for duplicate members/terminals, NaN, bool counts, exact pin grammar and missing operands; include valid restored twins.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use last-terminal-wins, accept newline-suffixed pins, coerce bool to count or silently supply missing loss as zero.",
+        "required_failure_layer": "strict parse/receipt-validation rejection before any qualified verdict"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G03",
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "TODO": [
+          "Q05",
+          "T01",
+          "T03",
+          "U07",
+          "X01"
+        ]
+      },
+      "scope_limits": "Harness inputs and product schemas remain distinct; success parsing a serializer round trip is not an independent oracle."
+    },
+    "H24": {
+      "short_contract": "Checked construction and replay enforce the same identity, scope arithmetic, interval and synthetic-provenance invariants.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-core/src/workload/{evidence,scope,observation}.rs",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_reader.mojo:330,339",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Independently authored valid/invalid records specify resolved versus unknown identity, cgroup-zero limits, ordered intervals, exact partition sums and u64 boundaries; compare parser and direct-constructor outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Bypass validation during deserialize/direct construction, erase synthetic provenance, or accept a resolved cgroup-zero identity/overflowed partition.",
+        "required_failure_layer": "semantic constructor or deserialization validation before usable evidence is created"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G16",
+          "G17",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "Q01",
+          "Q05",
+          "T01",
+          "T03",
+          "X01"
+        ]
+      },
+      "scope_limits": "No universal cgroup/product schema is imposed; candidate adapters select only shared invariants and retain their own semantic oracle."
+    },
+    "H25": {
+      "short_contract": "Unknown identities do not collide and old-generation completions cannot retire reused successor objects.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_reader.mojo:1912",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:534-562",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs:593,613,816,886,1081,1129",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs:963-1006,1215-1254,1349-1367",
+          "coverage": "INSPECTED_FROZEN_SOURCE_NOT_RUN",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "src/memveil/capture/reader.mojo:401-409",
+          "coverage": "INSPECTED_FROZEN_SOURCE_NOT_RUN",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        }
+      ],
+      "independent_oracle": "Append-only operation log independently assigns epochs/generations and expected live objects under reuse, repeated allocation, late completion and missing release; small explicit tombstone limits force exhaustion.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use one shared unknown ID, remove generation from completion key, or evict provenance and manufacture continuity.",
+        "required_failure_layer": "identity collision/successor-liveness assertion or explicit exhaustion uncertainty assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC11"
+        ],
+        "G": [
+          "G06",
+          "G12",
+          "G16",
+          "G18",
+          "G20"
+        ],
+        "TODO": [
+          "L09",
+          "B09",
+          "Q01",
+          "T01",
+          "T02",
+          "T03",
+          "X01"
+        ]
+      },
+      "scope_limits": "DMA regions, kernel transforms, provider generations and process exec remain different state machines."
+    },
+    "H26": {
+      "short_contract": "Independent facts survive missing relationships; alternate totals never double-count the same work.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:206-237,656-784,933-1205",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/evidence_model.rs:108,233,522,590",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Hand-authored fact-dependency graph states independent bytes/counts versus occupancy/correlation claims; expected bounds use disjoint operation sets and explicit units, with measured zero distinct from missing.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Sum detail and aggregate for the same work, erase known bytes after unrelated attribution loss, or claim occupancy despite missing release.",
+        "required_failure_layer": "unit/conservation/dependency-specific quality or bound assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G14",
+          "G16",
+          "G18"
+        ],
+        "TODO": [
+          "Q01",
+          "Q02",
+          "Q04",
+          "T01",
+          "T03",
+          "X01"
+        ]
+      },
+      "scope_limits": "Products retain different uncertainty meanings; no global quality lattice or automatic sum is implied."
+    },
+    "H27": {
+      "short_contract": "Snapshots are non-destructive; ordered metrics require their proof and late corrections reach every holder.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "M",
+          "location": "tests/unit/test_mappings.mojo:302-501",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "M",
+          "location": "tests/unit/test_engine.mojo:762,805,890",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "O",
+          "location": "tests/scan_oracle.rs:1195,1244,2336,2581,2734",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "osslscope.md#source-custody-and-current-state"
+        }
+      ],
+      "independent_oracle": "Independent persistent fact log supplies release-before-map tie rules, valid/reordered intervals, snapshots and producer-admissible contradictory evidence; expected base facts and correction destinations are enumerated.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Permanently taint state on a temporary partial snapshot, sort away an invalid ordering proof, or suppress a correction to one retained holder.",
+        "required_failure_layer": "snapshot persistence/metric admissibility/correction propagation assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G09",
+          "G10",
+          "G17",
+          "G18"
+        ],
+        "TODO": [
+          "Q02",
+          "Q04",
+          "T01",
+          "T02",
+          "T03",
+          "S01",
+          "X01"
+        ]
+      },
+      "scope_limits": "Wire-impossible adversarial records test reader refusal, not producer correctness. Real consumed loss persists within its epoch."
+    },
+    "H28": {
+      "short_contract": "Native retained views, buffers and loader lifetimes enforce generation, map-kind, output and exactly-once destruction rules.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "L",
+          "location": "tests/native/generic_object.c",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/native/generic_maps.c:469",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "L",
+          "location": "tests/mojo/compile_fail/",
+          "coverage": "INSPECTED_SOURCE",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
+        },
+        {
+          "alias": "LJ",
+          "location": "tests/integration/standard_objects/test_first_live_maps.py",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "memveil.md#complete-memveillibbpf-branch-and-worktree-inventory"
+        }
+      ],
+      "independent_oracle": "Independent acquisition/destruction ledger, fixed layout sentinels, mutable-buffer guards and required-symbol list define permitted retained-parent, stale-generation, alias/short-output and bloom-membership outcomes.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Unload library before child destruction, accept stale view, acquire without destroy symbol, or treat bloom membership as ordinary output lookup.",
+        "required_failure_layer": "native/typed-wrapper lifetime, ABI or output-preservation refusal assertion"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC14"
+        ],
+        "G": [
+          "G03",
+          "G06",
+          "G09",
+          "G10",
+          "G19",
+          "G20"
+        ],
+        "TODO": [
+          "T01",
+          "X01",
+          "X02",
+          "X04"
+        ]
+      },
+      "scope_limits": "Single-thread restrictions remain explicit. Installed/live generic map success is a separate gate, not established by native host fixtures or newer sibling sources."
+    },
+    "H29": {
+      "short_contract": "Used-result atomic RMW returns the independently expected old value and stores the expected new value through the final consumer build.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-toolchain-experiment.md:46-75",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "W",
+          "location": "evidence/llvm-toolchain-review-20260922/kernel-oracle/{cases.json,prepare.py}",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Preselected initial values/operands and arithmetic independently specify old/new values for each operation and width; unused-result and CAS controls plus final-object fetch-bit decode distinguish the lowering defect.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Force non-fetch atomic lowering while leaving the memory update correct.",
+        "required_failure_layer": "returned-old-value semantic assertion, not merely memory-value or compile-exit assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G20",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "C03",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Historical single-run stack-memory results do not establish concurrent shared-map atomic ordering; upstream LLVM fix does not establish installed rustc or bpf-linker inclusion."
+    },
+    "H30": {
+      "short_contract": "Compiler upgrades cannot emit instructions outside an explicitly selected advertised profile even when CPU preset names are unchanged.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-toolchain-experiment.md:77-110",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        },
+        {
+          "alias": "W",
+          "location": "sdd/p11scope/SYSTEM-PLAN/task-bpf-v4-baseline-review.md:54-83",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Independently enumerated allowed instruction families and minimal per-family producers are checked against final decoded opcodes and exact backend/features; intended kernel cells independently accept/refuse actual objects.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Inject a forbidden opcode or broaden a preset feature while preserving the same nominal v4 label.",
+        "required_failure_layer": "instruction-profile admission rejection before support promotion; separate live kernel acceptance verdict"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G12",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "B10",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Empty CPU, generic, v3 and feature-controlled v4 are distinct; no universal kernel floor follows from a compiler feature name."
+    },
+    "H31": {
+      "short_contract": "AtomicLoad instruction selection compiles or refuses under its declared CPU/features without being mislabeled as a kernel failure.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "llvm-bpf-atomic-load-report.md:18-114",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Minimal monotonic aligned i64 atomic-load IR and real Rust/C consumer paths have predeclared compile/refusal categories; successful objects are decoded to identify actual ordinary/acquire loads.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Use the wrong expected feature mask or classify compiler selector rejection as verifier failure.",
+        "required_failure_layer": "compiler diagnostic-category or decoded-object instruction-profile assertion"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G03",
+          "G14",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C02",
+          "C06",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Volatile access is not a generic semantic replacement. A compiler feature gate does not alone establish a kernel opcode requirement."
+    },
+    "H32": {
+      "short_contract": "Mixed Rust/C debug-record transformations preserve valid final BTF/BTF.ext function and map information.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "W",
+          "location": "sdd/p11scope/SYSTEM-PLAN/task-llvm23-{pipeline-debug-review,linker-repair-report,linker-repair-review}.md",
+          "coverage": "PRESERVED_WIP_OR_RESEARCH_SOURCE",
+          "pin_document": "p11scope.md#revision-and-authority"
+        }
+      ],
+      "independent_oracle": "Fixture independently declares required function/map type identities and relocation structure; validate metadata after each transform and on the final consumer object, then separately test loader/verifier/callback behavior.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Strip expected metadata or replay through a metadata-dropping transformation while retaining nominal successful compile/link exit.",
+        "required_failure_layer": "metadata/final-object semantic checker rejection; later loader/verifier/live gates remain distinct"
+      },
+      "related_obligations": {
+        "UC": [],
+        "G": [
+          "G18",
+          "G20",
+          "G21"
+        ],
+        "TODO": [
+          "C01",
+          "C04",
+          "T01",
+          "T03",
+          "X03"
+        ]
+      },
+      "scope_limits": "The retained repair reference is documented in the matrix; this catalog does not invent a fix ref or claim its selected compiler/toolchain includes the repair."
+    },
+    "H33": {
+      "short_contract": "Keep author-authorized source/destination grants and target input options separate from final object/runtime license bytes and intended-reason kernel admission.",
+      "inspected_donor_anchors": [
+        {
+          "alias": "P",
+          "location": "crates/ebpf/Cargo.toml; crates/ebpf/native/image_identity.c; crates/ebpf/src/main.rs SelectionTransport",
+          "coverage": "INSPECTED_SOURCE_NOT_EXECUTED",
+          "pin_document": "license-boundaries.md#actual-inspected-inputs"
+        }
+      ],
+      "independent_oracle": "Per-input ownership/role/offered-option manifest and original notices; independently decoded final license bytes; actual loader declaration; a supported GPL-only-helper fixture with nonempty independent owned workload, otherwise-valid non-GPL refusal at the selected kernel license check, and helper-free non-GPL control where the type permits it. Preserve same-errno different-cause evidence.",
+      "known_bad_control": {
+        "status": "PLANNED_CONTROL_NOT_RUN",
+        "mutation_or_countermodel": "Authorize Apache-only target inputs solely from a GPL ELF string; substitute historical source SPDX for owner destination grant; remove or change final/runtime license; accept generic EACCES or zero activity as intended GPL-only refusal; drop required upstream notice.",
+        "required_failure_layer": "source-closure, final-object/binding, intended kernel license reason, non-vacuity or installed-notice assertion after valid positive setup; unrelated privilege/verifier failures remain incomplete"
+      },
+      "related_obligations": {
+        "UC": [
+          "UC12",
+          "UC14"
+        ],
+        "G": [
+          "G18",
+          "G19",
+          "G20",
+          "G22"
+        ],
+        "TODO": [
+          "F01",
+          "F02",
+          "B03",
+          "T01",
+          "T03"
+        ]
+      },
+      "scope_limits": "Runtime acceptance does not adjudicate copyright permission. Do not require unrelated LSM/struct_ops/kfunc features. Preserve original third-party options and settle no-MIT dependency scope explicitly. Required missing positive/cell/cause evidence stays incomplete.",
+      "origin": "NEW_SCOPEBASE_PLAN_OBLIGATION_2026_10_18_NOT_A_HISTORICAL_DONOR_FAILURE"
+    }
+  },
+  "obligation_coverage": [
+    {
+      "kind": "research_todo",
+      "id": "F01",
+      "owners": [
+        "SB01",
+        "LX01",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F02",
+      "owners": [
+        "SB01",
+        "LX01",
+        "BP01",
+        "CP01",
+        "TC01",
+        "NX02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F03",
+      "owners": [
+        "SB01",
+        "SB02",
+        "SB03",
+        "RL02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F04",
+      "owners": [
+        "SB01",
+        "SB03",
+        "TT01",
+        "TC01",
+        "CP01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F05",
+      "owners": [
+        "SB03",
+        "TT02",
+        "TT10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "F06",
+      "owners": [
+        "SB02",
+        "SB03",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L01",
+      "owners": [
+        "SB02",
+        "LX01",
+        "BP09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L02",
+      "owners": [
+        "LX02",
+        "LX05",
+        "LX06",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L03",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L04",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L05",
+      "owners": [
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L06",
+      "owners": [
+        "LX09",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L07",
+      "owners": [
+        "LX13",
+        "MG01",
+        "MG02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L08",
+      "owners": [
+        "LX04",
+        "LX10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "L09",
+      "owners": [
+        "LX08",
+        "LX10",
+        "CP02",
+        "CP03",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B01",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B02",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10",
+        "BP11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B03",
+      "owners": [
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B04",
+      "owners": [
+        "BP09",
+        "TC05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B05",
+      "owners": [
+        "BP01",
+        "TC01",
+        "TC08",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B06",
+      "owners": [
+        "TC05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B07",
+      "owners": [
+        "BP06",
+        "BP10",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B08",
+      "owners": [
+        "BP07",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B09",
+      "owners": [
+        "BP08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "B10",
+      "owners": [
+        "BP03",
+        "BP11",
+        "TC03",
+        "TC07",
+        "TT05",
+        "RL04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C01",
+      "owners": [
+        "TC01",
+        "TC04",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C02",
+      "owners": [
+        "TC03",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C03",
+      "owners": [
+        "TC04",
+        "TC07",
+        "TC08",
+        "RL04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C04",
+      "owners": [
+        "TC05",
+        "TC06",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C05",
+      "owners": [
+        "TC02",
+        "TC07",
+        "TC08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "C06",
+      "owners": [
+        "TC01",
+        "TC08",
+        "SB03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q01",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP04",
+        "CP06",
+        "CP07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q02",
+      "owners": [
+        "CP06",
+        "CP08",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q03",
+      "owners": [
+        "CP09",
+        "BP06",
+        "BP07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q04",
+      "owners": [
+        "CP11",
+        "CP13",
+        "MG02",
+        "MG03",
+        "MG04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q05",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "Q06",
+      "owners": [
+        "CP12",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T01",
+      "owners": [
+        "TT01",
+        "SB01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T02",
+      "owners": [
+        "TT06",
+        "LX04",
+        "BP04",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T03",
+      "owners": [
+        "TT02",
+        "TT03",
+        "TT04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T04",
+      "owners": [
+        "TT06",
+        "TT09",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T05",
+      "owners": [
+        "TT08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T06",
+      "owners": [
+        "LX11",
+        "BP11",
+        "CP11",
+        "CP13",
+        "TT07",
+        "TT09",
+        "RL02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "T07",
+      "owners": [
+        "SB03",
+        "TT07",
+        "TT10",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G01",
+      "owners": [
+        "LX03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G02",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G03",
+      "owners": [
+        "SB03",
+        "LX04",
+        "LX09",
+        "BP03",
+        "BP05",
+        "TC02",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G04",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX06",
+        "LX09",
+        "TC02",
+        "TT09",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G05",
+      "owners": [
+        "LX03",
+        "LX04",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G06",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G07",
+      "owners": [
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12",
+        "TC02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G08",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "TC02",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G09",
+      "owners": [
+        "LX02",
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G10",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX09",
+        "BP06",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G11",
+      "owners": [
+        "LX02",
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G12",
+      "owners": [
+        "LX06",
+        "LX08",
+        "BP03",
+        "BP08",
+        "CP09",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G13",
+      "owners": [
+        "LX09",
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G14",
+      "owners": [
+        "BP03",
+        "CP09",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G15",
+      "owners": [
+        "BP02",
+        "BP05",
+        "BP06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G16",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G17",
+      "owners": [
+        "LX04",
+        "LX10",
+        "CP02",
+        "CP08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G18",
+      "owners": [
+        "LX02",
+        "LX03",
+        "BP02",
+        "BP10",
+        "CP10",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G19",
+      "owners": [
+        "SB02",
+        "LX11",
+        "BP11",
+        "TT07",
+        "TT08",
+        "SDK07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G20",
+      "owners": [
+        "SB03",
+        "CP10",
+        "NX07",
+        "NX09",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G21",
+      "owners": [
+        "TC02",
+        "TC03",
+        "TC07",
+        "TT08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G22",
+      "owners": [
+        "SB03",
+        "LX11",
+        "CP10",
+        "SDK02",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "G23",
+      "owners": [
+        "BP04",
+        "BP07",
+        "CP03",
+        "CP09",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U01",
+      "owners": [
+        "LX06",
+        "LX07",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U02",
+      "owners": [
+        "LX02",
+        "LX05",
+        "LX06",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U03",
+      "owners": [
+        "TT01",
+        "TT02",
+        "TT07",
+        "LX11"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U04",
+      "owners": [
+        "TT07",
+        "LX11",
+        "LX12"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U05",
+      "owners": [
+        "TT03",
+        "TT04",
+        "LX07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U06",
+      "owners": [
+        "TT02",
+        "TT03",
+        "TT04",
+        "TT06",
+        "LX07"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U07",
+      "owners": [
+        "TT02",
+        "TT07",
+        "TT10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "U08",
+      "owners": [
+        "LX12",
+        "TT07",
+        "TT08",
+        "TT10",
+        "RL03"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "S01",
+      "owners": [
+        "SDK01",
+        "SDK02",
+        "SDK03",
+        "SDK04",
+        "SDK05",
+        "SDK06",
+        "SDK07",
+        "SDK08",
+        "SDK09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "S02",
+      "owners": [
+        "SDK01",
+        "SDK05",
+        "SDK07",
+        "SDK09"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X01",
+      "owners": [
+        "NX01",
+        "NX02",
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X02",
+      "owners": [
+        "NX07",
+        "NX08",
+        "NX09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X03",
+      "owners": [
+        "NX02",
+        "NX06",
+        "TC05",
+        "TC07",
+        "MG05"
+      ]
+    },
+    {
+      "kind": "research_todo",
+      "id": "X04",
+      "owners": [
+        "NX01",
+        "NX08",
+        "NX09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H01",
+      "owners": [
+        "LX08",
+        "BP08",
+        "TT03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H02",
+      "owners": [
+        "LX05",
+        "LX08",
+        "LX09",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H03",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP03",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H04",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05",
+        "BP10",
+        "TT03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H05",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H06",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "LX05",
+        "LX10",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H07",
+      "owners": [
+        "TC03",
+        "TC05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H08",
+      "owners": [
+        "BP08",
+        "BP09",
+        "TC05",
+        "TC06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H09",
+      "owners": [
+        "TC06",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H10",
+      "owners": [
+        "BP09",
+        "TC05",
+        "TC06",
+        "TC07",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H11",
+      "owners": [
+        "BP09",
+        "TC05",
+        "TC07"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H12",
+      "owners": [
+        "BP06",
+        "BP10",
+        "TT06"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H13",
+      "owners": [
+        "BP06",
+        "BP10",
+        "CP06",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H14",
+      "owners": [
+        "BP07",
+        "TT05",
+        "TT06"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H15",
+      "owners": [
+        "BP02",
+        "BP07",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H16",
+      "owners": [
+        "BP02",
+        "BP07",
+        "NX05",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H17",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H18",
+      "owners": [
+        "BP06",
+        "BP07",
+        "CP09",
+        "SDK06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H19",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "BP10",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H20",
+      "owners": [
+        "LX09",
+        "LX10",
+        "TT03",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H21",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H22",
+      "owners": [
+        "BP03",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H23",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H24",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP07",
+        "CP08",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H25",
+      "owners": [
+        "CP05",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H26",
+      "owners": [
+        "CP03",
+        "CP06",
+        "CP07",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H27",
+      "owners": [
+        "CP06",
+        "CP08",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H28",
+      "owners": [
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06",
+        "NX09",
+        "BP02",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H29",
+      "owners": [
+        "TC04",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H30",
+      "owners": [
+        "TC03",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H31",
+      "owners": [
+        "TC03",
+        "TC04",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H32",
+      "owners": [
+        "TC05",
+        "TC07",
+        "NX06",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC01",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX04",
+        "TT03",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC02",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC03",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC04",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC05",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX08",
+        "LX07",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC06",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC07",
+      "owners": [
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC08",
+      "owners": [
+        "LX02",
+        "LX06",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC09",
+      "owners": [
+        "LX03",
+        "LX06",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC10",
+      "owners": [
+        "LX02",
+        "LX06",
+        "TT03",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC11",
+      "owners": [
+        "LX02",
+        "LX06",
+        "LX08",
+        "BP05",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC12",
+      "owners": [
+        "BP05",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC13",
+      "owners": [
+        "LX03",
+        "LX06",
+        "LX09",
+        "BP05",
+        "TT06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "user_conformance",
+      "id": "UC14",
+      "owners": [
+        "TT07",
+        "TT10",
+        "LX12",
+        "BP11",
+        "TC08",
+        "CP13",
+        "SDK09",
+        "NX10"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G01",
+      "owners": [
+        "LX03"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G02",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G03",
+      "owners": [
+        "SB03",
+        "LX04",
+        "LX09",
+        "BP03",
+        "BP05",
+        "TC02",
+        "CP10"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G04",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX06",
+        "LX09",
+        "TC02",
+        "TT09",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G05",
+      "owners": [
+        "LX03",
+        "LX04",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G06",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G07",
+      "owners": [
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12",
+        "TC02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G08",
+      "owners": [
+        "LX06",
+        "LX09",
+        "BP05",
+        "TC02",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G09",
+      "owners": [
+        "LX02",
+        "LX04",
+        "LX09",
+        "BP05",
+        "CP12"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G10",
+      "owners": [
+        "LX02",
+        "LX03",
+        "LX09",
+        "BP06",
+        "CP12",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G11",
+      "owners": [
+        "LX02",
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G12",
+      "owners": [
+        "LX06",
+        "LX08",
+        "BP03",
+        "BP08",
+        "CP09",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G13",
+      "owners": [
+        "LX09",
+        "BP03",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G14",
+      "owners": [
+        "BP03",
+        "CP09",
+        "SDK01"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G15",
+      "owners": [
+        "BP02",
+        "BP05",
+        "BP06",
+        "TT09"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G16",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G17",
+      "owners": [
+        "LX04",
+        "LX10",
+        "CP02",
+        "CP08"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G18",
+      "owners": [
+        "LX02",
+        "LX03",
+        "BP02",
+        "BP10",
+        "CP10",
+        "TT02"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G19",
+      "owners": [
+        "SB02",
+        "LX11",
+        "BP11",
+        "TT07",
+        "TT08",
+        "SDK07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G20",
+      "owners": [
+        "SB03",
+        "CP10",
+        "NX07",
+        "NX09",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G21",
+      "owners": [
+        "TC02",
+        "TC03",
+        "TC07",
+        "TT08"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G22",
+      "owners": [
+        "SB03",
+        "LX11",
+        "CP10",
+        "SDK02",
+        "TT07"
+      ]
+    },
+    {
+      "kind": "public_contract_gap",
+      "id": "G23",
+      "owners": [
+        "BP04",
+        "BP07",
+        "CP03",
+        "CP09",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV01",
+      "owners": [
+        "LX08",
+        "LX09"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV02",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV03",
+      "owners": [
+        "LX02",
+        "LX06",
+        "BP05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV04",
+      "owners": [
+        "LX05",
+        "LX06",
+        "LX07",
+        "TT04"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV05",
+      "owners": [
+        "LX03",
+        "LX04",
+        "LX05",
+        "LX10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV06",
+      "owners": [
+        "BP09",
+        "TC05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV07",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV08",
+      "owners": [
+        "BP02",
+        "NX05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV09",
+      "owners": [
+        "BP04",
+        "BP05",
+        "BP10"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV10",
+      "owners": [
+        "BP03",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV11",
+      "owners": [
+        "BP06",
+        "BP10",
+        "CP06",
+        "NX03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV12",
+      "owners": [
+        "BP07",
+        "CP09",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV13",
+      "owners": [
+        "BP07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV14",
+      "owners": [
+        "BP07",
+        "CP03",
+        "CP04"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV15",
+      "owners": [
+        "CP02",
+        "CP03",
+        "CP04",
+        "CP06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV16",
+      "owners": [
+        "CP02",
+        "CP04",
+        "LX08"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV17",
+      "owners": [
+        "LX08",
+        "BP08",
+        "CP05",
+        "CP06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV18",
+      "owners": [
+        "CP04",
+        "CP05",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV19",
+      "owners": [
+        "CP07"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV20",
+      "owners": [
+        "CP06",
+        "CP11",
+        "SDK03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV21",
+      "owners": [
+        "CP08",
+        "SDK03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV22",
+      "owners": [
+        "CP03",
+        "CP10",
+        "CP11"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV23",
+      "owners": [
+        "CP11",
+        "SDK04",
+        "SDK06"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV24",
+      "owners": [
+        "LX09",
+        "TT03"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV25",
+      "owners": [
+        "TC02",
+        "TC07",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV26",
+      "owners": [
+        "TC03",
+        "TC04",
+        "TC05",
+        "TC06",
+        "TC07",
+        "BP10",
+        "TT05"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV27",
+      "owners": [
+        "CP10",
+        "TT02",
+        "NX01",
+        "NX07"
+      ]
+    },
+    {
+      "kind": "overlap_row",
+      "id": "OV28",
+      "owners": [
+        "NX03",
+        "NX04",
+        "NX05",
+        "NX06",
+        "NX07",
+        "NX08",
+        "NX09"
+      ]
+    },
+    {
+      "kind": "regression_family",
+      "id": "H33",
+      "owners": [
+        "SB01",
+        "SB02",
+        "BP01",
+        "BP03",
+        "TC01",
+        "TC03",
+        "TC07",
+        "TC08",
+        "TT01",
+        "TT02",
+        "TT05",
+        "TT07",
+        "NX02",
+        "RL02"
+      ]
+    }
+  ],
+  "observation": {
+    "method": "READ_ONLY_FROZEN_SOURCE_AND_EXPLICIT_LOCAL_HISTORY_INSPECTION_NOT_TEST_EXECUTION",
+    "source_inventory_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "scope_limits": [
+      "Private proposed consumer-routing supplement only; controller adoption required before TT03 PORT/ADAPT/VECTORS_ONLY.",
+      "No new grant, original immutable admission unchanged; no source copied, port receipt, implementation or test/runtime qualification.",
+      "Global family/obligation metadata retained only because SB01 validator requires whole registry coverage. It does not select their other source files."
+    ]
+  },
+  "selection": {
+    "selected_file_count": 2,
+    "selected_file_ids": [
+      "P:src/process.rs",
+      "O:tests/target_lifecycle.rs"
+    ],
+    "unselected_disposition": "RESEARCH_ONLY_NOT_ADOPTED",
+    "unselected_scope": "This supplement selects ONLY six TT03 host facets/nine exact ranges; original admissions outside this supplement remain intact.",
+    "findings": [
+      "Original references.tasks omitted TT03 on exactly these two source rows. This successor adds TT03 only over the narrowed source_scope."
+    ]
+  },
+  "files": [
+    {
+      "id": "P:src/process.rs",
+      "donor": "P",
+      "path": "src/process.rs",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+      "dirty_sha256": null,
+      "owner": "LX09",
+      "intended_contracts": [
+        "tt03-ordinary-host-selected-facets"
+      ],
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "LX09",
+          "LX10",
+          "LX11",
+          "LX08",
+          "LX06",
+          "TT03"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/process.rs",
+            "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "abb1308bbd77a8d742fa83b61c90912e64346383b45816a5514b5741683bf051",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1555,
+            1617
+          ],
+          [
+            1745,
+            1760
+          ],
+          [
+            1883,
+            1917
+          ],
+          [
+            2343,
+            2367
+          ],
+          [
+            2381,
+            2384
+          ],
+          [
+            2388,
+            2392
+          ],
+          [
+            2396,
+            2400
+          ],
+          [
+            2404,
+            2410
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+        "observed_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 89140,
+        "research_baseline_delta": {
+          "baseline_exists": true,
+          "baseline_sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+          "changed_current_bytes": false
+        },
+        "original_observation_sha256": "2e831f643ddae869c417e2d4ebad14ecebc100bed67ee8ce65c860e14b79bdf9"
+      },
+      "source_issue_test": {
+        "issues": [
+          "tt03-ordinary-host-selected-facets"
+        ],
+        "existing_symbols": [
+          {
+            "name": "exited_unreaped",
+            "line": 2343
+          },
+          {
+            "name": "run_pidfd_denial_case",
+            "line": 2369
+          },
+          {
+            "name": "original_generation_state_distinguishes_exit_from_pid_reuse",
+            "line": 1555
+          },
+          {
+            "name": "only_a_missing_process_is_proof_of_exit",
+            "line": 1745
+          },
+          {
+            "name": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+            "line": 1883
+          }
+        ],
+        "evidence": "Exact selected source symbols/ranges present in immutable frozen local bytes; NOT_RUN, no port."
+      },
+      "intake_mapping_note": "Separate proposed TT03-consumer-only supplement, exact selected ranges only. Existing LX09 primary owner and previous consumers are retained as provenance; original admission/scopes/dispositions remain unchanged. Existing OWNER-2026-10-18 only. No port exists."
+    },
+    {
+      "id": "O:tests/target_lifecycle.rs",
+      "donor": "O",
+      "path": "tests/target_lifecycle.rs",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+      "dirty_sha256": null,
+      "owner": "LX09",
+      "intended_contracts": [
+        "tt03-ordinary-host-selected-facets"
+      ],
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "LX09",
+          "LX10",
+          "LX11",
+          "LX08",
+          "LX06",
+          "TT03"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "tests/target_lifecycle.rs",
+            "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "e791d495780ed43a41cdbe2fd4cf3536939c3e010c8c05bf35588557bd8ec852",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            359,
+            375
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+        "observed_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 125083,
+        "research_baseline_delta": {
+          "baseline_exists": true,
+          "baseline_sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+          "changed_current_bytes": false
+        },
+        "original_observation_sha256": "b8d10d5d95b8525be684b47dd361e4285d9d99530bbe73ad9f8d3b64bbb35d59"
+      },
+      "source_issue_test": {
+        "issues": [
+          "tt03-ordinary-host-selected-facets"
+        ],
+        "existing_symbols": [
+          {
+            "name": "external_pid_target_is_never_signaled",
+            "line": 359
+          }
+        ],
+        "evidence": "Exact selected source symbols/ranges present in immutable frozen local bytes; NOT_RUN, no port."
+      },
+      "intake_mapping_note": "Separate proposed TT03-consumer-only supplement, exact selected ranges only. Existing LX09 primary owner and previous consumers are retained as provenance; original admission/scopes/dispositions remain unchanged. Existing OWNER-2026-10-18 only. No port exists."
+    }
+  ],
+  "donors": [
+    {
+      "id": "P",
+      "project": "p11scope",
+      "host": "local",
+      "repository_path": "/home/user/src/m/p11scope-ws/.worktrees/v040-integration",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "tree": "c61420fd7488d02c4a9e5f09c5be0164a02a41a2",
+      "baseline_commit": "eb6bbe1df910a3cf40b6b7e8965cc65c69f203ae",
+      "authority": "Active integration selected by current outer handoff; nested public main is older.",
+      "observed_head_before": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "observed_head_after": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "observed_branch_label_only": "v040-h7-object-wire",
+      "baseline_relationship": {
+        "relationship": "ancestor"
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "5f941905370d8a5e4a1294b216e149682e262543e80a8eee9897ad0eae18f003",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "2b6d91de37017aad31162156eac7ad3378b7d584f64356bbf64b79b99718533d",
+          "status": ""
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "d2e9fe8bfc29c87c8db8b7d8b6fe61f5e91666b098da8c4b4d426643cb565993",
+          "status": ""
+        }
+      ],
+      "policy_gap": "third-party/README.md cites licenses/sources.json and licenses/, absent in this selected checkout; original upstream license texts do exist under generated third-party/src/aya*/LICENSE-* and are hashed here.",
+      "selected_tree_entries": {
+        "src/process.rs": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e"
+      }
+    },
+    {
+      "id": "K",
+      "project": "KryProbe",
+      "host": "local",
+      "repository_path": "/home/user/src/m/kryprobe-ws/kryprobe",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "tree": "240f3dc7669aeed7e94f300f56569e97fc881b12",
+      "baseline_commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "authority": "Product main selected; selftest-lane-policy work remains separate unaccepted WIP.",
+      "observed_head_before": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "observed_head_after": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "observed_branch_label_only": "main",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "1c092ebaaf6f0b5437e4946fb491218a0a3079c746567edb7c17540c9d0b03c5",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "9730796f426ef2bec3a729200c662db62ad7877a2e405ac422f318b7b388bb0d",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    },
+    {
+      "id": "W",
+      "project": "p11scope compiler research",
+      "host": "local",
+      "repository_path": "/home/user/src/m/p11scope-ws",
+      "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+      "tree": "3443a474568c810d62f0bb22dec41a21cbf23f67",
+      "baseline_commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+      "authority": "Private research references only; licensing/authorship must be resolved before copying.",
+      "observed_head_before": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+      "observed_head_after": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+      "observed_branch_label_only": "main",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "2aab886e9fe9f8af9fdd972b2c5b79dc8d036b000ad8b1c438d4b20d5c7162a2",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "2fc2a1553efe5f7ad41758898288f4ae0f107465cd7ec5232238bd64bdb03013",
+          "status": ""
+        },
+        {
+          "path": "handoff.md",
+          "sha256": "1ccaaa44f6973c6c97cf259693769fec6e22259451977c6979dcd9bb78c82a98",
+          "status": "M handoff.md"
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    },
+    {
+      "id": "O",
+      "project": "OSSLscope",
+      "host": "um790",
+      "repository_path": "/work/osslscope-ws/osslscope/.worktrees/preview-r21",
+      "commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "tree": "2ad18b4da848c0ef1d3701caa2839418129b2d10",
+      "baseline_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "authority": "Integration preview selected by donor research; root product checkout task/p7-traversal is a different authority.",
+      "observed_head_before": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "observed_head_after": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "observed_branch_label_only": "task/integration-preview-r21",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "c77c24678c7bd887bda60bb91b04ead378d211fb0cee8c8177000b05e3d4a9a2",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "7e537c672c0556266f04a59eaf72161a2012e652f433b07541b67946d0f9d82a",
+          "status": ""
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "9322675a787fec5385280b7a04ff5da54c17faf1b7f18c78c1a3e24c0f4de62e",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {
+        "tests/target_lifecycle.rs": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19"
+      }
+    },
+    {
+      "id": "M",
+      "project": "MemVeil",
+      "host": "um790",
+      "repository_path": "/work/memveil-ws/repos/memveil",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "tree": "41f8e248c9406974740c9b015e8becea6d4d5d6a",
+      "baseline_commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "authority": "Product main; consumed libbpf-mojo bundle remains separate from sibling library HEAD.",
+      "observed_head_before": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "observed_head_after": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "observed_branch_label_only": "main",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "801985d8221888f02eb0887380caca71534536fa486ed9cf854b36bf147bc606",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "65b7af2b8a18eee6a31d6f8df24475ab2fbe73fce989a07bac09220d146071bb",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    },
+    {
+      "id": "L",
+      "project": "libbpf-mojo",
+      "host": "um790",
+      "repository_path": "/work/memveil-ws/repos/libbpf-mojo",
+      "commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "tree": "a21a5b413eebd78da0a1380dc8bb9e1112c9d355",
+      "baseline_commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "authority": "Stable product main for transport/map/FFI baseline; LJ successor compared separately.",
+      "observed_head_before": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "observed_head_after": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "observed_branch_label_only": "main",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "eb82e18ca670847fcdf5f9b3090a2ad40d3738ce802b7c4e14e6d490fa0129e4",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "21532e47fe11d7f86c876938de7f310015e085c6c53b69de1e4f0c54b48950cd",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    },
+    {
+      "id": "LJ",
+      "project": "libbpf-mojo integration successor",
+      "host": "um790",
+      "repository_path": "/work/mojobpf-ws/.worktrees/libbpf-joint-integration-20261016",
+      "commit": "e55ecbef7493714944cf05a2f92f10938ca6c5ed",
+      "tree": "7c7de1c022a27dab8b074b2deaf8b4525716eb15",
+      "baseline_commit": "ff6ea5087cb6cab3db51a9ffaf99922f880da8c9",
+      "authority": "Separate native successor integration candidate; do not silently replace stable L baseline.",
+      "observed_head_before": "e55ecbef7493714944cf05a2f92f10938ca6c5ed",
+      "observed_head_after": "e55ecbef7493714944cf05a2f92f10938ca6c5ed",
+      "observed_branch_label_only": "exec/library-joint-integration-20261016",
+      "baseline_relationship": {
+        "relationship": "divergent",
+        "patch_equivalent": 0,
+        "patch_unmatched": 1,
+        "cherry_exit": 0
+      },
+      "baseline_changed_selected_paths": [
+        "docs/support.md",
+        "tests/integration/standard_objects/test_first_live_maps.py"
+      ],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "eb82e18ca670847fcdf5f9b3090a2ad40d3738ce802b7c4e14e6d490fa0129e4",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "21532e47fe11d7f86c876938de7f310015e085c6c53b69de1e4f0c54b48950cd",
+          "status": ""
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    },
+    {
+      "id": "J",
+      "project": "MojoBPF bounded compiler/object reference",
+      "host": "um790",
+      "repository_path": "/work/mojobpf-ws/.worktrees/mojobpf-cr09-m1",
+      "commit": "f520a529ddd9572165d18f9560a45c1cd13288c1",
+      "tree": "ec9a1eb97a0a24afe2c5a740e1b3eafe284527f4",
+      "baseline_commit": "f520a529ddd9572165d18f9560a45c1cd13288c1",
+      "authority": "Research catalog's exact bounded source authority; current dev and D2 work kept separate.",
+      "observed_head_before": "f520a529ddd9572165d18f9560a45c1cd13288c1",
+      "observed_head_after": "f520a529ddd9572165d18f9560a45c1cd13288c1",
+      "observed_branch_label_only": "exec/cr09-m1-20261015",
+      "baseline_relationship": {
+        "relationship": "equal",
+        "plus": 0,
+        "minus": 0
+      },
+      "baseline_changed_selected_paths": [],
+      "policy_evidence": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "8459497c0bc09a8e5715d3f257c3c7b9dd01287d7e442f5cbb476b09ed35f2ce",
+          "status": ""
+        },
+        {
+          "path": "README.md",
+          "sha256": "d5316e535ab09d2c7d2757f333492b832f7b961340e079db4967e8fc73145ea2",
+          "status": "M README.md"
+        }
+      ],
+      "policy_gap": null,
+      "selected_tree_entries": {}
+    }
+  ],
+  "port_groups": [
+    {
+      "id": "tt03-ordinary-host-selected-facets",
+      "owner": "TT03",
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H20"
+        ],
+        "G": [
+          "G03",
+          "G04",
+          "G07",
+          "G08",
+          "G09",
+          "G11",
+          "G12",
+          "G13"
+        ],
+        "UC": [
+          "UC05",
+          "UC10",
+          "UC13"
+        ],
+        "TODO": [
+          "B09",
+          "L02",
+          "L05",
+          "L06",
+          "T01",
+          "T02",
+          "T03",
+          "T04"
+        ],
+        "tasks": [
+          "TT03"
+        ]
+      },
+      "source_file_ids": [
+        "P:src/process.rs",
+        "O:tests/target_lifecycle.rs"
+      ],
+      "contract": "Six exact ordinary-host TT03 selected facets/nine ranges; original child/pidfd nonreaping and phase order, independent error/birth/tricky-name vectors and borrow-only sentinel invariant, per exact r2 materializer selection and unchanged r4 runtime contract. No production process classification/API, denial/namespace route, stopped-child setup, or implicit no-control syscall audit.",
+      "selected_regressions_to_port_or_adapt": [
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "exited_unreaped",
+          "line": 2343,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "run_pidfd_denial_case",
+          "line": 2369,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "original_generation_state_distinguishes_exit_from_pid_reuse",
+          "line": 1555,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "only_a_missing_process_is_proof_of_exit",
+          "line": 1745,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+          "line": 1883,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "tests/target_lifecycle.rs",
+          "name": "external_pid_target_is_never_signaled",
+          "line": 359,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        }
+      ]
+    }
+  ],
+  "tt03_supplement": {
+    "status": "PRIVATE_PROPOSED_NOT_ADOPTED",
+    "supersedes": null,
+    "supplements": {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+      "bytes": 966251,
+      "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+    },
+    "consumer": "TT03",
+    "original_owners_preserved": true,
+    "new_author_grant": false,
+    "source_grants_intake_changed": false,
+    "packet_ready": false,
+    "implementation_admitted": false,
+    "facets": [
+      {
+        "facet_id": "TT03-SF-06",
+        "file_id": "P:src/process.rs",
+        "symbol": "exited_unreaped",
+        "line_start": 2343,
+        "line_end": 2367,
+        "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56",
+        "first_increment": "ADAPT",
+        "selected_ranges": [
+          {
+            "line_start": 2343,
+            "line_end": 2367,
+            "bytes": 1143,
+            "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56"
+          }
+        ],
+        "destination_contract": "parent original-owner phase oracle; rustix PidFd wait with WNOWAIT if accepted API supports it; no arbitrary numeric-PID/wait-any authority; EINTR charges/deadline",
+        "excluded_context": "unbounded EINTR loop and raw PID reacquisition are adapted to finite work/original-owner authority",
+        "preservation_evidence_contract": {
+          "positive": "P owned_live_zombie_reaped_are_distinct: original live child, actual terminal pidfd plus WNOWAIT unreaped, exact original-child reap and only then ECHILD; active B remains responsive.",
+          "independent_oracle": "Original parent-owned Child/pidfd and raw wait disposition, distinct from consumer output and bare numeric PID.",
+          "active_bad_control": "Remove WNOWAIT or substitute wait-any/B or accept unrecorded ECHILD as reap.",
+          "intended_assertion": "Exact original-owned-child nonreaping/phase/custody assertion fails after valid live setup.",
+          "adaptation_why": "Finite work/deadline and retained original authority replace unbounded EINTR/raw-number convenience without discarding the original nonreaping regression."
+        },
+        "original_disposition_preserved": "ADAPT_RECOMMENDED"
+      },
+      {
+        "facet_id": "TT03-SF-07",
+        "file_id": "P:src/process.rs",
+        "symbol": "run_pidfd_denial_case",
+        "line_start": 2369,
+        "line_end": 2414,
+        "sha256": "b43df48f91e6b2f05a47a744325042b6fa2c2aa0fbb43617d2d6eac1d8067766",
+        "first_increment": "ADAPT_LIFECYCLE_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 2381,
+            "line_end": 2384,
+            "bytes": 262,
+            "sha256": "ec6e2831aed824b6e46b7586f872b042aa05e2cc86f35f30c5daca371fa8c434"
+          },
+          {
+            "line_start": 2388,
+            "line_end": 2392,
+            "bytes": 181,
+            "sha256": "524d127845b99bc3f0f56ad9d3e68ab1eca0f4be96da01444cb05e7eb2c5a953"
+          },
+          {
+            "line_start": 2396,
+            "line_end": 2400,
+            "bytes": 253,
+            "sha256": "e33a467ffecac019858e111921a718e98fcc313a5e43cc201a8b96503f9929ea"
+          },
+          {
+            "line_start": 2404,
+            "line_end": 2410,
+            "bytes": 282,
+            "sha256": "89e463ab87fa48ef4d8d07a24739181a7489887c6d4016141862d0975c2f8166"
+          }
+        ],
+        "destination_contract": "parent lifecycle schedule and literal oracle, exact original Child/pidfd; no denial helper or destructor copied",
+        "excluded_context": "ReapOnDrop/cat/denial helper commands/refreshed deadlines and helper ACK after target death are not copied",
+        "preservation_evidence_contract": {
+          "positive": "Same retained original birth/pidfd across real live -> zombie -> recorded reap, with independent target B and immutable phase ledger.",
+          "independent_oracle": "Parent real pidfd readiness, raw starttime/state and exact wait result; worker ACK cannot certify dead phases.",
+          "active_bad_control": "Treat terminal pidfd as completed reap, accept helper ACK as death witness, use a replacement Child or destructor-only cleanup.",
+          "intended_assertion": "Original phase order and cleanup/custody fail after actual original exit, not during helper setup.",
+          "adaptation_why": "Reuse the original lifecycle evidence sequence while retaining the r4 bounded framing/original-owner finalizer instead of copying the reference-only denial helper or destructor."
+        },
+        "original_disposition_preserved": "ADAPT_LIFECYCLE_ONLY"
+      },
+      {
+        "facet_id": "TT03-SF-09",
+        "file_id": "P:src/process.rs",
+        "symbol": "original_generation_state_distinguishes_exit_from_pid_reuse",
+        "line_start": 1555,
+        "line_end": 1617,
+        "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb",
+        "first_increment": "VECTORS_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 1555,
+            "line_end": 1617,
+            "bytes": 2148,
+            "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb"
+          }
+        ],
+        "destination_contract": "independent literal phase/oracle vectors; no production OriginalGenerationState API or strict-LX08 implementation claimed",
+        "excluded_context": "production fallback API, fake PID-reuse claim and domain error constructor are not ported",
+        "preservation_evidence_contract": {
+          "positive": "Literal same-birth zombie with terminal original pidfd; separate interrupted poll, permission denial and missing retained-birth vectors.",
+          "independent_oracle": "Independently authored native-phase/literal expectation distinguishes terminal, current, reused and unknown evidence; it is not a new production classification API.",
+          "active_bad_control": "Birth-equals-alive, poll-error-is-exit, denial-is-exit or missing-birth-is-exit.",
+          "intended_assertion": "The named independent counterexample assertion fails; no actual PID-reuse race or LX08 implementation is claimed.",
+          "adaptation_why": "VECTORS_ONLY preserves original oracle counterexamples in the fixture tier; strict production classification remains with LX08."
+        },
+        "original_disposition_preserved": "ADAPT_ORACLE_FACETS"
+      },
+      {
+        "facet_id": "TT03-SF-10",
+        "file_id": "P:src/process.rs",
+        "symbol": "only_a_missing_process_is_proof_of_exit",
+        "line_start": 1745,
+        "line_end": 1760,
+        "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c",
+        "first_increment": "VECTORS_ONLY",
+        "selected_ranges": [
+          {
+            "line_start": 1745,
+            "line_end": 1760,
+            "bytes": 605,
+            "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c"
+          }
+        ],
+        "destination_contract": "independent error/absence literal vectors; no actual restricted-credential or strict-LX08 classification claimed",
+        "excluded_context": "production gone_from/generation_gone API and native credential recipe remain outside increment",
+        "preservation_evidence_contract": {
+          "positive": "Literal NotFound, live starttime, EACCES and malformed-stat populations, with raw source labels retained.",
+          "independent_oracle": "Original absence-versus-unobserved distinction, independently encoded in fixture literal expectations.",
+          "active_bad_control": "Collapse EACCES/InvalidData into NotFound/exit.",
+          "intended_assertion": "Exact non-exit/unknown vector expectation fails; no restricted-credential native population is credited.",
+          "adaptation_why": "Retain deterministic error/absence regression without claiming production API or deferred credential support."
+        },
+        "original_disposition_preserved": "ADAPT_ORACLE_FACETS"
+      },
+      {
+        "facet_id": "TT03-SF-11",
+        "file_id": "P:src/process.rs",
+        "symbol": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+        "line_start": 1883,
+        "line_end": 1917,
+        "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072",
+        "first_increment": "ADAPT",
+        "selected_ranges": [
+          {
+            "line_start": 1883,
+            "line_end": 1917,
+            "bytes": 1688,
+            "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072"
+          }
+        ],
+        "destination_contract": "owned worker PR_SET_NAME plus independent Python raw-stat final-delimiter/state/birth oracle; explicit r4 parent retirement",
+        "excluded_context": "/bin/sleep/symlink/arg0/timing loops and cleanup after assertions are replaced only as ratified worker composition requires",
+        "preservation_evidence_contract": {
+          "positive": "P tricky_comm_has_independent_birth_state: exact nine-byte a) Z 1 (b under actual worker naming, same original birth in real live/zombie phases and recorded reap.",
+          "independent_oracle": "Independent Python final-right-delimiter raw stat parser plus real comm bytes and original parent phase evidence.",
+          "active_bad_control": "First-right-delimiter or wrong-index parser, fake Z name treated as zombie, or cleanup only after assertion.",
+          "intended_assertion": "The actual live tricky-name state/birth assertion fails after real naming and before claimed native completion; cleanup truth remains collected.",
+          "adaptation_why": "Own explicit worker operation replaces external sleep/symlink timing dependency; source literal and original live/zombie/reaped invariant remain."
+        },
+        "original_disposition_preserved": "ADAPT_RECOMMENDED"
+      },
+      {
+        "facet_id": "TT03-SF-14",
+        "file_id": "O:tests/target_lifecycle.rs",
+        "symbol": "external_pid_target_is_never_signaled",
+        "line_start": 359,
+        "line_end": 375,
+        "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a",
+        "first_increment": "ADAPT_NO_CONTROL_FACET",
+        "selected_ranges": [
+          {
+            "line_start": 359,
+            "line_end": 375,
+            "bytes": 628,
+            "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a"
+          }
+        ],
+        "destination_contract": "borrow-only actual consumer/fixture sentinel invariant; actual LX08 control API/type/audit comparison waits for its implementation",
+        "excluded_context": "application ExternalTarget/OwnedTarget API, external /bin/sleep dependency and unguarded cleanup are not ported",
+        "preservation_evidence_contract": {
+          "positive": "P observation_does_not_control_target: actual borrow-only accepted Linux consumer while independent active A/B endpoints remain responsive.",
+          "independent_oracle": "Original-owner phase endpoints and actual adapter/API binding, separate from consumer return values. Full invisible no-control syscall audit remains F/open.",
+          "active_bad_control": "Actual consumer stops/kills/adopts wrong target or loses independent live sentinel after a valid phase.",
+          "intended_assertion": "Reached visible no-control/target-identity assertion fails. Signal0/wait-WNOHANG coverage and future ProcessObservation UI are never inferred.",
+          "adaptation_why": "Preserve external observation/control separation without porting application custody policy or substituting a sentinel for the separately required operation audit."
+        },
+        "original_disposition_preserved": "ADAPT_NO_CONTROL_FACET"
+      }
+    ],
+    "preserved_nonselection": [
+      {
+        "facet_id": "TT03-SF-01",
+        "first_increment": "REFERENCE_ONLY",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-02",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-03",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-04",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-05",
+        "first_increment": "REFERENCE_ONLY",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-08",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-12",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-13",
+        "first_increment": "DEFERRED",
+        "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+        "selected_ranges": []
+      },
+      {
+        "facet_id": "TT03-SF-15",
+        "first_increment": "REFERENCE_ONLY",
+        "copy_admission": "UNGRANTED_REFERENCE_ONLY",
+        "selected_ranges": []
+      }
+    ]
+  }
+}
