@@ -25,7 +25,9 @@ pub enum ContractError {
     EpochExhausted,
     /// Generations do not match.
     GenerationMismatch,
-    /// An explicit capacity was exceeded.
+    /// An explicit cardinality or checked collection-size limit was exceeded,
+    /// or a precommit collection reservation failed. This does not promise
+    /// recoverable whole-process allocator exhaustion or unwind rollback.
     CapacityExceeded,
     /// A required feed is absent.
     MissingFeed,

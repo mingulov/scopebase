@@ -26,4 +26,7 @@ pub mod error;
 pub mod generation;
 pub mod quantity;
 pub mod time;
+pub mod view;
+pub mod feeds;
+pub mod correction;
 pub use error::ContractError;

@@ -4,8 +4,28 @@
 // ADAPT: OSSLscope 4bcb24c evidence.rs:145–152 unknown versus known bounds.
 use crate::ContractError;
 use std::{fmt, marker::PhantomData};
+// CP06-D9: crate-private erasure only; no public unit/wire discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnitTag {
+    Events,
+    Records,
+    Bytes,
+    Objects,
+    Attempts,
+    Nonexecutions,
+    DiagnosticSignals,
+}
+pub(crate) struct UnitTagAccess(());
 mod private {
-    pub trait Sealed {}
+    pub trait Sealed {
+        #[allow(private_interfaces)]
+        fn unit_tag(_: super::UnitTagAccess) -> super::UnitTag
+        where
+            Self: Sized;
+    }
+}
+pub(crate) fn unit_tag<U: Unit>() -> UnitTag {
+    <U as private::Sealed>::unit_tag(UnitTagAccess(()))
 }
 /// A sealed unit. Counts with different units cannot be mixed implicitly.
 #[allow(private_bounds)]
@@ -14,7 +34,10 @@ macro_rules! units {
     ($($name:ident => $doc:literal),+ $(,)?) => {$ (
         #[doc = $doc]
         pub enum $name {}
-        impl private::Sealed for $name {}
+        impl private::Sealed for $name {
+            #[allow(private_interfaces)]
+            fn unit_tag(_: UnitTagAccess) -> UnitTag { UnitTag::$name }
+        }
         impl Unit for $name {}
     )+};
 }
@@ -115,5 +138,32 @@ impl<U: Unit> fmt::Debug for CountBounds<U> {
             .field("lower", &self.lower)
             .field("upper", &self.upper)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod cp06_tests {
+    use super::*;
+    #[test]
+    fn seven_private_unit_tags() {
+        assert_eq!(unit_tag::<Events>(), UnitTag::Events, "CP06:Events tag");
+        assert_eq!(unit_tag::<Records>(), UnitTag::Records, "CP06:Records tag");
+        assert_eq!(unit_tag::<Bytes>(), UnitTag::Bytes, "CP06:Bytes tag");
+        assert_eq!(unit_tag::<Objects>(), UnitTag::Objects, "CP06:Objects tag");
+        assert_eq!(
+            unit_tag::<Attempts>(),
+            UnitTag::Attempts,
+            "CP06:Attempts tag"
+        );
+        assert_eq!(
+            unit_tag::<Nonexecutions>(),
+            UnitTag::Nonexecutions,
+            "CP06:Nonexecutions tag"
+        );
+        assert_eq!(
+            unit_tag::<DiagnosticSignals>(),
+            UnitTag::DiagnosticSignals,
+            "CP06:DiagnosticSignals tag"
+        );
     }
 }

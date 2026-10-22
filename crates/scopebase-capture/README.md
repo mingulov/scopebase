@@ -78,7 +78,7 @@ Exact source/range mappings and broader original regressions remain in the
 repository's `docs/issues/capture/` register. These representation tests do not run
 the donors' reducers, validated wire decoding or native adapters.
 
-CP06–CP13 still own reducer/replay behavior, real reference
+CP07–CP13 still own the remaining reducer/replay behavior, application reference
 applications and the installed conformance route. This pure foundation does not
 qualify complete capture profiles, live/native behavior, product migration or
 publication. THIRD-PARTY-NOTICES.md retains the distinct optional dependency terms.
@@ -160,7 +160,7 @@ The K capped-fold and saturation vectors and O missing-baseline/source/unit
 semantics are preserved in this increment under the admitted owned-source
 Apache-2.0 destination grant, independently of their historical GPL labels.
 Full identity-map storage, producer baseline acquisition/order and live behavior
-have CP04 host models below and retain BP07 live obligations; persistent per-claim rollup remains CP06; replay remains CP10;
+have CP04 host models below and retain BP07 live obligations; per-claim consumed evidence and views are described in the CP06 increment below; replay remains CP10;
 real application consumers and installed operator conformance remain CP11/CP13.
 No capture-runtime profile, product migration or publication follows from CP03.
 
@@ -386,3 +386,108 @@ CP05's `tests/support/cp05_bounded_process.py` reuses the already accepted
 ScopeBase testkit `tests/fixtures/fixture-access/bounded_process.py` unchanged
 under Apache-2.0. Its exact common.py-excerpt provenance and SHA256 are stated
 in the package README; it adds no third-party dependency or donor grant.
+
+CP06 adds three independently usable pure components. `view::ClaimLedger`
+retains each accepted loss or diagnostic occurrence with full source, channel,
+kind, unit and magnitude. The caller supplies claim dependencies. Exact zero and
+zero diagnostic signals add no reason; lower-bound zero, Unknown and nonzero
+signals add `ConsumedLoss` only to affected claims. `QueryOverlay` owns its input
+and adds `QueryPartial` only to that returned view. Later plain reads preserve
+consumed evidence and never inherit query taint. Empty reasons establish only
+absence of recorded reasons. Numeric claim/channel zero remains valid.
+
+`LedgerLimits` independently bounds registered/selected claims, reasons per
+returned claim, and accepted occurrences. Every accepted call consumes a fact
+slot, including zero, repeats and empty affected sets. There is no eviction or
+value-based deduplication. Normal errors preserve logical state; checked
+collection-size/reserve failure returns `CapacityExceeded`. Precommit vector
+capacity can grow, and arbitrary allocator abort/unwind is not recoverable under
+this contract. Lazy construction accepts zero and large limits without promising
+that those capacities can be allocated. Duplicate admission uses allocation-free
+pairwise O(n²) checks; sorted staging adds O(C+A log A) through one forward merge of the already sorted claims with the sorted affected IDs, using monotone cursors and one emission per entry, snapshot lookup
+O(S(log C+log Q)+S×min(R,2)). Cardinality bounds do not bound retained/peak bytes,
+generic payload allocations, hard time, syscalls or native cleanup.
+
+`feeds::FeedRegistry` distinguishes a missing required channel from an explicitly
+fed exact zero. It checks full epoch, required membership, then duplicate feed;
+accepted presence never computes a loss total. `finish` observes required bits
+and can recover after a missing feed is supplied. Unknown loss can satisfy
+presence without proving loss absence. The registry retains sorted IDs with
+matching received bits; feed is O(log M), finish O(M), storage O(M).
+
+`correction::{Revision,Versioned,Correction}` checks exactly the next revision and
+moves a whole value without requiring payload Eq/Clone/Debug. Full epoch mismatch
+precedes stale-revision refusal. A normally returned refusal returns the original
+owner and consumes the rejected replacement. Normal success drops the old
+payload; overflow drops its replacement. Ordinary payload Drop effects or panic
+propagate. After panic no normal Result, owner return, retirement/order of other
+owners or rollback is promised. The envelope has no target key: callers must route
+complete CP05 keys and explicitly update every report/export holder. A partial
+multi-holder update remains incomplete propagation with caller-owned pending
+custody.
+
+Run the new delivered checks from this package explicitly:
+
+```sh
+cargo test --offline --locked --no-default-features \
+  --lib --test report_views --test feed_integrity --test corrections \
+  --test cp06_donor_subsets
+cargo run --offline --locked --no-default-features --example fact_views
+cargo run --offline --locked --no-default-features --example transport_corrections
+```
+
+The pure fixtures retain all 25 CP06 case IDs, fifteen narrow original subsets,
+and independent fixed journals: 9,331 view scripts/44,790 actions, 1,364 feed
+scripts/5,008 actions and 781 revision scripts/2,930 actions. Only one bounded
+script is generated at a time. Private shipped unit tests additionally check all
+seven unit tags, retained full tuples, exact constructor error order/bit mapping,
+and owner-local reserve failure before publication. Injected deterministic
+`TryReserveError` validates normal error mapping and staging, not actual allocator
+exhaustion. Unit remains sealed and dyn compatible; private tag/token helpers
+create no public discriminator, audit API, wire format or serialization.
+
+The new Python3.11+ helper imports the unchanged accepted
+`cp05_bounded_process.py` collector (SHA256
+`81e371cec788e07df9139695f8f52b07fa653b1b93d36bbf8fd41ce2d8ef5bdd`)
+and preserves its twelve process-failure checks. It runs literal causal semantic
+mutants/restored twins, precise external privacy/trait checks, and two separate
+consumer packages generated from the materially different examples. Each client
+has its own manifest, offline lock, target and metadata binding to the actual
+supplied subject/version/features. Each retained executable and command/log has
+its own recorded digest. It requires a prepared offline CARGO_HOME/config.toml.
+
+```sh
+CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+python3 tests/support/check_cp06_controls.py run \
+  --source-root /absolute/path/to/scopebase-capture-0.1.0 \
+  --cargo /absolute/toolchain/bin/cargo --rustc /absolute/toolchain/bin/rustc \
+  --feature-set no-default --output-dir /new/private/output \
+  --build-wrapper /absolute/path/to/bound/scopebase-build
+```
+
+Use `default` or `json` to select the other declared feature form. The debug
+profile overrides must both equal zero or both be absent for portable Cargo
+defaults; partial/nonzero/unbound compiler/profile overrides refuse before launch.
+Both selected profile values, one job and disabled incremental compilation are
+explicitly forwarded/recorded for the subject and clients. Each command uses the
+optional explicit wrapper; do not take an outer lease in this mode. With one
+already coordinated outer lease, omit `--build-wrapper` for the direct route.
+The helper retains typed failure/cleanup facts, caps each log stream at 4 MiB,
+and stops new launches at 2 GiB own output or a 4 GiB free-space floor, preserving
+failed/partial artifacts. These soft checks reserve no disk/RSS and do not stop
+all effects of an in-progress compiler. They qualify no installed profile.
+
+CP06 adapts owner-authorized frozen K `d153f3a` first shared-feed/missing-feed
+semantics (original 11/5 and rejected 100/100), M `8307a17` call-local views and
+scoped copy512/occupancy4096 facts (original shared8192/pool3 witnesses), and O
+`4bcb24c` whole delivered-holder/tail replacement. Historical GPL source labels
+remain separate from the existing Apache-2.0 destination authorization; root
+source/port receipts retain exact selected ranges and deferrals. Full DMA,
+backend, producer/join/history reducers remain CP11. Public audit/neutral replay
+remains CP10; installed exact-consumer/operator qualification remains CP13/TT07.
+Actual OSSLscope migration/protected 5,000-foreign-close history is MG02, KryProbe
+migration MG03, and MemVeil independent-copy/pool/history migration MG04. These
+pure tests and standalone clients do not implement those later application or
+live/native capabilities. Required source/archive qualification remains separate
+from the presence of these delivered tests.
