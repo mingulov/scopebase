@@ -65,6 +65,8 @@ Registry `definition_complete` describes a nonempty frozen definition, not execu
 
 `scopebase-testkit` must not expose a safe custom-backend path that can cause unchecked buffer access. Structurally valid but false custom observations cannot be detected universally; the verdict records the adapter/oracle trust boundary. No report deserializer yields a live process/file/mapping/attachment capability.
 
+The [ratified TT03 fixture addendum](2026-10-22-scopebase-tt03-linux-fixture.md), [complete normative support](tt03-linux/protocol.md) and [verification plan](../plans/2026-10-22-scopebase-tt03-verification.md) govern the concrete Linux provider/worker, full-key transport, independent raw truth, immutable counters, creator guard and original-owner outer/constructor cleanup. They preserve the accepted TT02 seam and the original fourteen P/seven F populations. This is design only: actual product/C7/provider/realm/EOF/audit/joint/execution bindings remain UNBOUND, and full TT03 remains planned.
+
 ## Result and verdict contract
 
 The [closed intent/cause/capability matrix](2026-10-18-scopebase-tt02-engine.md#intent-cause-and-capability-matrix) and [strict contract-bound receipt rules](2026-10-18-scopebase-tt02-engine.md#result-schema-actual-contract-matching-and-import-boundary) govern the engine. Every case result preserves separate fields:

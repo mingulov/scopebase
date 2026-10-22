@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_R4_BOUNDED_MAPPING_REPAIR_INPUTS",
+  "status": "PRIVATE_MAPPING_REPAIR_FOR_SCOPED_REVIEW",
+  "packet_ready": false,
+  "product_tests_executed": false,
+  "runtime_qualification": false,
+  "inputs": [
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/artifact-index.json",
+      "bytes": 3546,
+      "sha256": "1105d700199c7ec4a512f2d122495728eaa042ef0006ca3a8e0752534b5bf194"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/packet.md",
+      "bytes": 21407,
+      "sha256": "4233286d60fba346be3acb8921735243858f2d94021efc0d9f4b649645ec1461"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/protocol.md",
+      "bytes": 36188,
+      "sha256": "475f603d98cc8595153d10df4e61eef8a9a0a8805e7626b3378a271c7dc9cbe6"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/verification.md",
+      "bytes": 14404,
+      "sha256": "20e37c5694155d33a38e945efcb5c975cac6e0fee46ff69ed06263fb1d4911a3"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/delivery.md",
+      "bytes": 7599,
+      "sha256": "efacd3e8ebe10f30e127ed85f4845c4533edfa81cc1ba752a0cd496d0565c474"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/repair-map.md",
+      "bytes": 7055,
+      "sha256": "10c74a6ccb52b053fcb8d21cb0c49ee7a82a3608fce702b7dd51bab445a49e1a"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/contract-data.json",
+      "bytes": 22948,
+      "sha256": "9447abe5f9d53546cb32e63f04bf7ce02b8652ab86c6db607aea43d0fe1790de"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/inputs.json",
+      "bytes": 10961,
+      "sha256": "be1f99c1d420963c180ce13b1fbeedf89d13f9697c9502adba14649e572a34cd"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/check_static.py",
+      "bytes": 15364,
+      "sha256": "e07e6403b931464bc24607f9792e63c69b6ae7de63d045cddd50bcc6c8bf9a29"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r2/static-check.json",
+      "bytes": 26571,
+      "sha256": "17662daeea9d6a5c211cd6b6ff6868e0f04ab388ec0b863cd3f48d1afa3fb2f7"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/index.json",
+      "bytes": 3588,
+      "sha256": "68284c34bf0eb3f1d2b2c2f819439a7ad28f05b3ad76ebc8a2cb5acb9acc8560"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/review.md",
+      "bytes": 29378,
+      "sha256": "9c77abf2be06d3b505b6d094507403a5c65bc441b926a0ba73571ee2225687b2"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/findings.json",
+      "bytes": 14014,
+      "sha256": "cfe697a0e4b1d6952a27ee4cf54dee31f165224f9c0ffbb2d609d9104500e5c4"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/source-amendment.json",
+      "bytes": 1709,
+      "sha256": "9f6b15fb5d72840e780a3a228f938f0c852acf4275e25b9786ad957e15701fdf"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/initial-observation.json",
+      "bytes": 786,
+      "sha256": "9713f5b931f4b493e6ece8f49e26e9e8e9f0f536da690247a93b6bd49b63202e"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/static-recheck.json",
+      "bytes": 26574,
+      "sha256": "6371b0b2bbbc6990fedf860a8f5157c958cccc1dc86febaa1c1388a104735c80"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r2-review-r1/verification.json",
+      "bytes": 9142,
+      "sha256": "0a092baaa979639193d8187c623b23b18015a6ea713e58121681629d9aa43a39"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt02-borrow-root-acceptance-r1.json",
+      "bytes": 2966,
+      "sha256": "dd9362f4bbdc7b0c55180f3cae47ccb4ab6961956e587cf0f21f372e64ad9e0a"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/process-dependency-proof-r1/report.json",
+      "bytes": 199394,
+      "sha256": "6aaf00abff66b90846038745a6b210208493834176f6c915e02dcd0a4f56074f"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/process-dependency-proof-r1/SUMMARY.md",
+      "bytes": 8552,
+      "sha256": "0968061f61a54e5796637f0fb5ae63d7f7765541324b462327b8dff9bcb406bc"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-22-scopebase-lx08-process.md",
+      "bytes": 55918,
+      "sha256": "90e0d78d8e3439a6bceebe4b365774f9e9db679a6a89b2c298a5c8ca9b5a73ca"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-22-scopebase-lx08-verification.md",
+      "bytes": 93372,
+      "sha256": "050cfb6a3fb13149982fcd2f3058ada6b1074fa78e1b2ea587e9308d844e2f4a"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-context-custody-review-r1/index.json",
+      "sha256": "0db2ed7a472158b118d35d9f37c99c10cde5ced86f710569d483cc484d7cb690",
+      "bytes": 2099
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-context-custody-review-r1/creator-context-translation.md",
+      "sha256": "965eb9a5f3cacc983f53251568a5ea492917bf99854ef8eaefd7f9aa8199f466",
+      "bytes": 15318
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-context-custody-review-r1/review.md",
+      "sha256": "a045ab13c64cde98b571b6ddd79a7365e0fcdfa004935715f7e9067939f714e4",
+      "bytes": 6229
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-root-context-ruling-r1.json",
+      "sha256": "2072302ddaaf1cf3575076b4174d81866fd96f0fc406ec4d0c79cc1a7cb56b36",
+      "bytes": 2847
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-tt03-packet/r3/artifact-index.json",
+      "sha256": "45d87d739e51d3a961c573020791fcb511c4eb45cc3068d56ddc7c5080a947d6",
+      "bytes": 7047
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r3-final-review-r1/index.json",
+      "sha256": "24c8dc8ae28ca75c0d9f6ddb789d6a790018ab695e3e356be61d4f766a0d9a24",
+      "bytes": 6077
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r3-final-review-r1/review.md",
+      "sha256": "bbe7823bdc9ae57eaf692de680ae403a1ee76b1aac18ef9df9f013cbb593c353",
+      "bytes": 16050
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r3-final-review-r1/review.json",
+      "sha256": "ccddbd066a5b96b3a3044a28f5aec4680b9304aa26c738f06a14163b780b75d8",
+      "bytes": 15044
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r3-final-review-r1/independent-checks.json",
+      "sha256": "6dcbc58423ebda585e7982dbb88c25700752fc1c6fe8f12ecaf3741228dcdcbe",
+      "bytes": 45264
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/tt03-r3-final-review-r1/author-static-recheck.json",
+      "sha256": "164b57a6d5251defba5460d91de7250b4e646a2d885f16e66f9f489c5c7860d9",
+      "bytes": 45918
+    }
+  ],
+  "source_bindings": [
+    {
+      "path": "crates/scopebase-testkit/src/fixture.rs",
+      "bytes": 20814,
+      "sha256": "74e16b7f00d6f0d3721a694759da5d21f515bdcee90f16c5356ed7cfa7c2b72f"
+    },
+    {
+      "path": "crates/scopebase-testkit/src/ids.rs",
+      "bytes": 4590,
+      "sha256": "5bf728a504e37fd8fb00017a138a45ab17f54626e7758af38e7a4f70dc8eab0f"
+    },
+    {
+      "path": "crates/scopebase-testkit/src/runner.rs",
+      "bytes": 64977,
+      "sha256": "b3af98b03753d99a337e9848f90c620e928a8179bb4ce25e3e0defc2aeab8221"
+    },
+    {
+      "path": "crates/scopebase-testkit/src/result.rs",
+      "bytes": 72502,
+      "sha256": "e971ae734eb9c7631e573bdebae4a798c662ea47db283f84eb2215b602ec6e74"
+    },
+    {
+      "path": "crates/scopebase-testkit/src/observation.rs",
+      "bytes": 14231,
+      "sha256": "7a78fb166a24e7d1187de805ad531b7f825e16cfdf85679f65f50193740e8bb1"
+    },
+    {
+      "path": "crates/scopebase-testkit/src/adapter.rs",
+      "bytes": 421,
+      "sha256": "65db1cae47fd44e81fe8a0adc449a229e1b6d4b21aaf0968006fd5057ead7b6e"
+    }
+  ],
+  "maintenance": {
+    "accepted_subject": "2921606362b8d6eaed15a4c190e0c0623f7d0912",
+    "reviewed_candidate": "309190e01c977b481519abe4ed94a29dbea6ba61",
+    "fixture_sha256": "74e16b7f00d6f0d3721a694759da5d21f515bdcee90f16c5356ed7cfa7c2b72f",
+    "root_acceptance_sha256": "dd9362f4bbdc7b0c55180f3cae47ccb4ab6961956e587cf0f21f372e64ad9e0a",
+    "status": "ACCEPTED_NARROW_MAINTENANCE",
+    "candidate_archive_sha256": "c4d12bf37f2afd811b122326f2ea26fd9ed70bdf288176220007cd0e290fbddf",
+    "r3_compilers_or_gate_replayed": false,
+    "source_package_fixture_sha256": "b08e95cd520698590f6e3f43f63ad8ae1ee3fa4b5b60718e4d7c8ae62d1b071c",
+    "digest_domains": "source package fixture b08e95 is distinct from Rust fixture.rs source 74e16b"
+  },
+  "source_custody": {
+    "adopted_admission_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "frozen_source_observations": ".scopebase/controller/resume-20261022/next-tt03-packet/source-observations.json",
+    "files": 3,
+    "scopes": 15,
+    "admitted_scopes": 14,
+    "reference_only_scopes": 1,
+    "donor_or_history_reopened": false,
+    "new_intake": false
+  },
+  "historical_static_evidence": {
+    "r2_initial_checks": 243,
+    "r2_initial_failed": 0,
+    "review_current_source_replay_checks": 243,
+    "review_current_source_replay_failed": 3,
+    "classification": "expected old fixture hash and two old outer-lifetime premises after accepted maintenance",
+    "r3_replayed_stale_script": false
+  },
+  "partial_C7": {
+    "report_sha256": "6aaf00abff66b90846038745a6b210208493834176f6c915e02dcd0a4f56074f",
+    "scope": "separate private dead-caller compile/API preparation on two pinned Rust compilers",
+    "independent_review": "separate root-owned review; not consumed as complete C7",
+    "product_dependency_admission": false,
+    "archive_or_runtime_qualification": false
+  },
+  "root_rulings": [
+    "adopt four TT03-R2-01..04 repair directions as technical rulings",
+    "preserve 58-byte exclusive RunId/operation directory name",
+    "full accepted InvocationKey in Hello and 128-byte-header-plus-bounded-key exec handover",
+    "one original-session mutable-borrow zero-wire finalizer with full additional 1MiB reserved report slot",
+    "closed snapshot/counter/subowner/partial-transport/error schemas",
+    "actual reached runner deadline via driver hold after validated ACK/full drain",
+    "matched Own initial and nested; original creator pidfd plus active PID namespace",
+    "original 14 P plus 7 F rows; full TT03 cannot close from partial core",
+    "independently finalized indexes; later separate root joint record",
+    "constructor failure returns opaque original auxiliary custody with close-only one-shot mutable finalizer; same exclusive1MiB slot; root separately binds private TT03 guard"
+  ],
+  "unbound": {
+    "future_execution_base": null,
+    "candidate_selected_port_receipt": null,
+    "actual_C7_product_dependency_feature_lock_notice_artifacts": null,
+    "TT03_provider_worker_consumer_archive_binaries": null,
+    "actual_TT04_realms": null,
+    "actual_EOF_assets": null,
+    "operation_tracer": null,
+    "actual_build_output_resources": null,
+    "joint_final_index_compatibility": null,
+    "LX09_helper_compatibility": null,
+    "actual_private_TT03_creator_guard_source_artifacts": null
+  },
+  "counterpart_final_index_required_to_finalize_this_index": false,
+  "hash_cycle": false,
+  "operations": {
+    "writes_scope": ".scopebase/controller/resume-20261022/next-tt03-packet/r4/",
+    "tracked_or_product_edits": false,
+    "build_compiler_cargo": false,
+    "native_live_probe": false,
+    "ssh_guest": false,
+    "donor_intake_history": false,
+    "subagent_or_reviewer_dispatch": false,
+    "commits": false
+  },
+  "creator_context": {
+    "root_ruling_sha256": "2072302ddaaf1cf3575076b4174d81866fd96f0fc406ec4d0c79cc1a7cb56b36",
+    "translation_sha256": "965eb9a5f3cacc983f53251568a5ea492917bf99854ef8eaefd7f9aa8199f466",
+    "advisory_index_sha256": "0db2ed7a472158b118d35d9f37c99c10cde5ced86f710569d483cc484d7cb690",
+    "selected_design": "private retained3 proc-root/original-creator-pidfd/active-PID-namespace specialization",
+    "constructor": {
+      "acquisitions": 6,
+      "peak": 4,
+      "retained": 3,
+      "closes": 3,
+      "nondata_attempts": 23,
+      "minimum_total": 28
+    },
+    "guard": {
+      "fresh_acquisitions": 4,
+      "fresh_peak": 3,
+      "fresh_retained": 0,
+      "closes": 4,
+      "nondata_attempts": 19,
+      "minimum_total": 24
+    },
+    "production_LX08_runtime_dependency": false,
+    "guard_actual_source_or_artifacts": "UNBOUND",
+    "metadata": "existing raw_file_bytes G>=2; M=G-1, existing aggregate R; no extra Vec/DOM",
+    "poll": "actual ready count and raw signed revents, null outputs on failed/unperformed query",
+    "counterpart_source_preservation": {
+      "LX08_selected": 34,
+      "LX08_deferred": 12,
+      "source_reopened_or_new_intake": false
+    }
+  },
+  "r4_repair": {
+    "finding": "TT03-R3-FINAL-01",
+    "frozen_r3_index_sha256": "45d87d739e51d3a961c573020791fcb511c4eb45cc3068d56ddc7c5080a947d6",
+    "review_index_sha256": "24c8dc8ae28ca75c0d9f6ddb789d6a790018ab695e3e356be61d4f766a0d9a24",
+    "root_selected_mapping": "existing adopted advisory: Other for semantic WrongContext/inconclusive, InvalidProtocol for malformed/missingCLOEXEC, exact accepted native errno/stops/limits; closed private GuardReason names",
+    "root_instruction_source": "parent controller repair task, no new human approval",
+    "unchanged_independent_premises": {
+      "checks": 383,
+      "failed": 0,
+      "rerun": false,
+      "why": "Frozen review receipt retained; no changed types, native/source, owner, transport or bounds require replay of that complete independent review."
+    },
+    "changed_author_premises": "replay adapted author checks on changed map/schema metadata/corpus/generator/prose bindings only; no stale r2 or product campaign",
+    "product_source_implementation_admitted": false
+  }
+}

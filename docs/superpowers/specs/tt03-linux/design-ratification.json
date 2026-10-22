@@ -1,0 +1,38 @@
+{
+  "kind": "TT03_ROOT_FINAL_DESIGN_RATIFICATION",
+  "status": "RATIFIED_CLOSED_DESIGN_CANONICAL_ADOPTION_AUTHORIZED",
+  "source": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-tt03-packet/r4/artifact-index.json",
+    "sha256": "1b003f8350c3653aa0d29c7ee781d3e5a0e04717ce9e18f6c36949bba3e9d822"
+  },
+  "independent_full_r3_review": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/tt03-r3-final-review-r1/review.json",
+    "sha256": "ccddbd066a5b96b3a3044a28f5aec4680b9304aa26c738f06a14163b780b75d8"
+  },
+  "independent_scoped_r4_review": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/tt03-r4-scoped-review-r1/review.json",
+    "sha256": "c90f89bb39208fe788e1add4625d4623faa09b50af5ff40707c65a800cf5bd88"
+  },
+  "independent_scoped_r4_index": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/tt03-r4-scoped-review-r1/index.json",
+    "sha256": "5f3c47c55eb83095815a59e6d71f43b811823125d404cfe8c154247ae573bf27"
+  },
+  "finding_TT03_R3_FINAL_01": "ADDRESSED_OTHER_INVALID_PROTOCOL_ONE_AUTHORITY",
+  "what": "Ratify full-key fixture transport, immutable raw truth, original-owner outer/constructor custody, reached runner deadline, retained creator context and unified closed guard errors",
+  "why": "Actual TT02 borrowing and native ownership/transport/control boundaries must be settled before provider execution; previous contradictory mappings are fixed with causal literals",
+  "cost_if_wrong": "Wrong-context control, lost raw/FD custody or inconsistent errors could invalidate later native qualification",
+  "static_evidence_only": {
+    "author": 582,
+    "focused": 79,
+    "independent_scoped": 191,
+    "prior_independent_full": 383
+  },
+  "unchanged_native_transport_bounds_owners": "Exact predecessor facts retained, not runtime verification",
+  "canonical_scope": "Primary contract+verification and complete finite normative support assets, administrative link/status transform only with inverse reconstruction; scripts/results may stay private",
+  "actual_product_C7_TT04_resources_tracer_EOF_joint_binding": "UNBOUND_SEPARATE_PREEXECUTION_GATES",
+  "task_status": "PLANNED",
+  "accepted_task_delta": 0,
+  "packet_ready": false,
+  "implementation_admitted": false,
+  "native_runtime_qualified": false
+}

@@ -1,0 +1,1651 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_R3_CLOSED_PRIVATE_BYTE_SCHEMAS",
+  "scope": "normative draft byte contract; not generated product code or codec validation",
+  "encoding": "protocol.md canonical UTF-8 JSON, no extra/missing keys; suffix ? alone allows null",
+  "entrypoints": [
+    "ConstructorLedger",
+    "AdmissionCleanupReport",
+    "HelloRequest",
+    "InvocationKey",
+    "RawRecord",
+    "Snapshot",
+    "OuterReport",
+    "OuterAdmissionError",
+    "AssetGuardReport",
+    "DriverHoldReport",
+    "WireError"
+  ],
+  "types": {
+    "U64": {
+      "kind": "decimal_string",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "PositiveU64": {
+      "kind": "decimal_string",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "I64": {
+      "kind": "decimal_string",
+      "minimum": -9223372036854775808,
+      "maximum": 9223372036854775807
+    },
+    "U32": {
+      "kind": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "PositiveU32": {
+      "kind": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "I32": {
+      "kind": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "PositiveI32": {
+      "kind": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "Bool": {
+      "kind": "boolean"
+    },
+    "Rev1": {
+      "kind": "literal",
+      "value": 1
+    },
+    "RunId": {
+      "kind": "string",
+      "pattern": "[0-9a-f]{32}",
+      "maximum_utf8_bytes": 32
+    },
+    "Digest": {
+      "kind": "string",
+      "pattern": "[0-9a-f]{64}",
+      "maximum_utf8_bytes": 64
+    },
+    "Label": {
+      "kind": "string",
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,95}",
+      "maximum_utf8_bytes": 96
+    },
+    "Cell": {
+      "kind": "string",
+      "maximum_utf8_bytes": 65536,
+      "minimum_utf8_bytes": 1,
+      "accepted_runlimits_name_bound": true
+    },
+    "Hex1024": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 1024
+    },
+    "Hex4096": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 4096
+    },
+    "Hex58": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 58
+    },
+    "Hex16": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 16
+    },
+    "HexSource": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 1048576
+    },
+    "HexPacket": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 65600
+    },
+    "HexPrefix": {
+      "kind": "hex_string",
+      "maximum_decoded_bytes": 4194304
+    },
+    "CaseKey": {
+      "kind": "object",
+      "fields": {
+        "case_id": "Label",
+        "case_version": "PositiveU32",
+        "cell_id": "Cell"
+      },
+      "additional_keys": false
+    },
+    "InvocationKey": {
+      "kind": "object",
+      "fields": {
+        "run_id": "RunId",
+        "case_key": "CaseKey",
+        "attempt": "PositiveU32",
+        "operation_id": "PositiveU64"
+      },
+      "additional_keys": false,
+      "maximum_encoded_bytes": 16384,
+      "semantic_constraints": [
+        "accepted CaseKey and InvocationKey checks including actual RunLimits.name_bytes",
+        "byte equality with admitted invocation",
+        "positive-u32 revision/attempt and positive-u64 decimal operation"
+      ]
+    },
+    "Actor": {
+      "kind": "enum",
+      "values": [
+        "parent",
+        "a",
+        "b",
+        "inventory-positive",
+        "inventory-negative"
+      ]
+    },
+    "WorkerActor": {
+      "kind": "enum",
+      "values": [
+        "a",
+        "b",
+        "inventory-positive",
+        "inventory-negative"
+      ]
+    },
+    "Category": {
+      "kind": "enum",
+      "values": [
+        "InvalidProtocol",
+        "Unavailable",
+        "Denied",
+        "Cancelled",
+        "TimedOut",
+        "Io",
+        "Other"
+      ]
+    },
+    "Stage": {
+      "kind": "enum",
+      "values": [
+        "Admission",
+        "Launch",
+        "Ready",
+        "Advance",
+        "Read",
+        "Collect",
+        "Retire",
+        "OuterFinalize",
+        "ConstructorAssetClose"
+      ]
+    },
+    "CoreStage": {
+      "kind": "enum",
+      "values": [
+        "Admission",
+        "Launch",
+        "Ready",
+        "Advance",
+        "Read",
+        "Collect",
+        "Retire"
+      ]
+    },
+    "Reason": {
+      "kind": "enum",
+      "values": [
+        "Protocol",
+        "Unavailable",
+        "Denied",
+        "Cancelled",
+        "TimedOut",
+        "Io",
+        "Limit",
+        "Injected",
+        "CloseError",
+        "WrongContext",
+        "Other"
+      ]
+    },
+    "LimitKind": {
+      "kind": "enum",
+      "values": [
+        "invocations",
+        "children_concurrent",
+        "child_registrations",
+        "sibling_threads",
+        "image_entries",
+        "open_fds_parent",
+        "inventory_slots",
+        "case_directories",
+        "leaf_names",
+        "steps",
+        "datagrams",
+        "payload_bytes",
+        "diagnostic_bytes",
+        "raw_file_bytes",
+        "read_calls_per_source",
+        "native_calls_parent",
+        "native_cleanup_reserve_parent",
+        "native_calls_per_image",
+        "native_cleanup_reserve_per_image",
+        "file_bytes",
+        "file_work_bytes",
+        "ledger_bytes",
+        "image_bytes",
+        "hash_work_bytes",
+        "parent_retained_bytes",
+        "fixed_metadata_bytes",
+        "immutable_snapshot_slots",
+        "subsidiary_errors",
+        "nspid_entries",
+        "executable_path_bytes",
+        "manifest_metadata_bytes_per_invocation",
+        "manifest_fixed_metadata_bytes",
+        "manifest_encoded_bytes",
+        "manifest_hash_work_bytes",
+        "outer_native_attempts",
+        "outer_records",
+        "outer_retained_bytes",
+        "outer_deadline",
+        "encoded_work_bytes"
+      ]
+    },
+    "Charges": {
+      "kind": "object",
+      "fields": {
+        "native_attempts": "U64",
+        "native_successes": "U64",
+        "read_attempts": "U64",
+        "read_bytes": "U64",
+        "file_work_bytes": "U64",
+        "hash_work_bytes": "U64",
+        "encoded_bytes": "U64",
+        "retained_capacity_bytes": "U64",
+        "datagram_send_attempts": "U64",
+        "datagram_receive_attempts": "U64",
+        "datagrams_sent": "U64",
+        "datagrams_received": "U64"
+      },
+      "additional_keys": false
+    },
+    "Carry": {
+      "kind": "object",
+      "fields": {
+        "datagrams": "U64",
+        "native_attempts": "U64",
+        "encoded_raw_bytes": "U64",
+        "file_work_bytes": "U64"
+      },
+      "additional_keys": false
+    },
+    "UnknownReason": {
+      "kind": "enum",
+      "values": [
+        "AncillaryTruncation",
+        "WorkerDiedBeforeInventory",
+        "CloseEBADF",
+        "MissingAck",
+        "UnexpectedECHILD",
+        "UnobservedReap",
+        "UnregisteredPartialCreate",
+        "CapacityStop",
+        "ContextUnavailable",
+        "ReportBudgetStop",
+        "WorkerCounterTail",
+        "UnenteredHook"
+      ]
+    },
+    "UnknownReasons": {
+      "kind": "array",
+      "item": "UnknownReason",
+      "maximum_items": 32,
+      "minimum_items": 0
+    },
+    "UnknownInventory": {
+      "kind": "object",
+      "fields": {
+        "sticky": "Bool",
+        "reasons": "UnknownReasons"
+      },
+      "additional_keys": false
+    },
+    "CounterProjection": {
+      "kind": "object",
+      "fields": {
+        "known_lower_bound": "Charges",
+        "exact": "Bool",
+        "unknown_reasons": "UnknownReasons"
+      },
+      "additional_keys": false
+    },
+    "EpochEnd": {
+      "kind": "enum",
+      "values": [
+        "active",
+        "exec",
+        "exit",
+        "lost"
+      ]
+    },
+    "CounterCoverage": {
+      "kind": "enum",
+      "values": [
+        "prefix",
+        "unknown"
+      ]
+    },
+    "WireObserved": {
+      "kind": "object",
+      "fields": {
+        "send_attempts": "U64",
+        "receive_attempts": "U64",
+        "sent": "U64",
+        "received": "U64"
+      },
+      "additional_keys": false
+    },
+    "WorkerEpochCharges": {
+      "kind": "object",
+      "fields": {
+        "invocation_operation_id": "PositiveU64",
+        "actor_slot": "WorkerActor",
+        "image_epoch": "PositiveU32",
+        "end": "EpochEnd",
+        "coverage": "CounterCoverage",
+        "last_record_index": "U32",
+        "known_prefix": "Charges",
+        "handover_carry": "Carry?",
+        "parent_wire_observed": "WireObserved",
+        "unknown_reasons": "UnknownReasons"
+      },
+      "additional_keys": false
+    },
+    "WorkerEpochs": {
+      "kind": "array",
+      "item": "WorkerEpochCharges",
+      "maximum_items": 6,
+      "minimum_items": 0
+    },
+    "NativeCounters": {
+      "kind": "object",
+      "fields": {
+        "parent": "Charges",
+        "workers": "WorkerEpochs",
+        "worker_cumulative": "CounterProjection",
+        "lifetime": "CounterProjection"
+      },
+      "additional_keys": false
+    },
+    "HookEntries": {
+      "kind": "object",
+      "fields": {
+        "prepare": "U64",
+        "collect": "U64",
+        "case_retire": "U64",
+        "run_retire": "U64"
+      },
+      "additional_keys": false
+    },
+    "Steps": {
+      "kind": "array",
+      "item": "Label",
+      "maximum_items": 10,
+      "minimum_items": 0
+    },
+    "GuardStage": {
+      "kind": "enum",
+      "values": [
+        "Entry",
+        "OpenProcRoot",
+        "ReadSelf",
+        "OpenObserver",
+        "ReadOwnStatus",
+        "SampleNamespace",
+        "OpenCreatorPidfd",
+        "PollCreatorPidfd",
+        "CloseTemporary"
+      ]
+    },
+    "GuardMember": {
+      "kind": "enum",
+      "values": [
+        "CreatorPid",
+        "ProcRoot",
+        "SelfLink",
+        "ObserverDirectory",
+        "ObserverStatus",
+        "ActivePidNamespace",
+        "CreatorPidfd",
+        "TemporaryClose"
+      ]
+    },
+    "GuardReason": {
+      "kind": "enum",
+      "values": [
+        "WrongContext",
+        "Inconclusive",
+        "Malformed",
+        "Unavailable",
+        "Denied",
+        "Io",
+        "Cancelled",
+        "TimedOut",
+        "Limit",
+        "CloseError"
+      ]
+    },
+    "GuardEvidence": {
+      "kind": "object",
+      "fields": {
+        "guard_stage": "GuardStage",
+        "member": "GuardMember",
+        "reason": "GuardReason?",
+        "native_operation": "NativeOperation?",
+        "native_attempt_index": "U64?",
+        "poll_ready_descriptors": "U64?",
+        "poll_revents": "I32?",
+        "expected_namespace_kind": "I32?",
+        "observed_namespace_kind": "I32?",
+        "getfd_flags": "I32?",
+        "expected_creator_pid": "PositiveI32?",
+        "observed_creator_pid": "I32?",
+        "expected_namespace_device": "U64?",
+        "expected_namespace_inode": "U64?",
+        "observed_namespace_device": "U64?",
+        "observed_namespace_inode": "U64?"
+      },
+      "additional_keys": false
+    },
+    "Failure": {
+      "kind": "object",
+      "fields": {
+        "guard_evidence": "GuardEvidence?",
+        "category": "Category",
+        "reason": "Reason",
+        "native_stage": "Stage",
+        "step_id": "Label?",
+        "actor_slot": "Actor?",
+        "image_epoch": "PositiveU32?",
+        "sequence": "PositiveU64?",
+        "call_result": "I64?",
+        "errno": "I32?",
+        "limit_kind": "LimitKind?",
+        "completed_steps": "Steps",
+        "consumed_parent": "Charges",
+        "diagnostic_hex": "Hex1024"
+      },
+      "additional_keys": false
+    },
+    "SubsidiaryFailure": {
+      "kind": "object",
+      "fields": {
+        "guard_evidence": "GuardEvidence?",
+        "category": "Category",
+        "reason": "Reason",
+        "native_stage": "Stage",
+        "step_id": "Label?",
+        "call_result": "I64?",
+        "errno": "I32?",
+        "limit_kind": "LimitKind?"
+      },
+      "additional_keys": false
+    },
+    "SubsidiaryFailures": {
+      "kind": "array",
+      "item": "SubsidiaryFailure",
+      "maximum_items": 32,
+      "minimum_items": 0
+    },
+    "Failures": {
+      "kind": "object",
+      "fields": {
+        "first": "Failure?",
+        "subsidiary": "SubsidiaryFailures",
+        "subsidiary_omitted": "U64"
+      },
+      "additional_keys": false
+    },
+    "SealKind": {
+      "kind": "enum",
+      "values": [
+        "early_export",
+        "first_failure",
+        "collect",
+        "case_retire",
+        "run_retire"
+      ]
+    },
+    "Seal": {
+      "kind": "object",
+      "fields": {
+        "kind": "SealKind",
+        "slot": "U32",
+        "publish_ordinal": "PositiveU32",
+        "native_event_index": "U64"
+      },
+      "additional_keys": false
+    },
+    "EffectId": {
+      "kind": "enum",
+      "values": [
+        "case-root",
+        "child-a",
+        "child-b",
+        "file-a",
+        "file-b",
+        "inventory-positive-child",
+        "inventory-negative-child"
+      ]
+    },
+    "OwnerState": {
+      "kind": "enum",
+      "values": [
+        "KnownPresent",
+        "Closed",
+        "Reaped",
+        "Removed",
+        "ConsumedWithCleanupError",
+        "Unresolved",
+        "Unknown"
+      ]
+    },
+    "SubownerRole": {
+      "kind": "enum",
+      "values": [
+        "admission-root",
+        "admission-image-a",
+        "admission-image-b",
+        "case-directory",
+        "channel",
+        "canary-read",
+        "canary-write",
+        "internal-read",
+        "internal-write",
+        "child",
+        "pidfd",
+        "proc-directory",
+        "exe-file",
+        "pid-namespace",
+        "mount-namespace",
+        "retained-file-a",
+        "retained-file-b",
+        "worker-local-file-a",
+        "worker-local-file-b",
+        "created-name",
+        "temporary-file"
+      ]
+    },
+    "Subowner": {
+      "kind": "object",
+      "fields": {
+        "id": "Label",
+        "registration": "EffectId?",
+        "role": "SubownerRole",
+        "invocation_operation_id": "PositiveU64?",
+        "actor_slot": "Actor?",
+        "created_order": "PositiveU64",
+        "native_number": "I32?",
+        "relative_name_hex": "Hex58?",
+        "device": "U64?",
+        "inode": "U64?",
+        "state": "OwnerState",
+        "registration_returned": "Bool",
+        "last_result": "I64?",
+        "last_errno": "I32?",
+        "cleanup_error_sticky": "Bool",
+        "inventory_unknown_sticky": "Bool"
+      },
+      "additional_keys": false
+    },
+    "Subowners": {
+      "kind": "array",
+      "item": "Subowner",
+      "maximum_items": 128,
+      "minimum_items": 0
+    },
+    "RegistrationState": {
+      "kind": "enum",
+      "values": [
+        "Pending",
+        "Retired"
+      ]
+    },
+    "ReturnedHook": {
+      "kind": "enum",
+      "values": [
+        "prepare",
+        "collect",
+        "case_retire",
+        "run_retire"
+      ]
+    },
+    "SubownerIds": {
+      "kind": "array",
+      "item": "Label",
+      "maximum_items": 128,
+      "minimum_items": 0
+    },
+    "EventRef": {
+      "kind": "object",
+      "fields": {
+        "actor_slot": "Actor",
+        "image_epoch": "PositiveU32?",
+        "record_index": "PositiveU32?",
+        "sequence": "PositiveU64?",
+        "parent_event_index": "U64"
+      },
+      "additional_keys": false
+    },
+    "Registration": {
+      "kind": "object",
+      "fields": {
+        "effect_id": "EffectId",
+        "owner": "FixtureOwner",
+        "first_seen": "EventRef",
+        "returned_in": "ReturnedHook?",
+        "state": "RegistrationState",
+        "subowner_ids": "SubownerIds",
+        "unknown_sticky": "Bool",
+        "cleanup_error_sticky": "Bool"
+      },
+      "additional_keys": false
+    },
+    "FixtureOwner": {
+      "kind": "enum",
+      "values": [
+        "fixture"
+      ]
+    },
+    "Registrations": {
+      "kind": "array",
+      "item": "Registration",
+      "maximum_items": 7,
+      "minimum_items": 0
+    },
+    "RawKind": {
+      "kind": "enum",
+      "values": [
+        "task",
+        "fd",
+        "view",
+        "proc",
+        "exit",
+        "exec",
+        "mutation",
+        "failure"
+      ]
+    },
+    "RawSource": {
+      "kind": "enum",
+      "values": [
+        "parent_kernel",
+        "worker_kernel",
+        "worker_ack"
+      ]
+    },
+    "ProducerCharges": {
+      "kind": "object",
+      "fields": {
+        "image_prefix": "Charges",
+        "handover_carry": "Carry?"
+      },
+      "additional_keys": false
+    },
+    "TaskValues": {
+      "kind": "object",
+      "fields": {
+        "pid": "PositiveI32?",
+        "tid": "PositiveI32?",
+        "parent_slot": "Label?",
+        "self_link_hex": "Hex4096?",
+        "thread_self_link_hex": "Hex4096?"
+      },
+      "additional_keys": false
+    },
+    "FileType": {
+      "kind": "enum",
+      "values": [
+        "regular",
+        "directory",
+        "socket",
+        "pipe",
+        "other"
+      ]
+    },
+    "FdValues": {
+      "kind": "object",
+      "fields": {
+        "slot": "Label?",
+        "device": "U64?",
+        "inode": "U64?",
+        "file_type": "FileType?",
+        "size": "U64?",
+        "fdinfo_hex": "HexSource?",
+        "getfd": "I32?",
+        "getfl": "I32?",
+        "canary_hex": "Hex16?"
+      },
+      "additional_keys": false
+    },
+    "NSpid": {
+      "kind": "array",
+      "item": "PositiveI32",
+      "maximum_items": 32,
+      "minimum_items": 1
+    },
+    "ViewValues": {
+      "kind": "object",
+      "fields": {
+        "proc_root_slot": "Label?",
+        "proc_fs_type": "I64?",
+        "pid_ns_slot": "Label?",
+        "pid_ns_device": "U64?",
+        "pid_ns_inode": "U64?",
+        "mount_ns_slot": "Label?",
+        "mount_ns_device": "U64?",
+        "mount_ns_inode": "U64?",
+        "self_link_hex": "Hex4096?",
+        "nspid": "NSpid?"
+      },
+      "additional_keys": false
+    },
+    "ProcName": {
+      "kind": "enum",
+      "values": [
+        "stat",
+        "status",
+        "maps",
+        "mountinfo"
+      ]
+    },
+    "ProcValues": {
+      "kind": "object",
+      "fields": {
+        "descriptor_slot": "Label?",
+        "file_name": "ProcName?",
+        "read_calls": "U64?",
+        "bytes_read": "U64?",
+        "eof": "Bool?",
+        "overflow_probe": "Bool?"
+      },
+      "additional_keys": false
+    },
+    "ExitMethod": {
+      "kind": "enum",
+      "values": [
+        "pidfd_poll",
+        "waitid_nowait",
+        "reap"
+      ]
+    },
+    "ExitValues": {
+      "kind": "object",
+      "fields": {
+        "child_slot": "Label?",
+        "method": "ExitMethod?",
+        "poll_revents": "I32?",
+        "si_pid": "PositiveI32?",
+        "si_code": "I32?",
+        "si_status": "I32?",
+        "exit_status": "I32?"
+      },
+      "additional_keys": false
+    },
+    "ExecValues": {
+      "kind": "object",
+      "fields": {
+        "image_before": "Label?",
+        "image_after": "Label?",
+        "executable_slot": "Label?",
+        "executable_sha256": "Digest?",
+        "birth_ticks": "U64?"
+      },
+      "additional_keys": false
+    },
+    "Action": {
+      "kind": "enum",
+      "values": [
+        "ready",
+        "capture_raw",
+        "set_tricky_comm",
+        "exec_b",
+        "exec_a",
+        "exec_missing",
+        "start_sibling",
+        "exit_leader",
+        "exec_from_sibling",
+        "create_files",
+        "offer_files",
+        "replace_file_a",
+        "unlink_original_a",
+        "mutate_file_a",
+        "inventory",
+        "parent_exit",
+        "parent_reap",
+        "close"
+      ]
+    },
+    "MutationValues": {
+      "kind": "object",
+      "fields": {
+        "original_slot": "Label?",
+        "replacement_slot": "Label?",
+        "operation": "Action?",
+        "offset": "U64?",
+        "byte_count": "U64?",
+        "readback_hex": "HexSource?"
+      },
+      "additional_keys": false
+    },
+    "RawSubsidiary": {
+      "kind": "object",
+      "fields": {
+        "native_stage": "CoreStage",
+        "reason": "Reason",
+        "errno": "I32?"
+      },
+      "additional_keys": false
+    },
+    "RawSubsidiaries": {
+      "kind": "array",
+      "item": "RawSubsidiary",
+      "maximum_items": 32,
+      "minimum_items": 0
+    },
+    "FailureValues": {
+      "kind": "object",
+      "fields": {
+        "native_stage": "CoreStage",
+        "reason": "Reason",
+        "limit_kind": "LimitKind?",
+        "completed_steps": "Steps",
+        "subsidiary_errors": "RawSubsidiaries"
+      },
+      "additional_keys": false
+    },
+    "RawValues": {
+      "kind": "tagged_values",
+      "discriminator": "record_kind",
+      "variants": {
+        "task": "TaskValues",
+        "fd": "FdValues",
+        "view": "ViewValues",
+        "proc": "ProcValues",
+        "exit": "ExitValues",
+        "exec": "ExecValues",
+        "mutation": "MutationValues",
+        "failure": "FailureValues"
+      }
+    },
+    "RawRecord": {
+      "kind": "object",
+      "fields": {
+        "schema_version": "Rev1",
+        "invocation": "InvocationKey",
+        "step_id": "Label",
+        "record_index": "PositiveU32",
+        "sequence": "PositiveU64?",
+        "actor_slot": "Actor",
+        "record_kind": "RawKind",
+        "source": "RawSource",
+        "bytes_hex": "HexSource?",
+        "values": "RawValues",
+        "call_result": "I64?",
+        "errno": "I32?",
+        "producer_charges": "ProducerCharges?"
+      },
+      "additional_keys": false
+    },
+    "ChronologicalRaw": {
+      "kind": "object",
+      "fields": {
+        "order": "PositiveU64",
+        "raw": "RawRecord"
+      },
+      "additional_keys": false
+    },
+    "RawRecords": {
+      "kind": "array",
+      "item": "ChronologicalRaw",
+      "maximum_items": 16630,
+      "minimum_items": 0
+    },
+    "Direction": {
+      "kind": "enum",
+      "values": [
+        "download",
+        "upload"
+      ]
+    },
+    "PartialReason": {
+      "kind": "enum",
+      "values": [
+        "Incomplete",
+        "InvalidProtocol",
+        "Limit",
+        "Interrupted"
+      ]
+    },
+    "PartialTransport": {
+      "kind": "object",
+      "fields": {
+        "direction": "Direction",
+        "actor_slot": "WorkerActor",
+        "image_epoch": "PositiveU32",
+        "step_id": "Label",
+        "sequence": "PositiveU64",
+        "index": "PositiveU32",
+        "expected_total_bytes": "PositiveU32?",
+        "received_bytes": "U32",
+        "prefix_hex": "HexPrefix",
+        "whole_sha256": "Digest?",
+        "malformed_datagram_hex": "HexPacket",
+        "call_result": "I64?",
+        "errno": "I32?",
+        "reason": "PartialReason"
+      },
+      "additional_keys": false
+    },
+    "PartialTransports": {
+      "kind": "array",
+      "item": "PartialTransport",
+      "maximum_items": 1,
+      "minimum_items": 0
+    },
+    "Limits": {
+      "kind": "object",
+      "fields": {
+        "invocations": "PositiveU64",
+        "children_concurrent": "PositiveU64",
+        "child_registrations": "PositiveU64",
+        "sibling_threads": "PositiveU64",
+        "image_entries": "PositiveU64",
+        "open_fds_parent": "PositiveU64",
+        "inventory_slots": "PositiveU64",
+        "case_directories": "PositiveU64",
+        "leaf_names": "PositiveU64",
+        "steps": "PositiveU64",
+        "datagrams": "PositiveU64",
+        "payload_bytes": "PositiveU64",
+        "diagnostic_bytes": "PositiveU64",
+        "raw_file_bytes": "PositiveU64",
+        "read_calls_per_source": "PositiveU64",
+        "native_calls_parent": "PositiveU64",
+        "native_cleanup_reserve_parent": "PositiveU64",
+        "native_calls_per_image": "PositiveU64",
+        "native_cleanup_reserve_per_image": "PositiveU64",
+        "file_bytes": "PositiveU64",
+        "file_work_bytes": "PositiveU64",
+        "ledger_bytes": "PositiveU64",
+        "image_bytes": "PositiveU64",
+        "hash_work_bytes": "PositiveU64",
+        "parent_retained_bytes": "PositiveU64",
+        "fixed_metadata_bytes": "PositiveU64",
+        "immutable_snapshot_slots": "PositiveU64",
+        "subsidiary_errors": "PositiveU64",
+        "nspid_entries": "PositiveU64",
+        "executable_path_bytes": "PositiveU64",
+        "manifest_metadata_bytes_per_invocation": "PositiveU64",
+        "manifest_fixed_metadata_bytes": "PositiveU64",
+        "manifest_encoded_bytes": "PositiveU64",
+        "manifest_hash_work_bytes": "PositiveU64",
+        "encoded_work_bytes": "PositiveU64"
+      },
+      "additional_keys": false
+    },
+    "Retained": {
+      "kind": "object",
+      "fields": {
+        "session_capacity": "U64",
+        "ledger_capacity": "U64",
+        "snapshot_slots_reserved": "U32",
+        "snapshot_slots_used": "U32",
+        "outer_capacity_reserved": "U64",
+        "metadata_capacity": "U64",
+        "serialization_capacity": "U64"
+      },
+      "additional_keys": false
+    },
+    "Timing": {
+      "kind": "object",
+      "fields": {
+        "last_clock_sample_ns": "U64",
+        "execution_deadline_ns": "U64"
+      },
+      "additional_keys": false
+    },
+    "SnapshotKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.linux.snapshot"
+      ]
+    },
+    "SealChargeScope": {
+      "kind": "enum",
+      "values": [
+        "this_seal_only"
+      ]
+    },
+    "SealCharge": {
+      "kind": "object",
+      "fields": {
+        "encoded_bytes": "U64",
+        "hash_work_bytes": "U64",
+        "scope": "SealChargeScope"
+      },
+      "additional_keys": false
+    },
+    "Snapshot": {
+      "kind": "object",
+      "fields": {
+        "seal_charge": "SealCharge",
+        "schema_version": "Rev1",
+        "kind": "SnapshotKind",
+        "invocation": "InvocationKey",
+        "seal": "Seal",
+        "hook_entries": "HookEntries",
+        "completed_steps": "Steps",
+        "failure": "Failures",
+        "records": "RawRecords",
+        "partial_transport": "PartialTransports",
+        "registrations": "Registrations",
+        "subowners": "Subowners",
+        "unknown_inventory": "UnknownInventory",
+        "counters": "NativeCounters",
+        "admitted_limits": "Limits",
+        "retained": "Retained",
+        "timing": "Timing",
+        "work_stopped": "Bool",
+        "guard_events": "GuardEvents"
+      },
+      "additional_keys": false
+    },
+    "OuterState": {
+      "kind": "enum",
+      "values": [
+        "Clean",
+        "SettledWithCleanupErrors",
+        "Unresolved"
+      ]
+    },
+    "OuterBudget": {
+      "kind": "object",
+      "fields": {
+        "deadline_monotonic_ns": "U64?",
+        "remaining_ns_at_entry": "PositiveU64",
+        "max_native_attempts": "U64",
+        "max_records": "PositiveU64",
+        "max_retained_bytes": "PositiveU64"
+      },
+      "additional_keys": false
+    },
+    "InvocationSummary": {
+      "kind": "object",
+      "fields": {
+        "invocation": "InvocationKey",
+        "hook_entries": "HookEntries",
+        "last_seal": "Seal?",
+        "last_snapshot_sha256": "Digest?",
+        "known_pending_registrations": "U32",
+        "unknown_inventory": "Bool"
+      },
+      "additional_keys": false
+    },
+    "InvocationSummaries": {
+      "kind": "array",
+      "item": "InvocationSummary",
+      "maximum_items": 16,
+      "minimum_items": 0
+    },
+    "AdmissionAssets": {
+      "kind": "array",
+      "item": "Subowner",
+      "maximum_items": 3,
+      "minimum_items": 3
+    },
+    "NativeOperation": {
+      "kind": "enum",
+      "values": [
+        "getpid",
+        "pidfd_poll",
+        "pidfd_send_signal",
+        "waitid",
+        "child_try_wait",
+        "close",
+        "unlinkat",
+        "fstatat",
+        "readlinkat",
+        "openat",
+        "fstat",
+        "fstatfs",
+        "ioctl",
+        "read",
+        "fcntl",
+        "clock_gettime",
+        "rmdir",
+        "pread",
+        "openat2",
+        "pidfd_open"
+      ]
+    },
+    "OperationClass": {
+      "kind": "enum",
+      "values": [
+        "context_read_only",
+        "cleanup"
+      ]
+    },
+    "CleanupEvent": {
+      "kind": "object",
+      "fields": {
+        "guard_evidence": "GuardEvidence?",
+        "order": "PositiveU64",
+        "operation_class": "OperationClass",
+        "native_operation": "NativeOperation",
+        "subowner_id": "Label?",
+        "invocation_operation_id": "PositiveU64?",
+        "call_result": "I64?",
+        "errno": "I32?",
+        "state_after": "OwnerState?",
+        "sampled_monotonic_ns": "U64?"
+      },
+      "additional_keys": false
+    },
+    "CleanupEvents": {
+      "kind": "array",
+      "item": "CleanupEvent",
+      "maximum_items": 16383,
+      "minimum_items": 0
+    },
+    "GuardEvents": {
+      "kind": "array",
+      "item": "CleanupEvent",
+      "maximum_items": 16384,
+      "minimum_items": 0
+    },
+    "OuterStop": {
+      "kind": "enum",
+      "values": [
+        "Completed",
+        "Deadline",
+        "NativeAttempts",
+        "Records",
+        "Bytes",
+        "WrongContext",
+        "InventoryUnknown",
+        "UnobservedReap"
+      ]
+    },
+    "TerminalStop": {
+      "kind": "object",
+      "fields": {
+        "reason": "OuterStop",
+        "first_unattempted_subowner": "Label?",
+        "unattempted_count": "U64"
+      },
+      "additional_keys": false
+    },
+    "SessionCounters": {
+      "kind": "object",
+      "fields": {
+        "admission_parent": "Charges",
+        "invocation_parent": "Charges",
+        "worker_cumulative": "CounterProjection",
+        "lifetime": "CounterProjection"
+      },
+      "additional_keys": false
+    },
+    "OuterCounters": {
+      "kind": "object",
+      "fields": {
+        "before": "SessionCounters",
+        "outer": "Charges",
+        "after": "SessionCounters",
+        "lifetime": "CounterProjection",
+        "read_only_guard_attempts": "U64",
+        "cleanup_attempts": "U64"
+      },
+      "additional_keys": false
+    },
+    "OuterKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.linux.outer-cleanup"
+      ]
+    },
+    "SampleKind": {
+      "kind": "enum",
+      "values": [
+        "sampled",
+        "last_observed",
+        "unavailable"
+      ]
+    },
+    "OuterReport": {
+      "kind": "object",
+      "fields": {
+        "seal_charge": "SealCharge",
+        "schema_version": "Rev1",
+        "kind": "OuterKind",
+        "run_id": "RunId",
+        "contract_sha256": "Digest",
+        "state": "OuterState",
+        "admitted_budget": "OuterBudget",
+        "entry_clock_ns": "U64",
+        "end_clock_ns": "U64",
+        "end_time_sample_kind": "SampleKind",
+        "hook_entries": "HookEntries",
+        "invocations": "InvocationSummaries",
+        "admission_assets": "AdmissionAssets",
+        "subowners": "Subowners",
+        "cleanup_events": "CleanupEvents",
+        "failure": "Failures",
+        "unknown_inventory": "UnknownInventory",
+        "counters": "OuterCounters",
+        "terminal_stop": "TerminalStop",
+        "sealed": "Bool"
+      },
+      "additional_keys": false
+    },
+    "AdmissionErrorKind": {
+      "kind": "enum",
+      "values": [
+        "ExpiredDeadline",
+        "DurationExceedsRetirement",
+        "AllowanceOutOfRange",
+        "InsufficientTerminalCapacity",
+        "ArithmeticOverflow",
+        "InvalidSessionState"
+      ]
+    },
+    "OuterAdmissionError": {
+      "kind": "object",
+      "fields": {
+        "schema_version": "Rev1",
+        "kind": "AdmissionErrorKind",
+        "diagnostic_hex": "Hex1024"
+      },
+      "additional_keys": false
+    },
+    "AssetGuardKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.linux.constructor-assets"
+      ]
+    },
+    "AssetCloseEvents": {
+      "kind": "array",
+      "item": "CleanupEvent",
+      "maximum_items": 3,
+      "minimum_items": 0
+    },
+    "AssetGuardReport": {
+      "kind": "object",
+      "fields": {
+        "seal_charge": "SealCharge",
+        "schema_version": "Rev1",
+        "kind": "AssetGuardKind",
+        "run_id": "RunId",
+        "contract_sha256": "Digest",
+        "constructor_error_category": "Category",
+        "constructor_errno": "I32?",
+        "budget": "OuterBudget",
+        "assets": "AdmissionAssets",
+        "close_events": "AssetCloseEvents",
+        "failure": "Failures",
+        "state": "OuterState",
+        "sealed": "Bool",
+        "constructor_ledger": "ConstructorLedgerRef",
+        "auxiliary_cleanup": "AdmissionCleanupRef?"
+      },
+      "additional_keys": false
+    },
+    "HoldOwners": {
+      "kind": "array",
+      "item": "EffectId",
+      "maximum_items": 7,
+      "minimum_items": 3
+    },
+    "HoldKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.driver.runner-deadline-hold"
+      ]
+    },
+    "DriverHoldReport": {
+      "kind": "object",
+      "fields": {
+        "schema_version": "Rev1",
+        "kind": "HoldKind",
+        "invocation": "InvocationKey",
+        "step_id": "Label",
+        "ack_sequence": "PositiveU64",
+        "ack_validated": "Bool",
+        "raw_drain_complete": "Bool",
+        "registered_owners": "HoldOwners",
+        "cancellation_before": "Bool",
+        "cancellation_after": "Bool",
+        "execution_duration_ns": "PositiveU64",
+        "hold_elapsed_ns": "U64",
+        "outer_deadline_ns": "U64",
+        "clock_checks": "U64",
+        "wait_calls": "U64",
+        "fixture_wire_during_hold": "U64",
+        "normal_observation_returned": "Bool"
+      },
+      "additional_keys": false
+    },
+    "WireError": {
+      "kind": "object",
+      "fields": {
+        "category": "Category",
+        "native_stage": "CoreStage",
+        "errno": "I32?",
+        "call_result": "I64?",
+        "step_id": "Label",
+        "completed_steps": "Steps",
+        "diagnostic_hex": "Hex1024",
+        "reason": "Reason",
+        "limit_kind": "LimitKind?",
+        "producer_charges": "ProducerCharges"
+      },
+      "additional_keys": false,
+      "maximum_encoded_bytes": 4096
+    },
+    "AuxiliarySubowners": {
+      "kind": "array",
+      "item": "Subowner",
+      "maximum_items": 16,
+      "minimum_items": 0
+    },
+    "ConstructorEvents": {
+      "kind": "array",
+      "item": "CleanupEvent",
+      "maximum_items": 4095,
+      "minimum_items": 0
+    },
+    "ConstructorLedgerKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.linux.constructor-ledger"
+      ]
+    },
+    "ConstructorState": {
+      "kind": "enum",
+      "values": [
+        "not_started",
+        "failed"
+      ]
+    },
+    "ConstructorLedger": {
+      "kind": "object",
+      "fields": {
+        "seal_charge": "SealCharge",
+        "schema_version": "Rev1",
+        "kind": "ConstructorLedgerKind",
+        "run_id": "RunId",
+        "contract_sha256": "Digest?",
+        "state": "ConstructorState",
+        "supplied_assets": "AdmissionAssets",
+        "auxiliary_subowners": "AuxiliarySubowners",
+        "events": "ConstructorEvents",
+        "failure": "Failures",
+        "charges": "Charges",
+        "unknown_inventory": "UnknownInventory",
+        "sealed": "Bool"
+      },
+      "additional_keys": false
+    },
+    "ConstructorLedgerRef": {
+      "kind": "object",
+      "fields": {
+        "sha256": "Digest",
+        "encoded_bytes": "U64"
+      },
+      "additional_keys": false
+    },
+    "AuxiliaryCloseEvents": {
+      "kind": "array",
+      "item": "CleanupEvent",
+      "maximum_items": 16,
+      "minimum_items": 0
+    },
+    "AdmissionCleanupKind": {
+      "kind": "enum",
+      "values": [
+        "tt03.linux.admission-cleanup"
+      ]
+    },
+    "AdmissionCleanupCounters": {
+      "kind": "object",
+      "fields": {
+        "constructor": "Charges",
+        "outer": "Charges",
+        "lifetime": "Charges"
+      },
+      "additional_keys": false
+    },
+    "AdmissionCleanupReport": {
+      "kind": "object",
+      "fields": {
+        "seal_charge": "SealCharge",
+        "schema_version": "Rev1",
+        "kind": "AdmissionCleanupKind",
+        "run_id": "RunId",
+        "contract_sha256": "Digest?",
+        "constructor_ledger": "ConstructorLedgerRef",
+        "state": "OuterState",
+        "admitted_budget": "OuterBudget",
+        "entry_clock_ns": "U64?",
+        "end_clock_ns": "U64?",
+        "end_time_sample_kind": "SampleKind",
+        "auxiliary_subowners": "AuxiliarySubowners",
+        "close_events": "AuxiliaryCloseEvents",
+        "failure": "Failures",
+        "unknown_inventory": "UnknownInventory",
+        "counters": "AdmissionCleanupCounters",
+        "terminal_stop": "TerminalStop",
+        "sealed": "Bool"
+      },
+      "additional_keys": false
+    },
+    "AdmissionCleanupRef": {
+      "kind": "object",
+      "fields": {
+        "sha256": "Digest",
+        "encoded_bytes": "U64",
+        "state": "OuterState"
+      },
+      "additional_keys": false
+    },
+    "Scenario": {
+      "kind": "enum",
+      "values": [
+        "leader-lifecycle",
+        "tricky-comm",
+        "exec-aba",
+        "exec-failure",
+        "thread-lifecycle",
+        "file-replacement",
+        "descriptor-inventory"
+      ]
+    },
+    "Mode": {
+      "kind": "enum",
+      "values": [
+        "boot",
+        "resume"
+      ]
+    },
+    "Marker": {
+      "kind": "enum",
+      "values": [
+        "A",
+        "B"
+      ]
+    },
+    "ImageEntry": {
+      "kind": "object",
+      "fields": {
+        "artifact": "Label",
+        "marker": "Marker",
+        "path_hex": "Hex4096",
+        "sha256": "Digest"
+      },
+      "additional_keys": false
+    },
+    "Images": {
+      "kind": "array",
+      "item": "ImageEntry",
+      "maximum_items": 2,
+      "minimum_items": 2
+    },
+    "StepActor": {
+      "kind": "enum",
+      "values": [
+        "a",
+        "parent"
+      ]
+    },
+    "Step": {
+      "kind": "object",
+      "fields": {
+        "id": "Label",
+        "action": "Action",
+        "actor": "StepActor"
+      },
+      "additional_keys": false
+    },
+    "StepScript": {
+      "kind": "array",
+      "item": "Step",
+      "maximum_items": 10,
+      "minimum_items": 1
+    },
+    "BlobEntry": {
+      "kind": "object",
+      "fields": {
+        "index": "PositiveU32",
+        "total_bytes": "U32",
+        "sha256": "Digest"
+      },
+      "additional_keys": false
+    },
+    "Blobs": {
+      "kind": "array",
+      "item": "BlobEntry",
+      "maximum_items": 3,
+      "minimum_items": 0
+    },
+    "ControlKind": {
+      "kind": "enum",
+      "values": [
+        "parent_failure_after_register",
+        "worker_exit",
+        "partial_file_write",
+        "inherit_canary",
+        "cancel_before_create",
+        "cancel_after_ack",
+        "wrong_run",
+        "wrong_operation",
+        "wrong_sequence",
+        "wrong_step",
+        "unknown_major",
+        "extra_fd",
+        "truncated_payload",
+        "truncated_ancillary"
+      ]
+    },
+    "ControlPoint": {
+      "kind": "enum",
+      "values": [
+        "after_case_root_register",
+        "after_child_register",
+        "after_pidfd_register",
+        "after_root_grant",
+        "after_file_register",
+        "before_ack",
+        "before_inventory_exec",
+        "before_first_creation",
+        "immediately_after_ack"
+      ]
+    },
+    "Control": {
+      "kind": "object",
+      "fields": {
+        "kind": "ControlKind",
+        "step_id": "Label",
+        "point": "ControlPoint"
+      },
+      "additional_keys": false
+    },
+    "Stdio": {
+      "kind": "literal",
+      "value": [
+        0,
+        1,
+        2
+      ]
+    },
+    "HelloRequest": {
+      "kind": "object",
+      "fields": {
+        "schema_version": "Rev1",
+        "invocation": "InvocationKey",
+        "mode": "Mode",
+        "slot": "WorkerActor",
+        "scenario": "Scenario",
+        "manifest_sha256": "Digest",
+        "images": "Images",
+        "steps": "StepScript",
+        "completed_steps": "U32",
+        "image_epoch": "PositiveU32",
+        "next_record_index": "PositiveU32",
+        "execution_deadline_ns": "U64",
+        "limits": "Limits",
+        "blobs": "Blobs",
+        "control": "Control?",
+        "inherited_fds": "Stdio"
+      },
+      "additional_keys": false,
+      "maximum_encoded_bytes": 65536
+    }
+  },
+  "bounds": {
+    "snapshot_slots": 4,
+    "invocation_metadata_bytes": 16384,
+    "subowners_per_snapshot_or_live_outer_inventory": 128,
+    "raw_records_per_invocation": 16630,
+    "partial_transports": 1,
+    "worker_image_entries": 6,
+    "subsidiary_errors": 32,
+    "outer_events_max": 16383,
+    "outer_records_include_terminal_summary": true,
+    "outer_report_capacity": 1048576,
+    "constructor_ledger_capacity": 524288,
+    "admission_cleanup_capacity": 524288,
+    "pending_constructor_auxiliary_fds": 16,
+    "preallocation_failure_inline_capacity": 16384,
+    "terminal_reservation_upper_bound": 524288,
+    "terminal_reservation_is_population_specific": true,
+    "raw_and_partial_dynamic_bytes_inside_L": true,
+    "max_projection_encoding_from_types_required": true
+  },
+  "semantic_constraints": [
+    "semantic relation tables in schemas.md are mandatory in addition to this exhaustive syntax",
+    "immutable exact invocation and contiguous raw record indices per producer",
+    "ChronologicalRaw order strictly increases across complete parent and worker observations",
+    "all charges monotone in one lifetime; retained_capacity is cumulative reservations with no refund",
+    "unknown sticky and missing worker tail is never zero",
+    "Snapshot records raw.invocation equals envelope.invocation",
+    "sum of actual subowner IDs across all registrations at most 128 and immutable single registration ownership",
+    "at most one unfinished transport because parent admits one exchange and stops on first failure",
+    "runtime/allocation overhead exclusions are explicit and never relabelled explicit counters"
+  ],
+  "guard_error_mapping": {
+    "path": "guard-error-map.json",
+    "sha256": "93bac2a4ab11cc28af67a75032f1bc7dada199e81361aa67d7c341ffbf319b8d",
+    "private_guard_reason_enum": "GuardReason",
+    "no_new_public_error_category": true
+  }
+}

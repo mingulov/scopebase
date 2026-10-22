@@ -1,0 +1,549 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_READ_ONLY_FIXTURE_DECISION_PACKET",
+  "created_utc": "2026-10-22T04:37:50.081073+00:00",
+  "status": "NEEDS_DECISION",
+  "packet_ready": false,
+  "source_admission_adopted": true,
+  "product_tests_executed": false,
+  "runtime_qualification": false,
+  "observed_product_head": "fdf548e7d1be5ed65008c0ee1274230600b8f3ec",
+  "future_execution_base": null,
+  "accepted_predecessors": [
+    "TT01",
+    "TT02",
+    "LX01",
+    "LX02",
+    "LX03",
+    "LX04",
+    "LX05"
+  ],
+  "implementation_stop": "BP02 and exact TT03 core technical rulings first; full denied/namespace/audit dialects remain unimplemented",
+  "git_read_environment": {
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0"
+  },
+  "git_read_policy": "Three named full-commit local blob reads only via explicit standalone histories; protocol.allow=never, fsmonitor=false, hooksPath=/dev/null; no fetch/history audit/donor mutation",
+  "source_files": [
+    {
+      "file_id": "P:src/process.rs",
+      "checkout_id": "w003",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "relative_path": "src/process.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "full_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "b9b74b111ca830d18a12ad1c65c4ede58e014a95817ccc12f2403b2fe22e1e3e",
+      "size_bytes": 89140,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX09",
+      "admission_consumer_tasks": [
+        "LX09",
+        "LX10",
+        "LX11",
+        "LX08",
+        "LX06"
+      ]
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "checkout_id": "w003",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/.worktrees/v040-integration",
+      "relative_path": "src/pidns.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git",
+      "full_commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+      "size_bytes": 33975,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX08",
+      "admission_consumer_tasks": [
+        "LX08",
+        "LX06",
+        "LX09",
+        "LX10",
+        "LX11"
+      ]
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "checkout_id": "checkout-018",
+      "frozen_checkout": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21",
+      "relative_path": "tests/target_lifecycle.rs",
+      "history_git_dir": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/histories/repo-001/history.git",
+      "full_commit": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "sha256": "3e1457daaa3ee50cbeb1b859b9b82b28c59c3c704d42f57d540012f7cb02af19",
+      "size_bytes": 125083,
+      "historical_spdx": "GPL-3.0-or-later",
+      "authorization_reference": "OWNER-2026-10-18",
+      "selected_wip_delta": false,
+      "selected_local_blob_matches": true,
+      "source_admission": "READY_FOR_SELECTED_EXISTING_SCOPES_ONLY",
+      "destination_role": "host",
+      "recommended_destination_license": "Apache-2.0",
+      "third_party_scope": "Selected owned host scopes classified by adopted admission; third_party_terms empty; not whole-file grant",
+      "mapping_reused_from": "next-lx08-packet/source-observations.json",
+      "admission_primary_owner": "LX09",
+      "admission_consumer_tasks": [
+        "LX09",
+        "LX10",
+        "LX11",
+        "LX08",
+        "LX06"
+      ]
+    }
+  ],
+  "fixture_scopes": [
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "ReapOnDrop destructor and owned child wrapper",
+      "line_start": 1945,
+      "line_end": 1967,
+      "sha256": "81b4bdd9b3d2974d2fd74a52eca2ef314fff96b06808cb54f5381f5796c06e27",
+      "disposition": "REFERENCE_ONLY",
+      "reason": "Drop ignores errors and cannot certify retirement",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "deny_pidfd_open",
+      "line_start": 1972,
+      "line_end": 2025,
+      "sha256": "3097c3c25d0227dff33394da1b0881717cd8c29b66332f0122102cd46dcb2ccb",
+      "disposition": "ADAPT_RECOMMENDED",
+      "reason": "Preserve real x86_64 seccomp syscall denial with explicit isolated-only effects",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "thread_status_field",
+      "line_start": 2030,
+      "line_end": 2036,
+      "sha256": "4c5445614a43a7901b906996fe21dfb3f913167802ccafcdcbff89511dd2d208",
+      "disposition": "ADAPT_RECOMMENDED",
+      "reason": "Require bounded independent status/filter delta witness; not unbounded read_to_string",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "pidfd_denial_helper",
+      "line_start": 2054,
+      "line_end": 2180,
+      "sha256": "37ba83f068f3da55809dc8c7005a261296cd8cf14433d79d18c17fcc8dde742f",
+      "disposition": "ADAPT_APPLICABLE_FACETS",
+      "reason": "Preserve denial/live/zombie/reaped/no-authority phases; original permissive success not applicable to strict LX08",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "PidfdDenialHelper parent framing/channel/finish",
+      "line_start": 2185,
+      "line_end": 2339,
+      "sha256": "34b4bb0ad3843689bd47c890aef6cc5dbfb805ca629070a904548fb0d2c83481",
+      "disposition": "REFERENCE_ONLY",
+      "reason": "Preserve causal phase pattern; replace unbounded thread/mpsc/stdout parsing and refreshed deadlines",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "exited_unreaped",
+      "line_start": 2343,
+      "line_end": 2367,
+      "sha256": "f7cbbb2473fe50e4aafeb7dbe73f2016039f426f67a59cef39fcbc6439e29e56",
+      "disposition": "ADAPT_RECOMMENDED",
+      "reason": "Independent original-owned-child WNOWAIT witness",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "run_pidfd_denial_case",
+      "line_start": 2369,
+      "line_end": 2414,
+      "sha256": "b43df48f91e6b2f05a47a744325042b6fa2c2aa0fbb43617d2d6eac1d8067766",
+      "disposition": "ADAPT_LIFECYCLE_ONLY",
+      "reason": "Preserve retained witness and exact phase order, not PID kill or destructor cleanup",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "real_pidfd_denial_preserves_proc_identity_without_signal_authority",
+      "line_start": 2422,
+      "line_end": 2426,
+      "sha256": "97830fac2377bd3fde2b6fee590a832d32886530d3ddb41fd7b6935250b6e61a",
+      "disposition": "ADAPT_BEHAVIOR_DIFFERENCE",
+      "reason": "Preserve both actual errno populations; strict destination refuses permissive fallback",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "original_generation_state_distinguishes_exit_from_pid_reuse",
+      "line_start": 1555,
+      "line_end": 1617,
+      "sha256": "55ac665e3a3d5a8aa00751a60e9f181492f97191449c113ee972d02255af02fb",
+      "disposition": "ADAPT_ORACLE_FACETS",
+      "reason": "Same-birth zombie and transport-error counterexamples; no replacement authority",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "only_a_missing_process_is_proof_of_exit",
+      "line_start": 1745,
+      "line_end": 1760,
+      "sha256": "4bef1f2fbeee2bca15ab5150afaa8d23aa75f96d93103bb42667c55200ac3b6c",
+      "disposition": "ADAPT_ORACLE_FACETS",
+      "reason": "Denial/malformed proc is not exit proof",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/process.rs",
+      "symbol": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+      "line_start": 1883,
+      "line_end": 1917,
+      "sha256": "fd36010b5d649e396cfef34850a26ced3eae14963801d5156f72762b8af27072",
+      "disposition": "ADAPT_RECOMMENDED",
+      "reason": "Actual tricky name and live/zombie/reaped states; independent parser and explicit cleanup",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "symbol": "only_this_namespaces_own_proc_classifies_own",
+      "line_start": 595,
+      "line_end": 635,
+      "sha256": "6a7d57bb5281e53acfd2c4c01e3bda9042fcb9b1583cde4e2c74b3f61e92b13f",
+      "disposition": "ADAPT_VECTORS_ONLY",
+      "reason": "Pure self/NSpid mismatch corpus; real matched nested/foreign routes are NEW",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "P:src/pidns.rs",
+      "symbol": "the_numbering_composes_the_mounted_procs_view",
+      "line_start": 729,
+      "line_end": 772,
+      "sha256": "382db24dd63a0eae76031bffebd49f33df640cefb48b37800df854fcea35dd59",
+      "disposition": "ADAPT_VECTORS_ONLY",
+      "reason": "Retain fake proc mismatch vectors separately from real namespace evidence; exclude global cache expectation",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "symbol": "external_pid_target_is_never_signaled",
+      "line_start": 359,
+      "line_end": 375,
+      "sha256": "7e0a664d6caf3d408806acc0f4fc4b2c7197f56df88480e5d2a1d0bc2c2f3d7a",
+      "disposition": "ADAPT_NO_CONTROL_FACET",
+      "reason": "Real actual-library no-control and sentinel; stronger syscall audit still required",
+      "copy_admission": "EXISTING_READY_SCOPE_NOT_COPIED",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": true
+    },
+    {
+      "file_id": "O:tests/target_lifecycle.rs",
+      "symbol": "stopped_child_maps_readable_for_setup_baseline",
+      "line_start": 336,
+      "line_end": 356,
+      "sha256": "d4a953540f5d39b897557b01a339c039a3640d98ae08fafc5042ff9c8e5bf312",
+      "disposition": "REFERENCE_ONLY_LX09",
+      "reason": "Cannot replace stopped pre-exec/dumpable original with ordinary live fixture",
+      "copy_admission": "UNGRANTED_REFERENCE_ONLY",
+      "future_port_receipt": "REQUIRED_IF_COPIED",
+      "inside_adopted_ready_scope": false
+    }
+  ],
+  "input_bindings": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "bcc827f3073a8b9df24e0d260f6931ad2f58a00287b039292398da84153a6dbe",
+      "bytes": 19141,
+      "previous_snapshot_sha256": "78f52fc59f8c56a35231b73017ff637ce93c325ff555f20e3ed10d32ca3376c2",
+      "change_note": "Concurrent root planning/source-admission update inspected; historical first input retained in source-observations-r1.json"
+    },
+    {
+      "path": "handoff.md",
+      "sha256": "ceacb73cd1a878163d1b72326c2005444b04e329db7f3c96f4507414eff715ad",
+      "bytes": 32415,
+      "previous_snapshot_sha256": "e361b13a769de01bdd2b7dbda058707606f9c98d6cb5316a0edd151d988f0395",
+      "change_note": "Concurrent root planning/source-admission update inspected; historical first input retained in source-observations-r1.json"
+    },
+    {
+      "path": "DEVELOPMENT.md",
+      "sha256": "62206811020cc8e842ba5f25b8d8a913acf2acace5c2ab3953284e445437c0b1",
+      "bytes": 15324
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md",
+      "sha256": "c03f31b90ad0299c94c4f2ed50d17463573416842fb4e61c184437381cb835bb",
+      "bytes": 9603
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "sha256": "60677f2b91c630823cea9b6c1f19618225f27082b4bdf6dff3f61f008274a546",
+      "bytes": 43180,
+      "previous_snapshot_sha256": "64b014e4f400dbf4027675d5c04a148574096a4b331338b41617e719c70b17ea",
+      "change_note": "Concurrent root planning/source-admission update inspected; historical first input retained in source-observations-r1.json"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md",
+      "sha256": "2775be0d139fbd7895ecac7c6ac4bf94ff69d12c2a2e7664c9cb5b62932741da",
+      "bytes": 32034
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-17-scopebase-testing.md",
+      "sha256": "ec878c85c5efd47f1bed22161d200429c4a22e09702b9ee2ad10bb54ee5a702e",
+      "bytes": 36538
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
+      "sha256": "3c43725dc417152d7dca440e744932c0f8b30a6358ea5a1f9946717eb2f44f48",
+      "bytes": 65219
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-17-scopebase-linux.md",
+      "sha256": "3d6d7f4016c850d277dd81a96a7f7d967cf06a6a88878f29c1a0f8c055729a7b",
+      "bytes": 54792
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-lx08-packet/packet.md",
+      "sha256": "82d4c4a416a41d227091bf2bd07ae0844590b621c3e4de05fa8187a02c7c3b1c",
+      "bytes": 15806
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-lx08-packet/verification.md",
+      "sha256": "285e4a63c3e6beb5e910bb838f9a9a2e35e2b2e032548aa7d5510f072ec281b5",
+      "bytes": 11642
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-lx08-packet/preservation.md",
+      "sha256": "497f1a52362f453f724e8830b0898791d0a1b822a0b4aac1fd1034c59ec1da34",
+      "bytes": 13275
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/next-lx08-packet/source-observations.json",
+      "sha256": "268e6aff3f9102005f7abffae774f41734a1b13f35b1fcb435441a1aed97dfb4",
+      "bytes": 91136
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/lx08-crossreview-r1/static-check.json",
+      "sha256": "36ca549b191ca6d28f52c90fc5e4608201347e359b6a2a00a078c3072aaceb07",
+      "bytes": 29219
+    },
+    {
+      "path": "crates/scopebase-testkit/Cargo.toml",
+      "sha256": "46664ac47764994ad48d7f54eab17848a15db1434b01ba91e0cd247a59486f25",
+      "bytes": 609
+    },
+    {
+      "path": "crates/scopebase-testkit/src/fixture.rs",
+      "sha256": "97b3ebde9b49987a212b3479c7733f0eca0e2c335e938f5bfee6b62f7205129a",
+      "bytes": 19419
+    },
+    {
+      "path": "crates/scopebase-testkit/src/observation.rs",
+      "sha256": "7a78fb166a24e7d1187de805ad531b7f825e16cfdf85679f65f50193740e8bb1",
+      "bytes": 14231
+    },
+    {
+      "path": "crates/scopebase-testkit/src/result.rs",
+      "sha256": "e971ae734eb9c7631e573bdebae4a798c662ea47db283f84eb2215b602ec6e74",
+      "bytes": 72502
+    },
+    {
+      "path": "crates/scopebase-testkit/src/runner.rs",
+      "sha256": "b3af98b03753d99a337e9848f90c620e928a8179bb4ce25e3e0defc2aeab8221",
+      "bytes": 64977
+    },
+    {
+      "path": "crates/scopebase-linux/Cargo.toml",
+      "sha256": "77f91eb0c0ec60e4a1f885345987b57ade9bfd46252e5b510d30b8a9cd05bf04",
+      "bytes": 743
+    },
+    {
+      "path": "crates/scopebase-linux/src/control.rs",
+      "sha256": "42d75629e3c0899e1820a76c2636f7b4354b9b605a47010f9d1b38fadbef9b47",
+      "bytes": 6298
+    },
+    {
+      "path": "crates/scopebase-linux/src/error.rs",
+      "sha256": "4283913916c9cc24e1cc60af094a8166a61c9da92a7b158f0b68712a06e3bb12",
+      "bytes": 4288
+    },
+    {
+      "path": "crates/scopebase-linux/src/file/held.rs",
+      "sha256": "ad573643417ccbae681c0f546b3752fee5dc85e082f522dc1e309a7067f26ba2",
+      "bytes": 52645
+    },
+    {
+      "path": "crates/scopebase-linux/src/file/read.rs",
+      "sha256": "86c6ec76c0196eb8d945777b6a9d346d4ef1908e43c45a8f4ebe97d1b0f615ee",
+      "bytes": 16340
+    },
+    {
+      "path": "crates/scopebase-linux/src/procfs/mod.rs",
+      "sha256": "97763d3540ab2e7505b3444377727dd62158f0ee666cc86e83c6abf14a203b7f",
+      "bytes": 7330
+    },
+    {
+      "path": "crates/scopebase-linux/tests/held_file.rs",
+      "sha256": "df56b175e21739881b43fe4959aa5890904ed05e355cace2135d107c83417be3",
+      "bytes": 16148
+    },
+    {
+      "path": "crates/scopebase-linux/tests/positional_read.rs",
+      "sha256": "2efcd70c4a145aa22f5e1ac977daa1423ecf487f2e1157f3a1a4cc04c12be872",
+      "bytes": 12684
+    },
+    {
+      "path": "crates/scopebase-linux/tests/controls.rs",
+      "sha256": "b8b4ec6fc71f13cba3fe8f536c0df6f04cf408faa58a1903939b65a1ea161118",
+      "bytes": 2126
+    },
+    {
+      "path": "crates/scopebase-linux/tests/proc_parsers.rs",
+      "sha256": "f318c4aa706d9a8759f6b6531801c0502d240c9e62921ee0cd6ba0e92a90a835",
+      "bytes": 36220
+    },
+    {
+      "path": "docs/provenance/next-host-scopes-20261022.md",
+      "sha256": "9d68eae05455201f5c043eafa6fae4fb9b9b8dc76995b7ec20da9bf281100690",
+      "bytes": 4672
+    },
+    {
+      "path": "docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+      "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+      "bytes": 966251
+    }
+  ],
+  "local_dependency_api_observations": [
+    {
+      "path": "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-1.1.5/src/process/pidfd.rs",
+      "sha256": "ce9c52d7f8a3d79a285f070a2a8c0536a84a7e31a8dcb0d76def1078ed6f0726",
+      "evidence": "SOURCE_API_INSPECTION_ONLY_NOT_COMPILED"
+    },
+    {
+      "path": "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-1.1.5/src/process/wait.rs",
+      "sha256": "6e9763df5e56390c55aa8028851f20391b104e93016fa0acacaf6063063576f6",
+      "evidence": "SOURCE_API_INSPECTION_ONLY_NOT_COMPILED"
+    },
+    {
+      "path": "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-1.1.5/src/net/send_recv/msg.rs",
+      "sha256": "d44b02ee8275f12c32ee67508aaf88d4d34954ebee037bfe7168527c98ebd0bb",
+      "evidence": "SOURCE_API_INSPECTION_ONLY_NOT_COMPILED"
+    }
+  ],
+  "controller_direction": {
+    "pid_proc_support": "Authenticated matched Own in initial and nested PID namespaces; real nested positive required",
+    "relay": "root/lx08_packet_crossreview and notification to root; no product support qualified"
+  },
+  "unresolved_decisions": [
+    "TT03-C1",
+    "TT03-C2",
+    "TT03-C3",
+    "TT03-C4",
+    "TT03-C5",
+    "TT03-C6",
+    "TT03-C7",
+    "TT03-C8"
+  ],
+  "operations": {
+    "builds": false,
+    "cargo": false,
+    "native_live_probes": false,
+    "ssh": false,
+    "guest": false,
+    "donor_mutation": false,
+    "tracked_product_edits": false,
+    "commits": false,
+    "subagents": false,
+    "selected_local_git_blobs": true,
+    "static_hash_checks": true
+  },
+  "source_admission_scope": "Existing adopted ready host ranges only; one ungranted reference range remains unselected for copying; TT03 actual subsets/receipt still required",
+  "source_admission_binding": {
+    "path": "docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+    "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "adopted_by": "root during this preparation",
+    "new_grant_by_this_agent": false
+  },
+  "input_refresh": {
+    "historical_source_inventory": "source-observations-r1.json",
+    "historical_static_check": "validation-r1-input-drift.json",
+    "reason": "Root concurrently adopted selected host scopes and CP05 contract/navigation; named documentation diffs inspected, no donor refresh/history audit and no product failure",
+    "source_files_changed": false,
+    "runtime_results_reused": false
+  },
+  "nominal_copy_scopes_inside_existing_admission": 14,
+  "ungranted_reference_scopes": 1,
+  "accepted_api_maintenance_probe": {
+    "schema_version": 1,
+    "kind": "TT03_CONSUMED_ROOT_ACCEPTED_API_PROBE",
+    "status": "BOUND",
+    "readiness_effect": "Required root TT02 maintenance gate; no TT03 implementation/support qualification",
+    "results": {
+      "path": ".scopebase/controller/resume-20261022/fixture-borrow-probe-r1/results.json",
+      "sha256": "7df4045424060848e4fef346c0a2afd6b6a101fc3473cc7bbc324e92954c8817"
+    },
+    "root_audit": {
+      "path": ".scopebase/controller/resume-20261022/fixture-borrow-probe-r1/audit.json",
+      "sha256": "d570064ebea801d20ce914a561e4f8f3028fa0e5e9262c02a2f37b2f44177d4a"
+    },
+    "private_patch": {
+      "path": ".scopebase/controller/resume-20261022/fixture-borrow-probe-r1/outer-slice-lifetimes.patch",
+      "sha256": "416f6cce65f4c59c357999dc8a9827edf07eb87f2bcf37516ab5b159cd3413a2"
+    },
+    "product_fixture_source_sha256": "97b3ebde9b49987a212b3479c7733f0eca0e2c335e938f5bfee6b62f7205129a",
+    "product_fixture_unchanged": true,
+    "semantic_cases": 32,
+    "compiler_mode_cells": 4,
+    "compiled_executed_positives": 12,
+    "E0515_refusals": 20,
+    "commands": 50,
+    "log_streams_verified_by_root_audit": 100,
+    "verification_by_this_agent": "Read/bound result/audit/patch and checked current unchanged fixture source; did not rerun compiler campaign or all log audit",
+    "integration_gate": "After BP02 root applies shared fixture.rs maintenance and runs affected source/archive checks; proposed private candidate does not qualify product",
+    "observed_utc": "2026-10-22T04:50:37.919447+00:00"
+  },
+  "input_binding_scope_note": "Root documentation hashes are point-in-time observations; subsequent root TODO/handoff/decisions changes do not require donor/source re-audit. Actual relevant package bytes remain separately bound."
+}

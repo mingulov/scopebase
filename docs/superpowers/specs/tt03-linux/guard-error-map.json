@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_R4_AUTHORITATIVE_PRIVATE_GUARD_ERROR_MAPPING",
+  "root_ruling": "Existing adopted advisory categories selected for TT03-R3-FINAL-01; single mapping for all enclosing guard failures",
+  "private_only": true,
+  "new_public_error_category": false,
+  "guard_reason_names": [
+    "WrongContext",
+    "Inconclusive",
+    "Malformed",
+    "Unavailable",
+    "Denied",
+    "Io",
+    "Cancelled",
+    "TimedOut",
+    "Limit",
+    "CloseError"
+  ],
+  "native_denied_errno": [
+    1,
+    13
+  ],
+  "native_unavailable_errno": [
+    38,
+    95,
+    24,
+    23,
+    12
+  ],
+  "namespace_kind_enotty_errno": 25,
+  "rules": [
+    {
+      "id": "semantic_wrong_context",
+      "category": "Other",
+      "failure_reason": "WrongContext",
+      "errno": "null",
+      "guard_reason": "WrongContext",
+      "population": "Proven creator PID/Own/namespace mismatch or original creator successful terminal IN with optional HUP"
+    },
+    {
+      "id": "inconclusive_poll",
+      "category": "Other",
+      "failure_reason": "Other",
+      "errno": "null",
+      "guard_reason": "Inconclusive",
+      "population": "Successful poll ERR/NVAL/unknown/HUP-only/inconsistent count or flags"
+    },
+    {
+      "id": "malformed",
+      "category": "InvalidProtocol",
+      "failure_reason": "Protocol",
+      "errno": "null",
+      "guard_reason": "Malformed",
+      "population": "Malformed syntax/native value or missing required CLOEXEC"
+    },
+    {
+      "id": "native_denied",
+      "category": "Denied",
+      "failure_reason": "Denied",
+      "errno": "actual",
+      "guard_reason": "Denied",
+      "population": "Reached non-close EACCES or EPERM"
+    },
+    {
+      "id": "native_unavailable",
+      "category": "Unavailable",
+      "failure_reason": "Unavailable",
+      "errno": "actual",
+      "guard_reason": "Unavailable",
+      "population": "Reached listed resource/unavailable errno or namespace-kind ENOTTY"
+    },
+    {
+      "id": "native_io",
+      "category": "Io",
+      "failure_reason": "Io",
+      "errno": "actual",
+      "guard_reason": "Io",
+      "population": "Other reached non-close errno including missing proc member"
+    },
+    {
+      "id": "non_time_limit",
+      "category": "Unavailable",
+      "failure_reason": "Limit",
+      "errno": "null",
+      "guard_reason": "Limit",
+      "population": "Actual non-time limit with exact LimitKind and consumed charges"
+    },
+    {
+      "id": "cancelled",
+      "category": "Cancelled",
+      "failure_reason": "Cancelled",
+      "errno": "null",
+      "guard_reason": "Cancelled",
+      "population": "Actual cancellation stop without an earlier native error"
+    },
+    {
+      "id": "timed_out",
+      "category": "TimedOut",
+      "failure_reason": "TimedOut",
+      "errno": "null",
+      "guard_reason": "TimedOut",
+      "population": "Actual local deadline stop without an earlier native error"
+    },
+    {
+      "id": "temporary_close_error",
+      "category": "Io",
+      "failure_reason": "CloseError",
+      "errno": "actual",
+      "guard_reason": "CloseError",
+      "population": "Reached temporary close error; consumed original owner and sticky error"
+    }
+  ],
+  "precedence": [
+    "Preserve the first actual failure; a later semantic mismatch never overwrites earlier transport/parse/kind/flag/control/limit failure.",
+    "Reached temporary close failure uses temporary_close_error with actual errno and consumed owner.",
+    "For other reached native errors use native_denied/native_unavailable/native_io, including special ENOTTY only at the namespace-kind ioctl.",
+    "If no earlier native error exists, preserve genuine cancellation/local-deadline/non-time limit at its actual checkpoint.",
+    "A successfully reached semantic context contradiction uses semantic_wrong_context; inconclusive poll and malformed are distinct populations."
+  ],
+  "evidence_relations": [
+    "Successful creator poll keeps actual ready count and signed raw revents, including invalid or terminal outputs.",
+    "Failed/unperformed poll has both output fields null; native errno is present only when reached.",
+    "Missing CLOEXEC retains actual successful GETFD flags; malformed syntax is not a fabricated native errno.",
+    "No category creates expected-refusal authority, a hook entry, native cleanup success or a public GuardReason API."
+  ]
+}

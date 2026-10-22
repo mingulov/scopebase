@@ -1,0 +1,1172 @@
+{
+  "schema_version": 1,
+  "kind": "TT03_R4_PRIVATE_GUARD_MAPPING_REPAIR",
+  "status": "PRIVATE_DESIGN_AMENDMENT_FOR_ROOT_REVIEW",
+  "root_ratified_wire_or_numeric_values": false,
+  "implemented": false,
+  "product_tests_executed": false,
+  "manifest": {
+    "schema_version": 1,
+    "kind": "tt03-linux-fixture",
+    "top_level_keys": [
+      "schema_version",
+      "kind",
+      "run_id",
+      "image_a_artifact",
+      "image_b_artifact",
+      "limits",
+      "invocations"
+    ],
+    "invocation_keys": [
+      "key",
+      "scenario",
+      "steps",
+      "control",
+      "expected_file_a_hex",
+      "expected_file_b_hex",
+      "mutation_hex",
+      "driver_schedule"
+    ],
+    "step_keys": [
+      "id",
+      "action",
+      "actor"
+    ],
+    "control_keys": [
+      "kind",
+      "step_id",
+      "point"
+    ],
+    "blob_indices": {
+      "1": "file-a",
+      "2": "file-b",
+      "3": "equal-size-file-a-mutation"
+    },
+    "only_exact_scenario_steps_allowed": true,
+    "no_action_arguments": true,
+    "driver_schedule": "null or exact closed runner_deadline_after_ack schedule; never sent to worker as a control/action"
+  },
+  "wire": {
+    "magic": "SBFIX001",
+    "header_bytes": 64,
+    "major": 1,
+    "minor": 0,
+    "payload_bytes": 65536,
+    "datagram_bytes": 65600,
+    "raw_request_bytes": 16,
+    "fragment_prefix_bytes": 48,
+    "chunk_bytes": 65488,
+    "raw_request_fields": [
+      "record_index:u32",
+      "offset:u32",
+      "max_chunk_bytes:u32",
+      "reserved:u32"
+    ],
+    "fragment_prefix_fields": [
+      "index:u32",
+      "total_bytes:u32",
+      "offset:u32",
+      "chunk_bytes:u32",
+      "whole_sha256:bytes32"
+    ],
+    "message_kinds": [
+      {
+        "code": 1,
+        "name": "HelloRequest",
+        "body": "canonical-json",
+        "fixed_or_prefix_bytes": null
+      },
+      {
+        "code": 2,
+        "name": "HelloReply",
+        "body": "canonical-json",
+        "fixed_or_prefix_bytes": null
+      },
+      {
+        "code": 3,
+        "name": "AdvanceRequest",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 4,
+        "name": "AdvanceReply",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 32
+      },
+      {
+        "code": 5,
+        "name": "RawRequest",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 6,
+        "name": "RawReply",
+        "body": "fragment-prefix-plus-bytes",
+        "fixed_or_prefix_bytes": 48
+      },
+      {
+        "code": 7,
+        "name": "FdTransferRequest",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 8,
+        "name": "FdTransferReply",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 9,
+        "name": "CloseRequest",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 10,
+        "name": "CloseReply",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 11,
+        "name": "Error",
+        "body": "canonical-json",
+        "fixed_or_prefix_bytes": null
+      },
+      {
+        "code": 12,
+        "name": "InputChunkRequest",
+        "body": "fragment-prefix-plus-bytes",
+        "fixed_or_prefix_bytes": 48
+      },
+      {
+        "code": 13,
+        "name": "InputChunkAck",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      },
+      {
+        "code": 14,
+        "name": "InventoryRequest",
+        "body": "canonical-json",
+        "fixed_or_prefix_bytes": null
+      },
+      {
+        "code": 15,
+        "name": "InventoryReply",
+        "body": "fixed",
+        "fixed_or_prefix_bytes": 16
+      }
+    ],
+    "initial_argv": [
+      "ABSOLUTE_IMAGE_PATH",
+      "--scopebase-fixture-v1",
+      "--slot",
+      "FIXED_ACTOR",
+      "--handover",
+      "-"
+    ],
+    "exec_argv": [
+      "ABSOLUTE_IMAGE_PATH",
+      "--scopebase-fixture-v1",
+      "--slot",
+      "a",
+      "--handover",
+      "LOWERCASE_HEX_OF_128_BYTE_HEADER_PLUS_CANONICAL_INVOCATION"
+    ],
+    "exec_handover_magic": "SBFH0001",
+    "only_parent_requests": true,
+    "exec_handover_header_bytes": 128,
+    "exec_handover_key_length_offset": 116,
+    "exec_handover_reserved_zero_offsets": [
+      120,
+      127
+    ],
+    "exec_handover_key_max_bytes": 16384,
+    "exec_handover_binary_max_bytes": 16512,
+    "exec_handover_hex_max_bytes": 33024,
+    "hello_required_invocation": true,
+    "hello_payload_admission_max_bytes": 65536,
+    "raw_record_producer_charges": true,
+    "wire_error_additional_keys": [
+      "reason",
+      "limit_kind",
+      "producer_charges"
+    ]
+  },
+  "opcodes": {
+    "ready": 1,
+    "capture_raw": 2,
+    "set_tricky_comm": 3,
+    "exec_b": 4,
+    "exec_a": 5,
+    "exec_missing": 6,
+    "start_sibling": 7,
+    "exit_leader": 8,
+    "exec_from_sibling": 9,
+    "create_files": 10,
+    "offer_files": 11,
+    "replace_file_a": 12,
+    "unlink_original_a": 13,
+    "mutate_file_a": 14,
+    "inventory": 15,
+    "parent_exit": 16,
+    "parent_reap": 17,
+    "close": 18
+  },
+  "parent_only_actions": [
+    "close",
+    "inventory",
+    "offer_files",
+    "parent_exit",
+    "parent_reap"
+  ],
+  "scenarios": [
+    {
+      "scenario": "leader-lifecycle",
+      "code": 1,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-live",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s03-exit",
+          "action": "parent_exit",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s04-zombie",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s05-reap",
+          "action": "parent_reap",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s06-reaped",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s07-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 1,
+      "prepare_prefix_ids": [
+        "s01-ready"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process"
+      ],
+      "first_unconsumed_step": "s02-live",
+      "successful_execs": 0,
+      "inventory_children": 0,
+      "uploaded_blobs": 0,
+      "raw_record_cap": 126,
+      "raw_chunk_cap": 190,
+      "input_chunk_cap": 0,
+      "other_exchange_cap": 26,
+      "derived_datagram_cap": 432
+    },
+    {
+      "scenario": "tricky-comm",
+      "code": 2,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-comm",
+          "action": "set_tricky_comm",
+          "actor": "a",
+          "wire_opcode": 3
+        },
+        {
+          "id": "s03-live",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s04-exit",
+          "action": "parent_exit",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s05-zombie",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s06-reap",
+          "action": "parent_reap",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s07-reaped",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s08-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 2,
+      "prepare_prefix_ids": [
+        "s01-ready",
+        "s02-comm"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process"
+      ],
+      "first_unconsumed_step": "s03-live",
+      "successful_execs": 0,
+      "inventory_children": 0,
+      "uploaded_blobs": 0,
+      "raw_record_cap": 144,
+      "raw_chunk_cap": 208,
+      "input_chunk_cap": 0,
+      "other_exchange_cap": 28,
+      "derived_datagram_cap": 472
+    },
+    {
+      "scenario": "exec-aba",
+      "code": 3,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-a",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s03-exec-b",
+          "action": "exec_b",
+          "actor": "a",
+          "wire_opcode": 4
+        },
+        {
+          "id": "s04-b",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s05-exec-a",
+          "action": "exec_a",
+          "actor": "a",
+          "wire_opcode": 5
+        },
+        {
+          "id": "s06-a2",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s07-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 1,
+      "prepare_prefix_ids": [
+        "s01-ready"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process"
+      ],
+      "first_unconsumed_step": "s02-a",
+      "successful_execs": 2,
+      "inventory_children": 0,
+      "uploaded_blobs": 0,
+      "raw_record_cap": 126,
+      "raw_chunk_cap": 190,
+      "input_chunk_cap": 0,
+      "other_exchange_cap": 30,
+      "derived_datagram_cap": 440
+    },
+    {
+      "scenario": "exec-failure",
+      "code": 4,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-before",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s03-missing",
+          "action": "exec_missing",
+          "actor": "a",
+          "wire_opcode": 6
+        },
+        {
+          "id": "s04-after",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s05-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 1,
+      "prepare_prefix_ids": [
+        "s01-ready"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process"
+      ],
+      "first_unconsumed_step": "s02-before",
+      "successful_execs": 0,
+      "inventory_children": 0,
+      "uploaded_blobs": 0,
+      "raw_record_cap": 90,
+      "raw_chunk_cap": 154,
+      "input_chunk_cap": 0,
+      "other_exchange_cap": 22,
+      "derived_datagram_cap": 352
+    },
+    {
+      "scenario": "thread-lifecycle",
+      "code": 5,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-start-sibling",
+          "action": "start_sibling",
+          "actor": "a",
+          "wire_opcode": 7
+        },
+        {
+          "id": "s03-sibling",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s04-exit-leader",
+          "action": "exit_leader",
+          "actor": "a",
+          "wire_opcode": 8
+        },
+        {
+          "id": "s05-leader-exited",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s06-missing",
+          "action": "exec_missing",
+          "actor": "a",
+          "wire_opcode": 6
+        },
+        {
+          "id": "s07-still-sibling",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s08-exec-sibling",
+          "action": "exec_from_sibling",
+          "actor": "a",
+          "wire_opcode": 9
+        },
+        {
+          "id": "s09-new-image",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s10-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 1,
+      "prepare_prefix_ids": [
+        "s01-ready"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process"
+      ],
+      "first_unconsumed_step": "s02-start-sibling",
+      "successful_execs": 1,
+      "inventory_children": 0,
+      "uploaded_blobs": 0,
+      "raw_record_cap": 180,
+      "raw_chunk_cap": 244,
+      "input_chunk_cap": 0,
+      "other_exchange_cap": 34,
+      "derived_datagram_cap": 556
+    },
+    {
+      "scenario": "file-replacement",
+      "code": 6,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-create-files",
+          "action": "create_files",
+          "actor": "a",
+          "wire_opcode": 10
+        },
+        {
+          "id": "s03-offer-files",
+          "action": "offer_files",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s04-original",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s05-replace",
+          "action": "replace_file_a",
+          "actor": "a",
+          "wire_opcode": 12
+        },
+        {
+          "id": "s06-replaced",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s07-unlink",
+          "action": "unlink_original_a",
+          "actor": "a",
+          "wire_opcode": 13
+        },
+        {
+          "id": "s08-mutate",
+          "action": "mutate_file_a",
+          "actor": "a",
+          "wire_opcode": 14
+        },
+        {
+          "id": "s09-mutated",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s10-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 3,
+      "prepare_prefix_ids": [
+        "s01-ready",
+        "s02-create-files",
+        "s03-offer-files"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process",
+        "linux.file-a",
+        "linux.file-b"
+      ],
+      "first_unconsumed_step": "s04-original",
+      "successful_execs": 0,
+      "inventory_children": 0,
+      "uploaded_blobs": 3,
+      "raw_record_cap": 180,
+      "raw_chunk_cap": 244,
+      "input_chunk_cap": 6,
+      "other_exchange_cap": 34,
+      "derived_datagram_cap": 568
+    },
+    {
+      "scenario": "descriptor-inventory",
+      "code": 7,
+      "steps": [
+        {
+          "id": "s01-ready",
+          "action": "ready",
+          "actor": "a",
+          "wire_opcode": 1
+        },
+        {
+          "id": "s02-create-files",
+          "action": "create_files",
+          "actor": "a",
+          "wire_opcode": 10
+        },
+        {
+          "id": "s03-offer-files",
+          "action": "offer_files",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s04-inventory",
+          "action": "inventory",
+          "actor": "parent",
+          "wire_opcode": null
+        },
+        {
+          "id": "s05-responding-ab",
+          "action": "capture_raw",
+          "actor": "a",
+          "wire_opcode": 2
+        },
+        {
+          "id": "s06-close",
+          "action": "close",
+          "actor": "parent",
+          "wire_opcode": null
+        }
+      ],
+      "prepare_prefix_length": 3,
+      "prepare_prefix_ids": [
+        "s01-ready",
+        "s02-create-files",
+        "s03-offer-files"
+      ],
+      "resource_labels": [
+        "linux.process",
+        "linux.excluded-process",
+        "linux.file-a",
+        "linux.file-b"
+      ],
+      "first_unconsumed_step": "s04-inventory",
+      "successful_execs": 0,
+      "inventory_children": 2,
+      "uploaded_blobs": 3,
+      "raw_record_cap": 174,
+      "raw_chunk_cap": 238,
+      "input_chunk_cap": 6,
+      "other_exchange_cap": 32,
+      "derived_datagram_cap": 552
+    }
+  ],
+  "controls": {
+    "parent_failure_after_register": {
+      "pairings": [
+        {
+          "point": "after_case_root_register",
+          "action": "ready",
+          "step_id": "s01-ready"
+        },
+        {
+          "point": "after_child_register",
+          "action": "ready",
+          "step_id": "s01-ready"
+        },
+        {
+          "point": "after_pidfd_register",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ]
+    },
+    "worker_exit": {
+      "pairings": [
+        {
+          "point": "after_root_grant",
+          "action": "ready",
+          "step_id": "s01-ready"
+        },
+        {
+          "point": "after_file_register",
+          "action": "create_files",
+          "step_id": "s02-create-files"
+        }
+      ]
+    },
+    "partial_file_write": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "mutate_file_a",
+          "step_id": "s08-mutate"
+        }
+      ],
+      "scenario": "file-replacement",
+      "minimum_file_and_mutation_bytes": 2,
+      "actual_write_bytes": 1,
+      "differing_byte_offsets": [
+        0,
+        1
+      ]
+    },
+    "inherit_canary": {
+      "pairings": [
+        {
+          "point": "before_inventory_exec",
+          "action": "inventory",
+          "step_id": "s04-inventory"
+        }
+      ],
+      "scenario": "descriptor-inventory",
+      "actor": "inventory-negative"
+    },
+    "cancel_before_create": {
+      "pairings": [
+        {
+          "point": "before_first_creation",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ]
+    },
+    "cancel_after_ack": {
+      "point": "immediately_after_ack",
+      "actions": [
+        "ready",
+        "capture_raw",
+        "set_tricky_comm",
+        "exec_b",
+        "exec_a",
+        "exec_missing",
+        "start_sibling",
+        "exit_leader",
+        "exec_from_sibling",
+        "create_files",
+        "replace_file_a",
+        "unlink_original_a",
+        "mutate_file_a"
+      ]
+    },
+    "wrong_run": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "wrong_operation": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "wrong_sequence": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "wrong_step": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "unknown_major": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "extra_fd": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "truncated_payload": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    },
+    "truncated_ancillary": {
+      "pairings": [
+        {
+          "point": "before_ack",
+          "action": "ready",
+          "step_id": "s01-ready"
+        }
+      ],
+      "actor": "a",
+      "replaces_one_reply": true
+    }
+  },
+  "raw_record_kinds": [
+    "task",
+    "fd",
+    "view",
+    "proc",
+    "exit",
+    "exec",
+    "mutation",
+    "failure"
+  ],
+  "raw_record_top_level_keys": [
+    "schema_version",
+    "invocation",
+    "step_id",
+    "record_index",
+    "sequence",
+    "actor_slot",
+    "record_kind",
+    "source",
+    "bytes_hex",
+    "values",
+    "call_result",
+    "errno",
+    "producer_charges"
+  ],
+  "effects": [
+    "case-root",
+    "child-a",
+    "child-b",
+    "file-a",
+    "file-b",
+    "inventory-positive-child",
+    "inventory-negative-child"
+  ],
+  "limits": {
+    "invocations": 16,
+    "children_concurrent": 3,
+    "child_registrations": 4,
+    "sibling_threads": 1,
+    "image_entries": 6,
+    "open_fds_parent": 64,
+    "inventory_slots": 32,
+    "case_directories": 1,
+    "leaf_names": 4,
+    "steps": 10,
+    "datagrams": 568,
+    "payload_bytes": 65536,
+    "diagnostic_bytes": 1024,
+    "raw_file_bytes": 1048576,
+    "read_calls_per_source": 4096,
+    "native_calls_parent": 16384,
+    "native_cleanup_reserve_parent": 512,
+    "native_calls_per_image": 4096,
+    "native_cleanup_reserve_per_image": 128,
+    "file_bytes": 65536,
+    "file_work_bytes": 1048576,
+    "ledger_bytes": 4194304,
+    "image_bytes": 33554432,
+    "hash_work_bytes": 294453760,
+    "parent_retained_bytes": 268435456,
+    "fixed_metadata_bytes": 1048576,
+    "immutable_snapshot_slots": 4,
+    "subsidiary_errors": 32,
+    "nspid_entries": 32,
+    "executable_path_bytes": 4096,
+    "manifest_metadata_bytes_per_invocation": 16384,
+    "manifest_fixed_metadata_bytes": 16384,
+    "manifest_encoded_bytes": 6569984,
+    "manifest_hash_work_bytes": 6569984,
+    "encoded_work_bytes": 34145792
+  },
+  "budgets": {
+    "limit_object_encoding": "all values canonical nonzero decimal-u64 strings in fixture manifests",
+    "packet_formula": {
+      "record_cap": "18*S+Q*(D+1)",
+      "raw_chunks": "R+floor((L-R)/C)",
+      "input_chunks": "U*ceil(F/C)",
+      "other_exchanges": "4+P+2*E+2*S+2*Q+(2+Q)+6",
+      "datagrams": "2*(raw_chunks+input_chunks+other_exchanges)"
+    },
+    "parent_retention_formula": "4*N*L+2*L+3*65600+3*N*F+1048576+1048576+1048576",
+    "worker_retention_formula": "3*L+1048576+3*F+65600+1048576",
+    "hash_formula": "8*I+6*L+6*F+6*65536+4*16512",
+    "explicit_native_attempt_cap": 40960,
+    "no_aggregate_bound_across_leaked_sessions": true,
+    "manifest_encoded_formula": "N*(6*F+16384)+16384",
+    "session_manifest_hash_bytes": 6569984,
+    "parent_retention_maxL_N15": 266338496,
+    "parent_retention_maxL_N16": 283312320,
+    "session_outer_report_hash_bytes": 1048576,
+    "session_total_manifest_plus_outer_hash_bytes": 7618560,
+    "encoded_work_formula": "8*L+6*65536+4*(16512+33024)",
+    "fixed_metadata_suballocation_max": {
+      "admitted_roster_and_global_metadata": 278528,
+      "three_binary_and_hex_handover_workspaces": 148608,
+      "typed_state_at_32768_per_invocation": 524288,
+      "global_state": 8192,
+      "total_at_N16": 976000,
+      "remaining_in_fixed_1MiB": 72576,
+      "empty_failure_inline": 16384
+    },
+    "session_explicit_native_formula": "N*40960+16384; constructor admission consumes existing N*16384 parent pool, never a fabricated invocation effect",
+    "session_admission_parent_pool": "charge once against N*16384 global parent allowance with N*512 reserved cleanup, and retain admission counters separately",
+    "guard_event_storage": "sequential encoded tape inside existing L; bounded transport indices/live typed owners within32768 per invocation; no per-attempt heap roster"
+  },
+  "tricky_comm_hex": "6129205a2031202862",
+  "inventory_canary_hex": "53424649585455524543414e41525931",
+  "pending": {
+    "future_base": "UNBOUND",
+    "dependency_proof": "UNBOUND",
+    "TT04_resources": "UNBOUND",
+    "tracer": "UNBOUND",
+    "C7_artifacts": "PARTIAL_6aaf00 compile preparation; actual product/dependency/archive/runtime UNBOUND",
+    "LX08_final_creator_guard_contract": "RATIFIED_DESIGN_68a86c6; actual guard/provider/consumer/EOF bindings UNBOUND",
+    "LX09_helper_compatibility": "UNBOUND",
+    "TT02_maintenance": "ACCEPTED_2921606; receipt dd9362f4bbdc7b0c55180f3cae47ccb4ab6961956e587cf0f21f372e64ad9e0a"
+  },
+  "effects_scope_note": "Seven per-invocation registrations unchanged. Original admission root/image Files are separately retained assets. One original-session mutable finalizer closes only its original inventory; zero wire, no new effects or runner receipt mutation.",
+  "root_adopted_four_repair_directions": true,
+  "complete_r3_schema_review_pending": true,
+  "outer_cleanup": {
+    "api": "LinuxFixtureSession::finalize(&mut self,LinuxOuterCleanupBudget)->Result<&LinuxOuterCleanupReport,LinuxOuterCleanupAdmissionError>",
+    "report_accessor": "LinuxFixtureSession::outer_cleanup_report(&self)->Option<&LinuxOuterCleanupReport>",
+    "budget_fields": {
+      "deadline": "Instant",
+      "max_native_attempts": "u64",
+      "max_records": "u64",
+      "max_retained_bytes": "u64"
+    },
+    "max_native_attempts": 16384,
+    "max_records": 16384,
+    "full_reserved_report_bytes": 1048576,
+    "max_first_remaining_ns": "checked contract retirement_ms*1000000",
+    "first_statically_valid_call": "permanently stop work; fix budget; live context guard first counted read-only work; failure seals Ok Unresolved without cleanup",
+    "repeat": "return original sealed report; ignore new budget; no native calls or refresh",
+    "worker_wire_messages": 0,
+    "record_charge": "one terminal summary plus every actual native attempt event",
+    "constructor_err_route": "exact supplied3 Files and contract separately, plus opaque move-only original auxiliary custody; close-only one-shot auxiliary finalize and separate driver asset closes",
+    "unresolved": "original same-session custody; pre-reserved failed-shutdown anchor on Drop; never success"
+  },
+  "snapshots": {
+    "schema": "schema-contract.json Snapshot",
+    "slots": {
+      "0": "early_export only when no snapshot exists",
+      "1": "first_failure OR collect; first failure wins",
+      "2": "case_retire only if entered",
+      "3": "run_retire only if entered"
+    },
+    "seal_kinds": [
+      "early_export",
+      "first_failure",
+      "collect",
+      "case_retire",
+      "run_retire"
+    ],
+    "terminal_reservation": "population-specific exhaustive schema upper encoding; maximum 524288; actual encoded/dynamic records all inside L",
+    "raw_ledger_return": "borrow from immutable published OnceLock slot after guard release; no escaped MutexGuard; no refreshed slots",
+    "max_current_subowners": 128,
+    "max_partial_transports": 1,
+    "max_records": 16630,
+    "additional_transport_records": 0,
+    "counter_lifetime": "never reset/refund; worker prefix or Unknown separately from parent independent counts",
+    "limit_error": "Unavailable errno null reason Limit exact LimitKind and consumed charges; never LimitExceeded"
+  },
+  "driver_deadline_schedule": {
+    "kind": "runner_deadline_after_ack",
+    "scenario": "exec-aba",
+    "step_id": "s06-a2",
+    "wire_control": null,
+    "execution_ms": 30000,
+    "retirement_ms_max": 30000,
+    "wait_full_execution_duration_after_real_ACK": true,
+    "maximum_hold_ms": 31000,
+    "fixed_outer_ms": 120000,
+    "max_clock_checks": 64,
+    "max_wait_calls": 64,
+    "sleep_chunk_ms_max": 500,
+    "driver_retained_capacity": 131072,
+    "driver_native_wait_clock_attempts_max": 128,
+    "report_schema": "DriverHoldReport",
+    "normal_nonrefusal_actual_Observation": "cache before hold; return after reached elapsed; completed prefix remains s06-a2; close not invented",
+    "positive_twin": "same actual A/B/ABI/cached Observation at held barrier; no pause, continue s07-close then Collect",
+    "fixture_local_timeout_is_separate": true,
+    "extra_worker_datagrams": 0
+  },
+  "constructor_custody": {
+    "private_guard_algorithm": "root-selected retained-root CreatorContext algorithm in creator-context.md; actual implementation/artifact UNBOUND; no production LX08 dependency",
+    "auxiliary_fd_cap": 16,
+    "constructor_ledger_records": 4096,
+    "constructor_ledger_bytes": 524288,
+    "admission_cleanup_report_bytes": 524288,
+    "same_exclusive_outer_slot_bytes": 1048576,
+    "outcomes": "slot exclusively moves to successful session OR failed-constructor custody; never both",
+    "preallocation_failure_inline_bytes": 16384,
+    "inline_rule": "no auxiliary acquisitions before full reservation; empty constructor ledger/empty-custody report fit checked inline buffer for allocation failure; no hidden FD cleanup",
+    "allowed_custody_operations": [
+      "close original pending auxiliary FD once"
+    ],
+    "forbidden": [
+      "signal",
+      "wait",
+      "child",
+      "path removal",
+      "namespace operation",
+      "reopening"
+    ],
+    "hash_reservation": "constructor-ledger plus admission-report hashes share the same <=1048576 outer hash budget on failure; not additive with successful-session report",
+    "additional_native_attempts": 16384,
+    "additional_records": 16384,
+    "repeat": "same sealed report; zero new work",
+    "auxiliary_unresolved": "same custody retains originals; failed-shutdown Drop anchor, no success",
+    "terminal_envelope_upper_bytes": 50742,
+    "cleanup_report_full_upper_bytes": 67239
+  },
+  "creator_context": {
+    "root_ruling_sha256": "2072302ddaaf1cf3575076b4174d81866fd96f0fc406ec4d0c79cc1a7cb56b36",
+    "translation_sha256": "965eb9a5f3cacc983f53251568a5ea492917bf99854ef8eaefd7f9aa8199f466",
+    "advisory_index_sha256": "0db2ed7a472158b118d35d9f37c99c10cde5ced86f710569d483cc484d7cb690",
+    "selected_design": "private retained3 proc-root/original-creator-pidfd/active-PID-namespace specialization",
+    "constructor": {
+      "acquisitions": 6,
+      "peak": 4,
+      "retained": 3,
+      "closes": 3,
+      "nondata_attempts": 23,
+      "minimum_total": 28
+    },
+    "guard": {
+      "fresh_acquisitions": 4,
+      "fresh_peak": 3,
+      "fresh_retained": 0,
+      "closes": 4,
+      "nondata_attempts": 19,
+      "minimum_total": 24
+    },
+    "production_LX08_runtime_dependency": false,
+    "guard_actual_source_or_artifacts": "UNBOUND",
+    "metadata": "existing raw_file_bytes G>=2; M=G-1, existing aggregate R; no extra Vec/DOM",
+    "poll": "actual ready count and raw signed revents, null outputs on failed/unperformed query",
+    "control_entrypoints": [
+      "prepare",
+      "advance",
+      "collect native work",
+      "case_retire",
+      "run_retire",
+      "first_valid_outer_finalize"
+    ],
+    "retained_ids": [
+      "context-proc-root",
+      "context-creator-pidfd",
+      "context-pid-namespace"
+    ],
+    "run_retirement_preserves_context": true,
+    "cleanup_uses_actual_cleanup_allowance_not_execution_stop": true,
+    "raw_file_bytes_min": 2,
+    "metadata_bound": "M=G-1 aggregate including overflow; max returned bytes G",
+    "namespace_kind": {
+      "expected": 536870912,
+      "ioctl": 46851,
+      "return": "direct successful i32 with null operand; no dereference/NoArg/Getter"
+    },
+    "guard_evidence_schema": "GuardEvidence",
+    "additional_worker_records_or_exchanges": 0
+  },
+  "snapshot_terminal_upper_bytes": 255019,
+  "outer_terminal_upper_bytes": 411019,
+  "guard_error_mapping": {
+    "path": "guard-error-map.json",
+    "sha256": "93bac2a4ab11cc28af67a75032f1bc7dada199e81361aa67d7c341ffbf319b8d",
+    "private_guard_reason_enum": "GuardReason",
+    "no_new_public_error_category": true
+  },
+  "narrow_successor": {
+    "from": "r3",
+    "finding": "TT03-R3-FINAL-01",
+    "scope": "guard error projection consistency only",
+    "encoded_types_or_bounds_changed": false
+  }
+}
