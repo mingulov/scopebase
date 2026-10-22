@@ -16,7 +16,7 @@
     ]
   },
   "selection": {
-    "selected_file_count": 129,
+    "selected_file_count": 132,
     "selected_file_ids": [
       "P:crates/manifest/src/identity.rs",
       "P:crates/manifest/src/maps.rs",
@@ -146,7 +146,10 @@
       "P:src/discovery/scan.rs",
       "O:src/args.rs",
       "O:tests/cli_limits.rs",
-      "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs"
+      "K:crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs",
+      "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+      "M:src/memveil/capture/reader.mojo",
+      "P:src/pidns.rs"
     ],
     "unselected_disposition": "RESEARCH_ONLY_NOT_ADOPTED",
     "unselected_scope": "All other refs, worktrees, untracked experiments and source paths remain research references. No merging or source publication is authorized by intake.",
@@ -158,7 +161,10 @@
       "J catalog source CR09-M1 remains f520a529 but has 63 tracked modifications and 11 untracked entries at observation. tests/kernel/test_map_roundtrip.py and compiler/lib/MapMetadata.cpp are selected dirty inputs with current SHA256 recorded. Current dev and D2/checkouts remain separate; D2 test_map_btf.py has distinct dirty bytes recorded in worktree metadata.",
       "MemVeil consumes libbpf-mojo 681096cb588379307d0c8e94e1d77e53de4be22f per toolchain.lock.json; neither L nor LJ is automatically its consumed runtime.",
       "BP02 adds the exact frozen K snapshot_who consumer row and admits 23 ADAPT scopes across seven K/L rows; nine selected comparison scopes remain reference-only. Prior narrower admissions and current CP04 authorizations are preserved. This is source admission, not copying or runtime qualification.",
-      "LX05 admits exactly 15 selected P source ranges across P:crates/manifest/src/maps.rs and P:crates/manifest/src/identity.rs under OWNER-2026-10-18 for host Apache-2.0 destinations; all 16 selected comparison/reference scopes remain ungranted. This is immutable pre-copy admission, not copying, implementation or qualification."
+      "LX05 admits exactly 15 selected P source ranges across P:crates/manifest/src/maps.rs and P:crates/manifest/src/identity.rs under OWNER-2026-10-18 for host Apache-2.0 destinations; all 16 selected comparison/reference scopes remain ungranted. This is immutable pre-copy admission, not copying, implementation or qualification.",
+      "CP05 adds two exact frozen source rows and 34 narrow copying ranges across eight K/M files for host or data-document Apache-2.0 destinations under OWNER-2026-10-18. Existing scopes and original observations remain intact; seventeen original regression slices are explicitly routed. The source admission does not resolve the CP05 public API decisions or assert copying, implementation or qualification.",
+      "PRIVATE LX08 DRAFT FOR CONTROLLER REVIEW: append only the omitted frozen P:src/pidns.rs row and propose exact owned host ProcPin/process/view/stat/namespace and original-test ranges across four P/O rows under existing OWNER-2026-10-18. Captured variants and all earlier observations/admissions are preserved. No source copy, public API/support ruling, product implementation, passing test or task/profile acceptance follows. Initial-only versus matched-nested remains unratified.",
+      "Private BP03 host-values proposal: three exact P ranges across two existing rows for pure PidFilterHits values/predicate, its original pure four-population regression, and descriptive KernelVerdict distinctions. Proposed host Apache-2.0 scopes use existing OWNER-2026-10-18 while preserving historical source observations. Native probe/policy/classifier/target code, comparison-source copying, IDs/context architecture, implementation and qualification remain unselected; source-only readiness cannot make BP03 dispatch-ready."
     ]
   },
   "donors": [
@@ -229,7 +235,8 @@
         "src/uretprobe_hazard.rs": "343077c7c053662d3582e24c755a2073b85f126347060b9a8ff8e97a7b1de0cb",
         "src/attach/cleanup_worker.rs": "41b581cb2e086e38f237ad072418802934e71d5db31bcd062e8bffd8331eb7b3",
         "src/scope/inventory_cgroup.rs": "8f4fcf17b390cee3e57349bbfc09721f4b4a947e72193f6b52751cca20617f31",
-        "src/discovery/scan.rs": "5cbf2b0145045980cea8a093f36e076542926bb19db487e45c5af21027e2180b"
+        "src/discovery/scan.rs": "5cbf2b0145045980cea8a093f36e076542926bb19db487e45c5af21027e2180b",
+        "src/pidns.rs": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9"
       }
     },
     {
@@ -290,7 +297,8 @@
         "docs/dependencies/pins.md": "ddedc4750e9d52a07f8df259c3b0d99171f55ee3496627b99078622a42e9e036",
         "docs/decisions/ADR-0013.md": "f19f9c25256c81b0dc676ebcdb3b67ef7d6b6bef69bbf1b3b8f2293cd2a6c336",
         "docs/decisions/ADR-0011.md": "027b3daf0b894e86eb3a9d35690bd610013a45031e81427a02d03d837f286009",
-        "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db"
+        "crates/kryprobe-privilege/src/kcrypto_backend/snapshot_who.rs": "e783c48e9378d88f166cdac3db666ed707ffa9656a27b093348041b74bfa05db",
+        "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5"
       }
     },
     {
@@ -441,7 +449,8 @@
         "tests/fixtures/attempts/gen_corpus.py": "2924df092113568fe1b90e8178da6ed5aa3c4140bee01525796ce5688850554b",
         "tests/fixtures/attempts/corpus.txt": "9f102cc50daa7b397efe13249eb3cd2e5bbe4cdd4f0973108cd2eed9a982a0be",
         "tests/native/test_attempt_decode.c": "74626ac868d5b51a3d380d7f00237adf19445770d7e8228a296632e04e87b73e",
-        "toolchain.lock.json": "e3e16e2786fc0cf527708ad4aa5b61e44f4dee809631a0bac417ace7cf051976"
+        "toolchain.lock.json": "e3e16e2786fc0cf527708ad4aa5b61e44f4dee809631a0bac417ace7cf051976",
+        "src/memveil/capture/reader.mojo": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8"
       }
     },
     {
@@ -1894,7 +1903,9 @@
         "tasks": [
           "LX09",
           "LX10",
-          "LX11"
+          "LX11",
+          "LX08",
+          "LX06"
         ]
       },
       "license": {
@@ -1941,14 +1952,215 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/process.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            301,
+            305
+          ],
+          [
+            307,
+            316
+          ],
+          [
+            318,
+            327
+          ],
+          [
+            471,
+            483
+          ],
+          [
+            485,
+            496
+          ],
+          [
+            498,
+            507
+          ],
+          [
+            509,
+            517
+          ],
+          [
+            586,
+            588
+          ],
+          [
+            590,
+            592
+          ],
+          [
+            598,
+            613
+          ],
+          [
+            708,
+            713
+          ],
+          [
+            715,
+            723
+          ],
+          [
+            725,
+            752
+          ],
+          [
+            754,
+            759
+          ],
+          [
+            761,
+            778
+          ],
+          [
+            781,
+            819
+          ],
+          [
+            823,
+            831
+          ],
+          [
+            833,
+            841
+          ],
+          [
+            843,
+            874
+          ],
+          [
+            944,
+            958
+          ],
+          [
+            960,
+            970
+          ],
+          [
+            972,
+            984
+          ],
+          [
+            986,
+            1001
+          ],
+          [
+            1003,
+            1033
+          ],
+          [
+            1191,
+            1193
+          ],
+          [
+            1195,
+            1197
+          ],
+          [
+            1199,
+            1205
+          ],
+          [
+            1207,
+            1239
+          ],
+          [
+            1263,
+            1272
+          ],
+          [
+            1274,
+            1276
+          ],
+          [
+            1278,
+            1296
+          ],
+          [
+            1324,
+            1333
+          ],
+          [
+            1335,
+            1363
+          ],
+          [
+            1365,
+            1383
+          ],
+          [
+            1385,
+            1387
+          ],
+          [
+            1389,
+            1392
+          ],
+          [
+            1394,
+            1404
+          ],
+          [
+            1478,
+            1506
+          ],
+          [
+            1508,
+            1517
+          ],
+          [
+            1519,
+            1526
+          ],
+          [
+            1528,
+            1550
+          ],
+          [
+            1552,
+            1617
+          ],
+          [
+            1701,
+            1708
+          ],
+          [
+            1719,
+            1737
+          ],
+          [
+            1739,
+            1760
+          ],
+          [
+            1762,
+            1786
+          ],
+          [
+            1788,
+            1827
+          ],
+          [
+            1829,
+            1875
+          ],
+          [
+            1877,
+            1917
+          ],
+          [
+            1929,
+            2427
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -2079,7 +2291,8 @@
           }
         ],
         "evidence": "Mechanically extracted candidate symbols. C includes support/wrapper functions; port selections live in port_groups. Existence is source evidence, not passing tests or complete coverage."
-      }
+      },
+      "intake_mapping_note": "LX08 draft appends explicit observation consumers while retaining the historical LX09 primary file owner and existing references. Only the named exact host mechanism/regression scopes use OWNER-2026-10-18 with Apache-2.0 destination; historical GPL-3.0-or-later observations and all unselected control/cache/application code remain unchanged. This is source-copy admission only, not public API/support ratification, copying or runtime qualification."
     },
     {
       "id": "P:src/events.rs",
@@ -2933,14 +3146,23 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:crates/bpf-multi/src/lib.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            591,
+            605
+          ],
+          [
+            1179,
+            1192
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -5858,14 +6080,19 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for P:src/uretprobe_hazard.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            34,
+            50
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -10768,16 +10995,65 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for K:crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            146,
+            172
+          ],
+          [
+            226,
+            235
+          ],
+          [
+            593,
+            610
+          ],
+          [
+            613,
+            632
+          ],
+          [
+            816,
+            839
+          ],
+          [
+            842,
+            863
+          ],
+          [
+            866,
+            883
+          ],
+          [
+            886,
+            901
+          ],
+          [
+            904,
+            917
+          ],
+          [
+            920,
+            951
+          ],
+          [
+            1129,
+            1147
+          ],
+          [
+            1150,
+            1172
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12506,7 +12782,9 @@
         "tasks": [
           "LX09",
           "LX10",
-          "LX11"
+          "LX11",
+          "LX08",
+          "LX06"
         ]
       },
       "license": {
@@ -12548,14 +12826,55 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:src/pin.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            15,
+            24
+          ],
+          [
+            43,
+            57
+          ],
+          [
+            59,
+            64
+          ],
+          [
+            66,
+            95
+          ],
+          [
+            98,
+            105
+          ],
+          [
+            113,
+            138
+          ],
+          [
+            144,
+            150
+          ],
+          [
+            153,
+            160
+          ],
+          [
+            162,
+            167
+          ],
+          [
+            169,
+            177
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -12594,7 +12913,8 @@
           }
         ],
         "evidence": "Mechanically extracted candidate symbols. C includes support/wrapper functions; port selections live in port_groups. Existence is source evidence, not passing tests or complete coverage."
-      }
+      },
+      "intake_mapping_note": "LX08 draft appends explicit observation consumers while retaining the historical LX09 primary file owner and existing references. Only the named exact host mechanism/regression scopes use OWNER-2026-10-18 with Apache-2.0 destination; historical GPL-3.0-or-later observations and all unselected control/cache/application code remain unchanged. This is source-copy admission only, not public API/support ratification, copying or runtime qualification."
     },
     {
       "id": "O:src/target.rs",
@@ -14978,7 +15298,9 @@
         "tasks": [
           "LX09",
           "LX10",
-          "LX11"
+          "LX11",
+          "LX08",
+          "LX06"
         ]
       },
       "license": {
@@ -15020,14 +15342,27 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for O:tests/target_lifecycle.rs; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            122,
+            127
+          ],
+          [
+            129,
+            138
+          ],
+          [
+            358,
+            375
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -15254,7 +15589,8 @@
           }
         ],
         "evidence": "Mechanically extracted candidate symbols. C includes support/wrapper functions; port selections live in port_groups. Existence is source evidence, not passing tests or complete coverage."
-      }
+      },
+      "intake_mapping_note": "LX08 draft appends explicit observation consumers while retaining the historical LX09 primary file owner and existing references. Only the named exact host mechanism/regression scopes use OWNER-2026-10-18 with Apache-2.0 destination; historical GPL-3.0-or-later observations and all unselected control/cache/application code remain unchanged. This is source-copy admission only, not public API/support ratification, copying or runtime qualification."
     },
     {
       "id": "O:tests/capture_controller.rs",
@@ -16507,14 +16843,23 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/model/identity.mojo; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            38,
+            42
+          ],
+          [
+            121,
+            150
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -16639,14 +16984,27 @@
       "adoption": {
         "disposition": "PORT_SOURCE",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:src/memveil/analysis/mappings.mojo; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            490,
+            510
+          ],
+          [
+            536,
+            548
+          ],
+          [
+            663,
+            680
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -16999,16 +17357,21 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_reader.mojo; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1912,
+            1942
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -17441,12 +17804,20 @@
         "decision_status": "READY_FOR_SELECTED_SCOPE",
         "source_scope": [
           [
+            544,
+            559
+          ],
+          [
             599,
             607
           ],
           [
             768,
             783
+          ],
+          [
+            848,
+            899
           ]
         ],
         "ownership_basis": "USER_OWNED",
@@ -18270,16 +18641,25 @@
         "normalization_note": null
       },
       "adoption": {
-        "disposition": "PORT_SOURCE",
+        "disposition": "VECTORS_ONLY",
         "copy_status": "NOT_COPIED",
-        "decision_status": "NEEDS_DECISION",
-        "source_scope": null,
-        "ownership_basis": "UNRESOLVED",
-        "artifact_role": null,
-        "destination_license": null,
-        "authorization_ref": null,
-        "third_party_terms": null,
-        "blocked_reason": "Source slice, actual artifact role and owned/upstream fragment classification have not been selected for M:tests/unit/test_identity.mojo; expert selection is required before copying."
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            89,
+            96
+          ],
+          [
+            114,
+            121
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "data-document",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
       },
       "source_evidence": {
         "exists_at_commit": true,
@@ -23655,6 +24035,585 @@
         ],
         "evidence": "Exact frozen source inspected for BP02 WHO88 consumer preservation; no donor execution."
       }
+    },
+    {
+      "id": "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+      "commit": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "sha256": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5",
+      "dirty_sha256": null,
+      "owner": "CP05",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H25"
+        ],
+        "G": [
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC14"
+        ],
+        "TODO": [
+          "L09",
+          "Q01",
+          "T01",
+          "T02",
+          "T03"
+        ],
+        "tasks": [
+          "CP05",
+          "CP10",
+          "CP11"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+            "sha256": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-3.0-or-later.txt",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "crates/kryprobe-privilege/Cargo.toml",
+            "sha256": "2b4cbeef20ba53cc1b3dd829029ea76bf51f0c847c8032d73956648fa6c68aa7",
+            "declarations": [
+              "true"
+            ],
+            "kind": "manifest_declaration"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "297ba19b03dcbb89d42c2cc3a540fabe89eceacc08075c100b285eb99fb513cf",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            563,
+            576
+          ],
+          [
+            586,
+            595
+          ],
+          [
+            636,
+            640
+          ],
+          [
+            660,
+            670
+          ],
+          [
+            963,
+            1006
+          ],
+          [
+            1013,
+            1022
+          ],
+          [
+            1057,
+            1061
+          ],
+          [
+            1138,
+            1154
+          ],
+          [
+            1215,
+            1254
+          ],
+          [
+            1297,
+            1313
+          ],
+          [
+            1349,
+            1367
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5",
+        "observed_sha256": "1815708dabb2c95cad74185df192e6dcb6cc01d8aca1ed256b7e3bdff502e6b5",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 58247,
+        "original_observation_sha256": "a109037422aad1bdd58b303a14e622f8856e89e5929a8181812ec0f65e4d5c43",
+        "selection_note": "New CP05 row from completed private 2026-10-18 capture; selected frozen bytes equal selected commit. This is not an original-124 observer record or a live donor status refresh."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [
+          {
+            "name": "PendingAttempt",
+            "line": 543
+          },
+          {
+            "name": "TransformTracker",
+            "line": 636
+          },
+          {
+            "name": "submit",
+            "line": 968
+          },
+          {
+            "name": "complete",
+            "line": 1057
+          },
+          {
+            "name": "complete_alloc",
+            "line": 1117
+          },
+          {
+            "name": "complete_destroy",
+            "line": 1207
+          },
+          {
+            "name": "complete_config",
+            "line": 1273
+          },
+          {
+            "name": "evict_tombstones",
+            "line": 1354
+          }
+        ],
+        "evidence": "Exact source symbols inspected in completed frozen CP05 input; admitted scopes may be partial method bodies. No donor or ScopeBase test execution."
+      }
+    },
+    {
+      "id": "M:src/memveil/capture/reader.mojo",
+      "donor": "M",
+      "path": "src/memveil/capture/reader.mojo",
+      "commit": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "sha256": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8",
+      "dirty_sha256": null,
+      "owner": "CP05",
+      "intended_contracts": [
+        "capture-independent-facts-and-replay"
+      ],
+      "references": {
+        "H": [
+          "H03",
+          "H25"
+        ],
+        "G": [
+          "G18",
+          "G20",
+          "G22"
+        ],
+        "UC": [
+          "UC14"
+        ],
+        "TODO": [
+          "L09",
+          "Q01",
+          "T01",
+          "T02",
+          "T03"
+        ],
+        "tasks": [
+          "CP05",
+          "CP10",
+          "CP11"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/memveil/capture/reader.mojo",
+            "sha256": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            401,
+            409
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8",
+        "observed_sha256": "ae72efd3749e24622a2ebaefa135cbd7bf3ff4321976919415d3fc0e8ef28fa8",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 22623,
+        "original_observation_sha256": "cae075277f758d4db61bf6fa54ad7aca4a0abbffe92e6be861b811b46e81a7e6",
+        "selection_note": "New CP05 row from completed private 2026-10-18 capture; selected frozen bytes equal selected commit. This is not an original-124 observer record or a live donor status refresh."
+      },
+      "source_issue_test": {
+        "issues": [
+          "capture-independent-facts-and-replay"
+        ],
+        "existing_symbols": [
+          {
+            "name": "_check_identities",
+            "line": 361
+          }
+        ],
+        "evidence": "Exact source symbols inspected in completed frozen CP05 input; admitted scopes may be partial method bodies. No donor or ScopeBase test execution."
+      }
+    },
+    {
+      "id": "P:src/pidns.rs",
+      "donor": "P",
+      "path": "src/pidns.rs",
+      "commit": "2c2713e66292b0d2688508a25f79e813ae823d81",
+      "sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+      "dirty_sha256": null,
+      "owner": "LX08",
+      "intended_contracts": [
+        "process-observation-custody"
+      ],
+      "references": {
+        "H": [
+          "H01",
+          "H02",
+          "H03"
+        ],
+        "G": [
+          "G06",
+          "G10",
+          "G11",
+          "G12",
+          "G18"
+        ],
+        "UC": [
+          "UC05",
+          "UC11"
+        ],
+        "TODO": [
+          "L02",
+          "L05",
+          "L09",
+          "T01",
+          "T04"
+        ],
+        "tasks": [
+          "LX08",
+          "LX06",
+          "LX09",
+          "LX10",
+          "LX11"
+        ]
+      },
+      "license": {
+        "spdx": "GPL-3.0-or-later",
+        "resolution": "explicit_spdx",
+        "evidence": [
+          {
+            "path": "src/pidns.rs",
+            "sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+            "kind": "observed_source_spdx"
+          },
+          {
+            "path": "LICENSE",
+            "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-only.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "LICENSES/GPL-2.0-or-later.txt",
+            "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+            "kind": "license_text"
+          },
+          {
+            "path": "Cargo.toml",
+            "sha256": "abb1308bbd77a8d742fa83b61c90912e64346383b45816a5514b5741683bf051",
+            "declarations": [
+              "\"GPL-3.0-or-later\""
+            ],
+            "kind": "manifest_declaration"
+          }
+        ],
+        "raw_spdx_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "raw_effective_license_observation": [
+          "GPL-3.0-or-later"
+        ],
+        "normalization_note": null
+      },
+      "adoption": {
+        "disposition": "PORT_SOURCE",
+        "copy_status": "NOT_COPIED",
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            27,
+            28
+          ],
+          [
+            33,
+            79
+          ],
+          [
+            81,
+            88
+          ],
+          [
+            90,
+            94
+          ],
+          [
+            109,
+            132
+          ],
+          [
+            135,
+            172
+          ],
+          [
+            174,
+            182
+          ],
+          [
+            185,
+            190
+          ],
+          [
+            201,
+            204
+          ],
+          [
+            218,
+            225
+          ],
+          [
+            445,
+            449
+          ],
+          [
+            455,
+            468
+          ],
+          [
+            470,
+            479
+          ],
+          [
+            481,
+            507
+          ],
+          [
+            592,
+            635
+          ],
+          [
+            637,
+            688
+          ],
+          [
+            690,
+            723
+          ],
+          [
+            725,
+            772
+          ],
+          [
+            774,
+            786
+          ],
+          [
+            788,
+            811
+          ]
+        ],
+        "ownership_basis": "USER_OWNED",
+        "artifact_role": "host",
+        "destination_license": "Apache-2.0",
+        "authorization_ref": "OWNER-2026-10-18",
+        "third_party_terms": [],
+        "blocked_reason": null
+      },
+      "source_evidence": {
+        "exists_at_commit": true,
+        "head_blob_sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+        "observed_sha256": "49d4c3d381f82675484c17f26807a6d3fe95d4304f0cdeee74d90312d4b3aba9",
+        "dirty_sha256": null,
+        "git_status": "",
+        "size_bytes": 33975,
+        "original_observation_sha256": "adbbc3936cfdd50f2acae6326aa87ba3b45d310a67c428d69a7a809fdfdfef61"
+      },
+      "source_issue_test": {
+        "issues": [
+          "process-observation-custody"
+        ],
+        "existing_symbols": [
+          {
+            "name": "classify",
+            "line": 66
+          },
+          {
+            "name": "parse_pid_ns_link",
+            "line": 82
+          },
+          {
+            "name": "read_own_pidns_link",
+            "line": 92
+          },
+          {
+            "name": "classify_proc_view",
+            "line": 141
+          },
+          {
+            "name": "read_proc_view_at",
+            "line": 175
+          },
+          {
+            "name": "agrees",
+            "line": 202
+          },
+          {
+            "name": "numbering_from",
+            "line": 220
+          },
+          {
+            "name": "the_initial_inode_is_the_kernel_abi_constant",
+            "line": 446
+          },
+          {
+            "name": "only_the_initial_inode_classifies_initial",
+            "line": 456
+          },
+          {
+            "name": "an_unreadable_namespace_is_unknown_never_initial",
+            "line": 471
+          },
+          {
+            "name": "a_link_that_is_not_a_pid_namespace_is_unknown",
+            "line": 485
+          },
+          {
+            "name": "labels_are_the_published_closed_set",
+            "line": 510
+          },
+          {
+            "name": "pid_scope_is_allowed_only_in_the_initial_namespace",
+            "line": 519
+          },
+          {
+            "name": "evidence_names_both_numberings",
+            "line": 544
+          },
+          {
+            "name": "only_a_mismatched_observer_warns",
+            "line": 559
+          },
+          {
+            "name": "only_this_namespaces_own_proc_classifies_own",
+            "line": 595
+          },
+          {
+            "name": "a_foreign_proc_under_an_initial_observer_is_a_mismatch",
+            "line": 641
+          },
+          {
+            "name": "an_unserved_proc_refuses_every_capture_by_name",
+            "line": 693
+          },
+          {
+            "name": "the_numbering_composes_the_mounted_procs_view",
+            "line": 729
+          },
+          {
+            "name": "the_test_seam_injects_on_this_thread_only",
+            "line": 776
+          },
+          {
+            "name": "the_live_read_is_a_pid_namespace_link",
+            "line": 791
+          }
+        ],
+        "evidence": "Read from the named completed frozen w003 file and independent r001.git commit, not a refreshed live donor. Fourteen original tests and seven implementation symbols are source observations only; no execution or complete capability claim."
+      },
+      "intake_mapping_note": "LX08 adds this formerly omitted row from completed private capture p11scope-ws/tree/.worktrees/v040-integration (w003), history p11scope-ws/history/r001.git, commit 2c2713e66292b0d2688508a25f79e813ae823d81. Selected bytes match the commit; no selected WIP delta. Exact proposed line scopes are in adoption. Preserve the older pidns variant as reference. Existing OWNER-2026-10-18 authorizes only selected owned host contributions; initial-only versus matched-nested support, global-cache replacement, API and runtime results remain separate controller decisions."
     }
   ],
   "port_groups": [
@@ -24096,7 +25055,9 @@
           "LX09",
           "LX10",
           "LX11",
-          "LX04"
+          "LX04",
+          "LX08",
+          "LX06"
         ]
       },
       "source_file_ids": [
@@ -24110,7 +25071,8 @@
         "O:tests/target_lifecycle.rs",
         "P:src/scope/inventory_cgroup.rs",
         "O:src/args.rs",
-        "O:tests/cli_limits.rs"
+        "O:tests/cli_limits.rs",
+        "P:src/pidns.rs"
       ],
       "selected_regressions_to_port_or_adapt": [
         {
@@ -24300,6 +25262,188 @@
           "path": "tests/target_lifecycle.rs",
           "name": "r20fix_kernel_lifecycle_witnesses_real_fork_exec_exit",
           "line": 2224,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "pid_reuse_between_pin_and_proc_open_refuses",
+          "line": 945,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "changed_admission_birth_during_proc_open_refuses",
+          "line": 961,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stable_proc_acquisition_keeps_directory_after_final_liveness_check",
+          "line": 987,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "original_pin_death_during_actual_maps_read_refuses",
+          "line": 1004,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "a_generation_change_stops_before_the_next_target_action",
+          "line": 1481,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "root_fence_owned_poll_error_is_not_a_timeout",
+          "line": 1520,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "original_exit_probe_distinguishes_exit_from_transport_failure",
+          "line": 1529,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "original_generation_state_distinguishes_exit_from_pid_reuse",
+          "line": 1555,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "process_view_records_its_monotonic_admission_boundary",
+          "line": 1702,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "admission_clock_is_read_only_after_identity_validation",
+          "line": 1720,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "only_a_missing_process_is_proof_of_exit",
+          "line": 1745,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "single_read_stat_matches_read_to_string",
+          "line": 1768,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stat_read_retries_interrupted_reads",
+          "line": 1792,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stat_read_accumulates_short_reads_and_the_buffer_overflow",
+          "line": 1834,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/process.rs",
+          "name": "stat_fields_survive_a_comm_with_parens_spaces_and_a_fake_state",
+          "line": 1883,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "the_initial_inode_is_the_kernel_abi_constant",
+          "line": 446,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "only_the_initial_inode_classifies_initial",
+          "line": 456,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "an_unreadable_namespace_is_unknown_never_initial",
+          "line": 471,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "a_link_that_is_not_a_pid_namespace_is_unknown",
+          "line": 485,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "only_this_namespaces_own_proc_classifies_own",
+          "line": 595,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "a_foreign_proc_under_an_initial_observer_is_a_mismatch",
+          "line": 641,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "an_unserved_proc_refuses_every_capture_by_name",
+          "line": 693,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "the_numbering_composes_the_mounted_procs_view",
+          "line": 729,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "the_test_seam_injects_on_this_thread_only",
+          "line": 776,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "P",
+          "path": "src/pidns.rs",
+          "name": "the_live_read_is_a_pid_namespace_link",
+          "line": 791,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "O",
+          "path": "tests/target_lifecycle.rs",
+          "name": "external_pid_target_is_never_signaled",
+          "line": 359,
           "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
         }
       ],
@@ -26419,7 +27563,9 @@
         "M:tests/unit/test_identity.mojo",
         "M:tests/fixtures/attempts/gen_corpus.py",
         "M:tests/fixtures/attempts/corpus.txt",
-        "M:tests/native/test_attempt_decode.c"
+        "M:tests/native/test_attempt_decode.c",
+        "K:crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs",
+        "M:src/memveil/capture/reader.mojo"
       ],
       "selected_regressions_to_port_or_adapt": [
         {
@@ -26784,6 +27930,104 @@
           "path": "tests/unit/test_engine.mojo",
           "name": "test_post_gap_pool_run_survives_snapshots",
           "line": 919,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "pending_table_bound_refuses",
+          "line": 226,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "alloc_after_proved_retire_assigns_fresh_id",
+          "line": 593,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "alloc_for_live_base_forces_retire_as_ambiguous",
+          "line": 613,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "destroy_return_after_realloc_retires_nothing",
+          "line": 816,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "destroy_entry_unmapped_then_live_refuses",
+          "line": 842,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "config_return_after_realloc_unlinks",
+          "line": 886,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "config_entry_unmapped_then_live_unlinks",
+          "line": 904,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "config_after_retire_admits_fresh_never_merges",
+          "line": 920,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "d4_live_cap_refuses_new_generations",
+          "line": 1129,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "K",
+          "path": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs",
+          "name": "d4_retired_history_is_fifo_bounded",
+          "line": 1150,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_identity.mojo",
+          "name": "test_pairing_key_namespaces",
+          "line": 89,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_identity.mojo",
+          "name": "test_generation_positive",
+          "line": 114,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_mappings.mojo",
+          "name": "test_reused_generation_two_samples",
+          "line": 544,
+          "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
+        },
+        {
+          "alias": "M",
+          "path": "tests/unit/test_mappings.mojo",
+          "name": "test_retired_history_bounded",
+          "line": 848,
           "evidence": "SYMBOL_PRESENT_IN_INSPECTED_SOURCE_NOT_RUN"
         }
       ],
@@ -28163,6 +29407,18 @@
           "location": "crates/kryprobe-privilege/tests/kcrypto_tfm_lifecycle.rs:593,613,816,886,1081,1129",
           "coverage": "INSPECTED_SOURCE",
           "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "K",
+          "location": "crates/kryprobe-privilege/src/kcrypto_lifecycle/tfm.rs:963-1006,1215-1254,1349-1367",
+          "coverage": "INSPECTED_FROZEN_SOURCE_NOT_RUN",
+          "pin_document": "kryprobe.md#revision-and-custody"
+        },
+        {
+          "alias": "M",
+          "location": "src/memveil/capture/reader.mojo:401-409",
+          "coverage": "INSPECTED_FROZEN_SOURCE_NOT_RUN",
+          "pin_document": "memveil.md#revision-and-custody-boundary"
         }
       ],
       "independent_oracle": "Append-only operation log independently assigns epochs/generations and expected live objects under reuse, repeated allocation, late completion and missing release; small explicit tombstone limits force exhaustion.",

@@ -20,6 +20,8 @@ The user requires deep, proactive gap analysis, preservation of hard-won fixes, 
 
 - [LX05 parser contract](docs/superpowers/specs/2026-10-18-scopebase-lx05-proc-contract.md) and [verification plan](docs/superpowers/plans/2026-10-18-scopebase-lx05-verification.md): frozen maps/mountinfo grammar, source preservation, bounds and delivered parser checks; runtime identity remains with its later owners.
 
+- [Next host-source admission](docs/provenance/next-host-scopes-20261022.md): 132 source rows, 41 narrow ready scopes. CP05/LX08/BP03 source selection is admitted separately from still-incomplete executor/API/fixture packets; no task is accepted by intake.
+
 - [Decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md), [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md), and [repair plan / all task routes](docs/superpowers/plans/2026-10-18-scopebase-plan-repair.md): mandatory WHAT/WHY decisions, source slices, stop rules and task origins. Read before dispatch or implementation; source inventory and dependency readiness alone do not make a packet ready.
 
 - [Development workflow](DEVELOPMENT.md), [current handoff](handoff.md) and [execution policy](orchestration/policy.json): controller/worker roles, model efforts, task/review preparation and restart custody. Product work follows the active thread goal; do not create a replacement goal or infer a budget.
