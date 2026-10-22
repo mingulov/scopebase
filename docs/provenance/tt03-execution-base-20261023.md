@@ -19,9 +19,10 @@ design-only adoption").
 - It freezes the starting tree for the TT03 finite-implementation
   packet: any dispatch must start from this commit with a clean tree,
   and any later base requires a fresh binding.
-- It is NOT a dispatch authorization. Two gates remain before any
-  PORT/ADAPT/VECTORS_ONLY execution: (1) independent Sol re-review of
-  the Q1/Q2 adoption packet, (2) explicit resume for TT03 execution.
+- It is NOT a dispatch authorization. Of the two pre-dispatch gates,
+  (1) independent re-review of the Q1/Q2 adoption packet is DONE
+  (APPROVE, full hash recomputation, no blocking findings); (2)
+  explicit resume for TT03 execution is still REQUIRED.
   All 14 packet items (destination bytes, C7 artifacts, binaries,
   resources, realms, EOF, tracer, LX09, final-index, creator-guard,
   row executions, installed delivery) remain UNBOUND/NOT_RUN.
