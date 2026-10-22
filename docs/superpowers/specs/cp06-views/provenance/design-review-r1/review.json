@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R2_INDEPENDENT_CONTRACT_VERIFICATION_DESIGN_REVIEW",
+  "date": "2026-10-22",
+  "review_revision": "r1",
+  "disposition": "NEEDS_REPAIR",
+  "summary": "Nine root semantic choices are coherent;two narrow verification freeze repairs are needed.No additional architecture/public API/source-selection choice was found.",
+  "root_ratification_authority": "root/controller only",
+  "source_admission": false,
+  "implementation_admission": false,
+  "task_acceptance": false,
+  "packet_readiness": "NOT_PACKET_READY",
+  "input_bindings": [
+    {
+      "role": "exact_r2_index",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/artifact-index.json",
+      "sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e"
+    },
+    {
+      "role": "root_semantic_rulings",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-root-design-rulings-r1.json",
+      "sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab"
+    },
+    {
+      "role": "immutable_r1_index",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r1/artifact-index.json",
+      "sha256": "10db2b1698018f7a5a1031f5f3b7ffcc663a8012199f3fc9201cf8945ce42aee"
+    },
+    {
+      "role": "source_proposal_review_disposition_only",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-source-admission-review-r1/artifact-index.json",
+      "sha256": "ee2c2dd3bbd527dcf3be8d269e3659669766abd426cbdcbdc4288626ed255270"
+    },
+    {
+      "role": "r2_contract.md",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/contract.md",
+      "sha256": "dbb397c8d3290b19a45db337170a6510a927d4b41a7953f9b0a80562e53fc4a6"
+    },
+    {
+      "role": "r2_verification-plan.md",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/verification-plan.md",
+      "sha256": "f52757e6de4cf26b50bf5fc75ebccacd35098c5aee0ca7342a2044dd8cd4825f"
+    },
+    {
+      "role": "r2_source-map.json",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/source-map.json",
+      "sha256": "4128e7a0b4c27446b4c99f6ed5d18ed704fcdc0e2b404a2bf3162f181650aa01"
+    },
+    {
+      "role": "r2_cases-and-controls.json",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/cases-and-controls.json",
+      "sha256": "606941cb71c48d5207e22b515181c2f3baf689b57d972bfc62d189613b1c3b22"
+    },
+    {
+      "role": "r2_decision-incorporation.json",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/decision-incorporation.json",
+      "sha256": "e74414522a6ed1e1576b7365e72121495cb5c8af1b46ea13cc74618cb34c19d9"
+    }
+  ],
+  "selected_API_context": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "628d4fb8f3ad1ba3f80a32b1ddecddae3dd7d74d2299f99134919cd6775006ec"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
+      "sha256": "699478ecf274d326f68d4c996386ba7334a37181249e12329d84a63fabf2a261"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-10-17-scopebase-capture.md",
+      "sha256": "693185296dc4187ad53fb416eaddfea9ee58d3a4e2a968c7058ab05e031b94d9"
+    },
+    {
+      "path": "crates/scopebase-capture/src/quantity.rs",
+      "sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1"
+    },
+    {
+      "path": "crates/scopebase-capture/src/domain.rs",
+      "sha256": "16481276dd5417156d5a93ff91642c14d76bc4f3f79dc8153cfd25907bdb144a"
+    },
+    {
+      "path": "crates/scopebase-capture/src/loss.rs",
+      "sha256": "0f1226a8bde0e13a597ddb1ed105efa0c931b6c8e871787e1d11f7839d5024f9"
+    },
+    {
+      "path": "crates/scopebase-capture/src/error.rs",
+      "sha256": "6ede15b0739e5dcf3eb6d41a2220438be88a36f39bacab9b866b0df81535256b"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/cp05-port-preparation-r1/validation-tree/crates/scopebase-capture/src/generation.rs",
+      "sha256": "96fe64b569268d4b797b036f10aa77f5ba0a267a4fe66035de98b9e8b45c064c"
+    },
+    {
+      "path": ".scopebase/controller/resume-20261022/cp05-port-preparation-r1/artifact-index.json",
+      "sha256": "85e7ca9d29522808c293e141178afa1d9c93587a80d78d354c1bc2dfb0cbcbec"
+    }
+  ],
+  "findings": [
+    {
+      "id": "CP06-DR1-01",
+      "severity": "MEDIUM",
+      "category": "verification_gap",
+      "title": "Constructor reserve mapping and duplicate-before-allocation order lack discriminating controls",
+      "locations": [
+        {
+          "path": "next-cp06-packet/r2/contract.md",
+          "lines": [
+            137,
+            148
+          ]
+        },
+        {
+          "path": "next-cp06-packet/r2/verification-plan.md",
+          "lines": [
+            65,
+            76
+          ]
+        },
+        {
+          "path": "next-cp06-packet/r2/cases-and-controls.json",
+          "case": "CP06-A01",
+          "lines": [
+            801,
+            811
+          ]
+        }
+      ],
+      "evidence": "D5/P3 specify QueryOverlay::new and FeedRegistry::new cardinality->duplicates->checked allocations and CapacityExceeded for checked-size/reserve refusal. A01/Task2 list only affected-copy,claim-stage,fact-append,snapshot-row and per-row-reason sites;Task3 adds no constructor reserve/order fault rows.",
+      "counterexample": "A constructor that reserves before duplicate preflight,or panics/maps ArithmeticOverflow on reserve refusal,can satisfy all currently named constructor success/duplicate tests when ordinary small allocations succeed;existing A01 injections never reach these constructors.",
+      "minimal_repair": [
+        "Extend existing CP06-A01 and Task2/Task3 with QueryOverlay owned-copy and both FeedRegistry required/received allocation branches;keep25 IDs and all original subsets.",
+        "For each branch inject the already allowed owner-local cfg(test) deterministic TryReserveError through its normal mapping;require CapacityExceeded,no normally returned owner,unchanged borrowed input and restored unique positive.",
+        "With reserve faults armed,overlength and within-limit duplicate declarations must return the ruled length error or DuplicateKey without hitting a reserve site;add a valid unique admitted declaration per site to prove the injection is reachable.",
+        "Use an unsorted unique required[1,0] positive to verify the frozen sorted-ID/received-bit association;mutate ordering/error mapping to require the intended assertion failure."
+      ],
+      "architecture_change_required": false,
+      "new_public_API_required": false
+    },
+    {
+      "id": "CP06-DR1-02",
+      "severity": "LOW",
+      "category": "frozen_case_contradiction",
+      "title": "V06 required overlay outsider is outside its declared literal claim-ID bounds",
+      "locations": [
+        {
+          "path": "next-cp06-packet/r2/cases-and-controls.json",
+          "case": "CP06-V06",
+          "json_pointer": "/cases/5/bounds/claim_ids",
+          "lines": [
+            203,
+            239
+          ]
+        }
+      ],
+      "evidence": "The valid setup is selected[2,1],overlay[1,3],but bounds.claim_ids is[0,1,2].",
+      "minimal_repair": [
+        "Change only V06 literal bounds.claim_ids to[0,1,2,3],or express equally explicit per-case overlay-ID bounds admitting3.",
+        "Keep selected cardinality<=C,overlay cardinality<=max_claims,finite populations and all existing IDs/subset objects unchanged;numeric ID value3 does not require capacity3."
+      ],
+      "architecture_change_required": false,
+      "new_public_API_required": false
+    }
+  ],
+  "root_semantics": [
+    {
+      "id": "CP06-D1",
+      "status": "COHERENT",
+      "assessment": "One value per envelope;full CP05 key routing and all holders remain caller-owned.",
+      "concrete_independent_witness": "C03/C04/DL01:two keys sharing epoch/revision;only intended report/export entries become full replacement,unrelated key stays unchanged;one dropped export update fails expected truth."
+    },
+    {
+      "id": "CP06-D2",
+      "status": "COHERENT_REPAIR_V06_LITERAL_BOUNDS",
+      "assessment": "Commit registers affected IDs;reads can select untouched IDs and ignore outsiders without registration.",
+      "concrete_independent_witness": "V01/V06/V09:untouched plain=>[],own overlay=>QueryPartial;selected order[2,1] retained;outsider3 ignored and duplicate outsiders refused."
+    },
+    {
+      "id": "CP06-D3",
+      "status": "COHERENT",
+      "assessment": "Each accepted call consumes one F slot,including Exact0,signal0,empty affected and repeats.",
+      "concrete_independent_witness": "V04/V07/V09:equal observations occupy separate private rows;C=R=0,F=1 damaging empty-affected record succeeds once and then quota refuses."
+    },
+    {
+      "id": "CP06-D4",
+      "status": "COHERENT",
+      "assessment": "Only Exact0/signal0 are nondegrading;AtLeast0 remains uncertainty;final reasons obey R.",
+      "concrete_independent_witness": "V05/V09:literal truth table;R1 consumed+partial refuses whole snapshot;R0 pristine succeeds and damaging affected record refuses."
+    },
+    {
+      "id": "CP06-D5",
+      "status": "COHERENT_REPAIR_CONSTRUCTOR_CONTROLS",
+      "assessment": "Full epoch before list checks;length/duplicates before allocation;normal errors preserve logical state.",
+      "concrete_independent_witness": "V04/V06/V08/F03/F04/A01:foreign+duplicate+fullquota=>DomainMismatch;late precommit refusal leaves all rows unchanged;constructor order requires DR1-01 rows."
+    },
+    {
+      "id": "CP06-D6",
+      "status": "COHERENT",
+      "assessment": "finish checks presence,idempotently;not a seal or numeric loss claim.",
+      "concrete_independent_witness": "F01/F02/F05:missing finish recovers after valid feed;Unknown presence can finish;duplicate100 cannot replace accepted11/client total."
+    },
+    {
+      "id": "CP06-D7",
+      "status": "COHERENT",
+      "assessment": "Ownership metadata adds no T bounds;epoch before stale;normal Err returns original owner;ordinary Drop may effect/panic.",
+      "concrete_independent_witness": "C01/C02/C05/C06/C07:0->1->2;MAX constructor overflow;MAX-1->MAX private fixture;normal drop journal vs propagated single Drop panic."
+    },
+    {
+      "id": "CP06-D8",
+      "status": "COHERENT",
+      "assessment": "Private full tags/affected set;payload-free errors;no audit/serialization export;numeric feed totals stay in client.",
+      "concrete_independent_witness": "V07/U02/DL01:independent literal private tuples include source,channel,unit,kind,magnitude/observed+cap and affected IDs;tag mutants fail privately."
+    },
+    {
+      "id": "CP06-D9",
+      "status": "COHERENT_WITH_REQUIRED_UNRUN_COMPILER_GATE",
+      "assessment": "Private typed-token static method Self:Sized;public Unit spelling/extra bounds remain unchanged.",
+      "concrete_independent_witness": "U01/U02:generic Unit-only functions,seven Count constructors and Option<&dyn Unit>=None require no inhabited marker;external inherited impossible() call must fail intended privacy gate on both compilers."
+    }
+  ],
+  "refinements": {
+    "R2-P1": "Design coherent;compiler/privacy/lint/dyn proof NOT_RUN and must precede implementation admission.No guessed fallback permitted.",
+    "R2-P2": "Pairwise allocation-free O(n^2) preflight is an honest scoped exception;caller cardinality bounds admit work,not hard wall time.Root must update broad canonical linear-work prose on promotion.",
+    "R2-P3": "CapacityExceeded for collection checked-size/try_reserve refusal is a coherent explicit choice,distinct from scalar ArithmeticOverflow;constructors need DR1-01 controls.Public error rustdoc must reflect this scope during implementation.",
+    "R2-P4": "Tagged RetainedFact plus one persistent bool per registered claim is sufficient for the advertised two-reason increment;complete sorted affected sets and acceptance order are retained."
+  },
+  "preservation": {
+    "original_case_ids": 21,
+    "new_local_case_ids": 4,
+    "total_case_groups": 25,
+    "original_subset_objects_unchanged": 15,
+    "deferred_objects_unchanged": 4,
+    "source_mapping_objects_unchanged": 10,
+    "selected_ranges": 29,
+    "selected_lines": 747,
+    "fresh_donor_reinspection": false,
+    "original_full_reducers_and5000_close_history": "PRESERVED_DEFERRED_CP11_MG03_NOT_CLAIMED_TESTED"
+  },
+  "oracle_arithmetic": {
+    "view_scripts": 9331,
+    "view_actions": 44790,
+    "feed_scripts": 1364,
+    "feed_actions": 5008,
+    "correction_scripts": 781,
+    "correction_actions": 2930,
+    "execution": "NOT_RUN",
+    "coverage_limit": "Fixed journals do not themselves cover all capacity/context/MAX/tag/drop/client rows;those are explicitly separate literal families.Revision journal reaches at most rev2 with its fixed from0/from1 alphabet."
+  },
+  "promotion_consistency_obligations": [
+    {
+      "path": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
+      "lines": [
+        366,
+        529
+      ],
+      "action": "Replace current errors/serialization retain tags claim and qualify broad linear-work prose with ratified D8/P2 meaning;add explicit later TODO routes as already required by Task6."
+    },
+    {
+      "path": "crates/scopebase-capture/src/error.rs",
+      "lines": [
+        28,
+        29
+      ],
+      "action": "During implementation,expand CapacityExceeded rustdoc beyond explicit cardinality to the ratified checked-size/reserve scope;no new variant required."
+    }
+  ],
+  "unbound_not_design_findings": [
+    "actual CP05 acceptance and accepted CP03/CP05 receipts/API hashes",
+    "actual post-acceptance base/writer/shared-file/export ownership",
+    "canonical source admission/grant and actual copying/port receipt",
+    "D9 prototype bytes/both compiler reports/privacy diagnostics",
+    "compiler binaries/features/dependencies/lock/cache",
+    "common absolute build resource/wrapper/targets/output leases",
+    "actual fixture/control bytes and two independent client manifests/locks/subjects",
+    "archive membership/helper/collector/process and cleanup bounds",
+    "CP02 changed-quantity successor and any actually changed CP03 mapped destination successor",
+    "execution/source review/root acceptance"
+  ],
+  "execution_limits": {
+    "cargo": false,
+    "compiler": false,
+    "repository_helper": false,
+    "native_or_kernel": false,
+    "product_source_edits": false,
+    "donor_refresh_or_reinspection": false,
+    "subagents": 0,
+    "mutations": "Only this new private review directory"
+  },
+  "pure_checks": {
+    "path": "pure-checks.json",
+    "passed": 28,
+    "failed": 1,
+    "failure": "V06 literal-ID contradiction is a finding,not product execution."
+  },
+  "recommended_root_action": "Prepare a new immutable freeze with both minimal repairs,retain r1/r2,bind it to this review or request focused follow-up.Root then decides normative adoption;do not infer task acceptance or packet readiness."
+}

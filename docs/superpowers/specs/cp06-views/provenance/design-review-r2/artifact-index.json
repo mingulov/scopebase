@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R3_SCOPED_INDEPENDENT_DESIGN_FOLLOWUP_INDEX",
+  "date": "2026-10-22",
+  "review_revision": "r2",
+  "disposition": "READY_FOR_ROOT_RATIFICATION",
+  "input_r3_index_sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11",
+  "prior_review_index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+  "targeted_findings": [
+    "CP06-DR1-01",
+    "CP06-DR1-02"
+  ],
+  "both_findings_closed_as_authoring_obligations": true,
+  "scope": "Two repairs,preservation,source-only identity and artifact-checker causality only.",
+  "source_selection_binding_verified": true,
+  "root_ratification_performed": false,
+  "implementation_admission": false,
+  "CP06_task_acceptance": false,
+  "packet_readiness": "NOT_PACKET_READY",
+  "artifact_count": 43,
+  "artifacts": [
+    {
+      "path": "artifact-variants/early_reserve_visit/cases-and-controls.json",
+      "bytes": 76267,
+      "sha256": "12284068baa5f893aaeb5c915106a0f715f81cce4f9672ca79a5ab42a272df99"
+    },
+    {
+      "path": "artifact-variants/early_reserve_visit/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/early_reserve_visit/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/early_reserve_visit/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/early_reserve_visit/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "artifact-variants/missing_received_site/cases-and-controls.json",
+      "bytes": 75389,
+      "sha256": "2e2e8d4539ecc8f284e4a2d0a05b7014e110e6ebd5514f865afdf79f929c0a16"
+    },
+    {
+      "path": "artifact-variants/missing_received_site/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/missing_received_site/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/missing_received_site/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/missing_received_site/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "artifact-variants/old_V06_bounds/cases-and-controls.json",
+      "bytes": 76203,
+      "sha256": "c5e5b9fa0375e91cee3b2d37230ac29988bfd9f967defe2add7492800b021e17"
+    },
+    {
+      "path": "artifact-variants/old_V06_bounds/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/old_V06_bounds/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/old_V06_bounds/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/old_V06_bounds/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "artifact-variants/unreachable_selected_fault/cases-and-controls.json",
+      "bytes": 76217,
+      "sha256": "acefcdcbb3413aad946cb0b5500339fdedd342cb1d1c97d1b3be80ee3d9461be"
+    },
+    {
+      "path": "artifact-variants/unreachable_selected_fault/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/unreachable_selected_fault/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/unreachable_selected_fault/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/unreachable_selected_fault/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "artifact-variants/wrong_ID_bit_association/cases-and-controls.json",
+      "bytes": 76216,
+      "sha256": "b918beeee647f17b98735d24edac3109476322078a8064bbbdbf7486da0bcb61"
+    },
+    {
+      "path": "artifact-variants/wrong_ID_bit_association/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/wrong_ID_bit_association/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/wrong_ID_bit_association/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/wrong_ID_bit_association/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "artifact-variants/wrong_error_mapping/cases-and-controls.json",
+      "bytes": 76218,
+      "sha256": "a859ca2ba0fd6071a6d075146e397fb370fd5a4e3d4e1c34fba508e93d3594ea"
+    },
+    {
+      "path": "artifact-variants/wrong_error_mapping/contract.md",
+      "bytes": 24223,
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "artifact-variants/wrong_error_mapping/decision-incorporation.json",
+      "bytes": 15824,
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "path": "artifact-variants/wrong_error_mapping/source-map.json",
+      "bytes": 47714,
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "path": "artifact-variants/wrong_error_mapping/verification-plan.md",
+      "bytes": 24803,
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "checker-causality.json",
+      "bytes": 6151,
+      "sha256": "2f7df054f47f318c5137e6d9828aca961a22d86e0db1908224849f5f6efbda78"
+    },
+    {
+      "path": "checker-runs/early_reserve_visit.json",
+      "bytes": 7891,
+      "sha256": "5c71d7873896fd58db3e0eae79a1ea01727264fd1eb36e2ab195523ba3cf61ac"
+    },
+    {
+      "path": "checker-runs/missing_received_site.json",
+      "bytes": 7857,
+      "sha256": "dd146f58401cec422d152e16104e069ece85ae201c34fa37c61e90b90f5a112c"
+    },
+    {
+      "path": "checker-runs/new-r3.json",
+      "bytes": 7853,
+      "sha256": "53cfe2f09ea457139da95450f06a629c87e2d685ba5594ee0189cf215c60f2d4"
+    },
+    {
+      "path": "checker-runs/old-r2.json",
+      "bytes": 6661,
+      "sha256": "bf2f1d20093ceab5674160002e341b5faa9daf938c3200f9967a21d6b5f72310"
+    },
+    {
+      "path": "checker-runs/old_V06_bounds.json",
+      "bytes": 7869,
+      "sha256": "2e4bc8bae68f2a1c977c1532584a7b1674553bf5865c380217112e76104e06da"
+    },
+    {
+      "path": "checker-runs/unreachable_selected_fault.json",
+      "bytes": 7898,
+      "sha256": "90fcea896358818a65f883a3672ad2de6d153f01a386c32aa00e2fa7ba1024f8"
+    },
+    {
+      "path": "checker-runs/wrong_ID_bit_association.json",
+      "bytes": 7896,
+      "sha256": "4cc0b9aa313bd17d35654f03d2e1c6a30be9bab94d84787de55bd17743ed3bc5"
+    },
+    {
+      "path": "checker-runs/wrong_error_mapping.json",
+      "bytes": 7891,
+      "sha256": "041fcbb2465a7fa5945012f7e140c27d23da514bdd11cad899e20c93d3277765"
+    },
+    {
+      "path": "pure-checks.json",
+      "bytes": 7414,
+      "sha256": "6e8f2a086d5bed1a7ead2980b86beb310d8792e19f699d114477eac21bd9f21f"
+    },
+    {
+      "path": "review.json",
+      "bytes": 9610,
+      "sha256": "65cc157df4953297fe3b7af45a1365236a2beb8fc9aba8e0ebf7ff6995dd8de8"
+    },
+    {
+      "path": "review.md",
+      "bytes": 5199,
+      "sha256": "de6fdf98e18e93068d5434f58e8be307e9ce3aca76977a09f99ce5c0d67b07d4"
+    },
+    {
+      "path": "source-binding-checks.json",
+      "bytes": 1307,
+      "sha256": "385c9197cc1c1ce6b42d9eca2384899af914528cea09a7859e64979046b1b37d"
+    }
+  ],
+  "self_excluded": true,
+  "root_next_action": "Decide normative ratification of exact r3;bind actual execution prerequisites separately."
+}

@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R2_ROOT_DECISION_INCORPORATION",
+  "status": "FROZEN_FOR_INDEPENDENT_DESIGN_REVIEW_NOT_IMPLEMENTATION_READY",
+  "rulings": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-root-design-rulings-r1.json",
+    "sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab",
+    "status": "ADOPT_SEMANTICS_FOR_INDEPENDENT_REVIEW"
+  },
+  "prior_index": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r1/artifact-index.json",
+    "sha256": "10db2b1698018f7a5a1031f5f3b7ffcc663a8012199f3fc9201cf8945ce42aee",
+    "immutable": true
+  },
+  "incorporated": [
+    {
+      "id": "CP06-D1",
+      "root_what": "Retain specified one caller-associated aggregate correction API. Full epoch/revision only; no inferred target identity. Reference consumers route complete CP05 keys, refuse unknown/foreign keys and update all original holders. Explicit wrong same-epoch/revision value is beyond apply guarantee.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Corrections, identity and user effects",
+      "case_ids": [
+        "CP06-C03",
+        "CP06-C04"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D2",
+      "root_what": "Record registers affected IDs on successful commit; snapshot may select untouched IDs without mutation within C. Empty reasons mean no recorded reasons, never complete source/claim proof. Reject duplicate affected/selected/overlay IDs including ignored outsiders; bounded input list first, preserve selected order, overlay outsiders ignored, zero IDs valid.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Claims, overlays and loss truth",
+      "case_ids": [
+        "CP06-V01",
+        "CP06-V03",
+        "CP06-V06",
+        "CP06-V09",
+        "CP06-A01"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D3",
+      "root_what": "Each accepted loss/signal call consumes shared F slot, including exact0/zero signal/empty affected. Retain full tags/affected list. No equality dedup, eviction, coalescing, public aggregate or universal exactly-once claim; FeedRegistry cardinality is separate.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Exact private representation; Claims, overlays and loss truth",
+      "case_ids": [
+        "CP06-V04",
+        "CP06-V07",
+        "CP06-V09",
+        "CP06-A01"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D4",
+      "root_what": "Only Exact0/zero signal nondegrading. AtLeast0/all AtLeast/Unknown/nonzero add ConsumedLoss to affected claims. QueryPartial transient. Final distinct reasons incl overlay bounded by R in enum order; no weakened/partial results on refusal; R0 behavior explicit. No invented mutators for other vocabulary.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Claims, overlays and loss truth",
+      "case_ids": [
+        "CP06-V02",
+        "CP06-V05",
+        "CP06-V09"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D5",
+      "root_what": "Full epoch first; then cardinality, duplicates/membership, projected capacities, checked allocation, commit. Feed epoch -> required membership InvalidId -> duplicate DuplicateFeed -> commit. Constructor cardinality -> duplicates -> allocation. Snapshot length -> duplicates -> final reason cap -> allocation. No inferred same-epoch origin/binding/unit schema/authenticity.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Exact normal-error order and transaction boundary",
+      "case_ids": [
+        "CP06-V06",
+        "CP06-V08",
+        "CP06-F04",
+        "CP06-C02",
+        "CP06-A01"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D6",
+      "root_what": "finish is observational/idempotent presence, not seal or completeness. Empty required max0 valid; missing can recover by later valid feed; duplicates retain first; Unknown meets presence only.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Exact normal-error order and transaction boundary",
+      "case_ids": [
+        "CP06-F01",
+        "CP06-F02",
+        "CP06-F03",
+        "CP06-F05"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D7",
+      "root_what": "Retain specified ownership API/traits with no T Eq/Clone callbacks, epoch before stale, checked successor revision and0/MAX supplied valid. On normally returned metadata rejection original owner unchanged. Ordinary rejected/old T destruction may effect/panic; no rollback/panic containment or returned rejected replacement promise. Preserve automatic Send/Sync.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Corrections, identity and user effects",
+      "case_ids": [
+        "CP06-C01",
+        "CP06-C02",
+        "CP06-C05",
+        "CP06-C06",
+        "CP06-C07"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D8",
+      "root_what": "Retain complete heterogeneous ledger tags internally with delivered private-invariant tests and caller borrowed facts. Existing payload-free errors do not encode tags. CP10 owns serialization; public provenance audit/export/conformance remains later CP10/CP13/TT07 and must be explicit remaining TODO. Feed registry need presence only; numeric donor first-feed totals retained in real client/CP11, never claimed as registry sum.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "Exact private representation; Delivery, receipts and explicit remaining TODO",
+      "case_ids": [
+        "CP06-V07",
+        "CP06-U02",
+        "CP06-DL01"
+      ],
+      "implementation_admission": false
+    },
+    {
+      "id": "CP06-D9",
+      "root_what": "Narrow private discriminator on seven existing sealed units; no public UnitKind, type_name/unsafe guessing/conversion or public Unit signature change. Freeze exact private representation and require external compile-negative for nonexport/unchanged sealed trait plus all7literal unit tags, affected CP02/CP03 checks and receipt successor for changed mapped quantity.rs. Exact private Rust privacy mechanism must be validated before implementation admission.",
+      "root_why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "root_cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state",
+      "incorporation_status": "SEMANTICS_INCORPORATED_FOR_INDEPENDENT_REVIEW_ONLY",
+      "contract_sections": "D9 private sealed-unit mechanism and validation gate",
+      "case_ids": [
+        "CP06-U01",
+        "CP06-U02"
+      ],
+      "implementation_admission": false
+    }
+  ],
+  "r2_concrete_refinements_pending_review": [
+    {
+      "id": "R2-P1",
+      "scope": "D9 exact privacy mechanism",
+      "choice": "Private typed-token Sealed::unit_tag static method where Self:Sized; crate-private UnitTag and helper; unchanged Unit source signature. No associated const/publicUnitKind/type guessing/unsafe.",
+      "reason": "Seven-unit discriminator without opening external construction/callable gate or destroying dyn Unit compatibility.",
+      "required_before_implementation_admission": "Independent review plus both pinned compiler positive/private-refusal prototype; actual result UNBOUND/NOT_RUN."
+    },
+    {
+      "id": "R2-P2",
+      "scope": "Bounded work versus duplicate-before-allocation order",
+      "choice": "Immutable arbitrary-ID list duplicate preflight is pairwise allocation-free O(n^2),after length admission.",
+      "reason": "Avoid hidden pre-refusal allocation that changes ruled error order; do not retain earlier false generic linear-input claim.",
+      "required_before_implementation_admission": "Root ratifies explicit scoped work exception after independent design review."
+    },
+    {
+      "id": "R2-P3",
+      "scope": "Collection allocation errors and semantic state",
+      "choice": "CapacityExceeded for length/projected capacity/checked collection-size/try_reserve refusal. Precommit reservation can grow Vec capacity; logical state is atomic.",
+      "reason": "No new error variant or universal OOM/address-capacity rollback claim.",
+      "required_before_implementation_admission": "Root ratifies exact refusal/state interpretation after independent review."
+    },
+    {
+      "id": "R2-P4",
+      "scope": "Private heterogeneous state",
+      "choice": "Fixed tagged RetainedFact enum payload plus complete affected Vec; sorted ClaimState bool vector; fixed required IDs/received bits; exact fields in contract.",
+      "reason": "Retain provenance and bounded claim dependence without common reducer/runtime or hidden history engine.",
+      "required_before_implementation_admission": "Independent review of tag completeness,staging/caps and successor receipt mapping."
+    }
+  ],
+  "explicit_remaining_TODO": [
+    {
+      "owner": "CP10",
+      "work": "Canonical neutral serialization and separate public provenance audit/export design; no current CP06 serialization or tag-bearing error."
+    },
+    {
+      "owner": "CP13/TT07",
+      "work": "Exact-consumer/installed audit/export/conformance qualification; private unit tests are not an operator route."
+    },
+    {
+      "owner": "CP11",
+      "work": "Real reducers/all correction holders/protected retained history including actual5000-close foreign-flood regression."
+    },
+    {
+      "owner": "MG03",
+      "work": "Actual product adoption and duplicate retirement after preserved original regressions/negative twins."
+    }
+  ],
+  "actual_executor_fields": {
+    "status": "EXECUTION_FIELDS_UNBOUND_SOURCE_SELECTION_SEPARATELY_BOUND",
+    "required": [
+      "actual CP03 and CP05 acceptance/receipts/API hashes",
+      "post-acceptance product base/isolated writer and shared quantity/export ownership",
+      "actual copied subset/destination hashes/selected-port receipt under the bound root source selection",
+      "D9 validated prototype bytes/compilers/diagnostics",
+      "compiler binaries/features/dependencies/lock/cache",
+      "absolute common build resource/wrapper/targets/output leases",
+      "actual fixture bytes/hash and semantic controls",
+      "actual independent clients/manifests/locks/production subject",
+      "actual archive/member inventory/helper/collector/process bounds",
+      "current selected-port receipts,CP02 successor and any affected CP03 successor",
+      "independent design/source review and acceptance reports"
+    ]
+  },
+  "source_intake_or_grant_changed": false,
+  "product_implementation_or_build_performed": false,
+  "reviewers_dispatched": false,
+  "canonical_or_r1_files_modified": false,
+  "revision": "r3",
+  "review_repair": {
+    "index_path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-design-review-r1/artifact-index.json",
+    "index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+    "disposition": "NEEDS_REPAIR",
+    "scoped_findings": [
+      "CP06-DR1-01",
+      "CP06-DR1-02"
+    ]
+  },
+  "source_selection_binding": {
+    "status": "ADOPTED_SOURCE_SELECTION_ONLY_NOT_COPIED_NOT_IMPLEMENTATION_READY",
+    "source_only_integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "admission_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "navigation_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+    "navigation_sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83",
+    "predecessor_admission_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "predecessor_preserved": true,
+    "selected_added_ranges": 29,
+    "selected_added_lines": 747,
+    "new_row_total": 136,
+    "qualification": "Root-adopted pre-copy source selection under existing owner authorization. Actual copied subset,destination hashes,port receipts,CP05 acceptance,D9 validation,API/resources and product gates remain UNBOUND. No r3 donor intake/reinspection or source copy."
+  },
+  "prior_r2_index": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/artifact-index.json",
+    "sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e",
+    "immutable": true
+  },
+  "scoped_repairs": [
+    {
+      "finding": "CP06-DR1-01",
+      "change": "Extend existing A01 and Tasks2/3 with all3 constructor reserve sites,normal CapacityExceeded/no-owner/input-preservation/reachability rows,zero-visit preflight controls,restored unique twin and unsorted[1,0] ID-bit mapping.",
+      "semantic_or_API_change": false
+    },
+    {
+      "finding": "CP06-DR1-02",
+      "change": "Only CP06-V06 bounds.claim_ids changes from[0,1,2] to[0,1,2,3]; no cardinality/oracle/case-ID change.",
+      "semantic_or_API_change": false
+    }
+  ],
+  "r2_files_modified": false
+}

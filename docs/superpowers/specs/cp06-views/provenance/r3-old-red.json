@@ -1,0 +1,224 @@
+{
+  "kind": "CP06_SCOPED_ARTIFACT_REPAIR_CHECK",
+  "scope": "PURE_ARTIFACT_OBLIGATIONS_ONLY_NOT_RUST_PRODUCT_EXECUTION",
+  "candidate": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2",
+  "baseline_r2_index_sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e",
+  "review_index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+  "checker_sha256": "f101b7e31e2509a811404892c5f0ee7b1f9c8eb49fed28cff984edf129aa9a90",
+  "input_sha256": {
+    "contract.md": "dbb397c8d3290b19a45db337170a6510a927d4b41a7953f9b0a80562e53fc4a6",
+    "verification-plan.md": "f52757e6de4cf26b50bf5fc75ebccacd35098c5aee0ca7342a2044dd8cd4825f",
+    "source-map.json": "4128e7a0b4c27446b4c99f6ed5d18ed704fcdc0e2b404a2bf3162f181650aa01",
+    "cases-and-controls.json": "606941cb71c48d5207e22b515181c2f3baf689b57d972bfc62d189613b1c3b22",
+    "decision-incorporation.json": "e74414522a6ed1e1576b7365e72121495cb5c8af1b46ea13cc74618cb34c19d9"
+  },
+  "source_selection_binding": {
+    "status": "HISTORICAL_R2_UNBOUND_SOURCE_SELECTION"
+  },
+  "finding_checks": [
+    {
+      "finding": "CP06-DR1-01",
+      "checks": [
+        {
+          "assertion": "all_three_constructor_sites",
+          "status": "FAIL",
+          "detail": {
+            "required": [
+              "overlay_owned_copy",
+              "feed_required_ids",
+              "feed_received_bits"
+            ],
+            "actual": []
+          }
+        },
+        {
+          "assertion": "overlay_owned_copy: reachable_normal_capacity_refusal_no_owner_input_preserved",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "overlay_owned_copy: overlength_unique_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "overlay_owned_copy: overlength_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "overlay_owned_copy: within_limit_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_required_ids: reachable_normal_capacity_refusal_no_owner_input_preserved",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_required_ids: overlength_unique_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_required_ids: overlength_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_required_ids: within_limit_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_received_bits: reachable_normal_capacity_refusal_no_owner_input_preserved",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_received_bits: overlength_unique_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_received_bits: overlength_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "feed_received_bits: within_limit_duplicate_before_any_reserve",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "restored_unsorted_unique_positive_and_ID_bit_association",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "named_early_reserve_wrong_error_panic_and_bit_controls",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "Task2_constructor_mapping_order_and_twin_obligations",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "Task3_both_constructor_sites_and_unsorted_mapping_obligations",
+          "status": "FAIL"
+        },
+        {
+          "assertion": "contract_retains_all_constructor_reserve_obligations",
+          "status": "FAIL"
+        }
+      ],
+      "status": "FAIL"
+    },
+    {
+      "finding": "CP06-DR1-02",
+      "checks": [
+        {
+          "assertion": "only_V06_literal_claim_bounds_admit_outsider3",
+          "status": "FAIL",
+          "detail": {
+            "selected_literals": [
+              2,
+              1
+            ],
+            "overlay_literals": [
+              1,
+              3
+            ],
+            "declared_claim_ids": [
+              0,
+              1,
+              2
+            ],
+            "selected_cardinality": 2,
+            "overlay_cardinality": 2
+          }
+        }
+      ],
+      "status": "FAIL"
+    }
+  ],
+  "preservation_checks": [
+    {
+      "assertion": "same25_case_IDs_in_order",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_selected_original_subsets",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_deferred_originals",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_independent_oracles",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_authoring_carrier",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_private_layout",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_families",
+      "status": "PASS"
+    },
+    {
+      "assertion": "unchanged_public_requirements",
+      "status": "PASS"
+    },
+    {
+      "assertion": "other23_case_objects_unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "V06_only_claim_ID_bounds_changed",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_id",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_assertion",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_intended_failure_layer",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_source_subset_refs",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_rulings_applied",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_required_tier",
+      "status": "PASS"
+    },
+    {
+      "assertion": "A01_preserves_bounds",
+      "status": "PASS"
+    },
+    {
+      "assertion": "same10_frozen_source_mapping_objects",
+      "status": "PASS"
+    },
+    {
+      "assertion": "same29_ranges747_lines",
+      "status": "PASS"
+    },
+    {
+      "assertion": "public_API_private_layout_and_D9_Rust_blocks_unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "root9_semantic_rulings_unchanged",
+      "status": "PASS"
+    }
+  ],
+  "immutable_r1_r2_and_review_hashes_verified": true,
+  "result": "RED",
+  "product_constructor_or_compiler_execution": "NOT_RUN",
+  "source_intake_or_donor_inspection": "NOT_RUN",
+  "limit": "These checks prove the written repair obligations and preservation only. They do not execute a constructor,TryReserveError path,mutation,compiler gate or package/client."
+}

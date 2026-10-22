@@ -1,0 +1,84 @@
+{
+  "artifacts": [
+    {
+      "bytes": 20502,
+      "lines": 258,
+      "path": "check_retained-attempt1.py",
+      "sha256": "a31dd9e8faf2c1b781232aaa0ba1f6983eaf93148d6ab1c679670b0ccc28c127"
+    },
+    {
+      "bytes": 20833,
+      "lines": 262,
+      "path": "check_retained.py",
+      "sha256": "e82da4df0539841f268fdc18df52dec360087edbbb9de63819c5ea418917054d"
+    },
+    {
+      "bytes": 71253,
+      "lines": 1243,
+      "path": "input-index-attempt1.json",
+      "sha256": "3d22e56a37a9399166d086b147ce9d4c22f2fc3f869abc1d29ba375288df71e7"
+    },
+    {
+      "bytes": 71253,
+      "lines": 1243,
+      "path": "input-index.json",
+      "sha256": "3d22e56a37a9399166d086b147ce9d4c22f2fc3f869abc1d29ba375288df71e7"
+    },
+    {
+      "bytes": 129022,
+      "lines": 5326,
+      "path": "pure-checks-attempt1.json",
+      "sha256": "2d9d15474a8b5d9ebe36cba0138eb21fc505a5cbc582ebe3111d9ff6919f296c"
+    },
+    {
+      "bytes": 128878,
+      "lines": 5326,
+      "path": "pure-checks.json",
+      "sha256": "7d62801b63f36fe9ba8e13e02863a823473087e4b4527dfe07a2d8bc3267855e"
+    },
+    {
+      "bytes": 11430,
+      "lines": 207,
+      "path": "report.json",
+      "sha256": "ac301d6dc1bf783c82d370b44462cd32922d8bf76f242bd75c6556b9ca7181b7"
+    },
+    {
+      "bytes": 8657,
+      "lines": 50,
+      "path": "report.md",
+      "sha256": "179a8dc0a7f32e7b4e5f344c99ed052cbfdb9963ba556efde29305ad28824c26"
+    },
+    {
+      "bytes": 1903,
+      "lines": 50,
+      "path": "source-deltas-attempt1.json",
+      "sha256": "b631f916e6fb20df5571591306573b5e94589f1a24761e10946a261627ab5465"
+    },
+    {
+      "bytes": 1903,
+      "lines": 50,
+      "path": "source-deltas.json",
+      "sha256": "b631f916e6fb20df5571591306573b5e94589f1a24761e10946a261627ab5465"
+    },
+    {
+      "bytes": 466,
+      "lines": 16,
+      "path": "worktree-observations.json",
+      "sha256": "040e46896583e63b3f9043ea2265992a39ef9f76f7d43609f1f176855b83b3c8"
+    }
+  ],
+  "disposition": "READY_FOR_ROOT_NARROW_D9_SUCCESSOR_ADOPTION",
+  "implementation_admitted": false,
+  "input_design_index_sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11",
+  "input_strict_r3_report_sha256": "3b7f4300d4ddad7a98206f8eed76c4c6f20e5b69aaaaebc1fb031f0aef637d56",
+  "kind": "CP06_D9_INDEPENDENT_PRIVATE_PROTOTYPE_REVIEW_INDEX",
+  "packet_ready": false,
+  "review_revision": "r1",
+  "root": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-review-r1",
+  "schema_version": 1,
+  "self": {
+    "path": "artifact-index.json",
+    "reason": "Self digest intentionally excluded; index hashes every other retained review artifact.",
+    "sha256": "NOT_SELF_HASHED"
+  }
+}

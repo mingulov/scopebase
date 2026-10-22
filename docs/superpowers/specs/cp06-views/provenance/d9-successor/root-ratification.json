@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_ROOT_NARROW_D9_DESIGN_SUCCESSOR",
+  "status": "ADOPTED_NARROW_DESIGN_AND_PROTOTYPE_PREREQUISITE",
+  "time_utc": "2026-10-22T09:20:06.458050+00:00",
+  "what": "Extend the existing method-declaration private_interfaces allowance to the exact seven macro-generated Sealed::unit_tag implementation method declarations. Keep existing Unit private_bounds allowance; no other lint suppression.",
+  "why": "Actual strict compiler prototype exposed14implementation-interface lint errors not covered by the declaration-only allowance. The warning-denied verification contract needs this explicit scoped correction while preserving the private typed gate.",
+  "normative_successor_to": "CP06 exactr3 D9 declaration-only lint rule; all other publicAPI,privateprivacy,dyncompatibility,caseIDs,finitepopulations,source selections and semantics unchanged.",
+  "exact_implementation_pattern": "impl private::Sealed for $name { #[allow(private_interfaces)] fn unit_tag(_: UnitTagAccess) -> UnitTag { UnitTag::$name } }",
+  "public_api_unchanged": true,
+  "no_public_tag_or_token": true,
+  "no_blanket_lint_allow": true,
+  "prototype_source_quantity_sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1",
+  "strict_failed_predecessor": "cp06-d9-probe-r1",
+  "default_policy_semantic_predecessor": "cp06-d9-probe-r2",
+  "accepted_strict_prototype": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r3/report.json",
+    "sha256": "3b7f4300d4ddad7a98206f8eed76c4c6f20e5b69aaaaebc1fb031f0aef637d56",
+    "commands": 22,
+    "tools": [
+      "1.88.0",
+      "1.98.1"
+    ],
+    "positives": 2,
+    "intended_refusals": 12,
+    "widened_gate_controls": 2,
+    "strict_scope": "deny(warnings) on prototype libraries; external consumer stderr warning-free with exact intended refusal sites, no global-Dflag claim"
+  },
+  "independent_review": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-review-r1/report.json",
+    "sha256": "ac301d6dc1bf783c82d370b44462cd32922d8bf76f242bd75c6556b9ca7181b7"
+  },
+  "independent_review_index_sha256": "6819cbe016b5f70d4241c49cea03389cc57fe42dd6f7c2b5188a058ada7e815f",
+  "prior_design_ratification_sha256": "538fe58da9983f9849c183cd0ce8a7eb5b7532c74ec0cb92112e42755aa8ba41",
+  "prototype_prerequisite": "SATISFIED_ONLY_FOR_EXACT_NARROW_DELTA_AND_BOUND_INPUTS",
+  "product_implementation": "NOT_RUN",
+  "implementation_admitted": false,
+  "packet_ready": false,
+  "accepted_task_delta": 0,
+  "remaining": [
+    "Canonical primaryheader/supplement adoption with exact owner routing repairs.",
+    "Actual final base,sharedquantityownership,selectedport successor and consumer/fixture/resource packet.",
+    "Actual final product source/archive privacy/API/dyn checks onbothcompilers and affectedCP02/CP03tests; prototype is not actualpackagequalification."
+  ]
+}

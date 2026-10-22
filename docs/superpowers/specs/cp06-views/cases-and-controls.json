@@ -1,0 +1,1728 @@
+{
+  "schema_version": 1,
+  "kind": "scopebase-private-cp06-cases-and-controls-proposal",
+  "status": "FROZEN_AUTHORING_PROPOSAL_NOT_RUN_NOT_EXECUTABLE_CORPUS",
+  "task": "CP06",
+  "public_requirements": [
+    "CP-R07",
+    "CP-R11",
+    "CP-R13",
+    "CP-R18"
+  ],
+  "families": [
+    "H13",
+    "H26",
+    "H27"
+  ],
+  "case_count": 25,
+  "selected_original_subset_count": 15,
+  "cases": [
+    {
+      "id": "CP06-V01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::partial_snapshot_does_not_poison_later_view",
+      "assertion": "Returned partial reason disappears only from later plain view; previously returned view remains immutable.",
+      "valid_setup_and_trigger": "New epoch E, claims1=observed bytes and2=occupancy, both initially pristine; snapshot selected[1,2] with overlay[1], then snapshot same selection with empty overlay.",
+      "independent_expected_result": "First:1=[QueryPartial],2=[]; second:1=[],2=[]; first value still1=[QueryPartial]. No loss record exists.",
+      "active_bad_control": "Permanently insert QueryPartial into ledger during snapshot; valid setup succeeds but second reason equality fails.",
+      "intended_failure_layer": "Returned partial reason disappears only from later plain view; previously returned view remains immutable.",
+      "restored_positive_twin": "Restore read-only overlay merge and compare against literal two-view rows.",
+      "source_subset_refs": [
+        "M-S03",
+        "M-S04"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D4"
+      ]
+    },
+    {
+      "id": "CP06-V02",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::consumed_loss_stays_in_epoch",
+      "assertion": "Plain views cannot erase accepted consumed loss; overlays cannot reset facts or unrelated caller counters.",
+      "valid_setup_and_trigger": "Record a nonzero relationship loss targeting claim2, interleave partial/plain snapshots; then construct new ledger for explicit successor epoch.",
+      "independent_expected_result": "Within E:2 always contains ConsumedLoss;1 stays pristine absent its own overlay. New epoch starts pristine. Retained client observed bytes and post-gap sample witnesses survive.",
+      "active_bad_control": "Clear persistent reasons after snapshot or confuse temporary overlay removal with loss retirement.",
+      "intended_failure_layer": "Plain views cannot erase accepted consumed loss; overlays cannot reset facts or unrelated caller counters.",
+      "restored_positive_twin": "Restore append-only evidence and repeat the same interleaving.",
+      "source_subset_refs": [
+        "M-S05",
+        "M-S06",
+        "M-S07",
+        "M-S08"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D3",
+        "CP06-D4"
+      ]
+    },
+    {
+      "id": "CP06-V03",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::independent_fact_claim_survives_relationship_loss",
+      "assertion": "A supplied affected-set loss degrades only dependent claims.",
+      "valid_setup_and_trigger": "Independent fixture holds observed-copy512 and occupancy4096. Mapping/release uncertainty targets occupancy2 only; separate twin copy-attribution uncertainty targets copy1 only.",
+      "independent_expected_result": "Mapping loss:copy1=[] and observed512 remains;occupancy2=[ConsumedLoss]. Copy attribution twin:copy1=[ConsumedLoss],occupancy2=[] and4096 retained. These are supplied dependency choices, not inferred identities.",
+      "active_bad_control": "Broadcast every loss to every claim, or discard independently observed copy bytes on missing relationship.",
+      "intended_failure_layer": "A supplied affected-set loss degrades only dependent claims.",
+      "restored_positive_twin": "Restore exact affected-set propagation; compare each claim and literal caller values.",
+      "source_subset_refs": [
+        "M-S01",
+        "M-S02"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D4"
+      ]
+    },
+    {
+      "id": "CP06-V04",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::capacity_refusal_preserves_ledger",
+      "assertion": "Whole affected-list validation and quota allocation precede every persistent commit.",
+      "valid_setup_and_trigger": "F1 first fact accepted for claim1; second record targets existing1 then new2 with insufficient F or C. Separate list[1,1] duplicates and late final reason-capacity overflow are validly constructed.",
+      "independent_expected_result": "Second call returns CapacityExceeded or DuplicateKey under frozen order; stored record count/tags/affected/reasons exactly unchanged. All public snapshots still equal pre-error values. Private invariants checked in shipped unit tests, not inferred solely from snapshots. Logical state is exact; existing Vec capacity/address equality is outside the guarantee. All fallible allocations precede the logical commit.",
+      "active_bad_control": "Commit first affected claim or fact before checking late duplicate/quota; silently evict first fact to admit second.",
+      "intended_failure_layer": "Whole affected-list validation and quota allocation precede every persistent commit.",
+      "restored_positive_twin": "Restore staged atomic insertion; same rejected input then a sufficient-capacity positive succeeds.",
+      "source_subset_refs": [
+        "M-S05"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D3",
+        "CP06-D4",
+        "CP06-D5",
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-V05",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::loss_magnitudes_and_signal_units_remain_distinct",
+      "assertion": "Only proved exact zero/non-degrading zero signal avoids ConsumedLoss.",
+      "valid_setup_and_trigger": "Independent rows Exact0,Exact1,ExactMAX,AtLeast0,AtLeast1,Unknown; separate capped signals observed0/1/cap255. Each fresh E/claim and sufficient capacity.",
+      "independent_expected_result": "Exact0 and signal0:[]; all other rows:[ConsumedLoss]. Tags keep original units; signal255 is diagnostic degradation, never255 omitted events.",
+      "active_bad_control": "Treat AtLeast0 or Unknown as zero; reinterpret nonzero signal as exact event count; saturating-clear atMAX.",
+      "intended_failure_layer": "Only proved exact zero/non-degrading zero signal avoids ConsumedLoss.",
+      "restored_positive_twin": "Restore exact truth table and unchanged accepted CP03 sample/tag constructors.",
+      "source_subset_refs": [
+        "K-S01",
+        "M-S01",
+        "M-S02"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D3",
+        "CP06-D4",
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-V06",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::selected_overlay_and_output_bounds",
+      "assertion": "Duplicate IDs refuse, selected order is preserved, irrelevant overlay IDs do not taint other claims.",
+      "valid_setup_and_trigger": "Use selected[2,1], overlay[1,3] built within its own max; separate selected[1,1], affected[1,1], overlay[1,1], and list lengths one over supplied quota.",
+      "independent_expected_result": "Return assessments in[2,1] order with QueryPartial only on1; duplicates DuplicateKey; over-length CapacityExceeded precedes duplicate scan under D5. No read registers claim3 or consumes persistent quota. Preflight duplicate refusal is allocation-free pairwise; an ignored outsider duplicate still refuses at overlay construction.",
+      "active_bad_control": "Deduplicate silently, sort requested output, apply overlay globally, or mutate the read-only membership set.",
+      "intended_failure_layer": "Duplicate IDs refuse, selected order is preserved, irrelevant overlay IDs do not taint other claims.",
+      "restored_positive_twin": "Restore explicit validation/order and repeat a within-limit unique positive.",
+      "source_subset_refs": [
+        "M-S03",
+        "M-S04"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D5"
+      ]
+    },
+    {
+      "id": "CP06-V07",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "src/view.rs shipped unit tests::erased_record_retains_all_tags",
+      "assertion": "Private loss/signal records preserve complete original provenance and typed magnitude after erasure.",
+      "valid_setup_and_trigger": "Same epoch with different bindings/origins, channels including0, every sealed unit, independent kinds and repeated identical observations. Borrowed input facts remain available. Accepted Unit has no discriminator; the private seven-unit extension must pass the isolated compiler gate and then be implemented after root admission, without a public UnitKind export.",
+      "independent_expected_result": "Stored tagged rows equal independent literal tuples:full SourceRef/channel/kind/ratified private unit discriminator/magnitude or observed/cap plus exact affected IDs. Each accepted call consumes its own record slot. No new public accessor/error/serialization claim. Production RetainedFact stores source/channel/unit/RetainedObservation/complete affected Vec; Signal always has DiagnosticSignals unit and observed/cap, not event magnitude.",
+      "active_bad_control": "Erase unit/binding/origin or conflate repeated values; assert exact private tuple mismatch, not just presence.",
+      "intended_failure_layer": "Private loss/signal records preserve complete original provenance and typed magnitude after erasure.",
+      "restored_positive_twin": "Restore full tagged storage; rerun shipped unit tests against actual source/archive production module.",
+      "source_subset_refs": [
+        "K-S01",
+        "M-S01"
+      ],
+      "required_tier": "T1 actual module private invariants; delivered unit tests",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D3",
+        "CP06-D5",
+        "CP06-D8",
+        "CP06-D9"
+      ]
+    },
+    {
+      "id": "CP06-V08",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::foreign_epoch_refuses_without_mutation",
+      "assertion": "Full capture/producer/ordinal context mismatch precedes mutation and quota effects.",
+      "valid_setup_and_trigger": "For each Epoch field vary one, including capture,producer,ordinal; combine foreign context with full quota and duplicate affected IDs to test error order.",
+      "independent_expected_result": "DomainMismatch first; all previous ledger facts/reasons remain. Same-epoch different binding/origin retains its tags and is not silently promoted.",
+      "active_bad_control": "Compare only ordinal or compare source metadata after partial commit.",
+      "intended_failure_layer": "Full capture/producer/ordinal context mismatch precedes mutation and quota effects.",
+      "restored_positive_twin": "Restore complete Epoch check; equal complete epoch twin succeeds.",
+      "source_subset_refs": [
+        "CP03-ACCEPTED-DOMAIN"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D5",
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-V09",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/report_views.rs::zero_budgets_and_snapshot_reason_capacity",
+      "assertion": "Every independent cardinality budget is enforced without weakening an assessment.",
+      "valid_setup_and_trigger": "C0/F0/R0 constructors and empty selections; R1 record ConsumedLoss then request QueryPartial on same claim; R0 exact0 fact versus damaging fact in separate fresh ledgers with C1/F1.",
+      "independent_expected_result": "Empty operations succeed where within bounds. Exact0 can consume F1 with R0 without reason; damaging record refuses. ConsumedLoss+QueryPartial with R1 refuses entire snapshot; prior plain snapshot preserved. A damaging record with empty affected at C=R=0,F=1 is accepted and consumes exactly one fact slot without any claim reason. Lazy new accepts usize limits without preallocating or promising they can all be filled.",
+      "active_bad_control": "Treat R as persistent-only and let overlay escape quota, truncate one reason, or interpret zero as unbounded.",
+      "intended_failure_layer": "Every independent cardinality budget is enforced without weakening an assessment.",
+      "restored_positive_twin": "Restore final distinct-reason capacity and compare R2 positive.",
+      "source_subset_refs": [
+        "M-S03",
+        "M-S05"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D3",
+        "CP06-D4"
+      ]
+    },
+    {
+      "id": "CP06-F01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/feed_integrity.rs::zero_feed_is_not_missing",
+      "assertion": "Required absence differs from an explicit exact-zero observation.",
+      "valid_setup_and_trigger": "Required channels[0,1],max2; finish unfed; feed0 Exact0; finish; feed1 Exact0; finish. Separate nonzero11/5 client facts with no backend losses.",
+      "independent_expected_result": "MissingFeed,MissingFeed,Ok in that order. Numeric11/5 stays11/5 in client reducer; no numeric sum accessor is attributed to FeedRegistry.",
+      "active_bad_control": "Initialize required presence as zero-fed or ignore missing channels; public finish wrongly succeeds.",
+      "intended_failure_layer": "Required absence differs from an explicit exact-zero observation.",
+      "restored_positive_twin": "Restore explicit presence and complete both zero feeds.",
+      "source_subset_refs": [
+        "K-S02",
+        "K-S04",
+        "K-S01"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D6",
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-F02",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/feed_integrity.rs::second_feed_refuses",
+      "assertion": "A second channel feed refuses regardless of magnitude,unit,kind,or source binding within the same Epoch.",
+      "valid_setup_and_trigger": "Feed required0 once with exact0 or11; second feed0 with100 or Unknown, using valid CP03 tags. Required1 remains absent until actually fed.",
+      "independent_expected_result": "DuplicateFeed; required1 stays missing; first accepted client fact remains0 or11 and rejected100 is excluded. Internal received set unchanged.",
+      "active_bad_control": "Overwrite/update on duplicate, mark every channel fed, or double-accrue client data even after Err.",
+      "intended_failure_layer": "A second channel feed refuses regardless of magnitude,unit,kind,or source binding within the same Epoch.",
+      "restored_positive_twin": "Restore first accepted membership and conditional client accrual; channel1 positive succeeds.",
+      "source_subset_refs": [
+        "K-S03"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D5",
+        "CP06-D6",
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-F03",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/feed_integrity.rs::required_declarations_are_bounded",
+      "assertion": "Required channel inventory is explicit, unique and bounded.",
+      "valid_setup_and_trigger": "Construct required[0,1] max1; required[0,0] max2; empty required/max0; feed undeclared2 to a valid[0,1] registry.",
+      "independent_expected_result": "CapacityExceeded,DuplicateKey,empty finish Ok,undeclared InvalidId; valid unique declared channels are accepted.",
+      "active_bad_control": "Deduplicate declaration silently, treat unknown channel as extra valid feed, or grow beyond max.",
+      "intended_failure_layer": "Required channel inventory is explicit, unique and bounded.",
+      "restored_positive_twin": "Restore declaration and membership checks; unique/max2 twin succeeds.",
+      "source_subset_refs": [
+        "K-S04"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D5",
+        "CP06-D6"
+      ]
+    },
+    {
+      "id": "CP06-F04",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/feed_integrity.rs::feed_error_order_and_atomicity",
+      "assertion": "Foreign epoch always refuses before declaration/duplicate tests and cannot mark a feed present.",
+      "valid_setup_and_trigger": "Foreign epoch feed0 after valid0; foreign feed2 undeclared; vary each epoch field; attempt valid required1 after failures.",
+      "independent_expected_result": "DomainMismatch for each foreign attempt; no state change; valid1 still accepted and finish then succeeds.",
+      "active_bad_control": "Ignore producer/capture, report DuplicateFeed before foreign-context check, or consume channel1 on failure.",
+      "intended_failure_layer": "Foreign epoch always refuses before declaration/duplicate tests and cannot mark a feed present.",
+      "restored_positive_twin": "Restore ordered full-domain validation; exact-context twins exercise duplicate/InvalidId separately.",
+      "source_subset_refs": [
+        "K-S03",
+        "CP03-ACCEPTED-DOMAIN"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D5",
+        "CP06-D6"
+      ]
+    },
+    {
+      "id": "CP06-F05",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/feed_integrity.rs::finish_is_observational",
+      "assertion": "Finishing checks presence without sealing or changing the registry.",
+      "valid_setup_and_trigger": "Unfed finish\u2192feed0\u2192finish; repeat successful finish; attempt duplicate0; required empty finish repeated.",
+      "independent_expected_result": "MissingFeed can recover; repeated Ok remains Ok; duplicate still DuplicateFeed; no new completeness/closure token. Unknown loss can satisfy required presence while loss absence remains unknown.",
+      "active_bad_control": "Mark finished on any attempt and reject later valid feed; clear state on finish; infer loss-free from present Unknown.",
+      "intended_failure_layer": "Finishing checks presence without sealing or changing the registry.",
+      "restored_positive_twin": "Restore observational finish and the same sequence.",
+      "source_subset_refs": [
+        "K-S04"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D6"
+      ]
+    },
+    {
+      "id": "CP06-C01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs::correction_is_exact_next_revision",
+      "assertion": "Successful replacement advances exactly one; stale,duplicate and out-of-order replacements return original owner.",
+      "valid_setup_and_trigger": "Holder E/rev0/valueA; correction from0\u2192valueB; then from0\u2192valueC; separately from1 presented to initial rev0; finally correct from1\u2192valueD.",
+      "independent_expected_result": "B/rev1; stale returns sameB/rev1; prematurefrom1 returns sameA/rev0; validnext yieldsD/rev2. Entire immutable value is replaced.",
+      "active_bad_control": "Accept any greater revision, reuse stalefrom0, partially merge fields, or drop original owner on error.",
+      "intended_failure_layer": "Successful replacement advances exactly one; stale,duplicate and out-of-order replacements return original owner.",
+      "restored_positive_twin": "Restore exact from relation and complete replacement; use literal independent revision/value rows.",
+      "source_subset_refs": [
+        "O-S01",
+        "O-S02"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-C02",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs::foreign_epoch_precedes_stale",
+      "assertion": "Full epoch mismatch refuses with unchanged original owner before revision mismatch.",
+      "valid_setup_and_trigger": "Correction has a different capture/producer/ordinal and stale from, against a holder with nonempty value fields.",
+      "independent_expected_result": "DomainMismatch before StaleRevision; returned holder retains same field identity, revision and value. Same epoch stale case returns StaleRevision.",
+      "active_bad_control": "Compare epoch ordinal only, or return stale first after inspecting/modifying value.",
+      "intended_failure_layer": "Full epoch mismatch refuses with unchanged original owner before revision mismatch.",
+      "restored_positive_twin": "Restore full metadata order and successful same-context next correction.",
+      "source_subset_refs": [
+        "CP03-ACCEPTED-DOMAIN"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D5",
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-C03",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs plus reference client::complete_key_routes_replacement",
+      "assertion": "Application router protects different values; primitive metadata does not manufacture key validation.",
+      "valid_setup_and_trigger": "Two application entries with same epoch/rev but different complete CP05 key:raw namespace/device/handle or generation. Feed correction targeted at one key plus unknown/wrong-key controls. CP05 acceptance required before binding. Reference router uses Vec<Entry> and complete ObjectKey::matches; do not require Ord/Hash/Copy on ObjectKey.",
+      "independent_expected_result": "Router updates only exact intended entry; wrong/unknown key is explicit outer refusal/incompleteness. Characterize primitive limitation separately: Versioned::apply cannot detect a wrong same-epoch/same-revision value and must not be advertised as doing so.",
+      "active_bad_control": "Route by raw handle/revision only, collapse Unknown into one key, or assert primitive error for an identity it never receives.",
+      "intended_failure_layer": "Application router protects different values; primitive metadata does not manufacture key validation.",
+      "restored_positive_twin": "Restore caller complete-key routing and exact target twin.",
+      "source_subset_refs": [
+        "O-S02",
+        "CP05-FUTURE-ACCEPTED-KEY"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D1",
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-C04",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs and report/export client::both_holders_apply_full_replacement",
+      "assertion": "Every participating real holder equals independent late-replacement truth; unrelated holders remain unchanged.",
+      "valid_setup_and_trigger": "Nonempty report and export hold rev0 Complete/opKnown plus independent fields; late contradiction names exact key and replacement Tainted/opUnknown. Create explicit equivalent corrections for both holders, no hidden broadcast.",
+      "independent_expected_result": "Both are rev1/full expected replacement; unrelated key retains original complete value. A tail merge applies correction after appending its new records. If one real holder refuses, propagation is explicitly incomplete with retained caller custody; no atomic broadcast guarantee.",
+      "active_bad_control": "Deliberately omit export update, change outcome without op, update wrong key, or drop tail correction; each fails its named holder-field assertion.",
+      "intended_failure_layer": "Every participating real holder equals independent late-replacement truth; unrelated holders remain unchanged.",
+      "restored_positive_twin": "Restore explicit two-holder routing and verify report/export separately.",
+      "source_subset_refs": [
+        "O-S01",
+        "O-S02",
+        "O-S03"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D1",
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-C05",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs::generic_trait_and_drop_boundary",
+      "assertion": "Metadata operations require no payload equality/clone; rejected replacement destruction is ordinary caller effect.",
+      "valid_setup_and_trigger": "Payload without Clone/Eq/Debug plus positive Send and Rc non-Send compile cases. Probe payload Eq/Clone counters; rejected replacement Drop witness under harness catch_unwind only.",
+      "independent_expected_result": "Construction/apply has no added T bounds and zero Eq/Clone calls. Field-based auto traits preserved; Rc refusal must be at intended Send bound. On normal metadata refusal original owner returned; Drop effects/panic are not claimed rolled back. The unnameable private unit gate may not add a public Unit:Sized or static bound; trait-object compatibility has its own U01 positive.",
+      "active_bad_control": "Add derive/manual bounds that unnecessarily require T:Clone/Eq/Debug or unsafe Send for Rc; claim replacement is returned or arbitrary Drop panic contained.",
+      "intended_failure_layer": "Metadata operations require no payload equality/clone; rejected replacement destruction is ordinary caller effect.",
+      "restored_positive_twin": "Restore narrow traits; valid non-Debug/non-Clone payload compiles and same test subject succeeds.",
+      "source_subset_refs": [
+        "CP05-FUTURE-CALLBACK-BOUNDARY"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-C06",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs::revision_overflow_is_explicit",
+      "assertion": "Supplied MAX is a valid revision value, but fromMAX cannot create successor.",
+      "valid_setup_and_trigger": "Revision::new(0/MAX-1/MAX) and Correction::new at each; private module fixture may bind holderMAX-1 without exporting a setter.",
+      "independent_expected_result": "Constructed RevisionMAX is valid; CorrectionfromMAX returns ArithmeticOverflow; MAX-1\u2192MAX is representable. No wrapping to0, skipped revision or saturation.",
+      "active_bad_control": "Use wrapping/saturating next revision or reject supplied RevisionMAX itself.",
+      "intended_failure_layer": "Supplied MAX is a valid revision value, but fromMAX cannot create successor.",
+      "restored_positive_twin": "Restore checked successor arithmetic and MAX-1 positive; input payload destruction remains ordinary on constructor Err.",
+      "source_subset_refs": [
+        "SPEC-NEW-VERSION-ENVELOPE"
+      ],
+      "required_tier": "T1 pure/library",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D7"
+      ]
+    },
+    {
+      "id": "CP06-DL01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "future packaged source/archive clients and helper",
+      "assertion": "Delivered checks exercise the consumer resolved production subject and every semantic control after valid setup.",
+      "valid_setup_and_trigger": "Actual accepted base, source/archive membership, two independently wired client manifests/locks/targets, exact metadata and per-cell output; helper has bounded process/log/cleanup collector. All inputs currently UNBOUND.",
+      "independent_expected_result": "Every required source/archive compiler/feature row runs named nonempty cases and wrong-control/restored assertions; no private repository/donor dependency. Missing fixture or setup failure stays incomplete.",
+      "active_bad_control": "Use testkit second library copy, share one mock reducer, omit client/helper from archive, run all-zero population, or label setup crash as semantic red.",
+      "intended_failure_layer": "Delivered checks exercise the consumer resolved production subject and every semantic control after valid setup.",
+      "restored_positive_twin": "Restore actual packaged subject and installed/extracted-root direct invocation; full conformance profile remains later.",
+      "source_subset_refs": [
+        "CP05-FUTURE-ACCEPTED-DELIVERY-MECHANISM"
+      ],
+      "required_tier": "T1 actual source/archive consumer execution; not installed profile",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "channel_ids": [
+          0,
+          1,
+          2
+        ],
+        "actual_production_fixture_hashes_execution_and_resource_bindings": "UNBOUND",
+        "fixed_alphabet_population_limits": "See independent_oracles; separate exact prefixes0..5/0..4 only."
+      },
+      "rulings_applied": [
+        "CP06-D8"
+      ]
+    },
+    {
+      "id": "CP06-U01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "isolated D9 prototype gate; delivered tests/ui/cp06_unit_*.rs",
+      "assertion": "Private inherited unit access stays unavailable externally while Unit-only generic and dyn compatibility remain.",
+      "valid_setup_and_trigger": "Exact accepted quantity.rs plus contract token/method delta in a root-bound disposable library. Separate external packages compile Unit-only generic Count/Loss uses and Option<&dyn Unit>; try foreign impl,private module/tag/token/helper imports,and U::unit_tag(impossible()) with generic impossible<T>()->T.",
+      "independent_expected_result": "Both pinned compilers accept unchanged public generic/dyn positives without extra U bounds. Foreign impl refuses sealed ownership; private imports/call refuse at actual privacy boundary. Primary diagnostic IDs are bound after prototype characterization,not guessed. No public UnitKind export. No blanket lint allowance; only existing private_bounds and one deliberate private_interfaces declaration.",
+      "active_bad_control": "Remove Self:Sized from private static method or replace with associated const, making dyn positive fail. Expose the gate/tag/helper, making intended external privacy-negative compile. A setup error is not the intended refusal.",
+      "intended_failure_layer": "Private inherited unit access stays unavailable externally while Unit-only generic and dyn compatibility remain.",
+      "restored_positive_twin": "Restore exact typed gate,Self:Sized,crate-private tags/helper and unchanged public Unit source line; compiler validation precedes product implementation.",
+      "source_subset_refs": [
+        "CP02-ACCEPTED-SEALED-UNIT"
+      ],
+      "rulings_applied": [
+        "CP06-D9"
+      ],
+      "required_tier": "T1 pure/library or external compiler boundary",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "actual_subject_compiler_fixture_resource_bindings": "UNBOUND"
+      }
+    },
+    {
+      "id": "CP06-U02",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "quantity.rs private unit tests; view.rs stored-record tests",
+      "assertion": "Seven distinct marker units map to exactly seven literal private tags without type guessing or fallback.",
+      "valid_setup_and_trigger": "Events,Records,Bytes,Objects,Attempts,Nonexecutions,DiagnosticSignals are each used as generic LossFact<U>; include signal observed1/cap255. Unit tag helper statically dispatches through validated private method.",
+      "independent_expected_result": "Literal mappings are Events->Events,Records->Records,Bytes->Bytes,Objects->Objects,Attempts->Attempts,Nonexecutions->Nonexecutions,DiagnosticSignals->DiagnosticSignals. Each heterogeneous stored row retains its own tag; signal tag DiagnosticSignals with raw observed/cap. No public/wire repr guarantee.",
+      "active_bad_control": "Map Bytes to Events or collapse every unit to Events; expected private tuple equality fails after valid record admission. A new public UnitKind workaround fails U01.",
+      "intended_failure_layer": "Seven distinct marker units map to exactly seven literal private tags without type guessing or fallback.",
+      "restored_positive_twin": "Restore seven exhaustive literal implementations with no fallback/default and rerun actual source/archive unit controls.",
+      "source_subset_refs": [
+        "CP02-ACCEPTED-SEALED-UNIT"
+      ],
+      "rulings_applied": [
+        "CP06-D8",
+        "CP06-D9"
+      ],
+      "required_tier": "T1 pure/library or external compiler boundary",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "actual_subject_compiler_fixture_resource_bindings": "UNBOUND"
+      }
+    },
+    {
+      "id": "CP06-A01",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "view.rs and feeds.rs owner-local cfg(test) ledger/snapshot/constructor reserve refusal controls",
+      "assertion": "Every detectable reserve refusal occurs before logical publication; no weakened prefix or lost record.",
+      "valid_setup_and_trigger": "Valid E ledger with nonempty prior fact and two affected IDs. Independently force failure at affected-copy reserve,claim-stage reserve,fact-append reserve; separately snapshot-row/per-row-reason allocation. Test-only owner-local fault fields/branches do not appear in production. At the selected site produce deterministic capacity-overflow TryReserveError with Vec::<u8>::new().try_reserve_exact(usize::MAX) and enter the normal reserve-result error mapping. This is not an actual allocator-exhaustion campaign. Extend the same A01 family with QueryOverlay::new overlay_owned_copy and FeedRegistry::new feed_required_ids/feed_received_bits reserve sites. Each constructor attempt has a private owner-local cfg(test) fault context and visited-site observation, using the same actual reserve-result mapping; no production callback/global/public parameter. For each selected site use unique input[1,0],limit2 to reach injection; arm the same fault for overlength unique[1,0,2],overlength duplicate[1,1,0],and within-limit duplicate[1,1] to prove no reserve is reached before refusal.",
+      "independent_expected_result": "CapacityExceeded on normally returned refusal; full prior facts/tags/order/affected sets/claim IDs/reasons and borrowed inputs unchanged. Existing Vec capacity may grow. No callback/global/feature in production,no recoverable OOM claim. Snapshot owner never mutates. At each constructor site deterministic TryReserveError returns normal Err(CapacityExceeded),no normally returned owner,and unchanged borrowed IDs/order. Every overlength input returns CapacityExceeded and every within-limit duplicate returns DuplicateKey with zero visited reserve sites even while faults are armed. Unique faulted inputs must visit/reach the selected site. Restored unique positives return their proper owner. Unsorted required[1,0] stores sorted[0,1];feed1 sets received[false,true],finish MissingFeed;feed0 then sets[true,true],finish Ok.",
+      "active_bad_control": "Commit one claim/fact before a later reserve and hit that failure point; exact old logical-state equality fails. A fault that crashes setup is not semantic RED. Constructor reserve-before-length/duplicate mutation fails the zero-visited-sites/error-order assertion; mapping reserve error to ArithmeticOverflow or panic fails normal Err(CapacityExceeded); incorrect sorted-ID/received-bit association fails the unsorted required[1,0] private mapping assertion.",
+      "intended_failure_layer": "Every detectable reserve refusal occurs before logical publication; no weakened prefix or lost record.",
+      "restored_positive_twin": "Restore staged pending fact/claims plus pre-reserved append; all fault cases and sufficient-allocation twins run against same subject. Restore constructor preflight and error mapping at each selected reserve site,disarm its fault and require unique[1,0] input owner success with unchanged borrowed input; perform both feeds to prove sorted ID-to-bit association.",
+      "source_subset_refs": [
+        "M-S05"
+      ],
+      "rulings_applied": [
+        "CP06-D2",
+        "CP06-D3",
+        "CP06-D4",
+        "CP06-D5",
+        "CP06-D8"
+      ],
+      "required_tier": "T1 pure/library or external compiler boundary",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "actual_subject_compiler_fixture_resource_bindings": "UNBOUND"
+      },
+      "constructor_controls": {
+        "scope": "CP06-DR1-01 verification extension only; no new API/semantics/case ID",
+        "injection": "Owner-local cfg(test) deterministic TryReserveError through each actual reserve-result mapping; no allocator-exhaustion campaign.",
+        "site_rows": [
+          {
+            "site": "overlay_owned_copy",
+            "operation": "QueryOverlay::new",
+            "input_ids": [
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "overlay_owned_copy",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0
+              ],
+              "visited_reserve_sites": [
+                "overlay_owned_copy"
+              ],
+              "selected_fault_reached": true
+            },
+            "restored_twin": "Disarm selected site; same unique input returns normal owner and preserves borrowed order."
+          },
+          {
+            "site": "feed_required_ids",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_required_ids",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0
+              ],
+              "visited_reserve_sites": [
+                "feed_required_ids"
+              ],
+              "selected_fault_reached": true
+            },
+            "restored_twin": "Disarm selected site; same unique input returns normal owner and preserves borrowed order."
+          },
+          {
+            "site": "feed_received_bits",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_received_bits",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0
+              ],
+              "visited_reserve_sites": [
+                "feed_required_ids",
+                "feed_received_bits"
+              ],
+              "selected_fault_reached": true
+            },
+            "restored_twin": "Disarm selected site; same unique input returns normal owner and preserves borrowed order."
+          }
+        ],
+        "preflight_rows": [
+          {
+            "kind": "overlength_unique",
+            "operation": "QueryOverlay::new",
+            "input_ids": [
+              1,
+              0,
+              2
+            ],
+            "limit": 2,
+            "armed_fault_site": "overlay_owned_copy",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0,
+                2
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "overlength_duplicate",
+            "operation": "QueryOverlay::new",
+            "input_ids": [
+              1,
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "overlay_owned_copy",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1,
+                0
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "within_limit_duplicate",
+            "operation": "QueryOverlay::new",
+            "input_ids": [
+              1,
+              1
+            ],
+            "limit": 2,
+            "armed_fault_site": "overlay_owned_copy",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "DuplicateKey",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "overlength_unique",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              0,
+              2
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_required_ids",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0,
+                2
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "overlength_duplicate",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_required_ids",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1,
+                0
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "within_limit_duplicate",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              1
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_required_ids",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "DuplicateKey",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "overlength_unique",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              0,
+              2
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_received_bits",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                0,
+                2
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "overlength_duplicate",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              1,
+              0
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_received_bits",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "CapacityExceeded",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1,
+                0
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          },
+          {
+            "kind": "within_limit_duplicate",
+            "operation": "FeedRegistry::new",
+            "input_ids": [
+              1,
+              1
+            ],
+            "limit": 2,
+            "armed_fault_site": "feed_received_bits",
+            "expected": {
+              "outcome": "NormalErr",
+              "error": "DuplicateKey",
+              "normal_owner_returned": false,
+              "borrowed_input_after": [
+                1,
+                1
+              ],
+              "visited_reserve_sites": [],
+              "selected_fault_reached": false
+            }
+          }
+        ],
+        "restored_unique_positive": {
+          "input_ids": [
+            1,
+            0
+          ],
+          "limit": 2,
+          "borrowed_input_after": [
+            1,
+            0
+          ],
+          "normal_owner_returned": true,
+          "overlay_stored_ids": [
+            0,
+            1
+          ],
+          "overlay_selected_order": [
+            1,
+            0
+          ],
+          "overlay_returned_reasons": [
+            [
+              "QueryPartial"
+            ],
+            [
+              "QueryPartial"
+            ]
+          ],
+          "feed_required_ids": [
+            0,
+            1
+          ],
+          "feed_received_initial": [
+            false,
+            false
+          ],
+          "after_feed1_received": [
+            false,
+            true
+          ],
+          "after_feed1_finish": "MissingFeed",
+          "after_feed0_received": [
+            true,
+            true
+          ],
+          "after_feed0_finish": "Ok"
+        },
+        "active_bad_controls": [
+          "constructor_reserves_before_length_or_duplicate_preflight",
+          "reserve_refusal_maps_ArithmeticOverflow",
+          "reserve_refusal_panics",
+          "sorted_required_to_received_bit_misassociation"
+        ],
+        "unchanged_public_and_finite_contract": true
+      }
+    },
+    {
+      "id": "CP06-C07",
+      "status": "FROZEN_PROPOSAL_NOT_RUN",
+      "target": "tests/corrections.rs::ordinary_drop_effects_and_unwind_boundary",
+      "assertion": "Normally returned owner guarantees and ordinary payload Drop panic effects remain distinct.",
+      "valid_setup_and_trigger": "Independent Drop journal payloads with no Eq/Clone/Debug requirements. Normal stale/foreign apply,normal success,constructorfromMAX,then harness-only catch_unwind for rejected/old payload Drop panic; only one destructor panics in each probe.",
+      "independent_expected_result": "Normal refusal:rejected replacement drops once,returned original still live. Normal success:old retires once,successor lives. ConstructorMAX normal Err drops replacement. On destructor panic:panic propagates,no promised normal Result/returned owner/rollback; caller journal effects may persist and ordinary unwind drops other owners. Production never catches it.",
+      "active_bad_control": "Claim Err was delivered after panic,return rejected replacement,catch panic inside production,or require T Clone/Eq for metadata. Fail explicit outcome/effect or compile-positive assertion.",
+      "intended_failure_layer": "Normally returned owner guarantees and ordinary payload Drop panic effects remain distinct.",
+      "restored_positive_twin": "Restore ordinary consuming API and honest panic boundary; nonpanicking twins establish normal owned-return assertions.",
+      "source_subset_refs": [
+        "SPEC-NEW-VERSION-ENVELOPE"
+      ],
+      "rulings_applied": [
+        "CP06-D7"
+      ],
+      "required_tier": "T1 pure/library or external compiler boundary",
+      "bounds": {
+        "normalized_literal_case_actions_max": 32,
+        "actual_subject_compiler_fixture_resource_bindings": "UNBOUND"
+      }
+    }
+  ],
+  "selected_original_subsets": [
+    {
+      "id": "K-S01",
+      "file": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "name": "shared_losses_map_to_integrity_only_shared_counters",
+      "lines": [
+        193,
+        207
+      ],
+      "selected_subset": "Shared transport11/5 has no backend-local contribution. FeedRegistry asserts presence only; numeric/disjoint totals retained in client/CP11.",
+      "cases": [
+        "CP06-F01",
+        "CP06-V07"
+      ],
+      "deferred": "Full IntegritySummary conversions and per-backend rollup remain product/CP11."
+    },
+    {
+      "id": "K-S02",
+      "file": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "name": "shared_losses_accrue_exactly_once_in_session_total",
+      "lines": [
+        51,
+        83
+      ],
+      "selected_subset": "First shared feed admitted once; backend/skip source categories are separate. Keep11/5 client witness.",
+      "cases": [
+        "CP06-F01"
+      ],
+      "deferred": "Actual synthetic backend and numeric summary schema remain K/CP11."
+    },
+    {
+      "id": "K-S03",
+      "file": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "name": "duplicate_shared_feed_refused_without_double_count",
+      "lines": [
+        85,
+        107
+      ],
+      "selected_subset": "Second feed100/100 refuses and first accepted11/5 client data stands.",
+      "cases": [
+        "CP06-F02",
+        "CP06-F04"
+      ],
+      "deferred": "No new numeric accessor is added to FeedRegistry."
+    },
+    {
+      "id": "K-S04",
+      "file": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "name": "missing_shared_feed_fails_checked_total_but_not_lenient_rollup",
+      "lines": [
+        109,
+        121
+      ],
+      "selected_subset": "Missing required feed fails strict route.",
+      "cases": [
+        "CP06-F01",
+        "CP06-F03",
+        "CP06-F05"
+      ],
+      "deferred": "Lenient legacy rollup contrast documented only; not exposed by CP06."
+    },
+    {
+      "id": "M-S01",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_split_producer_copy_loss_preserves_occupancy",
+      "lines": [
+        291,
+        312
+      ],
+      "selected_subset": "Copy-attribution-only loss degrades copy claim; valued occupancy4096 survives; observed-copy512 retained.",
+      "cases": [
+        "CP06-V03"
+      ],
+      "deferred": "DMA quality-channel/schema and metric calculations remain CP11."
+    },
+    {
+      "id": "M-S02",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_split_producer_mapping_loss_withholds_occupancy",
+      "lines": [
+        315,
+        331
+      ],
+      "selected_subset": "Mapping/release loss targets occupancy; independent-copy512 retains own quality.",
+      "cases": [
+        "CP06-V03"
+      ],
+      "deferred": "Mapping/pairing/row reducers remain CP11."
+    },
+    {
+      "id": "M-S03",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_snapshot_finish_equivalence",
+      "lines": [
+        575,
+        585
+      ],
+      "selected_subset": "A plain read is non-destructive and equivalent on unchanged fact input.",
+      "cases": [
+        "CP06-V01",
+        "CP06-V06",
+        "CP06-V09"
+      ],
+      "deferred": "Strict finish horizon policy is separate and remains CP08/CP11."
+    },
+    {
+      "id": "M-S04",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_partial_snapshot_preserves_later_facts",
+      "lines": [
+        762,
+        802
+      ],
+      "selected_subset": "Partial view unavailable/degraded, later plain/final view matches fresh fact inputs; original4096/8192/pool3 witness remains fixture intent.",
+      "cases": [
+        "CP06-V01",
+        "CP06-V06"
+      ],
+      "deferred": "Do not claim generic reasons implement live bytes/shared regions/pool streak metrics."
+    },
+    {
+      "id": "M-S05",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_repeated_partial_snapshots_preserve_facts",
+      "lines": [
+        805,
+        842
+      ],
+      "selected_subset": "Repeated alternating partial/plain reads plus an admitted fact do not poison future assessment.",
+      "cases": [
+        "CP06-V02",
+        "CP06-V04",
+        "CP06-V09"
+      ],
+      "deferred": "Pool actual sample counting retained by CP11 reducer."
+    },
+    {
+      "id": "M-S06",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_consumed_detail_gap_stays_degraded",
+      "lines": [
+        845,
+        887
+      ],
+      "selected_subset": "Consumed loss remains after partial/plain reads; independent post-gap scalar data not reset.",
+      "cases": [
+        "CP06-V02"
+      ],
+      "deferred": "Exact live/region availability and pool streak reconstruction remain CP11."
+    },
+    {
+      "id": "M-S07",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_gap_between_snapshots_stays_degraded",
+      "lines": [
+        890,
+        916
+      ],
+      "selected_subset": "Real gap between temporary reads persists into final assessment.",
+      "cases": [
+        "CP06-V02"
+      ],
+      "deferred": "Original per-metric quality mapping remains CP11."
+    },
+    {
+      "id": "M-S08",
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_post_gap_pool_run_survives_snapshots",
+      "lines": [
+        919,
+        930
+      ],
+      "selected_subset": "Call-local reads cannot replay old loss into unrelated caller scalar state; post-gap1\u21923 sample witness retained in client fixture.",
+      "cases": [
+        "CP06-V02"
+      ],
+      "deferred": "Pool pressure state-machine implementation remains CP11/MG03."
+    },
+    {
+      "id": "O-S01",
+      "file": "O:tests/scan_oracle.rs",
+      "name": "fix3_consumed_taint_corrects",
+      "lines": [
+        1190,
+        1238
+      ],
+      "selected_subset": "Delivered Complete replaced by exact target Tainted/by-seq1 plus opUnknown after later contradiction.",
+      "cases": [
+        "CP06-C01",
+        "CP06-C04"
+      ],
+      "deferred": "Whole producer/join/slot oracle remains product/CP11."
+    },
+    {
+      "id": "O-S02",
+      "file": "O:src/capture.rs",
+      "name": "fix3_apply_corrections_rewrites_by_key",
+      "lines": [
+        10444,
+        10506
+      ],
+      "selected_subset": "Right full key rewrites outcome+op; unrelated value untouched.",
+      "cases": [
+        "CP06-C01",
+        "CP06-C03",
+        "CP06-C04"
+      ],
+      "deferred": "Original unknown-key ignore stays local; CP06 outer router must make missing association explicit."
+    },
+    {
+      "id": "O-S03",
+      "file": "O:src/capture.rs",
+      "name": "traversal_capture_merge_applies_corrections",
+      "lines": [
+        11264,
+        11294
+      ],
+      "selected_subset": "Finish/salvage tail replacement reaches held earlier verdict.",
+      "cases": [
+        "CP06-C04"
+      ],
+      "deferred": "Traversal controller and shutdown settlement stay product/CP11."
+    }
+  ],
+  "deferred_originals": [
+    {
+      "file": "O:tests/scan_oracle.rs",
+      "name": "fix4_recent_survives_foreign_flood",
+      "lines": [
+        1240,
+        1314
+      ],
+      "owner": "CP11/MG03",
+      "preserve": "Original5000 actually closed foreign invocations with one live outer; consumed inner still correctable.",
+      "bad_control": "Global FIFO evicts the protected pair; fail intended final correction-target assertion after proven5000-close setup.",
+      "limit": "O protects live TIDs and can grow beyond nominal global cap. CP06 has no history queue; no strict memory bound is inferred.",
+      "status": "PRESERVED_REFERENCE_NOT_RUN"
+    },
+    {
+      "file": "M:tests/unit/test_engine.mojo",
+      "name": "test_snapshot_narrowed_ok_finish_strict",
+      "lines": [
+        588,
+        598
+      ],
+      "owner": "CP08/CP11",
+      "preserve": "Narrowed snapshot succeeds while strict final horizon rejects excluded evidence.",
+      "status": "PRESERVED_REFERENCE_NOT_RUN"
+    },
+    {
+      "file": "M:tests/unit/test_mappings.mojo",
+      "name": "test_unpaired_copy_bytes_retained and related independent-fact originals",
+      "lines": [
+        [
+          656,
+          681
+        ],
+        [
+          682,
+          694
+        ],
+        [
+          695,
+          717
+        ],
+        [
+          718,
+          737
+        ],
+        [
+          738,
+          767
+        ],
+        [
+          768,
+          783
+        ]
+      ],
+      "owner": "CP11/MG03",
+      "preserve": "Both copy directions, unpaired failure, copy-before-failure, mixture,overflow keep original semantic assertions. CP06 only accepts supplied claim dependencies.",
+      "status": "PRESERVED_REFERENCE_NOT_RUN"
+    },
+    {
+      "file": "M:tests/unit/test_mappings.mojo",
+      "name": "test_retired_history_bounded",
+      "lines": [
+        848,
+        899
+      ],
+      "owner": "CP05 prerequisite/CP11/MG03",
+      "preserve": "Six retirements/cap4, two evictions, sticky unknown continuity; not a CP06 reset/eviction policy.",
+      "status": "PRESERVED_REFERENCE_NOT_RUN"
+    }
+  ],
+  "independent_oracles": {
+    "view_occurrence_journal": {
+      "status": "FROZEN_AUTHORING_NOT_EXECUTED",
+      "alphabet": [
+        "L1_UNKNOWN",
+        "L2_EXACT1",
+        "L1_EXACT0",
+        "QUERY_BOTH_OVERLAY1",
+        "QUERY_BOTH_PLAIN",
+        "QUERY_BOTH_OVERLAY_BOTH"
+      ],
+      "lengths_inclusive": [
+        0,
+        5
+      ],
+      "scripts": 9331,
+      "actions": 44790,
+      "fixed_limits": {
+        "claims": 2,
+        "reasons_per_claim": 2,
+        "loss_facts": 5
+      },
+      "expected": "For each queried claim, independently enumerate preceding accepted damaging loss occurrences targeting it; OR a per-call QueryPartial only for selected overlay IDs. Do not call production constructors/ledger to calculate expected classifications. Constructor/capacity/context rows are separate literal tables.",
+      "journal_bounds": "At most5 actions,5 accepted loss occurrences,2 affected IDs per occurrence; literal payloads, no generic runtime.",
+      "duplicate_preflight": "Allocation-free pairwise checks; O(n^2) scoped work refinement disclosed for independent review.",
+      "memory_execution": "Generate one script at a time; at most5 action/journal rows,5 facts,2 claims,2 reasons per returned claim; no whole-population retention."
+    },
+    "feed_inventory": {
+      "status": "FROZEN_AUTHORING_NOT_EXECUTED",
+      "required_sets": [
+        [],
+        [
+          0
+        ],
+        [
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "alphabet": [
+        "FEED0_EXACT0",
+        "FEED0_EXACT11",
+        "FEED1_UNKNOWN",
+        "FINISH"
+      ],
+      "lengths_inclusive": [
+        0,
+        4
+      ],
+      "scripts_per_required_set": 341,
+      "actions_per_required_set": 1252,
+      "total_scripts": 1364,
+      "total_actions": 5008,
+      "expected": "Accepted input indices establish first declared channel occurrence. Later same channel refuses; FINISH checks literal required-subset membership. Registry output is never used to derive expected truth.",
+      "memory_execution": "One prefix up to4 actions and two-channel inventory at a time; no aggregate script retention."
+    },
+    "correction_revision_journal": {
+      "status": "FROZEN_AUTHORING_NOT_EXECUTED",
+      "alphabet": [
+        "APPLY_E_FROM0_A",
+        "APPLY_E_FROM1_B",
+        "APPLY_E_FROM0_C",
+        "APPLY_FOREIGN_FROM0_D",
+        "CONSTRUCT_FROM_MAX_E"
+      ],
+      "lengths_inclusive": [
+        0,
+        4
+      ],
+      "scripts": 781,
+      "actions": 2930,
+      "expected": "Independent accepted-attempt journal and literal revision table0..4 select full values. Foreign epoch always DomainMismatch, wrongfrom StaleRevision, fromMAX constructor ArithmeticOverflow. Never take expected revision/value from the production holder.",
+      "additional_literal_rows": [
+        "MAX-1 to MAX private-module edge",
+        "same-epoch same-revision wrong target is caller-routing boundary",
+        "both full replacement holders and unchanged unrelated key"
+      ],
+      "memory_execution": "One prefix up to4 actions,one original holder and literal values at a time; separate actual two-holder client rows."
+    },
+    "causality_requirements": [
+      "Each semantic wrong control reaches valid nonempty setup and fails its named assertion.",
+      "Restored twin uses the same inputs/environment and exact restored subject bytes.",
+      "Missing API,setup crash,compiler failure outside intended trait diagnostic,SKIP or NOT_RUN is not semantic RED.",
+      "Original selected subsets,private invariants,public API assertions and application-policy deferrals are reported separately."
+    ]
+  },
+  "delivery": {
+    "proposed_tests": [
+      "tests/report_views.rs",
+      "tests/feed_integrity.rs",
+      "tests/corrections.rs",
+      "shipped src/view.rs private-invariant unit tests",
+      "affected existing CP02 quantity and CP03 loss/unit controls if D9 changes quantity.rs",
+      "tests/cp06_donor_subsets.rs",
+      "tests/support/cp06_cases.rs literal fixtures",
+      "CP06-U01/U02/A01/C07 shipped controls"
+    ],
+    "proposed_distinct_clients": [
+      "fact-dependency viewer with independent byte/occupancy reducer",
+      "shared-transport report plus export holder with explicit complete-key correction routing"
+    ],
+    "actual_client_manifests_locks_helper_and_subjects": "UNBOUND",
+    "proposed_cells": {
+      "compilers": [
+        "1.88.0",
+        "1.98.1"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "features": [
+        {
+          "defaults": false,
+          "features": []
+        },
+        {
+          "defaults": true,
+          "features": []
+        },
+        {
+          "defaults": false,
+          "features": [
+            "json"
+          ]
+        }
+      ],
+      "source_and_archive_configurations": 12,
+      "affected_capture_archive_cells": 6,
+      "executed": 0
+    },
+    "all_input_output_schema_fixture_hashes": "Authoring carrier/caps frozen above; actual fixture bytes/hash,subjects,tools,helpers and outputs remain UNBOUND.",
+    "later_gates": [
+      "CP10 neutral/replay parity",
+      "CP11 three full real adapters and protected correction history",
+      "CP13/TT07 installed operator exact-consumer route",
+      "MG03 actual application adoption and duplicate retirement"
+    ],
+    "remaining_D8_TODO": [
+      "CP10 canonical neutral serialization and separately designed public provenance audit/export",
+      "CP13/TT07 exact-consumer installed audit/export/conformance route",
+      "Payload-free ContractError does not encode source/unit tags; private tests do not implement a public audit API."
+    ]
+  },
+  "revision": "r3",
+  "root_semantic_rulings": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-root-design-rulings-r1.json",
+    "sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab",
+    "status": "ADOPT_SEMANTICS_FOR_INDEPENDENT_REVIEW"
+  },
+  "prior_cases": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r1/cases-and-controls.json",
+    "sha256": "09d09f411f8cd55200154585a57a3a518e7c3f33cfa6e275e56b71df0b636693",
+    "all_prior_case_ids_preserved": true,
+    "all15_original_subset_objects_preserved": true
+  },
+  "contract": "contract.md",
+  "verification_plan": "verification-plan.md",
+  "additional_preservation_links": [
+    {
+      "case": "CP06-A01",
+      "original_subset": "M-S05",
+      "reason": "Additional failure-publication sensitivity; original subset object preserved byte-for-byte as JSON data."
+    }
+  ],
+  "private_layout": {
+    "representation": "Rust default layout,no repr/ABI/serialization",
+    "unit_tags": [
+      "Events",
+      "Records",
+      "Bytes",
+      "Objects",
+      "Attempts",
+      "Nonexecutions",
+      "DiagnosticSignals"
+    ],
+    "quantity_visibility": {
+      "UnitTag": "pub(crate),not reexported",
+      "UnitTagAccess": "pub(crate)tuple struct with private field",
+      "unit_tag_helper": "pub(crate)fn unit_tag<U:Unit>()->UnitTag",
+      "Sealed": "pub trait inside existing private module; typed private static method where Self:Sized",
+      "Unit": "unchanged pub trait Unit:private::Sealed{}"
+    },
+    "record_fields": [
+      "source:SourceRef",
+      "channel:ChannelId",
+      "unit:UnitTag",
+      "observation:RetainedObservation",
+      "affected:Vec<ClaimId>"
+    ],
+    "observation_variants": {
+      "Loss": [
+        "kind:LossKind",
+        "magnitude:Exact(u64)|AtLeast(u64)|Unknown"
+      ],
+      "Signal": [
+        "observed:u8",
+        "cap:u8"
+      ]
+    },
+    "claim_state": "sorted Vec<ClaimState{claim:ClaimId,consumed_loss:bool}>",
+    "feed_state": "sorted Vec<ChannelId> required + same-length Vec<bool> received",
+    "atomicity": "staged affected/claims/fact; pre-reserve append before fixed logical moves; errors preserve logical state,not allocation capacity",
+    "D9_compiler_validation": "NOT_RUN_UNBOUND_REQUIRED_BEFORE_IMPLEMENTATION_ADMISSION"
+  },
+  "authoring_carrier": {
+    "kind": "compiled literal Rust test fixture source,not a new public event/replay format",
+    "future_path": "crates/scopebase-capture/tests/support/cp06_cases.rs",
+    "parsing": "No new runtime decoder/dependency. Pure tests directly consume typed fixture literals; source file/hash remains UNBOUND until implemented.",
+    "exact_populations": {
+      "view_scripts": 9331,
+      "view_actions": 44790,
+      "feed_scripts_total": 1364,
+      "feed_actions_total": 5008,
+      "correction_scripts": 781,
+      "correction_actions": 2930
+    },
+    "literal_normalized_actions_max_per_case": 32,
+    "expected_truth": "Independent occurrence/accepted-input journal and hand-authored literal rows; never use production holder/ledger output as expected truth.",
+    "non_vacuity": "Require nonempty admitted/excluded/semantic-mutant populations; empty-prefix scripts alone cannot qualify a family."
+  },
+  "decision_review_refinements": [
+    "D9 exact typed private Rust mechanism requires isolated compiler validation and independent review.",
+    "Allocation-free pairwise preflight is an explicit O(n^2) exception to earlier generic linear-work prose.",
+    "Normal capacity/checked collection-size/try_reserve refusal returns CapacityExceeded without claiming universal OOM recovery."
+  ],
+  "review_repair": {
+    "index_path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-design-review-r1/artifact-index.json",
+    "index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+    "disposition": "NEEDS_REPAIR",
+    "scoped_findings": [
+      "CP06-DR1-01",
+      "CP06-DR1-02"
+    ]
+  },
+  "source_selection_binding": {
+    "status": "ADOPTED_SOURCE_SELECTION_ONLY_NOT_COPIED_NOT_IMPLEMENTATION_READY",
+    "source_only_integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "admission_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "navigation_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+    "navigation_sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83",
+    "predecessor_admission_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "predecessor_preserved": true,
+    "selected_added_ranges": 29,
+    "selected_added_lines": 747,
+    "new_row_total": 136,
+    "qualification": "Root-adopted pre-copy source selection under existing owner authorization. Actual copied subset,destination hashes,port receipts,CP05 acceptance,D9 validation,API/resources and product gates remain UNBOUND. No r3 donor intake/reinspection or source copy."
+  }
+}

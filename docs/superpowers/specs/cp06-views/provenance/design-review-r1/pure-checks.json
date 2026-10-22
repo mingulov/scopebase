@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R2_DESIGN_REVIEW_PURE_INPUT_CHECKS",
+  "status": "ONE_LITERAL_BOUNDS_CONTRADICTION_REPORTED",
+  "method": "One-shot Python3 stdlib JSON/hash/equality/cardinality arithmetic only;no repository helper executed.",
+  "product_execution": false,
+  "compiler_execution": false,
+  "donor_bytes_inspected": false,
+  "checks": [
+    {
+      "name": "exact_dispatch_index",
+      "result": "PASS",
+      "detail": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e"
+    },
+    {
+      "name": "r2_artifact_contract.md",
+      "result": "PASS",
+      "detail": {
+        "bytes": 22455,
+        "lines": 184,
+        "sha256": "dbb397c8d3290b19a45db337170a6510a927d4b41a7953f9b0a80562e53fc4a6"
+      }
+    },
+    {
+      "name": "r2_artifact_verification-plan.md",
+      "result": "PASS",
+      "detail": {
+        "bytes": 21722,
+        "lines": 130,
+        "sha256": "f52757e6de4cf26b50bf5fc75ebccacd35098c5aee0ca7342a2044dd8cd4825f"
+      }
+    },
+    {
+      "name": "r2_artifact_source-map.json",
+      "result": "PASS",
+      "detail": {
+        "bytes": 45741,
+        "lines": 1080,
+        "sha256": "4128e7a0b4c27446b4c99f6ed5d18ed704fcdc0e2b404a2bf3162f181650aa01"
+      }
+    },
+    {
+      "name": "r2_artifact_cases-and-controls.json",
+      "result": "PASS",
+      "detail": {
+        "bytes": 63185,
+        "lines": 1369,
+        "sha256": "606941cb71c48d5207e22b515181c2f3baf689b57d972bfc62d189613b1c3b22"
+      }
+    },
+    {
+      "name": "r2_artifact_decision-incorporation.json",
+      "result": "PASS",
+      "detail": {
+        "bytes": 13370,
+        "lines": 217,
+        "sha256": "e74414522a6ed1e1576b7365e72121495cb5c8af1b46ea13cc74618cb34c19d9"
+      }
+    },
+    {
+      "name": "r1_index_unchanged",
+      "result": "PASS",
+      "detail": "10db2b1698018f7a5a1031f5f3b7ffcc663a8012199f3fc9201cf8945ce42aee"
+    },
+    {
+      "name": "r1_unchanged_packet.md",
+      "result": "PASS",
+      "detail": "8f6e88def478151dde14ecb7c25214e4bc3f9bde5725b28fdb5a3b02f459eb89"
+    },
+    {
+      "name": "r1_unchanged_source-map.json",
+      "result": "PASS",
+      "detail": "0b11ee333c5f6550ebefc8ca520b9df8b2ec243518aefa37f4d2b0cb45c81ac5"
+    },
+    {
+      "name": "r1_unchanged_cases-and-controls.json",
+      "result": "PASS",
+      "detail": "09d09f411f8cd55200154585a57a3a518e7c3f33cfa6e275e56b71df0b636693"
+    },
+    {
+      "name": "r1_unchanged_decisions-needed.md",
+      "result": "PASS",
+      "detail": "a992f9e39195ebe2d5efa7c4d43dfda18d8942762d7c2e564805c5b917cd8bfc"
+    },
+    {
+      "name": "root_rulings_hash",
+      "result": "PASS",
+      "detail": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab"
+    },
+    {
+      "name": "separate_source_review_index_hash",
+      "result": "PASS",
+      "detail": {
+        "sha256": "ee2c2dd3bbd527dcf3be8d269e3659669766abd426cbdcbdc4288626ed255270",
+        "scope": "index disposition only;no donor/source-intake verification repeated"
+      }
+    },
+    {
+      "name": "case_ids_original21_plus4",
+      "result": "PASS",
+      "detail": [
+        "CP06-A01",
+        "CP06-C07",
+        "CP06-U01",
+        "CP06-U02"
+      ]
+    },
+    {
+      "name": "all_case_execution_statuses_unrun",
+      "result": "PASS",
+      "detail": 25
+    },
+    {
+      "name": "original15_subset_objects_unchanged",
+      "result": "PASS",
+      "detail": 15
+    },
+    {
+      "name": "deferred4_objects_unchanged",
+      "result": "PASS",
+      "detail": 4
+    },
+    {
+      "name": "source_mapping10_objects_unchanged",
+      "result": "PASS",
+      "detail": 10
+    },
+    {
+      "name": "selected29_ranges747_lines",
+      "result": "PASS",
+      "detail": {
+        "ranges": 29,
+        "lines": 747
+      }
+    },
+    {
+      "name": "root9_incorporation_exact",
+      "result": "PASS",
+      "detail": [
+        "CP06-D1",
+        "CP06-D2",
+        "CP06-D3",
+        "CP06-D4",
+        "CP06-D5",
+        "CP06-D6",
+        "CP06-D7",
+        "CP06-D8",
+        "CP06-D9"
+      ]
+    },
+    {
+      "name": "subset_case_links_exist",
+      "result": "PASS",
+      "detail": 15
+    },
+    {
+      "name": "independent_view_population_arithmetic",
+      "result": "PASS",
+      "detail": {
+        "scripts": 9331,
+        "actions": 44790,
+        "method": "sum(n**k);sum(k*n**k),inclusive lengths0..L"
+      }
+    },
+    {
+      "name": "independent_feed_population_arithmetic",
+      "result": "PASS",
+      "detail": {
+        "scripts": 1364,
+        "actions": 5008,
+        "method": "sum(n**k);sum(k*n**k),inclusive lengths0..L"
+      }
+    },
+    {
+      "name": "independent_correction_population_arithmetic",
+      "result": "PASS",
+      "detail": {
+        "scripts": 781,
+        "actions": 2930,
+        "method": "sum(n**k);sum(k*n**k),inclusive lengths0..L"
+      }
+    },
+    {
+      "name": "V06_overlay_outsider_in_declared_literal_ID_bounds",
+      "result": "FAIL",
+      "detail": {
+        "setup": "selected[2,1],overlay[1,3]",
+        "declared_claim_ids": [
+          0,
+          1,
+          2
+        ],
+        "required_missing_id": 3
+      }
+    },
+    {
+      "name": "whitespace_contract.md",
+      "result": "PASS",
+      "detail": 184
+    },
+    {
+      "name": "whitespace_verification-plan.md",
+      "result": "PASS",
+      "detail": 130
+    },
+    {
+      "name": "selected_current_API_hashes_match_r2_observed_inputs",
+      "result": "PASS",
+      "detail": {
+        "files": 7,
+        "not_execution_base_binding": true
+      }
+    },
+    {
+      "name": "selected_CP05_candidate_generation_hash",
+      "result": "PASS",
+      "detail": {
+        "candidate": "80b3847542b6424e1b09c259536fe81a8bf000be",
+        "sha256": "96fe64b569268d4b797b036f10aa77f5ba0a267a4fe66035de98b9e8b45c064c",
+        "acceptance_inferred": false
+      }
+    }
+  ],
+  "counts": {
+    "passed": 28,
+    "failed": 1
+  },
+  "manual_verification_gap": "CP06-DR1-01 constructor reserve/order controls are not among the explicitly frozen failure sites."
+}

@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R3_SCOPED_FOLLOWUP_PURE_CHECKS",
+  "status": "PASS",
+  "input_r3_index_sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11",
+  "checks": [
+    {
+      "assertion": "exact root-confirmed final r3 index",
+      "status": "PASS",
+      "detail": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11"
+    },
+    {
+      "assertion": "r3 member contract.md",
+      "status": "PASS",
+      "detail": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "assertion": "r3 member verification-plan.md",
+      "status": "PASS",
+      "detail": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "assertion": "r3 member source-map.json",
+      "status": "PASS",
+      "detail": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "assertion": "r3 member cases-and-controls.json",
+      "status": "PASS",
+      "detail": "9f43d3a8104a8ac1c727549d5b57ec1f2aa7e765aa467240707cfed7c01f01ad"
+    },
+    {
+      "assertion": "r3 member decision-incorporation.json",
+      "status": "PASS",
+      "detail": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "assertion": "r3 member check_repairs.py",
+      "status": "PASS",
+      "detail": "f101b7e31e2509a811404892c5f0ee7b1f9c8eb49fed28cff984edf129aa9a90"
+    },
+    {
+      "assertion": "r3 member old-red.json",
+      "status": "PASS",
+      "detail": "bf2f1d20093ceab5674160002e341b5faa9daf938c3200f9967a21d6b5f72310"
+    },
+    {
+      "assertion": "r3 member new-green.json",
+      "status": "PASS",
+      "detail": "53cfe2f09ea457139da95450f06a629c87e2d685ba5594ee0189cf215c60f2d4"
+    },
+    {
+      "assertion": "preserved immutable_r2_input",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r2_input member contract.md",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r2_input member verification-plan.md",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r2_input member source-map.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r2_input member cases-and-controls.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r2_input member decision-incorporation.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r1_input",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r1_input member packet.md",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r1_input member source-map.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r1_input member cases-and-controls.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved immutable_r1_input member decisions-needed.md",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved review_input",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved review_input member review.md",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved review_input member review.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preserved review_input member pure-checks.json",
+      "status": "PASS"
+    },
+    {
+      "assertion": "same25 IDs in order",
+      "status": "PASS"
+    },
+    {
+      "assertion": "exactly preserved selected_original_subsets",
+      "status": "PASS"
+    },
+    {
+      "assertion": "exactly preserved deferred_originals",
+      "status": "PASS"
+    },
+    {
+      "assertion": "exactly preserved independent_oracles",
+      "status": "PASS"
+    },
+    {
+      "assertion": "exactly preserved authoring_carrier",
+      "status": "PASS"
+    },
+    {
+      "assertion": "exactly preserved private_layout",
+      "status": "PASS"
+    },
+    {
+      "assertion": "15 original subset objects",
+      "status": "PASS"
+    },
+    {
+      "assertion": "10 unchanged source boundary objects",
+      "status": "PASS"
+    },
+    {
+      "assertion": "29 ranges 747 lines unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "view fixed population arithmetic",
+      "status": "PASS",
+      "detail": {
+        "scripts": 9331,
+        "actions": 44790
+      }
+    },
+    {
+      "assertion": "feed fixed population arithmetic",
+      "status": "PASS",
+      "detail": {
+        "scripts": 1364,
+        "actions": 5008
+      }
+    },
+    {
+      "assertion": "revision fixed population arithmetic",
+      "status": "PASS",
+      "detail": {
+        "scripts": 781,
+        "actions": 2930
+      }
+    },
+    {
+      "assertion": "other23 cases unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "V06 only literal bounds repaired",
+      "status": "PASS"
+    },
+    {
+      "assertion": "three constructor reserve sites",
+      "status": "PASS"
+    },
+    {
+      "assertion": "normal CapacityExceeded/no owner/input preserved/reachable",
+      "status": "PASS"
+    },
+    {
+      "assertion": "received-bit site follows required-ID site",
+      "status": "PASS"
+    },
+    {
+      "assertion": "nine preflight controls",
+      "status": "PASS"
+    },
+    {
+      "assertion": "fault armed at each site for all invalid-input classes",
+      "status": "PASS"
+    },
+    {
+      "assertion": "preflight length versus duplicate errors",
+      "status": "PASS"
+    },
+    {
+      "assertion": "restored unsorted ID-bit witness",
+      "status": "PASS"
+    },
+    {
+      "assertion": "source binding same across index/source/decisions",
+      "status": "PASS"
+    },
+    {
+      "assertion": "canonical and immutable tree admission_path",
+      "status": "PASS",
+      "detail": {
+        "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+        "sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2"
+      }
+    },
+    {
+      "assertion": "canonical and immutable tree navigation_path",
+      "status": "PASS",
+      "detail": {
+        "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+        "sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83"
+      }
+    },
+    {
+      "assertion": "earlier admission preserved",
+      "status": "PASS",
+      "detail": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1"
+    },
+    {
+      "assertion": "source-only commit changes metadata paths only",
+      "status": "PASS",
+      "detail": [
+        "TODO.md",
+        "docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+        "docs/provenance/cp06-scopes-20261022.md",
+        "docs/provenance/donors.json",
+        "docs/provenance/next-host-scopes-20261022.md",
+        "handoff.md"
+      ]
+    },
+    {
+      "assertion": "public API/private layout/D9 Rust blocks unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "root9 incorporation unchanged",
+      "status": "PASS"
+    },
+    {
+      "assertion": "no readiness inferred",
+      "status": "PASS"
+    }
+  ],
+  "passed": 53,
+  "failed": 0,
+  "product_Rust_compiler_native_or_helper_execution": false,
+  "only_artifact_checker_executed": true,
+  "limits": "Checks cover faithful repair authoring,checker sensitivity,preservation and source-only identity;no constructor/semantic/product gate passes."
+}

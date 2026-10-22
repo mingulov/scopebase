@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R3_SCOPED_INDEPENDENT_DESIGN_FOLLOWUP",
+  "date": "2026-10-22",
+  "review_revision": "r2",
+  "disposition": "READY_FOR_ROOT_RATIFICATION",
+  "scope": "Close CP06-DR1-01/02 only;verify faithful repairs,preservation,source-only adoption identity,and pure artifact-checker causality.No full settled-semantics re-review.",
+  "summary": "Both prior findings are closed as written design/verification obligations.No additional repair is required within this scoped follow-up.",
+  "input_bindings": [
+    {
+      "role": "parent_confirmed_final_r3_freeze",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/artifact-index.json",
+      "sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11"
+    },
+    {
+      "role": "prior_independent_design_review",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-design-review-r1/artifact-index.json",
+      "sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48"
+    },
+    {
+      "role": "preserved_r2_freeze",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/artifact-index.json",
+      "sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e"
+    },
+    {
+      "role": "reviewed_pure_checker",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/check_repairs.py",
+      "sha256": "f101b7e31e2509a811404892c5f0ee7b1f9c8eb49fed28cff984edf129aa9a90"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/contract.md",
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/verification-plan.md",
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/source-map.json",
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/cases-and-controls.json",
+      "sha256": "9f43d3a8104a8ac1c727549d5b57ec1f2aa7e765aa467240707cfed7c01f01ad"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/decision-incorporation.json",
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/old-red.json",
+      "sha256": "bf2f1d20093ceab5674160002e341b5faa9daf938c3200f9967a21d6b5f72310"
+    },
+    {
+      "role": "r3_member",
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/new-green.json",
+      "sha256": "53cfe2f09ea457139da95450f06a629c87e2d685ba5594ee0189cf215c60f2d4"
+    }
+  ],
+  "findings": [
+    {
+      "id": "CP06-DR1-01",
+      "prior_kind": "missing semantic sensitivity",
+      "status": "CLOSED_IN_DESIGN_VERIFICATION_AUTHORING",
+      "evidence": [
+        "A01,contract and Tasks2/3 identify overlay_owned_copy,feed_required_ids and feed_received_bits constructor reserve branches.",
+        "Each unique[1,0]/limit2 fault row reaches the selected site through the prescribed actual TryReserveError mapping and expects normal CapacityExceeded,no returned owner,and unchanged borrowed input.",
+        "Nine fault-armed preflight rows cover overlength unique[1,0,2],overlength duplicate[1,1,0] and within-limit duplicate[1,1] at all three sites,requiring their ruled error and zero reserve visits.",
+        "The received-bit fault observes required-ID reserve first.Disarmed identical positives return owners and preserve borrowed order.",
+        "Unsorted required[1,0] maps to sorted[0,1],then feed1->[false,true]/MissingFeed and feed0->[true,true]/Ok.",
+        "Early allocation,wrong error/panic mapping and wrong ID-to-bit controls are explicit future product obligations."
+      ],
+      "product_validation_status": "NOT_RUN;closure is of the missing verification obligation,not actual constructor behavior."
+    },
+    {
+      "id": "CP06-DR1-02",
+      "prior_kind": "actual frozen input/bounds contradiction",
+      "status": "CLOSED_IN_FROZEN_ARTIFACT",
+      "evidence": [
+        "Only V06 bounds.claim_ids changes to[0,1,2,3].",
+        "Existing selected[2,1] and overlay[1,3] still each contain two IDs.No capacity or finite alphabet is enlarged."
+      ],
+      "product_validation_status": "NOT_RUN;the contradictory written bounds are repaired."
+    }
+  ],
+  "new_findings": [],
+  "preservation": {
+    "case_IDs_in_same_order": 25,
+    "other_case_objects_unchanged": 23,
+    "original_subset_objects_unchanged": 15,
+    "deferred_groups_unchanged": 4,
+    "finite_journal_and_authoring_objects_unchanged": true,
+    "source_mapping_objects_unchanged": 10,
+    "source_ranges_unchanged": 29,
+    "source_lines_unchanged": 747,
+    "public_API_private_layout_D9_Rust_blocks_unchanged": true,
+    "root9_incorporation_objects_unchanged": true,
+    "prior_r1_r2_review_artifacts_preserved": true
+  },
+  "checker_causal_assessment": {
+    "source_review": "Independent literal expectations cover all3 sites,normal error/ownership/input/trace fields,all9 preflight rows,and exact unsorted positive.Text-token checks supplement the matrix;they are not runtime evidence.",
+    "independently_reproduced_old_r2": {
+      "exit_code": 1,
+      "finding_groups_failed": 2,
+      "preservation_checks_passed": 21
+    },
+    "independently_reproduced_new_r3": {
+      "exit_code": 0,
+      "finding_assertions_passed": 19,
+      "preservation_checks_passed": 21,
+      "total_assertions": 40
+    },
+    "isolated_artifact_controls": 6,
+    "control_changes": [
+      "remove feed_received_bits unique reachability row",
+      "feed_required_ids fault expected error ArithmeticOverflow",
+      "feed_received_bits within-limit duplicate has a visited reserve",
+      "overlay_owned_copy unique row says selected fault not reached",
+      "after feed1 received flags reversed",
+      "V06 claim bounds revert to[0,1,2]"
+    ],
+    "all_controls_failed_intended_assertions": true,
+    "other_finding_and_all21_preservation_checks_pass_on_each_control": true,
+    "baseline_bytes_restored_by_derivation_not_mutated": true,
+    "limitation": "No Rust constructor,actual TryReserveError,semantic product mutant,compiler gate,helper/package/client execution was performed."
+  },
+  "source_selection_binding": {
+    "status": "ROOT_ADOPTED_SOURCE_SELECTION_ONLY",
+    "verified_identity": true,
+    "integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "navigation_sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83",
+    "canonical_and_immutable_tree_hashes_match": true,
+    "predecessor_admission_preserved": true,
+    "commit_changed_metadata_paths_only": true,
+    "scope_limit": "Verifies the identity of already adopted source-only documents;does not repeat intake,donor/source inspection,copying,port correspondence or execution."
+  },
+  "subsequent_external_CP05_state": {
+    "reported_by": "root follow-up message after r3 freeze",
+    "root_accepted_source_prefix": "7d992e1",
+    "independently_verified_here": false,
+    "treatment": "Sealed r3 then-UNBOUND prerequisite wording stays historical.This review neither changes it nor treats it as current CP06 execution-gate proof.The eventual CP06 packet must bind actual accepted CP05 receipt/API and post-acceptance base."
+  },
+  "remaining_execution_bindings": [
+    "actual CP06 accepted-prerequisite receipts/APIs and post-acceptance product base",
+    "D9 compiler/privacy prototype bytes and diagnostics",
+    "actual copied subset/destination hashes/selected-port receipts",
+    "absolute common build resource/wrapper/compiler/features/cache/lock/targets/results",
+    "actual fixtures/helper/collector/two clients/manifests/locks/source+archive subjects",
+    "CP02 quantity successor and any actually changed CP03 mapped successor",
+    "actual implementation/source review/root acceptance"
+  ],
+  "authority": {
+    "root_ratification_performed": false,
+    "review_grants_source_admission": false,
+    "implementation_admission": false,
+    "CP06_task_acceptance": false,
+    "packet_readiness": "NOT_PACKET_READY"
+  },
+  "activity_limits": {
+    "product_source_edits_or_copy": false,
+    "donor_refresh_or_intake": false,
+    "Cargo_or_compiler": false,
+    "native_or_kernel": false,
+    "product_helper_campaign": false,
+    "pure_artifact_checker": true,
+    "private_artifact_derivatives_for_causality": true,
+    "subagents": 0,
+    "mutations": "Only new cp06-design-review-r2 outputs"
+  },
+  "pure_check_summary": {
+    "independent_checks_passed": 53,
+    "independent_checks_failed": 0,
+    "r3_authoring_checker_assertions_passed": 40,
+    "isolated_artifact_controls": 6
+  },
+  "root_next_action": "Ratify the reviewed design if desired using exact r3+review indexes;bind execution prerequisites separately.No implementation admission or acceptance follows from this review."
+}

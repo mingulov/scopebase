@@ -1,0 +1,207 @@
+{
+  "activity": {
+    "compiler_or_Cargo_executed_by_reviewer": false,
+    "donor_refresh_or_source_inspection": false,
+    "native_kernel_or_runtime_probe": false,
+    "process_signal_operations": "signal0 existence checks only",
+    "product_tests_or_helper_campaign": false,
+    "read_only_git_status_and_HEAD": true,
+    "subagents": 0
+  },
+  "authority": {
+    "CP06_task_acceptance": false,
+    "implementation_admitted": false,
+    "package_or_profile_qualification": "NOT_RUN",
+    "packet_ready": false,
+    "root_ratification_performed_by_reviewer": false
+  },
+  "campaigns": {
+    "r1": {
+      "commands": 1,
+      "library_lint_policy": "deny(warnings)",
+      "report_sha256": null,
+      "status": "FAILED_STRICT_LIBRARY_BUILD_1_88_ONLY"
+    },
+    "r2": {
+      "commands": 22,
+      "library_lint_policy": "default warnings; 14 private_interfaces warnings per compiler",
+      "report_sha256": "1aee179488ed6848a0036e468fbe07d94e3a98bd27b8efc6d90262ad17ec3ecc",
+      "status": "PASS_PROTOTYPE_ONLY"
+    },
+    "r3": {
+      "commands": 22,
+      "library_lint_policy": "deny(warnings)",
+      "report_sha256": "3b7f4300d4ddad7a98206f8eed76c4c6f20e5b69aaaaebc1fb031f0aef637d56",
+      "status": "PASS_STRICT_PROTOTYPE_ONLY"
+    }
+  },
+  "complete_retained_input_index": {
+    "files": 309,
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-review-r1/input-index.json",
+    "sha256": "3d22e56a37a9399166d086b147ce9d4c22f2fc3f869abc1d29ba375288df71e7"
+  },
+  "disposition": "READY_FOR_ROOT_NARROW_D9_SUCCESSOR_ADOPTION",
+  "evidence": {
+    "accepted_base": "0ebad270b873c621ef944ea98ec63cacc6347bfc",
+    "accepted_quantity_delta": "Exact original token/tag/method/helper delta plus seven explicit mappings; reverse transformation recovers accepted bytes. R3 adds only method-level private_interfaces attribute.",
+    "all_recorded_command_groups_currently_absent": 45,
+    "binding_validation": "All prelaunch source files, reserved/collected commands, actual inherited descriptors, log SHA256/lengths and collector cleanup facts match; retained outputs are indexed.",
+    "common_lock_device_inode": [
+      61,
+      385
+    ],
+    "common_lock_path": "/run/user/1000/scopebase-locks/build.lock",
+    "compiler_identity": "Current rustc SHA256 matches retained reports; installed rustc manifests identify each version. Reviewer did not execute rustc.",
+    "compilers": [
+      "1.88.0",
+      "1.98.1"
+    ],
+    "control": "Identical inferred-call source compiles against tag/token/token-field visibility widening only. Private module and helper remain unchanged; impossible() is not executed.",
+    "generic_and_dyn": "All seven Count/CountBounds instantiations work under Unit-only bound; Option<&dyn Unit> compiles. None is used; no uninhabited marker instance is forged.",
+    "negative_diagnostics": {
+      "external_impl": "E0277; Mine lacks quantity::private::Sealed; primary line3 columns15-19",
+      "inferred_gate": "code null; type quantity::UnitTag is private; primary line3 columns31-56",
+      "private_helper": "E0603; function unit_tag; primary line1 columns35-43",
+      "private_sealed": "E0603; module private; primary line1 columns35-42",
+      "private_tag": "E0603; enum UnitTag; primary line1 columns35-42",
+      "private_token": "E0603; struct UnitTagAccess; primary line1 columns35-48"
+    },
+    "r1": {
+      "commands": 1,
+      "compiler": "1.88.0",
+      "exit_code": 1,
+      "status": "GENUINE_FAILED_STRICT_GATE; later commands NOT_RUN",
+      "substantive_private_interfaces_errors": 14
+    },
+    "r2": {
+      "commands": 22,
+      "intended_refusals": 12,
+      "positive_compile_and_runtime_cells": 2,
+      "status": "PASS_DEFAULT_POLICY_SEMANTIC_PRIVACY_ONLY",
+      "substantive_library_warnings_per_compiler": 14,
+      "warning_lines_including_summary_per_compiler": 15,
+      "widened_call_controls_compiled": 2
+    },
+    "r3": {
+      "commands": 22,
+      "intended_refusals": 12,
+      "library_stderr_bytes_per_compiler": 0,
+      "positive_compile_and_runtime_cells": 2,
+      "private_quantity_sha256": "a85e90fd38627ee612915ba52aa7b8dee3bbd1454139ca698b56ea1715af1bbe",
+      "status": "PASS_NARROW_SUCCESSOR_STRICT_LIBRARY_PROTOTYPE",
+      "widened_call_controls_compiled": 2
+    },
+    "strict_scope": "deny(warnings) is a prototype-library crate attribute. External rustc clients have no -D warnings flag; positives and controls have empty stderr and negatives have no warning diagnostics.",
+    "tag_oracle": "Literal runtime positions [0,1,2,3,4,5,6] via labeled prototype-only shim; not an exported/wire ABI."
+  },
+  "findings": [
+    {
+      "id": "CP06-D9-RV1-01",
+      "kind": "strict lint scope mismatch",
+      "original_requirement": "Frozen verification-plan Task0 Step3 denies warnings; contract permits only one declaration allowance.",
+      "r1_evidence": "14 private_interfaces errors at seven implementation method argument/return declarations.",
+      "root_action": "Explicitly adopt tested narrow normative successor and bind exact source/report/review; do not rewrite sealed r3 or relabel r1/r2.",
+      "severity": "medium design/execution gate",
+      "status": "TECHNICAL_REPAIR_VERIFIED_PRIVATE_SUCCESSOR;NORMATIVE_ADOPTION_PENDING",
+      "tested_repair": "Retain trait declaration allowance and allow private_interfaces only directly on exact seven macro-generated implementation method declarations. No crate/module/impl/macro blanket allowance and no visibility widening.",
+      "why_r2_is_insufficient": "Removing deny(warnings) permits semantic/privacy proof but does not satisfy the frozen strict row."
+    }
+  ],
+  "input_bindings": [
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/artifact-index.json",
+      "role": "sealed_design_index",
+      "sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/contract.md",
+      "role": "sealed_design_contract",
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3/verification-plan.md",
+      "role": "sealed_design_verification_plan",
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-root-design-ratification-r1.json",
+      "role": "root_design_ratification",
+      "sha256": "538fe58da9983f9849c183cd0ce8a7eb5b7532c74ec0cb92112e42755aa8ba41"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r1/msrv/private-gate-collected.json",
+      "role": "r1_failed_strict_command",
+      "sha256": "14777f06f2b24b153d22b0d5be170964ef5ede93eb140df0c9396f8c5c4bf4cf"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r1/admission.json",
+      "role": "r1_strict_admission",
+      "sha256": "9e63c2dad7525fc6dd69d12f0b0b830ab48853de59463e9dcbe6b929acb3bf15"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r2/report.json",
+      "role": "r2_default_policy_report",
+      "sha256": "1aee179488ed6848a0036e468fbe07d94e3a98bd27b8efc6d90262ad17ec3ecc"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r3/report.json",
+      "role": "r3_strict_successor_report",
+      "sha256": "3b7f4300d4ddad7a98206f8eed76c4c6f20e5b69aaaaebc1fb031f0aef637d56"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-r3/admission.json",
+      "role": "r3_strict_successor_admission",
+      "sha256": "1e1c93365cb8be70c2a61d3ec2e2861819e9f3f200f2bf5f0cf3129be6c92604"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-root-prototype-amendment-r1.json",
+      "role": "root_narrow_prototype_authorization",
+      "sha256": "2a063fa883907ac4019c0f1e5b9a580a843f58c97d206d4f6d0564cb7951bf97"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/quantity.rs",
+      "role": "accepted_quantity",
+      "sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/error.rs",
+      "role": "accepted_error",
+      "sha256": "6ede15b0739e5dcf3eb6d41a2220438be88a36f39bacab9b866b0df81535256b"
+    }
+  ],
+  "kind": "CP06_D9_INDEPENDENT_PRIVATE_PROTOTYPE_REVIEW",
+  "new_source_or_oracle_findings": [],
+  "preservation": {
+    "all_private_evidence_retained": true,
+    "canonical_preparation_or_review_modified": false,
+    "mutation_scope": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-review-r1",
+    "product_or_donor_source_modified": false,
+    "r1_r2_r3_artifacts_modified": false,
+    "root_and_integration_clean_observed": true,
+    "sealed_r3_design_index_unchanged": true
+  },
+  "read_only_validation": {
+    "checks_failed": 0,
+    "checks_passed": 980,
+    "first_checker_attempt": "976 pass / 4 false failure from requiring bin metadata output nonempty; preserved source/results. Corrected predicate requires retained metadata file, while library/binary outputs remain nonempty. No compiler/product issue or rerun.",
+    "report_path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-d9-probe-review-r1/pure-checks.json",
+    "report_sha256": "7d62801b63f36fe9ba8e13e02863a823473087e4b4527dfe07a2d8bc3267855e"
+  },
+  "remaining_gates": [
+    "Actual CP06 product implementation and delivered UI checks",
+    "Actual source/archive and affected CP02/CP03 checks",
+    "Quantity selected-port successor and any changed mapped CP03 receipt",
+    "Final execution packet/API/features/lock/resources/client/archive bindings",
+    "Independent product review and root CP06 acceptance"
+  ],
+  "review_revision": "r1",
+  "reviewed_utc": "2026-10-22T09:17:57.066331+00:00",
+  "root_next_action": [
+    "Adopt explicit narrow normative D9 successor; update contract/Task0 Step3/U01 allowance wording together, preserving strict gate and public/privacy constraints.",
+    "Bind r3 exact quantity source, report, admission, bounded prototype authorization and this review index; preserve historical original design/r1/r2.",
+    "Then use this exact compiler/privacy proof for the conditional D9 gate only; bind remaining implementation/API/resources/sourceport/delivered checks separately."
+  ],
+  "schema_version": 1,
+  "scope": "Actual retained D9 prototype evidence, accepted quantity preservation, external oracle/primary diagnostics, widened control, lint placement, compiler/lease/custody. No full CP06 architecture or donor analysis.",
+  "summary": "R1 failed the real frozen strict lint gate; r2 proves default-policy privacy and compatibility only. The explicitly authorized narrow r3 successor adds one method-level allowance, restores library deny(warnings), and passes the compiler/privacy prototype on both pinned compilers. No unresolved technical defect found in r3; explicit normative successor adoption remains required."
+}

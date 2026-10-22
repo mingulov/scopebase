@@ -1,0 +1,1106 @@
+{
+  "schema_version": 1,
+  "kind": "scopebase-private-cp06-contract-source-proposal",
+  "status": "SOURCE_SELECTION_BOUND_NOT_COPIED_NOT_PACKET_READY",
+  "qualification": "STATIC_SOURCE_INSPECTION_ONLY",
+  "inspection_date": "2026-10-22",
+  "task": "CP06",
+  "copying_performed": false,
+  "new_intake_performed": false,
+  "live_donors_polled": false,
+  "build_or_test_campaign_run": false,
+  "donor_git_environment": {
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_LITERAL_PATHSPECS": "1"
+  },
+  "admission_observed": {
+    "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-next-host-scopes.json",
+    "sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "scope": "Existing narrow grants preserved. Proposed CP06 copying ranges remain pending."
+  },
+  "contract_inputs_observed": [
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/AGENTS.md",
+      "sha256": "628d4fb8f3ad1ba3f80a32b1ddecddae3dd7d74d2299f99134919cd6775006ec"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/specs/2026-10-18-scopebase-decisions.md",
+      "sha256": "b253b9192b5b8ab77d6f87e561ea2fef79214118e40126bc57a509eb107428ea"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md",
+      "sha256": "c03f31b90ad0299c94c4f2ed50d17463573416842fb4e61c184437381cb835bb"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
+      "sha256": "699478ecf274d326f68d4c996386ba7334a37181249e12329d84a63fabf2a261"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/plans/2026-10-17-scopebase-capture.md",
+      "sha256": "693185296dc4187ad53fb416eaddfea9ee58d3a4e2a968c7058ab05e031b94d9"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/specs/2026-10-22-scopebase-cp05-generations.md",
+      "sha256": "5213af7544347c2b104df1284589ee2d941985ff87212bd3842eda172047ea10"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/superpowers/plans/2026-10-22-scopebase-cp05-verification.md",
+      "sha256": "550ffaffd211c77a66129d347d929c2299f0537de2841724b612f4429be6c1be"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/error.rs",
+      "sha256": "6ede15b0739e5dcf3eb6d41a2220438be88a36f39bacab9b866b0df81535256b"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/loss.rs",
+      "sha256": "0f1226a8bde0e13a597ddb1ed105efa0c931b6c8e871787e1d11f7839d5024f9"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/domain.rs",
+      "sha256": "16481276dd5417156d5a93ff91642c14d76bc4f3f79dc8153cfd25907bdb144a"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/Cargo.toml",
+      "sha256": "a4cddea2b5560e20ea798aeda50ed6b6db96a764dd1915f9c3ea356408a39f56"
+    },
+    {
+      "path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/crates/scopebase-capture/src/quantity.rs",
+      "sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1",
+      "observed_contract": "Unit is a sealed marker with seven implementations and no public/private discriminator. CP06-D9 proposes a private extension only."
+    }
+  ],
+  "donors": {
+    "K": {
+      "pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "checkout": "kryprobe-ws/tree/kryprobe",
+      "checkout_id": "w001",
+      "history": "kryprobe-ws/history/r001.git",
+      "manifest": "kryprobe-ws/manifest.json",
+      "capture_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18",
+      "manifest_sha256": "f7ba378f0f89fceb06ccb3685993a446380e63a150761225a74550a186e05849",
+      "working_wip_overlay_selected": false,
+      "limitation": "Completed non-atomic private capture; no current-live-head claim."
+    },
+    "M": {
+      "pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "checkout": "memveil-ws/checkout/repos/memveil",
+      "checkout_id": "checkout-001",
+      "history": "memveil-ws/histories/repo-001/history.git",
+      "manifest": "memveil-ws/manifest.json",
+      "capture_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18",
+      "manifest_sha256": "914dad0a33a5b47525d46b4045634b6cd35263e49957e46e2a3d11b7aaceec93",
+      "working_wip_overlay_selected": false,
+      "limitation": "Completed non-atomic private capture; no current-live-head claim."
+    },
+    "O": {
+      "pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "checkout": "osslscope-ws/checkout/osslscope/.worktrees/preview-r21",
+      "checkout_id": "checkout-018",
+      "history": "osslscope-ws/histories/repo-001/history.git",
+      "manifest": "osslscope-ws/manifest.json",
+      "capture_root": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18",
+      "manifest_sha256": "c4ec41c56791f473fa1cfde1595ea809c00c040b16af4f0055b06cd890b83b02",
+      "working_wip_overlay_selected": false,
+      "limitation": "Completed non-atomic private capture; no current-live-head claim."
+    }
+  },
+  "fixes": [
+    {
+      "donor": "K",
+      "commit": "b250067f9b604dd7329f1ee37cb7fcf839bd88d1",
+      "meaning": "required shared feed and exactly-once rollup",
+      "selected_pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "static_ancestor_check_exit": 0,
+      "test_execution": "NOT_RUN"
+    },
+    {
+      "donor": "M",
+      "commit": "15e07cd1189da84f4e3fd3e12b793666b44974f3",
+      "meaning": "partial snapshots no longer poison persistent facts",
+      "selected_pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "static_ancestor_check_exit": 0,
+      "test_execution": "NOT_RUN"
+    },
+    {
+      "donor": "M",
+      "commit": "24defdd2317bdbd747751951bc2cf5a79cebfb77",
+      "meaning": "independent copy/failure facts before correlation; reference/deferred",
+      "selected_pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "static_ancestor_check_exit": 0,
+      "test_execution": "NOT_RUN"
+    },
+    {
+      "donor": "O",
+      "commit": "18ee661ce0247e2c1c2ed1329a9cbb72a6ded149",
+      "meaning": "consumed correction/full holder rewrite and retained-pair soundness",
+      "selected_pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "static_ancestor_check_exit": 0,
+      "test_execution": "NOT_RUN"
+    }
+  ],
+  "files": [
+    {
+      "id": "K:crates/kryprobe-core/src/backend/driver.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-core/src/backend/driver.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/kryprobe-ws/tree/kryprobe/crates/kryprobe-core/src/backend/driver.rs",
+      "pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "working_sha256": "7f1c3abd662c53ee7d12e21dfbf0d5c55e57f38c50950258a8eb87b148067126",
+      "commit_blob_sha256": "7f1c3abd662c53ee7d12e21dfbf0d5c55e57f38c50950258a8eb87b148067126",
+      "working_equals_commit_blob": true,
+      "line_count": 887,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            252,
+            255
+          ],
+          "sha256": "15f38296ae0e9ebbe6ca928395a43b2f228742cb71fa339d642f6104c6429a72",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            259,
+            281
+          ],
+          "sha256": "74bbfa112f6356fe7b3ce94125c825b4db4816917f12c891af9daf346b528b07",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            349,
+            359
+          ],
+          "sha256": "ab79864b177e7f2414da9be1c38ae748bbaa56aa1da719d27bf90745df6cb33a",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            419,
+            442
+          ],
+          "sha256": "3f8ca8d8c709355605138389182a7f5fee1d4233e1986f0d861c7115e5386d34",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          325,
+          346
+        ]
+      ],
+      "symbols": [
+        "DriverReport.shared_losses",
+        "DriverReport::feed_shared_losses",
+        "DriverReport::session_integrity_checked",
+        "SharedFeedError"
+      ],
+      "proposed_destination": "feeds.rs: FeedRegistry::{new,feed,finish}",
+      "preservation_boundary": "Preserve first accepted presence, duplicate refusal and missing-feed refusal. Do not extract lenient rollup or backend driver.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "disposition": "PORT_SOURCE"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "K:crates/kryprobe-core/src/evidence/integrity.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-core/src/evidence/integrity.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/kryprobe-ws/tree/kryprobe/crates/kryprobe-core/src/evidence/integrity.rs",
+      "pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "working_sha256": "b2a240db667f552ca09bdf0faaedf9cec87976d6f4d184d8f1a33e952e9cfa13",
+      "commit_blob_sha256": "b2a240db667f552ca09bdf0faaedf9cec87976d6f4d184d8f1a33e952e9cfa13",
+      "working_equals_commit_blob": true,
+      "line_count": 260,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT/VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            98,
+            142
+          ],
+          "sha256": "ca2758743458c989a6d96ec32b7aade3160422e1460592136dbe2919f5f080db",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            193,
+            207
+          ],
+          "sha256": "75532d9c43c57281c4ee650ee4e0426edaab563f0850fa8d1e92ca09a642794e",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [],
+      "symbols": [
+        "SharedLosses",
+        "SharedLosses::new",
+        "From<SharedLosses> for IntegritySummary",
+        "shared_losses_map_to_integrity_only_shared_counters"
+      ],
+      "proposed_destination": "feeds.rs and client-side disjoint tagged inputs",
+      "preservation_boundary": "Adapt shared versus backend distinction; source11/5 numeric rollup remains client/CP11 policy. Existing CP03 grant does not cover these ranges.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            172,
+            191
+          ],
+          [
+            235,
+            259
+          ]
+        ],
+        "disposition": "VECTORS_ONLY"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "K:crates/kryprobe-core/tests/shared_losses.rs",
+      "donor": "K",
+      "path": "crates/kryprobe-core/tests/shared_losses.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/kryprobe-ws/tree/kryprobe/crates/kryprobe-core/tests/shared_losses.rs",
+      "pin": "d153f3aaf9a3931337b47c9e1b046c692da55083",
+      "working_sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+      "commit_blob_sha256": "e0c4cb1f29b6fbe72f13a6460e8fe67bfae137822c03016491b443a46ff05a3b",
+      "working_equals_commit_blob": true,
+      "line_count": 121,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            51,
+            83
+          ],
+          "sha256": "329a6ac07fb7b81da1c01dfd7a849df211e0dc47bdcee8269cb1eb2a2354c42e",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            85,
+            107
+          ],
+          "sha256": "7ec63c460ed5da2cfb8e86a08779533e78d2cc0bd384083061bdf2498aaa15c4",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            109,
+            121
+          ],
+          "sha256": "affe746d200799d13d99759e95836c010dcbb99e19b89d13f5d1628b40d33421",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          27,
+          49
+        ]
+      ],
+      "symbols": [
+        "shared_losses_accrue_exactly_once_in_session_total",
+        "duplicate_shared_feed_refused_without_double_count",
+        "missing_shared_feed_fails_checked_total_but_not_lenient_rollup"
+      ],
+      "proposed_destination": "tests/feed_integrity.rs plus later client/CP11 numeric assertions",
+      "preservation_boundary": "Adapt cardinality and refusal subsets, retain11/5 and rejected100/100 as independent client facts. Legacy lenient path documented, not exported.",
+      "existing_admission": {
+        "row_present": false,
+        "decision_status": "NO_INTAKE_ROW"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "M:src/memveil/analysis/engine.mojo",
+      "donor": "M",
+      "path": "src/memveil/analysis/engine.mojo",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/checkout/repos/memveil/src/memveil/analysis/engine.mojo",
+      "pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "working_sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+      "commit_blob_sha256": "45b4c0d19cf3f74100f47835f094e06e1c2291d568a68d7723bfc12f4e3cf996",
+      "working_equals_commit_blob": true,
+      "line_count": 394,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            291,
+            318
+          ],
+          "sha256": "7ade55a1655e1b76b23de3defe151ce397955d7a5e4af42ffd640774742ec178",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          203,
+          209
+        ],
+        [
+          276,
+          290
+        ],
+        [
+          319,
+          341
+        ]
+      ],
+      "symbols": [
+        "Analyzer::snapshot",
+        "Analyzer::finish",
+        "Analyzer::_merge"
+      ],
+      "proposed_destination": "view.rs: ClaimLedger::{record_loss,record_signal,snapshot}",
+      "preservation_boundary": "Preserve consumed-loss latch versus call-local report overlay; tracker/row composition stays local.",
+      "existing_admission": {
+        "row_present": false,
+        "decision_status": "NO_INTAKE_ROW"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "M:src/memveil/analysis/mappings.mojo",
+      "donor": "M",
+      "path": "src/memveil/analysis/mappings.mojo",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/checkout/repos/memveil/src/memveil/analysis/mappings.mojo",
+      "pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "working_sha256": "f31d57f33a692e2641def9765c9ffb8b400fde18efade34c2990d8b7b07ef242",
+      "commit_blob_sha256": "f31d57f33a692e2641def9765c9ffb8b400fde18efade34c2990d8b7b07ef242",
+      "working_equals_commit_blob": true,
+      "line_count": 1820,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            265,
+            299
+          ],
+          "sha256": "469a81a45bb34e99f9eb24ec8cfd7f499aa76338f86483c4dd2686565d803af4",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            789,
+            856
+          ],
+          "sha256": "5039319314bb8f65c85cad13899b6c1de4064c9664633b9d7afafc61ef3cefd4",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            999,
+            1012
+          ],
+          "sha256": "fa7f2c4f8799dffdcbbaf2269f551184ad3121dd5eaada2e1657dc090c7dd706",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          254,
+          263
+        ],
+        [
+          301,
+          305
+        ],
+        [
+          760,
+          772
+        ]
+      ],
+      "symbols": [
+        "MappingTracker::note_detail_loss",
+        "MappingTracker::note_correlation_loss",
+        "MappingTracker::note_copy_attribution_loss",
+        "MappingTracker::note_sync_attribution_loss",
+        "MappingTracker::_coverage",
+        "MappingTracker::_coverage_copy",
+        "MappingTracker::_coverage_sync",
+        "MappingTracker::_view_live_invalid",
+        "MappingTracker::_view_live_cause",
+        "MappingTracker::metrics"
+      ],
+      "proposed_destination": "view.rs caller-supplied affected sets and immutable reason overlays",
+      "preservation_boundary": "Product dependency choices and metrics remain local; new ranges are outside the existing CP05 grant.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            490,
+            510
+          ],
+          [
+            536,
+            548
+          ],
+          [
+            663,
+            680
+          ]
+        ],
+        "disposition": "PORT_SOURCE"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "M:tests/unit/test_engine.mojo",
+      "donor": "M",
+      "path": "tests/unit/test_engine.mojo",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/checkout/repos/memveil/tests/unit/test_engine.mojo",
+      "pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "working_sha256": "d9b57bf2c93d2b4b6e20e2aa213ed09fb3f6323887cc4b6951e4fbb80887b4c4",
+      "commit_blob_sha256": "d9b57bf2c93d2b4b6e20e2aa213ed09fb3f6323887cc4b6951e4fbb80887b4c4",
+      "working_equals_commit_blob": true,
+      "line_count": 1069,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            291,
+            312
+          ],
+          "sha256": "747d7530491e4721c2f87012b8d7bf84462d87b5d932cdbc2ffc93d8d9adf907",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            315,
+            331
+          ],
+          "sha256": "5ef5761a21225c74e9d0b4ed43cb85079f5cd2f27b09673e616a8c4a7be98c5b",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            575,
+            585
+          ],
+          "sha256": "362ef5f340b24cd3054ccd9a44f1b78cf7da3fd79d10364970cca23fdbef71c9",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            762,
+            802
+          ],
+          "sha256": "97fef4a44037e6f40246352770b88c2df6df6f7563d1d3151c3f914940da2977",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            805,
+            842
+          ],
+          "sha256": "0e916abb5d095b28bfde91e1c96ef2d7960b962cd94d5331896b06eef7b060bb",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            845,
+            887
+          ],
+          "sha256": "dd8223174a0b71ad49101011a1b2a5e3a3a9953952819d4d6e81574c391c3332",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            890,
+            916
+          ],
+          "sha256": "808b69f21b5659de020dd98c5aff854d1e68e156be34268b19254d826510d606",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            919,
+            930
+          ],
+          "sha256": "f64654b8d7839518248f1b51de210c209d9ca4be8e59e7ec8c734113e8927376",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          588,
+          598
+        ],
+        [
+          734,
+          759
+        ]
+      ],
+      "symbols": [
+        "test_split_producer_copy_loss_preserves_occupancy",
+        "test_split_producer_mapping_loss_withholds_occupancy",
+        "test_snapshot_finish_equivalence",
+        "test_partial_snapshot_preserves_later_facts",
+        "test_repeated_partial_snapshots_preserve_facts",
+        "test_consumed_detail_gap_stays_degraded",
+        "test_gap_between_snapshots_stays_degraded",
+        "test_post_gap_pool_run_survives_snapshots"
+      ],
+      "proposed_destination": "tests/report_views.rs and donor-subset fixture tests",
+      "preservation_boundary": "Selected adaptation is reason/persistence/dependency behavior. Preserve original4096/8192/pool3/copy512 witnesses as fixture intent; DMA calculations and strict horizon remain deferred CP08/CP11.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "NEEDS_DECISION",
+        "source_scope": null,
+        "disposition": "PORT_SOURCE"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "M:tests/unit/test_mappings.mojo",
+      "donor": "M",
+      "path": "tests/unit/test_mappings.mojo",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/memveil-ws/checkout/repos/memveil/tests/unit/test_mappings.mojo",
+      "pin": "8307a17d4c1d01d2e6fa66679f0e7bed113fa416",
+      "working_sha256": "8348f3d7aac12c184629dac32fc1a49bafea571d65568106e2ea23a3b026f3e1",
+      "commit_blob_sha256": "8348f3d7aac12c184629dac32fc1a49bafea571d65568106e2ea23a3b026f3e1",
+      "working_equals_commit_blob": true,
+      "line_count": 1293,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "REFERENCE_ONLY",
+      "proposed_copying_scopes": [],
+      "reference_only_lines": [
+        [
+          656,
+          681
+        ],
+        [
+          682,
+          694
+        ],
+        [
+          695,
+          717
+        ],
+        [
+          718,
+          737
+        ],
+        [
+          738,
+          767
+        ],
+        [
+          768,
+          783
+        ],
+        [
+          848,
+          899
+        ]
+      ],
+      "symbols": [
+        "test_unpaired_copy_bytes_retained",
+        "test_unpaired_bounce_to_original_retained",
+        "test_unpaired_failure_counted",
+        "test_unpaired_copy_before_failure",
+        "test_mixed_paired_unpaired_copies",
+        "test_unpaired_copy_overflow_withheld",
+        "test_retired_history_bounded"
+      ],
+      "proposed_destination": "CP11/MG03 independent real reducers; CP05 retained-history prerequisite",
+      "preservation_boundary": "Do not relabel existing overflow/generation grants as CP06 ported reducer code. CP06 tests only the explicit supplied claim-dependency seam.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            544,
+            559
+          ],
+          [
+            599,
+            607
+          ],
+          [
+            768,
+            783
+          ],
+          [
+            848,
+            899
+          ]
+        ],
+        "disposition": "VECTORS_ONLY"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "O:src/scan/oracle.rs",
+      "donor": "O",
+      "path": "src/scan/oracle.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21/src/scan/oracle.rs",
+      "pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "working_sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+      "commit_blob_sha256": "17bf4f95f702c1213c1b08cad3f23232569552c4cf61b1a27902e6eb96b59595",
+      "working_equals_commit_blob": true,
+      "line_count": 2709,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT/VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            690,
+            700
+          ],
+          "sha256": "fd455af578c63e7da4dddaf70aa90c9e1efea1e9f985a50012d4d59e26f5feb8",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            1594,
+            1608
+          ],
+          "sha256": "d3ae0a82797174ab20c4d572368cbaf9a92229593b62fbe71e106addd0c7b0ad",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          658,
+          688
+        ],
+        [
+          702,
+          725
+        ],
+        [
+          980,
+          985
+        ],
+        [
+          1021,
+          1081
+        ],
+        [
+          1558,
+          1593
+        ]
+      ],
+      "symbols": [
+        "Correction",
+        "Oracle::taint_pair PairSite::Recent",
+        "Oracle::take_corrections",
+        "RecentClose",
+        "TidRecent",
+        "Oracle::push_done",
+        "Oracle::evict_idle_tids"
+      ],
+      "proposed_destination": "correction.rs complete replacement; CP11 retains producer/retention policy",
+      "preservation_boundary": "Only full-replacement mechanism is selected. Epoch/revision wrapper is separately specified NEW. No common join or correction-history engine.",
+      "existing_admission": {
+        "row_present": false,
+        "decision_status": "NO_INTAKE_ROW"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "O:src/capture.rs",
+      "donor": "O",
+      "path": "src/capture.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21/src/capture.rs",
+      "pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "working_sha256": "711ab0956d62a50fb1b07792557d4030e521c209b9ea19778b8b650d164705ac",
+      "commit_blob_sha256": "711ab0956d62a50fb1b07792557d4030e521c209b9ea19778b8b650d164705ac",
+      "working_equals_commit_blob": true,
+      "line_count": 13339,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "ADAPT/VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            307,
+            315
+          ],
+          "sha256": "00fa18102fd6d6c5b7846e4ee8f7e7b0215134e02c0ac8f638e8b3e8d39c4c88",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            4990,
+            4997
+          ],
+          "sha256": "347fe83c4cf16e4b7bedb206bb1fc8d609744eb42b997dfcd2c6887748d0e05b",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            7490,
+            7503
+          ],
+          "sha256": "fd488f64b6a528aa6201a019563539875bdff1f28edf95ef5c222f7f530c2f07",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            10444,
+            10506
+          ],
+          "sha256": "37558d6c5e184817b4d5ea865411f302f5f98ee18b0cc1ddceb8c24dceaf73a0",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        },
+        {
+          "lines": [
+            11264,
+            11294
+          ],
+          "sha256": "87e0205a85b263f43ba541ff24ffa70d23f72a68d9ce15a1ab99ec785b7090b8",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [],
+      "symbols": [
+        "TraversalCapture::merge",
+        "capture-loop apply_corrections call",
+        "apply_corrections",
+        "fix3_apply_corrections_rewrites_by_key",
+        "traversal_capture_merge_applies_corrections"
+      ],
+      "proposed_destination": "tests/corrections.rs plus explicit report/export client routing",
+      "preservation_boundary": "Retain full(tid,seq) routing and untouched unrelated value. Unknown-key ignore remains product-local; generic apply checks only epoch/revision.",
+      "existing_admission": {
+        "row_present": true,
+        "decision_status": "READY_FOR_SELECTED_SCOPE",
+        "source_scope": [
+          [
+            1504,
+            1515
+          ],
+          [
+            4403,
+            4418
+          ],
+          [
+            4546,
+            4584
+          ],
+          [
+            8881,
+            8890
+          ]
+        ],
+        "disposition": "PORT_SOURCE"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    },
+    {
+      "id": "O:tests/scan_oracle.rs",
+      "donor": "O",
+      "path": "tests/scan_oracle.rs",
+      "frozen_file": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/osslscope-ws/checkout/osslscope/.worktrees/preview-r21/tests/scan_oracle.rs",
+      "pin": "4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a",
+      "working_sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+      "commit_blob_sha256": "8f0b0b1475e01329cfa73eec9c4b335c298737f7949e33df65021a95826ab9b1",
+      "working_equals_commit_blob": true,
+      "line_count": 2819,
+      "captured_wip_overlay_selected": false,
+      "proposed_origin": "VECTORS_ONLY",
+      "proposed_copying_scopes": [
+        {
+          "lines": [
+            1190,
+            1238
+          ],
+          "sha256": "1355f0da2980bef9bbf39eb8216aa9283472014a4e23a58d36ebc03a62547ade",
+          "existing_grant_overlap": [],
+          "copying_status": "NOT_ADMITTED_FOR_CP06",
+          "needed_owner": "SB01/controller + capture expert",
+          "needed_action": "Classify exact scope/ownership/third-party terms and record bounded admission under existing OWNER-2026-10-18 before copying."
+        }
+      ],
+      "reference_only_lines": [
+        [
+          1240,
+          1314
+        ]
+      ],
+      "symbols": [
+        "fix3_consumed_taint_corrects",
+        "fix4_recent_survives_foreign_flood"
+      ],
+      "proposed_destination": "tests/corrections.rs adapted consumed-replacement subset; CP11/MG03 protected-history regression",
+      "preservation_boundary": "Keep producer-admissible correction target/replacement witness; defer whole joining algorithm and original5000-foreign-close history policy.",
+      "existing_admission": {
+        "row_present": false,
+        "decision_status": "NO_INTAKE_ROW"
+      },
+      "license": {
+        "historical_spdx_observed": "GPL-3.0-or-later",
+        "observed_at_line": 1,
+        "destination_proposed": "Apache-2.0 for selected user-owned host/data-document contributions",
+        "existing_authorization": "OWNER-2026-10-18",
+        "selected_scope_ownership_and_third_party_classification": "PENDING_SB01_EXPERT_SELECTION",
+        "new_grant_asserted": false
+      }
+    }
+  ],
+  "required_predecessors": {
+    "CP03": "Accepted; exact acceptance/API receipt must be bound for execution.",
+    "CP05": "Delegated source candidate80b3847 source-approved, NOT_ACCEPTED; actual acceptance prerequisite remains future."
+  },
+  "unbound": [
+    "actual_post_CP05_product_base",
+    "accepted_prerequisite_receipts_and_APIs",
+    "destination_source_and_receipt",
+    "compiler_cache_features_lock",
+    "build_lock_resource_and_targets",
+    "fixtures_oracles_mutants_and_clients",
+    "archive_and_helper",
+    "independent_review_and_acceptance",
+    "actual_CP06_copied_subset_and_selected_port_receipt"
+  ],
+  "no_whole_file_copy_claim": true,
+  "license_limit": "Historical source labels, owner grant, target role and actual third-party terms are distinct. No source admission was modified.",
+  "mechanism_missing_decisions": [
+    {
+      "id": "CP06-D8",
+      "semantic_ruling": "Payload-free errors do not encode tags; private invariant tests plus borrowed facts only. Serialization/audit export remains CP10/CP13/TT07.",
+      "implementation_and_public_export": "NOT_IMPLEMENTED"
+    },
+    {
+      "id": "CP06-D9",
+      "semantic_ruling": "Narrow seven-unit private discriminator with unchanged public Unit signature.",
+      "exact_private_design": "quantity.rs crate-private UnitTag/UnitTagAccess and unit_tag<U:Unit>(); private Sealed typed method with Self:Sized; no repr/wire ABI,TypeId,type_name or unsafe; contract.md is authoritative.",
+      "compiler_privacy_gate": "NOT_RUN_UNBOUND_BEFORE_IMPLEMENTATION_ADMISSION"
+    }
+  ],
+  "revision": "r3",
+  "root_semantic_rulings": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-root-design-rulings-r1.json",
+    "sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab",
+    "status": "ADOPT_SEMANTICS_FOR_INDEPENDENT_REVIEW",
+    "source_admission": false,
+    "implementation_admission": false
+  },
+  "prior_source_map": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r1/source-map.json",
+    "sha256": "0b11ee333c5f6550ebefc8ca520b9df8b2ec243518aefa37f4d2b0cb45c81ac5",
+    "frozen_file_blob_and_fix_ancestry_observations_reused": true,
+    "fresh_donor_verification_repeated": false
+  },
+  "separate_source_admission": {
+    "owner": "SB01/root separate preparer and adopter",
+    "status": "ROOT_ADOPTED_SOURCE_ONLY",
+    "admission_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "source_only_integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "navigation_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+    "actual_selected_copy_and_port_receipt": "UNBOUND",
+    "new_intake_performed_by_r3": false,
+    "qualification": "Use the root-adopted immutable source selection. This does not accept CP06/CP05 or bind D9/API/resources."
+  },
+  "shared_quantity_change": {
+    "owner": "root shared-file owner; task writer assignment UNBOUND",
+    "path": "crates/scopebase-capture/src/quantity.rs",
+    "observed_prior_destination_sha256": "6fa94a6aed8564cb99887beda93d98cc4474a5dd22d54d9b55f34aab8582cab1",
+    "existing_receipt": "docs/provenance/ports/CP02-20261018-initial.json",
+    "existing_receipt_observed_sha256": "c55a3c5879bfd7df0f1ce52022ab8071e637b5dec758f362bf317d517d52fb39",
+    "successor_proposed_path": "docs/provenance/ports/CP02-20261022-cp06-unit-tag.json",
+    "successor_exists_or_validated": false,
+    "preservation": "Keep same CP02 task/admission/source-slice identity; preserve all mappings and old receipt; append bounded supersedes and new quantity.rs destination hashes for Count::checked_add/CountBounds. Actual candidate validation mandatory.",
+    "affected_checks": [
+      "CP02 domain_quantity/time_domains/conservation/unit traits/doctests",
+      "CP03 counter_deltas/loss_units/unit/signal controls"
+    ],
+    "CP03_receipt_observed_sha256": "8d978d4bab93728834e0742f4ec649515c55bb23f9990f184fc0be60c5a89835",
+    "CP03_successor_rule": "Only if an actually mapped CP03 destination changes; changed dependency still needs affected tests and input binding."
+  },
+  "scope_preservation_assertions": {
+    "same_donor_file_ids_pins_paths_hashes": true,
+    "same29_candidate_ranges": true,
+    "same_reference_only_boundaries": true,
+    "same15_original_subsets_in_cases_file": true,
+    "new_source_grants_claimed": false
+  },
+  "source_selection_binding": {
+    "status": "ADOPTED_SOURCE_SELECTION_ONLY_NOT_COPIED_NOT_IMPLEMENTATION_READY",
+    "source_only_integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "admission_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "navigation_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+    "navigation_sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83",
+    "predecessor_admission_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "predecessor_preserved": true,
+    "selected_added_ranges": 29,
+    "selected_added_lines": 747,
+    "new_row_total": 136,
+    "qualification": "Root-adopted pre-copy source selection under existing owner authorization. Actual copied subset,destination hashes,port receipts,CP05 acceptance,D9 validation,API/resources and product gates remain UNBOUND. No r3 donor intake/reinspection or source copy."
+  },
+  "review_repair": {
+    "index_path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-design-review-r1/artifact-index.json",
+    "index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+    "disposition": "NEEDS_REPAIR",
+    "scoped_findings": [
+      "CP06-DR1-01",
+      "CP06-DR1-02"
+    ]
+  },
+  "historical_scope_fields": "The unchanged files/adoption/copying_status objects are r1/r2 preparation observations,not current grant state. The effective current pre-copy source grant is source_selection_binding; no actual source-to-destination copy has occurred."
+}

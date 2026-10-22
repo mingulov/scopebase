@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R3_SCOPED_REPAIR_FREEZE_INDEX",
+  "prepared_date": "2026-10-22",
+  "task": "CP06",
+  "revision": "r3",
+  "status": "SCOPED_REPAIRS_AUTHORED_PURE_OLD_RED_NEW_GREEN_PENDING_INDEPENDENT_FOLLOWUP",
+  "packet_readiness": "NOT_PACKET_READY",
+  "implementation_admission": false,
+  "root": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r3",
+  "review_input": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/cp06-design-review-r1/artifact-index.json",
+    "sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+    "disposition": "NEEDS_REPAIR",
+    "targeted_findings": [
+      "CP06-DR1-01",
+      "CP06-DR1-02"
+    ]
+  },
+  "immutable_r2_input": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r2/artifact-index.json",
+    "sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e",
+    "all_member_hashes_unchanged": true
+  },
+  "immutable_r1_input": {
+    "path": "/home/user/src/m/bpfscope/.scopebase/controller/resume-20261022/next-cp06-packet/r1/artifact-index.json",
+    "sha256": "10db2b1698018f7a5a1031f5f3b7ffcc663a8012199f3fc9201cf8945ce42aee",
+    "all_member_hashes_unchanged": true
+  },
+  "artifacts": [
+    {
+      "path": "contract.md",
+      "sha256": "de43abe40ebd65a78918c324b2bebf11ab911f78af414cdc65388090419a11d3",
+      "bytes": 24223,
+      "lines": 186,
+      "role": "Unchanged public/private API design plus required constructor verification paragraph and accurate source-only adoption binding."
+    },
+    {
+      "path": "verification-plan.md",
+      "sha256": "5cade86a5d32b742e1a395c2be2e65a79d8621fbbd7ed492006ab6ef86a5ec65",
+      "bytes": 24803,
+      "lines": 132,
+      "role": "Tasks2/3 constructor reserve mapping/order/reachability/twin obligations and exact unsorted ID-bit witness;future execution remains unbound."
+    },
+    {
+      "path": "source-map.json",
+      "sha256": "026fe717c5b72a95cb587f6cb1c773425a9c38a466fa8b6c2410035ce6a0f719",
+      "bytes": 47714,
+      "lines": 1106,
+      "role": "Same10 frozen mapping objects/29ranges/747lines;adopted source-only canonical f4a9 binding separate from historical r1/r2 preparation status."
+    },
+    {
+      "path": "cases-and-controls.json",
+      "sha256": "9f43d3a8104a8ac1c727549d5b57ec1f2aa7e765aa467240707cfed7c01f01ad",
+      "bytes": 76216,
+      "lines": 1728,
+      "role": "Same25case IDs/15original objects/fixedjournals;A01 gains3site/9preflight constructor rows and V06 alone admits outsider3."
+    },
+    {
+      "path": "decision-incorporation.json",
+      "sha256": "0f08fac758ce7a204fde3497aedb2d8e7348b3fb087751fe08003354bee20f7f",
+      "bytes": 15824,
+      "lines": 259,
+      "role": "Unchanged9 semantic rulings plus both scoped repair dispositions,review binding and source-only selection update."
+    },
+    {
+      "path": "check_repairs.py",
+      "sha256": "f101b7e31e2509a811404892c5f0ee7b1f9c8eb49fed28cff984edf129aa9a90",
+      "bytes": 10498,
+      "lines": 131,
+      "role": "Pure artifact checker for exactly DR1-01/02 plus frozen preservation;does not execute Rust/product code."
+    },
+    {
+      "path": "old-red.json",
+      "sha256": "bf2f1d20093ceab5674160002e341b5faa9daf938c3200f9967a21d6b5f72310",
+      "bytes": 6661,
+      "lines": 224,
+      "role": "Actual artifact checker exit1 on frozen r2:both targeted obligations FAIL,preservation PASS;not a product failure."
+    },
+    {
+      "path": "new-green.json",
+      "sha256": "53cfe2f09ea457139da95450f06a629c87e2d685ba5594ee0189cf215c60f2d4",
+      "bytes": 7853,
+      "lines": 240,
+      "role": "Actual artifact checker exit0 on r3:both targeted obligations PASS plus preservation;not product/compiler evidence."
+    }
+  ],
+  "self": {
+    "path": "artifact-index.json",
+    "sha256": "NOT_SELF_HASHED",
+    "reason": "Hashes all8 other artifacts;self digest intentionally excluded."
+  },
+  "causal_pure_checks": {
+    "scope": "ARTIFACT_OBLIGATIONS_ONLY",
+    "checker": "check_repairs.py",
+    "checker_sha256": "f101b7e31e2509a811404892c5f0ee7b1f9c8eb49fed28cff984edf129aa9a90",
+    "old": {
+      "candidate": "../r2",
+      "report": "old-red.json",
+      "observed_exit_code": 1,
+      "result": "RED",
+      "targeted_findings_failed": 2,
+      "preservation_failures": 0
+    },
+    "new": {
+      "candidate": ".",
+      "report": "new-green.json",
+      "observed_exit_code": 0,
+      "result": "GREEN",
+      "targeted_findings_passed": 2,
+      "finding_assertions_passed": 19,
+      "preservation_assertions_passed": 21
+    },
+    "interpretation": "Same checker,valid frozen inputs,different obligation content;old missing constructor coverage/V06 contradiction fail,new written repairs pass. No constructor/error-path/compiler/semantic mutant executed."
+  },
+  "source_selection_binding": {
+    "status": "ADOPTED_SOURCE_SELECTION_ONLY_NOT_COPIED_NOT_IMPLEMENTATION_READY",
+    "source_only_integration_commit": "3a4b73e94da8f2f4600fe5a33ee84b2a895ef258",
+    "admission_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/admissions/2026-10-22-cp06-scopes.json",
+    "admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+    "navigation_path": "/home/user/src/m/bpfscope/.worktrees/m0-integration/docs/provenance/cp06-scopes-20261022.md",
+    "navigation_sha256": "3602beaa551b5863b2c9207b4301d5a1deebcdf8ed148e8184b940343bef5b83",
+    "predecessor_admission_sha256": "e29cc889d99b73d3790a48fe555f4f74c60c4f718f7e184bd000f142a01e7bc1",
+    "predecessor_preserved": true,
+    "selected_added_ranges": 29,
+    "selected_added_lines": 747,
+    "new_row_total": 136,
+    "qualification": "Root-adopted pre-copy source selection under existing owner authorization. Actual copied subset,destination hashes,port receipts,CP05 acceptance,D9 validation,API/resources and product gates remain UNBOUND. No r3 donor intake/reinspection or source copy."
+  },
+  "preservation": {
+    "case_IDs": 25,
+    "original_subset_objects": 15,
+    "deferred_groups": 4,
+    "finite_journal_objects_unchanged": true,
+    "source_mapping_objects_unchanged": 10,
+    "ranges": 29,
+    "lines": 747,
+    "public_API_private_layout_D9_Rust_blocks_unchanged": true,
+    "root9_semantic_rulings_unchanged": true,
+    "new_case_IDs": 0
+  },
+  "still_unbound": [
+    "actual CP05 acceptance/accepted prerequisite/API receipts",
+    "D9 exact compiler/privacy prototype and primary diagnostics",
+    "actual post-acceptance product base/writer/quantity/export ownership",
+    "actual copied subset/destination hashes/port receipts",
+    "actual compiler/features/cache/lock/common absolute resources/targets/results",
+    "actual fixtures/helpers/collector/independent clients/source+archive subjects",
+    "CP02 quantity successor and any changed mapped CP03 successor",
+    "scoped independent follow-up/root normative ratification/implementation admission/acceptance"
+  ],
+  "activity_limits": {
+    "product_source_edit": false,
+    "Cargo_or_compiler": false,
+    "product_helper_native_or_kernel_campaign": false,
+    "donor_refresh_or_intake": false,
+    "subagents_or_reviewers_dispatched": 0,
+    "canonical_docs_or_admission_modified": false,
+    "r1_r2_or_review_modified": false,
+    "only_new_private_r3_written": true
+  },
+  "controller_next_action": "Obtain scoped independent follow-up on DR1-01/02 using this exact freeze;source-only grant is bound separately while D9/CP05/API/resources and actual execution stay unbound."
+}

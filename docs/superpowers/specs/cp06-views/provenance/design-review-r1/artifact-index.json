@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_R2_INDEPENDENT_DESIGN_REVIEW_INDEX",
+  "disposition": "NEEDS_REPAIR",
+  "review_revision": "r1",
+  "input_r2_index_sha256": "ee343cf59f4e00e457e6fc4ecca0273f7ec7fa669ffff9667bbd249493be095e",
+  "root_semantic_rulings_sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab",
+  "source_proposal_review_index_sha256": "ee2c2dd3bbd527dcf3be8d269e3659669766abd426cbdcbdc4288626ed255270",
+  "artifacts": [
+    {
+      "path": "review.md",
+      "bytes": 12559,
+      "sha256": "2b343a1ab2f89ab35e7bfb720f0113b32bba60622972f061dcdc9f1de5d78545"
+    },
+    {
+      "path": "review.json",
+      "bytes": 15128,
+      "sha256": "df3c66bdd3b0d6ba2d02eb84442516ae3d6244cb248f80823c52d842467482e8"
+    },
+    {
+      "path": "pure-checks.json",
+      "bytes": 6029,
+      "sha256": "8bdb32322b2d0e3e2ac05411d4d70121fab0f8c4a9185953c414f7bfcb66730d"
+    }
+  ],
+  "self_excluded": true,
+  "root_ratification": false,
+  "source_admission": false,
+  "implementation_admission": false,
+  "task_acceptance": false,
+  "packet_readiness": "NOT_PACKET_READY",
+  "root_next_action": "Adjudicate two bounded verification repairs and freeze a successor before normative ratification;actual execution gates remain separate."
+}

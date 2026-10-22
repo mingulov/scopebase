@@ -1,0 +1,55 @@
+{
+  "kind": "CP06_ROOT_DESIGN_RULINGS_FOR_NORMATIVE_DRAFT",
+  "status": "ADOPT_SEMANTICS_FOR_INDEPENDENT_REVIEW",
+  "source_admission": false,
+  "implementation_admission": false,
+  "CP05_prerequisite": "ACCEPTANCE_PENDING_NOT_BYPASSED",
+  "proposal_index_sha256": "10db2b1698018f7a5a1031f5f3b7ffcc663a8012199f3fc9201cf8945ce42aee",
+  "decisions": {
+    "CP06-D1": {
+      "what": "Retain specified one caller-associated aggregate correction API. Full epoch/revision only; no inferred target identity. Reference consumers route complete CP05 keys, refuse unknown/foreign keys and update all original holders. Explicit wrong same-epoch/revision value is beyond apply guarantee.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D2": {
+      "what": "Record registers affected IDs on successful commit; snapshot may select untouched IDs without mutation within C. Empty reasons mean no recorded reasons, never complete source/claim proof. Reject duplicate affected/selected/overlay IDs including ignored outsiders; bounded input list first, preserve selected order, overlay outsiders ignored, zero IDs valid.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D3": {
+      "what": "Each accepted loss/signal call consumes shared F slot, including exact0/zero signal/empty affected. Retain full tags/affected list. No equality dedup, eviction, coalescing, public aggregate or universal exactly-once claim; FeedRegistry cardinality is separate.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D4": {
+      "what": "Only Exact0/zero signal nondegrading. AtLeast0/all AtLeast/Unknown/nonzero add ConsumedLoss to affected claims. QueryPartial transient. Final distinct reasons incl overlay bounded by R in enum order; no weakened/partial results on refusal; R0 behavior explicit. No invented mutators for other vocabulary.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D5": {
+      "what": "Full epoch first; then cardinality, duplicates/membership, projected capacities, checked allocation, commit. Feed epoch -> required membership InvalidId -> duplicate DuplicateFeed -> commit. Constructor cardinality -> duplicates -> allocation. Snapshot length -> duplicates -> final reason cap -> allocation. No inferred same-epoch origin/binding/unit schema/authenticity.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D6": {
+      "what": "finish is observational/idempotent presence, not seal or completeness. Empty required max0 valid; missing can recover by later valid feed; duplicates retain first; Unknown meets presence only.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D7": {
+      "what": "Retain specified ownership API/traits with no T Eq/Clone callbacks, epoch before stale, checked successor revision and0/MAX supplied valid. On normally returned metadata rejection original owner unchanged. Ordinary rejected/old T destruction may effect/panic; no rollback/panic containment or returned rejected replacement promise. Preserve automatic Send/Sync.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D8": {
+      "what": "Retain complete heterogeneous ledger tags internally with delivered private-invariant tests and caller borrowed facts. Existing payload-free errors do not encode tags. CP10 owns serialization; public provenance audit/export/conformance remains later CP10/CP13/TT07 and must be explicit remaining TODO. Feed registry need presence only; numeric donor first-feed totals retained in real client/CP11, never claimed as registry sum.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    },
+    "CP06-D9": {
+      "what": "Narrow private discriminator on seven existing sealed units; no public UnitKind, type_name/unsafe guessing/conversion or public Unit signature change. Freeze exact private representation and require external compile-negative for nonexport/unchanged sealed trait plus all7literal unit tags, affected CP02/CP03 checks and receipt successor for changed mapped quantity.rs. Exact private Rust privacy mechanism must be validated before implementation admission.",
+      "why": "Preserve specified independent component and donor regressions without inventing missing authority or weakening uncertainty",
+      "cost_if_wrong": "Wrong claim/correction scope, lost provenance, silent feed loss or unbounded/partially committed state"
+    }
+  }
+}

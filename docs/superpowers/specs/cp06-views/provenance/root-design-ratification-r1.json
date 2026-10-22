@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "kind": "CP06_ROOT_EXACT_R3_DESIGN_RATIFICATION",
+  "status": "RATIFIED_DESIGN_ONLY",
+  "date_utc": "2026-10-22T08:48:30.359247+00:00",
+  "what": "Adopt exactr3 scoped immutable views,required-feed presence and correction envelopes under previously selected D1-D9, with constructor reserve/order controls and corrected V06 outsider bound.",
+  "why": "Preserve donor consumed-loss/call-local query/feed/correction mechanisms while separating caller key routing,numeric aggregations,serialization and runtime authority.",
+  "r3_index_sha256": "802d8b81f2f3acf3a2f331cc0daf07b569955cb270599bca0a5b71b92915be11",
+  "full_r2_review_index_sha256": "1b430409fc671eb90af0401f3ad5d6c9b9d388731a07418dcd4c3927dd004a48",
+  "scoped_r3_review_index_sha256": "ad89e98fa5c74a4c79df3ef465509c746cf68261f3eae82ab17049bb8d3551de",
+  "semantic_rulings": "cp06-root-design-rulings-r1.json",
+  "semantic_rulings_sha256": "094bdcec5d71fc88e3337afe70b12bad4afc954d60cc1384dadbc9dbf3fd67ab",
+  "source_admission_sha256": "f4a9a406053bedebb26b501374b106de035df62780e381cdd836ba0d3ea166a2",
+  "actual_CP05_acceptance": "cp05-root-acceptance.json",
+  "actual_CP05_acceptance_sha256": "e6f5f5624e831fdf8401f8a7bc3e6d59d2737f60f5f01ddd3b596fd5715e7f9b",
+  "actual_CP05_source": "7d992e12bd73519610e5b2eac7866993fe83ac16",
+  "case_ids": 25,
+  "original_subsets": 15,
+  "source_ranges": 29,
+  "task_status": "PLANNED",
+  "accepted_task_delta": 0,
+  "implementation_admitted": false,
+  "packet_ready": false,
+  "execution": "NOT_RUN",
+  "remaining_gates": [
+    "Canonical adoption and navigation consistency.",
+    "D9 exact private unit-token/object-safe/API compiler privacy proof on both supported compilers before implementation admission.",
+    "Actual final base,export/shared quantity.rs ownership,sourceport successor,deps/features/lock,fixtures/oracles/clients/tools/resources/output binding.",
+    "Affected source/archive and real reference consumers plus independent review.",
+    "CP10/CP11/CP13/TT07/MG03 later obligations remain explicit; no payload-free error serialization claims."
+  ]
+}
