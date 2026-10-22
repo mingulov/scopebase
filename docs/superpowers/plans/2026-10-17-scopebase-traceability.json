@@ -1538,7 +1538,7 @@
    "anchor": "sdk01-explicit-profile-capability-and-effects-admission",
    "lane": "sdk",
    "milestone": "M5",
-   "status": "PLANNED",
+   "status": "ACCEPTED",
    "depends_on": [
     "SB01",
     "SB02",
@@ -1549,7 +1549,12 @@
     "SDK-R02",
     "SDK-R12"
    ],
-   "profile_gates": []
+   "profile_gates": [],
+   "acceptance": {
+    "subject_commit": "3336d57c2c4f176196ac4d6745f6c4424555082a",
+    "reviewed_candidate_commit": "3336d57c2c4f176196ac4d6745f6c4424555082a",
+    "evidence_record": "docs/reviews/2026-10-22-tt06-sdk01-tt08core.md"
+   }
   },
   {
    "id": "SDK02",
@@ -2180,7 +2185,7 @@
    "anchor": "tt06-fault-schedules-propertymodelfuzz-and-sanitizer-campaigns",
    "lane": "testing",
    "milestone": "cross-cutting",
-   "status": "PLANNED",
+   "status": "ACCEPTED",
    "depends_on": [
     "TT02"
    ],
@@ -2190,7 +2195,12 @@
     "TT-R09",
     "TT-R12"
    ],
-   "profile_gates": []
+   "profile_gates": [],
+   "acceptance": {
+    "subject_commit": "e34ff709f39f2991ae983d8795444e82699baef3",
+    "reviewed_candidate_commit": "e34ff709f39f2991ae983d8795444e82699baef3",
+    "evidence_record": "docs/reviews/2026-10-22-tt06-sdk01-tt08core.md"
+   }
   },
   {
    "id": "TT07",
