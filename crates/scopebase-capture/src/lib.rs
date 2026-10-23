@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Pure capture values: caller domains, typed counts, counter windows and loss.
 //!
-//! No clock reads, ID generation, effects or authority are acquired. `json`
-//! retains optional dependency wiring only; it adds no serialization here.
+//! No clock reads, ID generation, effects or authority are acquired. The
+//! `json` feature gates strict replay vectors (`replay`); the neutral
+//! semantic validator (`neutral`) builds without it.
 //!
 //! ```
 //! use scopebase_capture::quantity::{Count, Events};
@@ -26,7 +27,10 @@ pub mod loss;
 pub mod domain;
 pub mod error;
 pub mod generation;
+pub mod neutral;
 pub mod quantity;
+#[cfg(feature = "json")]
+pub mod replay;
 pub mod time;
 pub mod view;
 pub mod feeds;
