@@ -434,9 +434,11 @@ impl Drop for MappingPool {
         // Any drop with occupied records anchors the queue: if this was the
         // last public handle the state, file owners and charges stay retained
         // indefinitely (terminal unresolved retention). The anchor releases
-        // when the last record retires with no active work.
-        let occupied = lock_report(&self.shared).occupied();
-        if occupied {
+        // when the last record retires with no active work. F07: the check
+        // and the install hold the state lock across the anchor lock
+        // (state-then-anchor, matching `release_anchor_if_empty`).
+        let state = lock_report(&self.shared);
+        if state.occupied() {
             *lock_anchor(&self.shared) = Some(Arc::clone(&self.shared));
         }
     }
@@ -487,13 +489,13 @@ fn lock_anchor(shared: &Shared) -> MutexGuard<'_, Option<Arc<Shared>>> {
 }
 
 /// Release the terminal-retention anchor once the domain holds nothing and no
-/// operation is in flight. The state lock is never held while taking this.
+/// operation is in flight. F07: the occupancy check and the anchor
+/// mutation hold the state lock across the anchor lock (order
+/// state-then-anchor, matching `Drop`), so a retirement cannot erase an
+/// anchor installed for newly acquired custody between the two steps.
 pub(crate) fn release_anchor_if_empty(shared: &Shared) {
-    let empty = {
-        let state = lock_report(shared);
-        !state.occupied() && state.active_ops == 0
-    };
-    if empty {
+    let state = lock_report(shared);
+    if !state.occupied() && state.active_ops == 0 {
         lock_anchor(shared).take();
     }
 }
@@ -761,18 +763,24 @@ fn drain_shared(shared: &Arc<Shared>, control: &OperationControl) -> MappingDrai
                 Some(index) => {
                     state.unresolved[index].retiring = true;
                     let record = &state.unresolved[index];
-                    Some((index, record.addr, record.len))
+                    Some((record.addr, record.len))
                 }
             }
         };
-        let Some((index, addr, len)) = claim else {
+        let Some((addr, len)) = claim else {
             break;
         };
         tried.push((addr, len));
         // No pool lock is held across the unmap attempt.
         if let Err(stop) = control.checkpoint() {
             let mut state = lock_report(shared);
-            if let Some(record) = state.unresolved.get_mut(index) {
+            // F06: restore by identity, not by the claim-time index: a
+            // concurrent drain may have shifted the queue under us.
+            if let Some(record) = state
+                .unresolved
+                .iter_mut()
+                .find(|record| record.addr == addr && record.len == len)
+            {
                 record.retiring = false;
             }
             errors.push(pool_error(
@@ -830,8 +838,10 @@ fn stop_reason(stop: crate::control::ControlStop) -> Reason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::{CancelToken, OperationControl};
     use crate::file::{ProcFdResolver, SymlinkPolicy};
     use std::os::fd::AsFd;
+    use std::sync::Barrier;
 
     fn test_pool(max_mappings: usize, max_bytes: usize) -> MappingPool {
         MappingPool::new(MappingPoolLimits {
@@ -997,6 +1007,74 @@ mod tests {
             .into_pool()
             .close(&OperationControl::unlimited())
             .unwrap();
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn cancelled_drain_unwinds_by_identity_under_racing_retire() {
+        // F06: a cancelled drain must restore its claim by record identity
+        // even when a concurrent drain shifts the queue with swap_remove.
+        // A stale-index unwind strands a record Retiring forever, and the
+        // final clean retry then cannot reach unresolved 0.
+        //
+        // Shape: two queued records, one unlimited sibling drain, one
+        // victim drain cancelled at release. When the victim holds the
+        // second record while the sibling retires the first, the stale
+        // index misses and the record strands; identity restore always
+        // lands. Thousands of rounds make the collision certain (this
+        // test was verified to fail against the old index unwind).
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(2, 2 * page());
+        let (path, held) = test_held("f06-unwind");
+        for _ in 0..3000 {
+            let (permit_a, addr_a) = activate_one(&pool, &held);
+            let (permit_b, addr_b) = activate_one(&pool, &held);
+            let mut guard_a =
+                super::super::custody::TestCleanupGuard::new(addr_a, page());
+            let mut guard_b =
+                super::super::custody::TestCleanupGuard::new(addr_b, page());
+            super::super::custody::inject_unmap_failures(2);
+            drop(super::super::MappingCustody::new(permit_a));
+            drop(super::super::MappingCustody::new(permit_b));
+            super::super::custody::inject_unmap_failures(0);
+            assert!(
+                pool.status().unresolved_mappings() >= 1,
+                "round queued nothing"
+            );
+            let token = CancelToken::new();
+            let control = OperationControl::new(None, token.clone());
+            let barrier = Barrier::new(3);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    pool.retry_unresolved(&OperationControl::unlimited())
+                });
+                scope.spawn(|| {
+                    barrier.wait();
+                    pool.retry_unresolved(&control)
+                });
+                barrier.wait();
+                token.cancel();
+            });
+            // Quiesce: stray injected failures elsewhere only delay this.
+            super::super::custody::inject_unmap_failures(0);
+            for _ in 0..200 {
+                if pool.status().unresolved_mappings() == 0 {
+                    break;
+                }
+                pool.retry_unresolved(&OperationControl::unlimited());
+            }
+            assert_eq!(
+                pool.status().unresolved_mappings(),
+                0,
+                "no record may strand Retiring"
+            );
+            guard_a.disarm();
+            guard_b.disarm();
+        }
+        pool.close(&OperationControl::unlimited()).unwrap();
         std::fs::remove_file(path).unwrap();
         super::super::custody::inject_unmap_failures(0);
     }
