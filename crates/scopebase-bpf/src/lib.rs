@@ -58,8 +58,10 @@ pub use capability::{
 
 pub mod attach;
 pub use attach::{
-    adjudicate_split, is_terminal_error, AttachBackend, AttachMode, AttachPlan, CustodyCharge,
-    ErrorAction, ErrorPolicy, NativeAttach, NativeRetire, Site,
+    adjudicate_split, execute_plan, is_terminal_error, AttachBackend, AttachMode, AttachOutcome,
+    AttachPlan, AttachSummary, AttachmentSet, CustodyCharge, ErrorAction, ErrorPolicy,
+    NativeAttach, NativeRetire, PoolClose, PoolReconcile, PoolUsage, Retirement, RetirementBudget,
+    RetirementCapacity, RetirementPool, Site, UnresolvedAttachments,
 };
 
 pub mod ring;

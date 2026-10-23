@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "discipline": "effectful LIFO walk (right pushed, left visited first); reverse-seq rollback; uncertain is terminal and retained",
+  "charge_formula": "test fake charges link_slots = sites + 1, retained_bytes = sites * 16; the pool must echo these exactly",
+  "scenarios": [
+    {
+      "name": "halt-after-linked-leaf-rolls-back",
+      "sites": 4,
+      "policy": "isolate",
+      "script": [
+        {"node": [0, 4], "outcome": "noeffect-invalid"},
+        {"node": [0, 2], "outcome": "noeffect-invalid"},
+        {"node": [0, 1], "outcome": "noeffect-invalid"},
+        {"node": [2, 4], "outcome": "noeffect-denied"}
+      ],
+      "default": "attached",
+      "expected": {
+        "outcome": "rolled-back",
+        "attempts": 5,
+        "attached_sites": 1,
+        "refused": [0, 2, 3],
+        "retired_seqs": [0],
+        "usage_after": {"groups": 0, "links": 0, "bytes": 0}
+      }
+    },
+    {
+      "name": "uncertain-is-terminal-and-retained",
+      "sites": 2,
+      "policy": "isolate",
+      "script": [
+        {"node": [0, 2], "outcome": "uncertain"}
+      ],
+      "default": "attached",
+      "expected": {
+        "outcome": "unresolved",
+        "attempts": 1,
+        "attached_sites": 0,
+        "refused": [],
+        "usage_after": {"groups": 1, "links": 1, "bytes": 32}
+      }
+    },
+    {
+      "name": "all-success-splits-retire-in-reverse",
+      "sites": 3,
+      "policy": "isolate",
+      "script": [
+        {"node": [0, 3], "outcome": "noeffect-invalid"},
+        {"node": [1, 3], "outcome": "noeffect-invalid"}
+      ],
+      "default": "attached",
+      "expected": {
+        "outcome": "active",
+        "attempts": 5,
+        "attached_sites": 3,
+        "refused": [],
+        "retired_seqs": [2, 1, 0],
+        "usage_after": {"groups": 0, "links": 0, "bytes": 0}
+      }
+    }
+  ]
+}

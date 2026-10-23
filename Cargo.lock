@@ -175,6 +175,7 @@ dependencies = [
  "btf-rs",
  "libc",
  "rustix",
+ "scopebase-linux",
  "serde",
  "serde_json",
  "sha2",

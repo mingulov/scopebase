@@ -29,6 +29,11 @@ btf-rs = { git = "https://github.com/retis-org/btf-rs", rev = "0a5838f8dad54b6da
 # moved from the x86_64-Linux-only section so pure BTF parsing stays host-only).
 sha2 = { version = "=0.11.0", default-features = false }
 
+[dev-dependencies]
+# BP05 retirement tests bind the real LX02 HeldFile authority (from_file
+# adoption, AsFd borrows); the production library stays dependency-free.
+scopebase-linux = { version = "0.1.0", path = "../scopebase-linux" }
+
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))'.dependencies]
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process", "thread", "linux_4_11"] }
 libc = { version = "=0.2.191", default-features = false, features = ["std"] }
@@ -89,6 +94,10 @@ path = "examples/filter_assessment.rs"
 [[test]]
 name = "attach"
 path = "tests/attach.rs"
+
+[[test]]
+name = "retirement"
+path = "tests/retirement.rs"
 
 [[test]]
 name = "ring"

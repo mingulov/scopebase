@@ -112,7 +112,7 @@ def main():
                         r=run(args,[tools/'cargo','run','--locked','--offline','--quiet','--',fixtures,'--native'],root,env,rows,prefix+'-native');assert r.stdout.strip()=='4242,12,101,0,0,291,4,11,44'
                 if name=='who-reader':
                     deps=Path(env['CARGO_TARGET_DIR'])/'debug/deps';rlibs=list(deps.glob('libscopebase_bpf-*.rlib'));assert len(rlibs)==1
-                    controls={'maps_positive.rs':None,'maps_topology_authority.rs':'E0308','maps_from_parts.rs':'E0599','maps_from_report.rs':'E0599','maps_custom_reader.rs':'E0599','maps_send.rs':'E0277','maps_sync.rs':'E0277','maps_clone.rs':'E0599','maps_debug.rs':'E0277','maps_mutable_snapshot.rs':'E0308','maps_raw_fd.rs':'E0599'}
+                    controls={'maps_positive.rs':None,'maps_topology_authority.rs':'E0308','maps_from_parts.rs':'E0599','maps_from_report.rs':'E0599','maps_custom_reader.rs':'E0599','maps_send.rs':'E0277','maps_sync.rs':'E0277','maps_clone.rs':'E0599','maps_debug.rs':'E0277','maps_mutable_snapshot.rs':'E0308','maps_raw_fd.rs':'E0599','bp05_positive.rs':None,'bp05_pool_send.rs':'E0277','bp05_pool_sync.rs':'E0277','bp05_ticket_clone.rs':'E0599','bp05_double_retire.rs':'E0382'}
                     for file,code in controls.items():
                         command=[tools/'rustc','--edition=2021',args.package/'tests/ui'/file,'--extern','scopebase_bpf='+str(rlibs[0]),'-L','dependency='+str(deps),'-o',root/(file+'.bin')]
                         result=run(args,command,root,env,rows,prefix+'-'+file,1 if code else 0)
