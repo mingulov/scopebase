@@ -22,10 +22,17 @@ use serde_json::Value;
 
 use crate::ids::{CaseId, Label, ProfileId};
 
+pub mod atomic;
 pub mod inspect;
 pub mod manifest;
 pub mod rules;
 
+pub use atomic::{
+    atomic_reference, check_atomics, check_load_selector, decode_atomic, decode_plain_access,
+    select_atomic_load, verify_outcome, AtomicCase, AtomicCell, AtomicDecodeError, AtomicExpected,
+    AtomicInsn, AtomicLoadOutcome, AtomicOp, AtomicWidth, BackendClass, CpuClass, LoadOrdering,
+    LoadRefusalReason, ObservedOutcome, OutcomeVerdict, PlainAccess,
+};
 pub use inspect::{inspect_final_object, FamilySpan, ObjectInspection, RuleViolation};
 pub use manifest::{AdmittedObject, ArtifactId, FinalObjectManifest, ObjectEntry, ObjectKind};
 pub use rules::{admit_profile, check_object, contract_families, IsaProfile};

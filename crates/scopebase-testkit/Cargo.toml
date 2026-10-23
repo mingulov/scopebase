@@ -57,6 +57,11 @@ path = "tests/object_isa.rs"
 required-features = ["object"]
 
 [[test]]
+name = "atomic_oracle"
+path = "tests/atomic_oracle.rs"
+required-features = ["object"]
+
+[[test]]
 name = "selection"
 path = "tests/selection.rs"
 
