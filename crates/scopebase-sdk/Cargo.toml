@@ -21,3 +21,6 @@ default = ["capture"]
 capture = ["dep:scopebase-capture"]
 linux = ["dep:scopebase-linux"]
 bpf = ["linux", "dep:scopebase-bpf"]
+
+[dev-dependencies]
+scopebase-testkit = { version = "0.1.0", path = "../scopebase-testkit" }

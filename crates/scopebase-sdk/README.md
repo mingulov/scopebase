@@ -1,10 +1,12 @@
 # scopebase-sdk
 
-ScopeBase explicit application profiles (SDK01) and bounded application
-contexts (SDK02): prerequisite capabilities, admitted effects, the
-Ready/Incomplete/Refused admission table, explicit limits, exact component
-bindings and bounded diagnostics. This is report metadata only; it carries
-no executable authority and probes no environments.
+ScopeBase explicit application profiles (SDK01), bounded application
+contexts (SDK02) and capture-metadata integration (SDK03): prerequisite
+capabilities, admitted effects, the Ready/Incomplete/Refused admission
+table, explicit limits, exact component bindings, bounded diagnostics and
+one retained validated capture snapshot per context. This is report
+metadata only; it carries no executable authority and probes no
+environments.
 
 ```rust
 use scopebase_sdk::profile::{
@@ -157,8 +159,38 @@ with no shared lock, signal handler or registry.
 `tests/limits.rs`, `tests/context.rs`, `tests/diagnostic.rs` and
 `tests/isolated_contexts.rs` pin every cap, the 108-population context
 oracle cross-check, the two-thread disjoint-context run with Send/Sync
-trait assertions, and bad controls. Capture-metadata integration
-(`AppContext::capture`) belongs to the later SDK03, not to this increment.
+trait assertions, and bad controls.
+
+## Capture metadata and consumer conformance (SDK03)
+
+With the default `capture` feature, `AppContext::capture` retains one
+bounded immutable snapshot of a CP10-validated neutral observation. Only
+pre-validated snapshots are accepted, through
+`scopebase_capture::neutral::validate_v1`; unknown magnitudes and
+query-partial reasons pass through unchanged, distinct epochs stay in
+distinct contexts, and a second snapshot is refused typed with
+`ContextError::CaptureAlreadyPresent`. Snapshot payload costs
+`128 + 32*counters + 8*claims + 4*reasons` bytes against the same
+`retained_bytes` allowance as binding strings. Capture never moves
+admission and mints no closure authority; see the `AppContext::capture`
+API example, which also runs as a doctest under the default features.
+
+```compile_fail
+use scopebase_sdk::context::AppContext;
+// There is no route from a retained snapshot to session closure.
+let context: AppContext = todo!();
+let _closed = context.close();
+```
+
+`tests/capture_metadata.rs` pins unknown/query-partial preservation,
+epoch separation, N/N+1 payload accounting, the shared binding/snapshot
+allowance, second-snapshot refusal and the 4,096/4,096/16 hard maxima.
+`tests/conformance_binding.rs` with `tests/adapters/consumer.rs` proves
+the consumer validates what it consumes: the adapter binds the actual
+production component, validates every raw input, and emits real testkit
+subject/observation values checked against an independent literal oracle,
+while metadata mismatches, a validation-skipping consumer and a wrong
+production digest each fail typed.
 
 From the workspace root:
 

@@ -2,7 +2,9 @@
 //! SDK01 dependency check: the default SDK build depends on the pure
 //! `scopebase-capture` API, the `--no-default-features` build is pure std,
 //! and neither build admits a BPF/native/Mojo build input. Verified through
-//! `cargo tree` in both feature modes.
+//! `cargo tree` in both feature modes. The tree is scoped to normal edges:
+//! dev-dependencies (integration-test-only, e.g. the SDK03 testkit consumer
+//! adapter) never ship in either build and are checked separately.
 
 use std::process::Command;
 
@@ -11,6 +13,10 @@ const BANNED: [&str; 9] = [
 ];
 
 fn tree(extra_args: &[&str]) -> String {
+    tree_edges(extra_args, "normal")
+}
+
+fn tree_edges(extra_args: &[&str], edges: &str) -> String {
     let cargo = option_env!("CARGO").unwrap_or("cargo");
     let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml");
     let mut args = vec![
@@ -22,6 +28,8 @@ fn tree(extra_args: &[&str]) -> String {
         "scopebase-sdk",
         "--prefix",
         "none",
+        "--edges",
+        edges,
     ];
     args.extend(extra_args.iter().copied());
     let output = Command::new(cargo)
@@ -85,6 +93,26 @@ fn default_tree_depends_on_capture_without_banned_inputs() {
             .iter()
             .any(|line| line.starts_with("scopebase-capture v0.1.0")),
         "default SDK tree must contain scopebase-capture: {output}"
+    );
+    assert_no_banned_inputs(&output);
+}
+
+#[test]
+fn dev_tree_has_testkit_without_banned_inputs() {
+    // Integration-test-only edges: the SDK03 consumer adapter uses the
+    // testkit's subject/observation types. These never ship in the build,
+    // and must not drag a BPF/native/Mojo input into SDK tests either.
+    let output = tree_edges(&[], "dev");
+    let lines: Vec<&str> = output.lines().collect();
+    assert!(
+        !lines.is_empty() && lines[0].starts_with("scopebase-sdk v0.1.0"),
+        "unexpected tree root: {output}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("scopebase-testkit v0.1.0")),
+        "dev tree must contain scopebase-testkit: {output}"
     );
     assert_no_banned_inputs(&output);
 }

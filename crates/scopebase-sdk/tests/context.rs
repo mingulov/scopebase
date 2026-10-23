@@ -742,7 +742,8 @@ fn dropping_context_leaves_external_owners_untouched() {
     );
     assert_eq!(fresh.report().bindings.len(), 1);
     assert_eq!(
-        fresh.report().bindings[0].package, "scopebase-capture",
+        fresh.report().bindings[0].package,
+        "scopebase-capture",
         "fresh binding must be the declared coordinate, not residue"
     );
     assert!(fresh.report().diagnostics.is_empty());

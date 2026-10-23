@@ -13,9 +13,17 @@
 //! [`ContextError::Capacity`] even when the refused entry is also unknown,
 //! duplicate or malformed. Failed operations check before any mutation, so
 //! the prior context is unchanged.
+//!
+//! SDK03 adds [`AppContext::capture`]: one bounded immutable snapshot of a
+//! CP10-validated neutral observation per context, sharing the `retained_bytes`
+//! allowance with binding payload. Only pre-validated snapshots are accepted;
+//! capture preserves evidence strength and mints no closure authority.
 
 use std::error::Error;
 use std::fmt;
+
+#[cfg(feature = "capture")]
+use scopebase_capture::neutral::ValidatedNeutralV1;
 
 use crate::diagnostic::RetainedDiagnostic;
 use crate::diagnostic::{Diagnostic, DiagnosticDisposition, DiagnosticStore, OmittedDiagnostics};
@@ -36,6 +44,18 @@ pub const MAX_BINDING_BACKEND_BYTES: usize = 64;
 pub const MAX_BINDING_FEATURES: usize = 16;
 /// Maximum feature name length in bytes.
 pub const MAX_BINDING_FEATURE_BYTES: usize = 64;
+/// Fixed retained-payload cost of the one capture snapshot in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_SNAPSHOT_BASE_BYTES: u64 = 128;
+/// Retained-payload cost per validated counter in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_COUNTER_BYTES: u64 = 32;
+/// Retained-payload cost per validated claim in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_CLAIM_BYTES: u64 = 8;
+/// Retained-payload cost per validated claim reason in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_REASON_BYTES: u64 = 4;
 
 /// One bound component: the actual package coordinate plus optional artifact
 /// evidence. Coordinates are owned strings so applications can bind
@@ -80,7 +100,9 @@ impl ComponentBinding {
 }
 
 /// Borrowed application report over existing context storage. Borrows only;
-/// callers cloning out of the borrow assume their own memory custody.
+/// callers cloning out of the borrow assume their own memory custody. The
+/// capture borrow is validated metadata, never a closure receipt: the report
+/// exposes no close/drain/quiesce route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContextReport<'a> {
     pub profile: &'static str,
@@ -90,6 +112,10 @@ pub struct ContextReport<'a> {
     pub bindings: &'a [ComponentBinding],
     pub diagnostics: &'a [RetainedDiagnostic],
     pub omitted: OmittedDiagnostics,
+    /// The retained capture snapshot, when the `capture` feature is enabled
+    /// and one was consumed.
+    #[cfg(feature = "capture")]
+    pub capture: Option<&'a ValidatedNeutralV1>,
 }
 
 /// Bounded application context. Not [`Clone`]: evidence changes require a
@@ -102,6 +128,8 @@ pub struct AppContext {
     bindings: Vec<ComponentBinding>,
     diagnostics: DiagnosticStore,
     retained_payload_bytes: u64,
+    #[cfg(feature = "capture")]
+    capture: Option<ValidatedNeutralV1>,
 }
 
 /// Application context failure. Variants stay structured and carry no
@@ -114,6 +142,10 @@ pub enum ContextError {
     DuplicateObservation,
     UnknownCapability,
     Capacity,
+    /// A capture snapshot is already present; later snapshots use a new
+    /// explicit context. Present in every feature mode so matches stay
+    /// exhaustive; only reachable through `capture` with `capture` enabled.
+    CaptureAlreadyPresent,
 }
 
 impl fmt::Display for ContextError {
@@ -132,6 +164,9 @@ impl fmt::Display for ContextError {
             }
             ContextError::Capacity => {
                 write!(f, "application context capacity exceeded")
+            }
+            ContextError::CaptureAlreadyPresent => {
+                write!(f, "capture snapshot already present")
             }
         }
     }
@@ -158,6 +193,8 @@ impl AppContext {
             bindings: Vec::new(),
             diagnostics: DiagnosticStore::new(),
             retained_payload_bytes: 0,
+            #[cfg(feature = "capture")]
+            capture: None,
         })
     }
 
@@ -256,6 +293,94 @@ impl AppContext {
         )
     }
 
+    /// Retain one validated capture snapshot as bounded immutable metadata.
+    /// The snapshot is an exact copy: source, epoch, binding, origin, units,
+    /// magnitudes and per-claim reasons pass through unchanged. Unknown stays
+    /// unknown and query-partial stays query-partial; nothing is upgraded,
+    /// merged or converted into closure authority, and admission never moves.
+    ///
+    /// A context holds at most one snapshot: a second `capture` -- identical
+    /// or different-epoch -- is refused with
+    /// [`ContextError::CaptureAlreadyPresent`], checked before the budget. A
+    /// snapshot whose deterministic cost (`128 + 32*counters + 8*claims +
+    /// 4*reasons`) does not fit the `retained_bytes` allowance shared with
+    /// binding payload is refused with [`ContextError::Capacity`]; checked
+    /// arithmetic runs before cloning. Either refusal leaves the prior
+    /// context unchanged.
+    ///
+    /// ```rust
+    /// use scopebase_capture::neutral::{
+    ///     validate_v1, NeutralLimits, NeutralObservationV1, NeutralOrigin,
+    ///     NeutralSource, NeutralUnit,
+    /// };
+    /// use scopebase_sdk::context::{AppContext, ComponentBinding};
+    /// use scopebase_sdk::limits::Limits;
+    /// use scopebase_sdk::profile::{Admission, Profile};
+    /// use std::time::Duration;
+    ///
+    /// let profile = Profile::new("capture-demo", vec![], vec![]).unwrap();
+    /// let limits = Limits {
+    ///     input_bytes: 65_536,
+    ///     retained_bytes: 65_536,
+    ///     work_items: 64,
+    ///     live_owners: 8,
+    ///     diagnostic_count: 32,
+    ///     diagnostic_bytes: 65_536,
+    ///     wait: Duration::from_secs(2),
+    /// };
+    /// let mut context = AppContext::new(profile, limits).unwrap();
+    /// context.bind(ComponentBinding {
+    ///     package: "scopebase-capture".to_owned(),
+    ///     version: "0.1.0".to_owned(),
+    ///     features: Vec::new(),
+    ///     backend: None,
+    ///     artifact_sha256: Some([0x42; 32]),
+    /// }).unwrap();
+    /// let raw = NeutralObservationV1 {
+    ///     source: NeutralSource {
+    ///         capture: [0x11; 16],
+    ///         producer: [0x22; 16],
+    ///         ordinal: 1,
+    ///         binding: [0x33; 32],
+    ///         origin: NeutralOrigin::AdapterReported,
+    ///     },
+    ///     unit: NeutralUnit::Events,
+    ///     counters: Vec::new(),
+    ///     losses: Vec::new(),
+    ///     signals: Vec::new(),
+    ///     claims: Vec::new(),
+    ///     partitions: Vec::new(),
+    ///     corrections: Vec::new(),
+    /// };
+    /// let validated = validate_v1(&raw, NeutralLimits::default()).unwrap();
+    /// context.capture(&validated).unwrap();
+    /// assert_eq!(context.admission(), Admission::Ready);
+    /// assert!(context.report().capture.is_some());
+    /// ```
+    #[cfg(feature = "capture")]
+    pub fn capture(&mut self, report: &ValidatedNeutralV1) -> Result<(), ContextError> {
+        if self.capture.is_some() {
+            return Err(ContextError::CaptureAlreadyPresent);
+        }
+        let cost = snapshot_cost(report).ok_or(ContextError::Capacity)?;
+        let total = self
+            .retained_payload_bytes
+            .checked_add(cost)
+            .ok_or(ContextError::Capacity)?;
+        if total > self.limits.retained_bytes {
+            return Err(ContextError::Capacity);
+        }
+        self.retained_payload_bytes = total;
+        self.capture = Some(report.clone());
+        Ok(())
+    }
+
+    /// Borrow the retained capture snapshot, if one was consumed.
+    #[cfg(feature = "capture")]
+    pub fn capture_snapshot(&self) -> Option<&ValidatedNeutralV1> {
+        self.capture.as_ref()
+    }
+
     /// Borrow the current report over existing storage. Allocates nothing.
     pub fn report(&self) -> ContextReport<'_> {
         ContextReport {
@@ -266,8 +391,26 @@ impl AppContext {
             bindings: &self.bindings,
             diagnostics: self.diagnostics.retained(),
             omitted: self.diagnostics.omitted(),
+            #[cfg(feature = "capture")]
+            capture: self.capture.as_ref(),
         }
     }
+}
+
+/// Deterministic retained-payload cost of one validated snapshot: `128 +
+/// 32*counters + 8*claims + 4*reasons`, with checked arithmetic over the
+/// validated cardinalities. `None` on arithmetic overflow.
+#[cfg(feature = "capture")]
+fn snapshot_cost(report: &ValidatedNeutralV1) -> Option<u64> {
+    let mut total = CAPTURE_SNAPSHOT_BASE_BYTES;
+    total =
+        total.checked_add((report.counters().len() as u64).checked_mul(CAPTURE_COUNTER_BYTES)?)?;
+    total = total.checked_add((report.claims().len() as u64).checked_mul(CAPTURE_CLAIM_BYTES)?)?;
+    let mut reasons: u64 = 0;
+    for claim in report.claims() {
+        reasons = reasons.checked_add(claim.reasons().len() as u64)?;
+    }
+    total.checked_add(reasons.checked_mul(CAPTURE_REASON_BYTES)?)
 }
 
 /// Whether `binding` is well-formed: nonempty package/version within

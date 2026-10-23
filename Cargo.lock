@@ -203,6 +203,7 @@ dependencies = [
  "scopebase-bpf",
  "scopebase-capture",
  "scopebase-linux",
+ "scopebase-testkit",
 ]
 
 [[package]]
