@@ -39,6 +39,8 @@ const TOOL_ROLES: &[&str] = &[
     "rust",
     "runner",
     "source-archive",
+    "cargo",
+    "sysroot",
 ];
 /// Origins that resolve without the network. `system-observed` is absent:
 /// an observed install without a recorded hash cannot pin a build.

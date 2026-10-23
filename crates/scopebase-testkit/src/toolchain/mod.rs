@@ -15,8 +15,25 @@
 //! [`run_pinned`] executes one closure-pinned tool id at a caller-supplied
 //! offline path under explicit byte/time/work bounds. There is no shell,
 //! no inherited environment and no network access.
+//!
+//! [`SelectedClosure`] is the reconciled role-structured execution view
+//! over an admitted manifest; [`CompilerExecutor`] runs
+//! [`compile_fixture`] builds through a [`BuildScopeBackend`] with
+//! persistent job custody and exclusive output-root leases. The narrow
+//! host [`DirectScope`] runs one pinned direct tool under a child-only
+//! no-children sandbox.
+pub mod executor;
 pub mod identity;
 pub mod invoke;
+pub mod scope;
 
+pub use executor::{
+    compile_fixture, CompileJob, CompileOutcome, CompileOutput, CompilerExecutor, ExecutorBudget,
+    ExecutorClose, ExecutorLimits, ExecutorReport, ExecutorUsage, OutputReleaseError,
+};
 pub use identity::{CompilerClosure, PinnedTool};
 pub use invoke::{run_pinned, NestedBounds, NestedOutput};
+pub use scope::{
+    BuildExit, BuildRequest, BuildScopeBackend, DirectScope, RoleBinding, RoleSelection, ScopePoll,
+    ScopeStart, SelectedClosure, ToolBinary, ToolRole,
+};

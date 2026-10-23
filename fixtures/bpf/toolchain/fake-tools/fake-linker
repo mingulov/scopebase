@@ -1,0 +1,6 @@
+#!/bin/sh
+# TC02 fake linker: record the loaded LLVM identity next to Rust/Clang LLVM.
+# Pure shell builtins only.
+# SPDX-License-Identifier: Apache-2.0
+printf 'loaded_llvm=%s\nrust_llvm=%s\nclang_llvm=%s\n' "$LOADED_LLVM_SHA" "$RUST_LLVM_SHA" "$CLANG_LLVM_SHA"
+exit 0

@@ -1,0 +1,10 @@
+#!/bin/sh
+# TC02 fake direct tool: block reading the *input.ll argv entry (stop/timeout control).
+# Pure shell builtins only: survives the direct-no-children sandbox.
+# SPDX-License-Identifier: Apache-2.0
+for arg in "$@"; do
+  case "$arg" in
+    *input.ll) read line < "$arg" || exit "$?";;
+  esac
+done
+exit 0

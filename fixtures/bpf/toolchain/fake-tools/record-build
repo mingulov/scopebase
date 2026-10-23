@@ -1,0 +1,14 @@
+#!/bin/sh
+# TC02 fake direct tool: record argv NUL-separated into the -o file.
+# Pure shell builtins only: survives the direct-no-children sandbox.
+# SPDX-License-Identifier: Apache-2.0
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  prev="$arg"
+done
+if [ -n "$TC02_SPAWN_MARKER" ]; then : > "$TC02_SPAWN_MARKER"; fi
+printf 'TC02OBJ\n' > "$out"
+printf '%s\0' "$@" >> "$out"
+exit 0
