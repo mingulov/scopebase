@@ -1,5 +1,34 @@
 # Working in this repository
 
+## Alpha mode (owner-directed 2026-10-23, supersedes conflicting process below)
+
+ScopeBase is a pre-alpha dev tool, not publicly known. The owner confirmed
+2026-10-23: keep the transfer-first substance, drop the release-grade
+ceremony. PORT/ADAPT from the four donor projects remains the method; nothing
+transferred is re-implemented. Effective immediately:
+
+- Keep: donor slice citations (file + lines + commit) in ported code headers.
+  This is what proves "transferred, not re-implemented".
+- Drop: separate preservation-map docs (fold to a short slice table in the
+  commit message), second review lane, per-slice grant votes, wave/scout
+  review theater, packet `NEEDS_DECISION` gates for user-owned donor slices.
+- Blanket grant: `OWNER-2026-10-23` authorizes PORT/ADAPT/VECTORS_ONLY of all
+  user-owned donor slices (p11scope, KryProbe, OSSLscope, MemVeil/libbpf-mojo,
+  MojoBPF) to ScopeBase Apache-2.0 destinations. Third-party/upstream code
+  (e.g. Aya upstream context, GPL third-party) is NEVER covered by the
+  blanket: analyze attribution first, copy only verified user-owned lines.
+- D03 scoped grant (2026-10-23): GPL-source to Apache-2.0 destination allowed
+  ONLY inside this library's destinations; original donor files/terms
+  untouched.
+- Ask the owner only about: real third-party license calls, and real
+  either/or technical choices. Never about citations, pins, paperwork, or
+  anything answerable from the tree.
+- Decisions in force: TT03 execution authorized; BP09 = locked btf-rs with
+  bounded narrow preflight (no upstreaming); CI target = GitHub Actions;
+  BP04 O:src/plan.rs citation = already-admitted preview pin (b).
+  RL01 assumed: review accepted-only now, defer LX06/NX negatives with a
+  recorded list; owner may override.
+
 [TT02-RSP01 prepared-response contract](docs/superpowers/specs/2026-10-22-scopebase-tt02-prepared-response.md) and [verification plan](docs/superpowers/plans/2026-10-22-scopebase-tt02-prepared-response-verification.md) ratify exact-r2 scoped maintenance under accepted TT02. Strict BP03 response-F depends on this work; actual execution bindings remain UNBOUND, implementation is not admitted and BP03 remains PLANNED. Prior TT02 acceptance and 86-task/120-requirement/179-mapping inventory are unchanged.
 
 ## Purpose and current state
