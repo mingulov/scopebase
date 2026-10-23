@@ -519,6 +519,61 @@ fn bogus_func_linkage_refuses() {
 }
 
 #[test]
+fn decl_tag_and_var_aux_rules_refuse() {
+    // DECL_TAG carries a fixed 4-byte component index (vlen must be 0);
+    // VAR carries linkage 0/1 with one aux word.
+    let bytes = SHAPES.to_vec();
+    let (type_at, _) = type_section(&bytes);
+    let mut pos = type_at;
+    for _ in 1..18u32 {
+        let info = read_u32(&bytes, pos + 4);
+        let kind = ((info >> 24) & 0x1F) as u8;
+        let vlen = (info & 0xFFFF) as usize;
+        let aux = match kind {
+            1 | 14 | 17 => 4,
+            3 => 12,
+            4 | 5 | 15 => vlen * 12,
+            6 | 13 => vlen * 8,
+            _ => 0,
+        };
+        pos += 12 + aux;
+    }
+    let decl_tag_at = pos;
+    let info = read_u32(&bytes, decl_tag_at + 4);
+    assert_eq!(
+        ((info >> 24) & 0x1F) as u8,
+        17,
+        "expected DECL_TAG at ID 18"
+    );
+    let mut mutant = bytes.clone();
+    write_u32(&mut mutant, decl_tag_at + 4, info | 1);
+    let error = parse_base(&mutant).expect_err("DECL_TAG vlen must refuse");
+    expect_error(&error, ErrorKind::Malformed, Stage::Admission);
+    // VAR linkage beyond 0/1 is corrupt (maps.bin ID 6 is a VAR).
+    let maps = MAPS.to_vec();
+    let (maps_at, _) = type_section(&maps);
+    let mut pos = maps_at;
+    for _ in 1..6u32 {
+        let info = read_u32(&maps, pos + 4);
+        let kind = ((info >> 24) & 0x1F) as u8;
+        let vlen = (info & 0xFFFF) as usize;
+        let aux = match kind {
+            1 => 4,
+            3 => 12,
+            4 | 5 => vlen * 12,
+            _ => 0,
+        };
+        pos += 12 + aux;
+    }
+    let info = read_u32(&maps, pos + 4);
+    assert_eq!(((info >> 24) & 0x1F) as u8, 14, "expected VAR at ID 6");
+    let mut mutant = maps.clone();
+    write_u32(&mut mutant, pos + 4, (info & !0xFFFF) | 9);
+    let error = parse_base(&mutant).expect_err("bogus VAR linkage must refuse");
+    expect_error(&error, ErrorKind::Malformed, Stage::Admission);
+}
+
+#[test]
 fn every_prefix_terminates_typed() {
     // Hostile truncation battery: no prefix may panic or hang; the full
     // image parses and every proper prefix fails typed.
