@@ -488,6 +488,9 @@ fn packaged_c_route_matches_host_contract() {
         "scopebase_identity_assign_task_v1",
         "scopebase_identity_advance_exec_v1",
         "task_identity.h",
+        // F02: self-domain assignment must stay memmove (memcpy on
+        // overlapping ranges is undefined behavior).
+        "memmove(out->producer_domain",
     ] {
         assert!(
             PRODUCER_CONTRACT_H.contains(marker),

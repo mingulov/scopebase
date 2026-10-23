@@ -32,14 +32,18 @@
  * nonzero cookie and initializes exec to the birth epoch 0. Returns
  * SCOPEBASE_IDENTITY_OK on success; on refusal (null output/domain or
  * zero cookie) returns SCOPEBASE_IDENTITY_ZERO_COOKIE with *out unchanged.
- * This helper does not allocate tickets, access maps or prove continuity. */
+ * This helper does not allocate tickets, access maps or prove continuity.
+ *
+ * F02: the copy is memmove, not memcpy: a caller may re-assign a record
+ * from its own domain (producer_domain == out->producer_domain), and
+ * memcpy on overlapping ranges is undefined behavior. */
 static inline int scopebase_identity_assign_task_v1(
     struct scopebase_producer_identity_v1 *out,
     const uint8_t producer_domain[16], uint64_t nonzero_cookie)
 {
     if (!out || !producer_domain || nonzero_cookie == 0)
         return SCOPEBASE_IDENTITY_ZERO_COOKIE;
-    memcpy(out->producer_domain, producer_domain, sizeof(out->producer_domain));
+    memmove(out->producer_domain, producer_domain, sizeof(out->producer_domain));
     out->task_cookie = nonzero_cookie;
     out->exec_generation = 0;
     return SCOPEBASE_IDENTITY_OK;

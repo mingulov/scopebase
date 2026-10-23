@@ -15,7 +15,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read as _;
 use std::io::Write as _;
-use std::os::fd::{AsRawFd as _, FromRawFd as _, RawFd};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -255,12 +255,35 @@ impl OwnedTarget {
         }
         let mut cmd_pipe = [0; 2];
         let mut out_pipe = [0; 2];
-        // SAFETY: valid out-pointers; both ends checked below.
-        if unsafe { libc::pipe(cmd_pipe.as_mut_ptr()) } != 0
-            || unsafe { libc::pipe(out_pipe.as_mut_ptr()) } != 0
-        {
+        // SAFETY: valid out-pointers; return value checked immediately.
+        if unsafe { libc::pipe(cmd_pipe.as_mut_ptr()) } != 0 {
             return Err(TargetError::new("fixture pipe failed"));
         }
+        // F20: take ownership of the first pair before creating the
+        // second, so a second pipe() failure closes (not leaks) the
+        // first pair via these guards' Drop.
+        // SAFETY: pipe() just reported success; both ends are ours.
+        let cmd_owned = [
+            unsafe { OwnedFd::from_raw_fd(cmd_pipe[0]) },
+            unsafe { OwnedFd::from_raw_fd(cmd_pipe[1]) },
+        ];
+        // SAFETY: valid out-pointers; return value checked immediately.
+        if unsafe { libc::pipe(out_pipe.as_mut_ptr()) } != 0 {
+            return Err(TargetError::new("fixture pipe failed"));
+        }
+        // SAFETY: pipe() just reported success; both ends are ours.
+        let out_owned = [
+            unsafe { OwnedFd::from_raw_fd(out_pipe[0]) },
+            unsafe { OwnedFd::from_raw_fd(out_pipe[1]) },
+        ];
+        // Both pairs exist: release them to the raw-fd fork protocol
+        // below, which closes or File-wraps every end on all paths
+        // (fork failure closes all four; otherwise the child's ends
+        // close and the parent's ends become Files whose Drop closes).
+        let [cmd_read, cmd_write] = cmd_owned;
+        let [out_read, out_write] = out_owned;
+        let cmd_pipe = [cmd_read.into_raw_fd(), cmd_write.into_raw_fd()];
+        let out_pipe = [out_read.into_raw_fd(), out_write.into_raw_fd()];
         let file_fd = file.as_raw_fd();
         // SAFETY: the child below runs only raw syscalls on inherited
         // descriptors, then _exit; it never allocates, locks, or
@@ -476,11 +499,12 @@ impl OwnedTarget {
         }
     }
 
-    /// The child's mapped range. Only mapping targets have one.
-    pub fn range(&self) -> (u64, u64) {
+    /// F05: the child's mapped range. Only mapping targets have one;
+    /// stopped/exec targets report `None` instead of panicking.
+    pub fn range(&self) -> Option<(u64, u64)> {
         match &self.kind {
-            TargetKind::Mapping { range, .. } => *range,
-            _ => panic!("only mapping targets have ranges"),
+            TargetKind::Mapping { range, .. } => Some(*range),
+            TargetKind::Stopped { .. } | TargetKind::Exec { .. } => None,
         }
     }
 

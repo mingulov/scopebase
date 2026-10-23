@@ -704,7 +704,8 @@ fn split_and_collision_are_required() {
     std::fs::write(&foreign_file, pattern_bytes(99, 8192)).unwrap();
     let held_foreign = hold(&foreign_file);
     let target = OwnedTarget::mapping(&snap).expect("mapping target");
-    let range = MapRange::new(target.range().0, target.range().1).unwrap();
+    let (rstart, rend) = target.range().expect("mapping target has range");
+    let range = MapRange::new(rstart, rend).unwrap();
     let ctl = control();
     let epoch = epoch();
     let pid = Pid::new(target.pid() as i32).unwrap();
@@ -776,7 +777,7 @@ fn copy_up_trigger_must_happen() {
     let key_before = stat_key(&merged_victim);
     let held_old = hold(&merged_victim);
     let target = OwnedTarget::mapping(&merged_victim).expect("mapping target");
-    let (tstart, tend) = target.range();
+    let (tstart, tend) = target.range().expect("mapping target has range");
     let range = MapRange::new(tstart, tend).unwrap();
     let ctl = control();
     let epoch = epoch();
@@ -974,7 +975,7 @@ fn wrong_mount_view_rejected() {
     }
     // Aligned control: with agreeing views the same alt object matches.
     let local = OwnedTarget::mapping(&alt_file).expect("local alt target");
-    let (lstart, lend) = local.range();
+    let (lstart, lend) = local.range().expect("mapping target has range");
     let lpid = Pid::new(local.pid() as i32).unwrap();
     let lobs = ProcessObservation::acquire(lpid, &epoch, proc_limits(), &ctl)
         .expect("acquire local target");
@@ -1022,7 +1023,7 @@ fn transient_target_mmap_detected() {
     let target_file = dir.join("audit-target.bin");
     std::fs::write(&target_file, pattern_bytes(51, 8192)).unwrap();
     let target = OwnedTarget::mapping(&target_file).expect("audit target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range_text = format!("{start:x}-{end:x}");
     let st = std::fs::metadata(&target_file).unwrap();
     let config = AuditConfig {
@@ -1146,7 +1147,7 @@ fn ext4_control() {
     let pool = pool_for(&policy);
     // Alias identity: both names observe the same mapped object.
     let target = OwnedTarget::mapping(&a).expect("ext4 target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range = MapRange::new(start, end).unwrap();
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs =
@@ -1167,7 +1168,7 @@ fn ext4_control() {
     std::fs::write(&rname, pattern_bytes(62, 8192)).unwrap();
     let rino = stat_key(&rname).1;
     let target_b = OwnedTarget::mapping(&rname).expect("rename target");
-    let (bstart, bend) = target_b.range();
+    let (bstart, bend) = target_b.range().expect("mapping target has range");
     let renamed = mnt.join(format!("rb-{tag}-new.bin"));
     std::fs::rename(&rname, &renamed).expect("rename");
     let rows = maps_entries(target_b.pid());
@@ -1205,7 +1206,7 @@ fn ext4_control() {
     std::fs::write(&victim, &doomed_bytes).unwrap();
     let held_pre = hold(&victim);
     let target_d = OwnedTarget::mapping(&victim).expect("doomed target");
-    let (dstart, dend) = target_d.range();
+    let (dstart, dend) = target_d.range().expect("mapping target has range");
     std::fs::remove_file(&victim).expect("delete");
     let drows = maps_entries(target_d.pid());
     let gone = drows
@@ -1268,7 +1269,7 @@ fn overlay_xino_off_aligned() {
     let policy = MappingPolicy::NoNewTargetMappings;
     let pool = pool_for(&policy);
     let target = OwnedTarget::mapping(&merged).expect("overlay target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs = ProcessObservation::acquire(pid, &epoch, proc_limits(), &ctl)
         .expect("acquire overlay target");
@@ -1340,7 +1341,7 @@ fn overlay_xino_on_split() {
     let policy = MappingPolicy::NoNewTargetMappings;
     let pool = pool_for(&policy);
     let target = OwnedTarget::mapping(&merged).expect("xino target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs =
         ProcessObservation::acquire(pid, &epoch, proc_limits(), &ctl).expect("acquire xino target");
@@ -1448,7 +1449,7 @@ fn metacopy_transition() {
     let policy = MappingPolicy::NoNewTargetMappings;
     let pool = pool_for(&policy);
     let target = OwnedTarget::mapping(&merged_dir.join(&name)).expect("metacopy target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs = ProcessObservation::acquire(pid, &epoch, proc_limits(), &ctl)
         .expect("acquire metacopy target");
@@ -1514,7 +1515,7 @@ fn restricted_denial_is_real() {
     let probe = dir.join("probe.bin");
     std::fs::write(&probe, pattern_bytes(72, 4096)).unwrap();
     let target = OwnedTarget::mapping(&probe).expect("denial target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs = ProcessObservation::acquire(pid, &epoch, proc_limits(), &ctl)
         .expect("acquire denial target");
@@ -1550,7 +1551,7 @@ fn fork_exec_exit_verdicts() {
     let pool = pool_for(&policy);
     // Exit leg: acquire live, reap, then observe.
     let target = OwnedTarget::mapping(&file).expect("exit target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range = MapRange::new(start, end).unwrap();
     let pid = Pid::new(target.pid() as i32).unwrap();
     let obs =
@@ -1617,7 +1618,7 @@ fn concurrent_same_owner_reads() {
     let file = dir.join("shared.bin");
     std::fs::write(&file, pattern_bytes(73, 8192)).unwrap();
     let target = OwnedTarget::mapping(&file).expect("shared target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range = MapRange::new(start, end).unwrap();
     let pid = target.pid();
     let held = hold(&file);
@@ -2035,7 +2036,7 @@ fn exact_range_positive_privileged() {
     let file = dir.join("exact.bin");
     std::fs::write(&file, pattern_bytes(74, 8192)).unwrap();
     let target = OwnedTarget::mapping(&file).expect("exact target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range = MapRange::new(start, end).unwrap();
     let ctl = control();
     let epoch = epoch();
@@ -2080,7 +2081,7 @@ fn calibration_policy_matrix() {
     let file = dir.join("cal.bin");
     std::fs::write(&file, pattern_bytes(75, 8192)).unwrap();
     let target = OwnedTarget::mapping(&file).expect("cal target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let range = MapRange::new(start, end).unwrap();
     let ctl = control();
     let epoch = epoch();
@@ -2136,7 +2137,7 @@ fn sub_page_cap_inconclusive() {
     let file = dir.join("sub.bin");
     std::fs::write(&file, pattern_bytes(76, 8192)).unwrap();
     let target = OwnedTarget::mapping(&file).expect("sub target");
-    let (start, end) = target.range();
+    let (start, end) = target.range().expect("mapping target has range");
     let ctl = control();
     let epoch = epoch();
     let pid = Pid::new(target.pid() as i32).unwrap();
@@ -2164,4 +2165,16 @@ fn sub_page_cap_inconclusive() {
         other => panic!("sub-page cap must be inconclusive, saw {other:?}"),
     }
     pass("FS-subpage", "sub-page calibration cap inconclusive");
+}
+
+/// F05: stopped and exec-transition targets have no mapped range;
+/// `range()` reports `None` instead of panicking (mapping targets
+/// still report `Some`, as every range call above proves).
+#[test]
+fn non_mapping_targets_have_no_range() {
+    let stopped = OwnedTarget::stopped().expect("stopped target");
+    assert_eq!(stopped.range(), None);
+    let exec = OwnedTarget::exec_transition().expect("exec target");
+    assert_eq!(exec.range(), None);
+    pass("FS-target-range", "stopped/exec range is None");
 }
