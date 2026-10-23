@@ -1092,6 +1092,14 @@ fn transient_target_mmap_detected() {
         .into_iter()
         .any(|u| u.addr <= hit.result_addr() && hit.result_addr() < u.addr + u.len);
     assert!(covered, "planted transient lacks its munmap close");
+    // R29: the genuine plant verifies (enter sample and maps row
+    // agree); R28: nothing in the planted ledger is unattributed.
+    assert!(!hit.unattributed, "planted target map failed verification");
+    assert!(
+        planted.unattributed_mmaps().is_empty(),
+        "planted ledger has unattributed maps: {:?}",
+        planted.unattributed_mmaps()
+    );
     // Clean leg: the real NoNew production phase maps no target bytes.
     let clean_report = dir.join("clean.report");
     let clean = audit::audit_subject(
@@ -1125,6 +1133,12 @@ fn transient_target_mmap_detected() {
         clean.target_backed_mmaps().is_empty(),
         "NoNew phase mapped target bytes: {:?}",
         clean.target_backed_mmaps()
+    );
+    // R28: clean means fully attributed, not merely target-free.
+    assert!(
+        clean.unattributed_mmaps().is_empty(),
+        "NoNew phase has unattributed maps: {:?}",
+        clean.unattributed_mmaps()
     );
     assert!(
         clean.anonymous_mmaps() >= 1,
@@ -1204,6 +1218,13 @@ fn audit_follows_worker_thread_maps() {
         .into_iter()
         .any(|u| u.addr <= hit.result_addr() && hit.result_addr() < u.addr + u.len);
     assert!(covered, "worker transient lacks its munmap close");
+    // R29: the worker plant verifies like any genuine map.
+    assert!(!hit.unattributed, "worker target map failed verification");
+    assert!(
+        traced.unattributed_mmaps().is_empty(),
+        "worker ledger has unattributed maps: {:?}",
+        traced.unattributed_mmaps()
+    );
     pass(
         "FS10",
         &format!(
@@ -1211,6 +1232,183 @@ fn audit_follows_worker_thread_maps() {
             hit.result_addr(),
             traced.threads_seen
         ),
+    );
+}
+
+/// R25: the tracer compares TracerPid against its own TID, not the
+/// process ID. The audit runs on a worker thread (TID != PID) over
+/// a subject whose fork child naps across the parent's exec: the
+/// child must be followed to its exit, so the signal file it writes
+/// after the exec is present when the audit returns. The old
+/// PID-compare prune dropped the live child and returned before
+/// the signal landed.
+#[test]
+fn audit_from_worker_thread_follows_exec_survivor() {
+    let yama = match audit::preflight() {
+        Ok(note) => note,
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-survivor");
+    let signal = dir.join("survivor.signal");
+    let st = std::fs::metadata(&dir).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let subject = audit_subject_bin();
+    let signal_arg = signal.to_string_lossy().into_owned();
+    // The audit itself runs on a worker thread: the tracer TID
+    // differs from the process ID, which is exactly the case the
+    // old PID-compare prune got wrong.
+    let traced = std::thread::Builder::new()
+        .name("r25-auditor".to_string())
+        .spawn(move || {
+            audit::audit_subject(
+                &subject,
+                &[
+                    "fork-exec-survivor".to_string(),
+                    "--signal".to_string(),
+                    signal_arg,
+                ],
+                &config,
+            )
+        })
+        .expect("auditor thread spawns")
+        .join()
+        .expect("auditor thread joins")
+        .expect("survivor audit run");
+    assert_eq!(traced.exit_code, Some(0), "exec target must exit 0");
+    assert!(
+        traced.threads_seen >= 2,
+        "tracer saw {} threads, want main + survivor",
+        traced.threads_seen
+    );
+    assert_eq!(
+        std::fs::read_to_string(&signal)
+            .expect("survivor wrote its signal")
+            .trim(),
+        "hi",
+        "audit returned before the exec-surviving child exited"
+    );
+    pass(
+        "FS10",
+        &format!(
+            "yama {yama}; worker-thread audit followed the fork survivor across exec; threads_seen={}",
+            traced.threads_seen
+        ),
+    );
+}
+
+/// R28: a successful mapping the tracer cannot attribute is an
+/// incomplete audit, never a clean report. The subject clears its
+/// own dumpability (fd and maps identity reads deny even to the
+/// same-uid tracer — probed EACCES), then maps one target page
+/// transiently and reports `mapped=0`, proving the map really
+/// happened. The audit must refuse with `unattributable`; the old
+/// tracer returned Ok with an empty target ledger.
+#[test]
+fn audit_refuses_unattributable_nondumpable_map() {
+    let yama = match audit::preflight() {
+        Ok(note) => note,
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-nondump");
+    let target_file = dir.join("nondump-target.bin");
+    std::fs::write(&target_file, pattern_bytes(91, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let map_report = dir.join("nondump.report");
+    let error = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "nondumpable-map".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            map_report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect_err("non-dumpable target map must be audit-incomplete");
+    assert!(
+        error.to_string().contains("unattributable"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&map_report)
+            .expect("subject wrote its report")
+            .trim(),
+        "mapped=0",
+        "fixture unexercised: subject never mapped"
+    );
+    pass(
+        "FS10",
+        &format!("yama {yama}; non-dumpable target map refused as incomplete"),
+    );
+}
+
+/// R30: the tracer forwards genuine SIGTRAP delivery instead of
+/// swallowing it. The subject's handler acknowledges to the
+/// report; the audit must return Ok with exit 0 AND a `trapped`
+/// report. The old tracer resumed event-zero traps without
+/// delivery, so the handler never ran and the report stayed empty.
+#[test]
+fn audit_forwards_genuine_sigtrap() {
+    let yama = match audit::preflight() {
+        Ok(note) => note,
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-trap");
+    let report = dir.join("trap.report");
+    let st = std::fs::metadata(&dir).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "trap-ack".to_string(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("trap audit run");
+    assert_eq!(traced.exit_code, Some(0), "trap subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&report)
+            .expect("subject created its report")
+            .trim(),
+        "trapped",
+        "SIGTRAP handler never ran: genuine trap swallowed"
+    );
+    assert!(
+        traced.unattributed_mmaps().is_empty(),
+        "trap subject has unattributed maps: {:?}",
+        traced.unattributed_mmaps()
+    );
+    pass(
+        "FS10",
+        &format!("yama {yama}; genuine SIGTRAP forwarded, handler acked"),
     );
 }
 

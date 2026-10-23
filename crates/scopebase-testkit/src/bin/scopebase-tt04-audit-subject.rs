@@ -6,6 +6,9 @@
 //! Usage: scopebase-tt04-audit-subject observe --target PATH --pid PID
 //!   --range START-END [--plant-violation] --report PATH
 //!   scopebase-tt04-audit-subject thread-plant --target PATH --report PATH
+//!   scopebase-tt04-audit-subject fork-exec-survivor --signal PATH
+//!   scopebase-tt04-audit-subject nondumpable-map --target PATH --report PATH
+//!   scopebase-tt04-audit-subject trap-ack --report PATH
 //!
 //! Exit 0 after writing `verdict=...` to the report for every completed
 //! observation (any production outcome, including MappingFailure,
@@ -16,6 +19,20 @@
 //! F15: `thread-plant` maps one target page transiently from a worker
 //! thread (the main thread never touches the target), proving the
 //! tracer follows threads. Writes `worker=0` and exits 0.
+//!
+//! R25: `fork-exec-survivor` forks a child that sleeps 200ms, writes
+//! `hi` to the signal file and exits, while the parent immediately
+//! execs `true`: the child is live across the parent's exec, so a
+//! tracer that forgets it returns before the signal lands.
+//!
+//! R28: `nondumpable-map` clears its own dumpability, then maps one
+//! target page transiently: fd and maps identity reads deny even to
+//! the same-uid tracer, so the success is unattributable. Writes
+//! `mapped=ok` and exits 0, proving the map really happened.
+//!
+//! R30: `trap-ack` installs a SIGTRAP handler that writes `trapped`
+//! to the report, raises SIGTRAP once, and exits 0: a tracer that
+//! swallows genuine traps leaves the report empty.
 use scopebase_linux::{
     control::OperationControl,
     file::{HeldFile, ProcFdResolver, SymlinkPolicy},
@@ -28,6 +45,7 @@ use scopebase_linux::{
 };
 use scopebase_testkit::cli;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 fn usage() -> ! {
@@ -36,7 +54,10 @@ fn usage() -> ! {
     cli::err_line(
         "usage: scopebase-tt04-audit-subject observe --target PATH --pid PID \
          --range START-END [--plant-violation] --report PATH | \
-         thread-plant --target PATH --report PATH",
+         thread-plant --target PATH --report PATH | \
+         fork-exec-survivor --signal PATH | \
+         nondumpable-map --target PATH --report PATH | \
+         trap-ack --report PATH",
     );
     std::process::exit(2);
 }
@@ -100,6 +121,141 @@ fn thread_plant(target: &str) -> i32 {
     worker.join().unwrap_or(13)
 }
 
+/// R25: fork a signalling child, then exec `true` in the parent.
+/// The child (syscalls only after fork) naps 200ms, writes `hi` to
+/// the signal file, and exits 0. Diverges: the parent image is
+/// replaced, the child `_exit`s; exit 2 on setup failure.
+fn fork_exec_survivor(signal: &str) -> ! {
+    let path = match std::ffi::CString::new(signal) {
+        Ok(path) => path,
+        Err(_) => std::process::exit(2),
+    };
+    // SAFETY: single-threaded here; the child runs syscalls only.
+    let forked = unsafe { libc::fork() };
+    if forked < 0 {
+        cli::err_line("audit subject setup failed at fork");
+        std::process::exit(2);
+    }
+    if forked == 0 {
+        // SAFETY: raw syscalls on stack memory only, then _exit.
+        unsafe {
+            let nap = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 200_000_000,
+            };
+            libc::nanosleep(&nap, std::ptr::null_mut());
+            let fd = libc::open(
+                path.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o644,
+            );
+            if fd >= 0 {
+                let msg = b"hi\n";
+                libc::write(fd, msg.as_ptr() as *const _, msg.len());
+                libc::close(fd);
+            }
+            libc::_exit(0);
+        }
+    }
+    // Parent: replace the image at once; the child is mid-nap.
+    let argv0 = c"true".as_ptr();
+    // SAFETY: NUL-terminated argv; returns only on failure.
+    unsafe {
+        libc::execvp(c"true".as_ptr(), [argv0, std::ptr::null()].as_ptr());
+    }
+    cli::err_line("audit subject setup failed at exec");
+    std::process::exit(2);
+}
+
+/// R28: clear dumpability, then map one target page transiently.
+/// Exit codes mirror `thread_plant` (14 NUL, 10/11/12 map stages,
+/// 16 prctl refused).
+fn nondumpable_map(target: &str) -> i32 {
+    let path = match std::ffi::CString::new(target) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    // SAFETY: raw syscalls with checked results, like the plant leg.
+    unsafe {
+        if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+            return 16;
+        }
+        let fd = libc::open(path.as_ptr(), libc::O_RDONLY);
+        if fd < 0 {
+            return 10;
+        }
+        let addr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if addr == libc::MAP_FAILED {
+            libc::close(fd);
+            return 11;
+        }
+        let _ = (addr as *const u8).read_volatile();
+        if libc::munmap(addr, 4096) != 0 {
+            libc::close(fd);
+            return 12;
+        }
+        libc::close(fd);
+    }
+    0
+}
+
+/// R30: report fd for the SIGTRAP handler. Written before the
+/// handler is installed and only read by it; atomic so the
+/// handler stays async-signal-safe without locking.
+static TRAP_FD: AtomicI32 = AtomicI32::new(-1);
+
+extern "C" fn trap_handler(_signal: libc::c_int) {
+    // SAFETY: async-signal-safe write of a fixed message.
+    unsafe {
+        let msg = b"trapped\n";
+        libc::write(
+            TRAP_FD.load(Ordering::Relaxed),
+            msg.as_ptr() as *const _,
+            msg.len(),
+        );
+    }
+}
+
+/// R30: install a SIGTRAP handler that acknowledges to the report,
+/// raise SIGTRAP once, and return 0. Exit codes mirror
+/// `thread_plant` (14 NUL, 10 report open, 17 sigaction refused).
+fn trap_ack(report: &str) -> i32 {
+    let path = match std::ffi::CString::new(report) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    // SAFETY: raw syscalls with checked results.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            0o644,
+        );
+        if fd < 0 {
+            return 10;
+        }
+        TRAP_FD.store(fd, Ordering::Relaxed);
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = trap_handler as *const () as usize;
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut action.sa_mask);
+        if libc::sigaction(libc::SIGTRAP, &action, std::ptr::null_mut()) != 0 {
+            libc::close(fd);
+            return 17;
+        }
+        libc::raise(libc::SIGTRAP);
+        libc::close(fd);
+    }
+    0
+}
+
 fn main() {
     // R03: non-UTF-8 argv refuses with usage, never panics in args().
     let argv = match cli::argv_strings() {
@@ -120,6 +276,25 @@ fn main() {
             cli::err_line("audit subject setup failed at report");
             std::process::exit(2);
         });
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] == "fork-exec-survivor" {
+        let signal = flag_value(&argv, "--signal").unwrap_or_else(|| usage());
+        fork_exec_survivor(&signal);
+    }
+    if argv[1] == "nondumpable-map" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = nondumpable_map(&target);
+        std::fs::write(&report, format!("mapped={code}\n")).unwrap_or_else(|_| {
+            cli::err_line("audit subject setup failed at report");
+            std::process::exit(2);
+        });
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] == "trap-ack" {
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = trap_ack(&report);
         std::process::exit(if code == 0 { 0 } else { 2 });
     }
     if argv[1] != "observe" {

@@ -100,6 +100,39 @@ fn read_exact_deadline(
     Ok(())
 }
 
+/// R27: byte-exact `ready\n` acknowledgement with a deadline.
+/// Silent (no bytes), partial (fewer than six before the deadline),
+/// and malformed acknowledgements are distinct typed refusals, each
+/// leaving the spawn guard armed so the child is retired.
+fn await_ready<R: std::io::Read + std::os::fd::AsRawFd>(
+    output: &mut R,
+    deadline: Instant,
+) -> Result<(), TargetError> {
+    let mut line = [0u8; 6];
+    let mut filled = 0;
+    while filled < line.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero()
+            || !poll_fd(output.as_raw_fd(), remaining)
+                .map_err(|e| TargetError::new(format!("fixture poll: {e}")))?
+        {
+            return Err(TargetError::new("fixture readiness deadline expired"));
+        }
+        let mut byte = [0];
+        output
+            .read_exact(&mut byte)
+            .map_err(|e| TargetError::new(format!("fixture readiness: {e}")))?;
+        line[filled] = byte[0];
+        filled += 1;
+    }
+    if &line != b"ready\n" {
+        return Err(TargetError::new(
+            "unexpected fixture readiness acknowledgement",
+        ));
+    }
+    Ok(())
+}
+
 fn wait_pid_exited(pid: libc::pid_t, timeout: Duration) -> Result<i32, TargetError> {
     // R05: checked before any waitpid call.
     let deadline = Instant::now()
@@ -129,6 +162,61 @@ fn wait_pid_exited(pid: libc::pid_t, timeout: Duration) -> Result<i32, TargetErr
             return Err(TargetError::new("fixture wait deadline expired"));
         }
         std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// R27: kill/reap custody for a raw-fork child, armed immediately
+/// after fork and transferred (disarmed) only on successful
+/// construction. Any error return drops the guard, which SIGKILLs
+/// and reaps within a bounded wait: no live strand, no zombie.
+struct ChildGuard {
+    pid: Option<libc::pid_t>,
+}
+
+impl ChildGuard {
+    fn armed(pid: libc::pid_t) -> Self {
+        Self { pid: Some(pid) }
+    }
+
+    fn disarm(mut self) {
+        self.pid = None;
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid.take() {
+            // SAFETY: signal an owned, unreaped child.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            let _ = wait_pid_exited(pid, Duration::from_secs(5));
+        }
+    }
+}
+
+/// R27: kill/reap custody for a spawned child, armed immediately
+/// after spawn; the only exit is [`SpawnGuard::take`], which moves
+/// the live child to its owner on successful construction.
+struct SpawnGuard(Option<Child>);
+
+impl SpawnGuard {
+    fn take(&mut self) -> Option<Child> {
+        self.0.take()
+    }
+}
+
+impl Drop for SpawnGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) | Err(_) => break,
+                    Ok(None) if Instant::now() >= end => break,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+                }
+            }
+        }
     }
 }
 
@@ -393,6 +481,11 @@ impl OwnedTarget {
             }
             return Err(TargetError::new("fixture fork failed"));
         }
+        // R27: kill/reap custody from here on: every error return
+        // below drops the guard, which retires the child. Closing
+        // the pipes alone would NOT stop it (it inherited writer
+        // copies of every end), and nothing else would reap it.
+        let guard = ChildGuard::armed(pid);
         // SAFETY: the child's ends, owned by this scope.
         unsafe {
             libc::close(cmd_read);
@@ -417,6 +510,8 @@ impl OwnedTarget {
         if addr == 0 || len as usize != map_len {
             return Err(TargetError::new("fixture child mapped nothing"));
         }
+        // Readiness verified: transfer custody to the target guard.
+        guard.disarm();
         Ok(Self {
             kind: TargetKind::Mapping {
                 pid,
@@ -432,44 +527,31 @@ impl OwnedTarget {
     /// [`OwnedTarget::trigger_exec`]. Birth is preserved across the
     /// exec while the address space is replaced.
     pub fn exec_transition() -> Result<Self, TargetError> {
-        let mut child = Command::new("sh")
-            .args(["-c", "printf 'ready\\n'; read -r line; exec sleep 300"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| TargetError::new(format!("fixture spawn: {e}")))?;
+        // R27: kill/reap custody from spawn on; every error return
+        // below drops the guard, which retires the child (`Child`
+        // itself neither kills nor reaps on drop).
+        let mut guard = SpawnGuard(Some(
+            Command::new("sh")
+                .args(["-c", "printf 'ready\\n'; read -r line; exec sleep 300"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| TargetError::new(format!("fixture spawn: {e}")))?,
+        ));
         let deadline = Instant::now() + Duration::from_secs(5);
+        let child = guard.0.as_mut().expect("spawn guard armed");
         let mut output = child
             .stdout
             .take()
             .ok_or_else(|| TargetError::new("fixture has no readiness pipe"))?;
-        let mut line = [0u8; 6];
-        let mut filled = 0;
-        while filled < line.len() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero()
-                || !poll_fd(output.as_raw_fd(), remaining)
-                    .map_err(|e| TargetError::new(format!("fixture poll: {e}")))?
-            {
-                return Err(TargetError::new("fixture readiness deadline expired"));
-            }
-            let mut byte = [0];
-            output
-                .read_exact(&mut byte)
-                .map_err(|e| TargetError::new(format!("fixture readiness: {e}")))?;
-            line[filled] = byte[0];
-            filled += 1;
-        }
-        if &line != b"ready\n" {
-            return Err(TargetError::new(
-                "unexpected fixture readiness acknowledgement",
-            ));
-        }
+        await_ready(&mut output, deadline)?;
         let stdin = child
             .stdin
             .take()
             .ok_or_else(|| TargetError::new("fixture has no command pipe"))?;
+        // Readiness verified: transfer custody to the target guard.
+        let child = guard.take().expect("spawn guard armed");
         Ok(Self {
             kind: TargetKind::Exec { child, stdin },
         })
@@ -638,6 +720,142 @@ mod tests {
         assert!(
             format!("{err}").contains("overflow"),
             "refusal must name the overflow: {err}"
+        );
+    }
+
+    fn pipe_pair() -> (File, File) {
+        let mut ends = [0; 2];
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+        // SAFETY: pipe() just reported success; both ends are ours.
+        unsafe { (File::from_raw_fd(ends[0]), File::from_raw_fd(ends[1])) }
+    }
+
+    /// R27: `await_ready` distinguishes silent, partial, malformed
+    /// and exact acknowledgements over a real pipe.
+    #[test]
+    fn await_ready_classifies_silent_partial_malformed() {
+        let (mut read, mut write) = pipe_pair();
+        write.write_all(b"ready\n").unwrap();
+        await_ready(&mut read, Instant::now() + Duration::from_secs(5)).expect("exact acks");
+        let (mut read, mut write) = pipe_pair();
+        write.write_all(b"bogus\n").unwrap();
+        let err = await_ready(&mut read, Instant::now() + Duration::from_secs(5)).unwrap_err();
+        assert!(
+            format!("{err}").contains("unexpected"),
+            "malformed must name itself: {err}"
+        );
+        // Silent: writer open, no bytes, short deadline.
+        let (mut read, _write) = pipe_pair();
+        let err = await_ready(&mut read, Instant::now() + Duration::from_millis(100)).unwrap_err();
+        assert!(
+            format!("{err}").contains("deadline expired"),
+            "silent must expire: {err}"
+        );
+        // Partial: three bytes, then silence.
+        let (mut read, mut write) = pipe_pair();
+        write.write_all(b"rea").unwrap();
+        let err = await_ready(&mut read, Instant::now() + Duration::from_millis(100)).unwrap_err();
+        assert!(
+            format!("{err}").contains("deadline expired"),
+            "partial must expire: {err}"
+        );
+    }
+
+    /// R27: `read_exact_deadline` reports silence, EOF (bare or
+    /// after a prefix) and success distinctly.
+    #[test]
+    fn read_exact_deadline_classifies_pipe_fates() {
+        let (mut read, mut write) = pipe_pair();
+        write.write_all(b"ready\n").unwrap();
+        let mut line = [0u8; 6];
+        read_exact_deadline(
+            &mut read,
+            &mut line,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("exact reads");
+        assert_eq!(&line, b"ready\n");
+        // Bare EOF: writer dropped, no bytes.
+        let (mut read, write) = pipe_pair();
+        drop(write);
+        let mut line = [0u8; 6];
+        let err = read_exact_deadline(
+            &mut read,
+            &mut line,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("closed its pipe"),
+            "bare EOF: {err}"
+        );
+        // Prefix then EOF.
+        let (mut read, mut write) = pipe_pair();
+        write.write_all(b"rea").unwrap();
+        drop(write);
+        let mut line = [0u8; 6];
+        let err = read_exact_deadline(
+            &mut read,
+            &mut line,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("closed its pipe"),
+            "prefix EOF: {err}"
+        );
+        // Silent: writer open, short deadline.
+        let (mut read, _write) = pipe_pair();
+        let mut line = [0u8; 6];
+        let err = read_exact_deadline(
+            &mut read,
+            &mut line,
+            Instant::now() + Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("deadline expired"),
+            "silent: {err}"
+        );
+    }
+
+    /// R27: `SpawnGuard` kills and fully reaps a live child when
+    /// construction fails (no strand, no zombie).
+    #[test]
+    fn spawn_guard_retires_live_child() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep spawns");
+        let pid = child.id();
+        drop(SpawnGuard(Some(child)));
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "spawn guard left {pid} alive or zombie"
+        );
+    }
+
+    /// R27: `ChildGuard` kills and fully reaps a live raw pid when
+    /// construction fails.
+    #[test]
+    fn child_guard_retires_live_pid() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep spawns");
+        let pid = child.id() as libc::pid_t;
+        // Custody passes to the guard alone.
+        std::mem::forget(child);
+        drop(ChildGuard::armed(pid));
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "child guard left {pid} alive or zombie"
         );
     }
 }
