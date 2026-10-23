@@ -19,6 +19,9 @@ pub mod error;
 pub mod file;
 pub mod identity;
 pub mod procfs;
+/// Explicit bounded descriptor-relative directory discovery (LX10).
+#[cfg(feature = "walk")]
+pub mod walk;
 
 // Unit fixtures which inspect retired numeric slots must coordinate every
 // competing descriptor allocation in this test process. This is not runtime

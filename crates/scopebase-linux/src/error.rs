@@ -12,6 +12,7 @@ pub enum Stage {
     ReadFile,
     ParseMaps,
     ParseMounts,
+    WalkDirectory,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -39,6 +40,13 @@ pub enum LimitKind {
     BufferCapacity,
     Entries,
     LineBytes,
+    Depth,
+    QueuedEntries,
+    PathBytes,
+    ReadBytes,
+    OutputBytes,
+    OpenFds,
+    StatCalls,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
