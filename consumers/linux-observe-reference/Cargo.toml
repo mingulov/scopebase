@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "linux-observe-reference"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+scopebase-linux = { version = "=0.1.0", path = "../../crates/scopebase-linux", features = ["process", "mapping"] }
+scopebase-testkit = { version = "=0.1.0", path = "../../crates/scopebase-testkit", features = ["linux-fixtures"] }
