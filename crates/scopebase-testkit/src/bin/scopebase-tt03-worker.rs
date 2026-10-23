@@ -8,30 +8,41 @@
 //! exec), real sibling thread spawn plus leader-only exit with service
 //! handover, and close. The parent owns all exits and reaps.
 //!
+//! Closed outage controls (`worker_exit`, `partial_file_write`) arrive on the
+//! A worker's boot Hello and terminate the worker at the named point with
+//! exit status 3 and no ACK: after the case-root grant echo, after FileA is
+//! created (before FileB exists), or after writing exactly the first mutation
+//! byte. A violated partial-write premise is a typed Error refusal, never a
+//! death.
+//!
 //! Grant: OWNER-2026-10-23 (user-owned donor slices to Apache-2.0).
 //!
 //! | Facet | Donor slice | Disposition |
 //! |---|---|---|---|
 //! | Exec epoch carry | P `src/process.rs:2205-2222` @ `2c2713e66292b0d2688508a25f79e813ae823d81` | ADAPT_ENV_CARRY: re-exec state (epoch/marker/slot) rides explicit env vars over an otherwise cleared environment, mirroring the donor re-exec helper's env-carried errno/target/start/token |
 //!
-//! Sibling spawn/handover, exec-attempt evidence and resume Hello are NEW
-//! narrow fixture composition over accepted TT02, as the TT03 contract
-//! authorizes; the wire codec already froze their record shapes.
+//! Sibling spawn/handover, exec-attempt evidence, resume Hello and outage
+//! triggers are NEW narrow fixture composition over accepted TT02, as the
+//! TT03 contract authorizes; the wire codec already froze their record shapes.
 #[cfg(not(target_os = "linux"))]
 compile_error!("scopebase-tt03-worker is Linux-only");
 
 use scopebase_testkit::fixture::linux::TRICKY_COMM;
 use scopebase_testkit::fixture::linux::wire::{
-    canonical_json, parse_canonical, sha256_of, validate_hello_request, Action, Actor,
-    AdvanceReply, AdvanceRequest, Charges, CloseBody, CloseReason, Envelope, FdDirection,
-    FdRole, FdTransferBody, FragmentPrefix, InputChunkAck, MessageKind, ProducerCharges, RawRecord,
-    RawRequest, DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
+    canonical_json, parse_canonical, parse_hello_control, sha256_of, validate_hello_request,
+    Action, Actor, AdvanceReply, AdvanceRequest, Charges, CloseBody, CloseReason, Envelope,
+    FdDirection, FdRole, FdTransferBody, FragmentPrefix, HelloControl, InputChunkAck, MessageKind,
+    ProducerCharges, RawRecord, RawRequest, DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
 };
+use scopebase_testkit::fixture::linux::{control_pairing_applies, Scenario};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 const EXIT_USAGE: i32 = 2;
+/// Control-triggered worker death: distinct from close (0), transport loss
+/// (1) and usage (2), so the parent's retained wait status names the outage.
+const EXIT_CONTROL_DEATH: i32 = 3;
 /// Post-exec resume state, set only by this worker immediately before a real
 /// execve. Value: `<epoch>:<marker>:<slot>`, e.g. `2:B:a`.
 const RESUME_ENV: &str = "SCOPEBASE_TT03_RESUME";
@@ -80,6 +91,15 @@ enum PostReply {
     Handover,
 }
 
+/// Armed outage trigger from the boot Hello control. Parent-side controls
+/// are refused here; only worker death points arm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArmedOutage {
+    WorkerExitAfterRootGrant,
+    WorkerExitAfterFileRegister,
+    PartialFileWrite,
+}
+
 struct Worker {
     // SAFETY: fd 0 is the inherited protocol socket for the process lifetime.
     sock: rustix::fd::BorrowedFd<'static>,
@@ -102,6 +122,7 @@ struct Worker {
     sibling_handoff: Option<std::sync::mpsc::Sender<Worker>>,
     leader_exited: bool,
     resume_pending: bool,
+    armed: Option<ArmedOutage>,
 }
 
 fn assert_worker_send() {
@@ -154,6 +175,25 @@ fn parse_resume_env(value: &str, slot: Actor) -> Result<(u32, &'static str), Str
         return Err("resume slot differs from argv slot".to_string());
     }
     Ok((epoch, marker))
+}
+
+fn check_control(
+    slot: Actor,
+    scenario: Scenario,
+    control: &HelloControl,
+) -> Result<ArmedOutage, String> {
+    if slot != Actor::A {
+        return Err("outage controls are A-only".to_string());
+    }
+    if !control_pairing_applies(&control.kind, &control.step_id, &control.point, scenario) {
+        return Err("control pairing is not applicable to this scenario".to_string());
+    }
+    match (control.kind.as_str(), control.point.as_str()) {
+        ("worker_exit", "after_root_grant") => Ok(ArmedOutage::WorkerExitAfterRootGrant),
+        ("worker_exit", "after_file_register") => Ok(ArmedOutage::WorkerExitAfterFileRegister),
+        ("partial_file_write", "before_ack") => Ok(ArmedOutage::PartialFileWrite),
+        _ => Err("control kind is parent-side and not servable by the worker".to_string()),
+    }
 }
 
 fn term_disposition_default() -> bool {
@@ -449,6 +489,20 @@ impl Worker {
         }
         if mode == "resume" && value["image_epoch"] != self.epoch {
             return Err("resume epoch differs from post-exec epoch".to_string());
+        }
+        let scenario = Scenario::parse(value["scenario"].as_str().unwrap_or(""))
+            .ok_or_else(|| "hello scenario is not a closed scenario".to_string())?;
+        let control =
+            parse_hello_control(&value["control"]).map_err(|e| e.detail().to_string())?;
+        match (mode, control) {
+            ("boot", None) => self.armed = None,
+            ("boot", Some(armed)) => {
+                self.armed = Some(check_control(self.slot, scenario, &armed)?);
+            }
+            // Resume carries no control; an armed worker never survives to
+            // exec, so boot-armed state simply persists across the barrier.
+            ("resume", _) => {}
+            _ => return Err("hello mode must be boot or resume".to_string()),
         }
         if !term_disposition_default() {
             return Err("SIGTERM disposition is not default/unblocked".to_string());
@@ -858,6 +912,7 @@ impl Worker {
             sibling_handoff: None,
             leader_exited: true,
             resume_pending: false,
+            armed: None,
         };
         std::mem::swap(self, &mut tombstone);
         tombstone.leader_exited = true;
@@ -900,6 +955,12 @@ impl Worker {
             }
             if index == 0 {
                 self.file_a = Some(fd);
+                // worker_exit/after_file_register: FileA is registered
+                // first; the worker dies here, before FileB exists, with
+                // no ACK.
+                if self.armed == Some(ArmedOutage::WorkerExitAfterFileRegister) {
+                    std::process::exit(EXIT_CONTROL_DEATH);
+                }
             } else {
                 self.file_b = Some(fd);
             }
@@ -925,7 +986,44 @@ impl Worker {
         Ok(())
     }
 
+    /// One-byte partial write: the contract premise (file and mutation
+    /// share length >= 2; bytes 0 and 1 each differ) is verified natively,
+    /// then exactly the first mutation byte lands at offset 0 and the worker
+    /// exits with no ACK. A violated premise is a typed refusal, never a
+    /// death, and the worker stays alive to refuse again.
+    fn partial_file_write(&mut self) -> Result<(), String> {
+        let mutation = self.blobs[2].data.clone();
+        if !self.blobs[2].complete() {
+            return Err("partial write needs the complete mutation blob".to_string());
+        }
+        let file_a = self.file_a.as_ref().ok_or("partial write needs file A")?;
+        let size = rustix::fs::fstat(file_a).map_err(|e| e.to_string())?.st_size as usize;
+        if mutation.len() != size || size < 2 {
+            return Err(
+                "partial-write premise unsatisfied: file and mutation must share length >= 2"
+                    .to_string(),
+            );
+        }
+        let dup: rustix::fd::OwnedFd = file_a.try_clone().map_err(|e| e.to_string())?;
+        let file: std::fs::File = dup.into();
+        use std::os::unix::fs::FileExt;
+        let mut current = [0u8; 2];
+        file.read_exact_at(&mut current, 0).map_err(|e| e.to_string())?;
+        if current[0] == mutation[0] || current[1] == mutation[1] {
+            return Err(
+                "partial-write premise unsatisfied: bytes 0 and 1 must each differ".to_string(),
+            );
+        }
+        self.charges.native_attempts += 1;
+        file.write_all_at(&mutation[..1], 0).map_err(|e| e.to_string())?;
+        self.charges.file_work_bytes += 1;
+        std::process::exit(EXIT_CONTROL_DEATH);
+    }
+
     fn mutate_file_a(&mut self) -> Result<(), String> {
+        if self.armed == Some(ArmedOutage::PartialFileWrite) {
+            return self.partial_file_write();
+        }
         let mutation = self.blobs[2].data.clone();
         if !self.blobs[2].complete() {
             return Err("mutate needs the complete mutation blob".to_string());
@@ -1044,7 +1142,11 @@ impl Worker {
                     encoded.len() as u32,
                     0,
                 );
-                self.send(envelope, &encoded, None).map_err(|e| e.to_string())
+                self.send(envelope, &encoded, None).map_err(|e| e.to_string())?;
+                if self.armed == Some(ArmedOutage::WorkerExitAfterRootGrant) {
+                    std::process::exit(EXIT_CONTROL_DEATH);
+                }
+                Ok(())
             }
             (FdDirection::Pull, FdRole::FileA) | (FdDirection::Pull, FdRole::FileB) => {
                 if !fds.is_empty() {
@@ -1171,6 +1273,7 @@ fn main() {
         sibling_handoff: None,
         leader_exited: false,
         resume_pending,
+        armed: None,
     };
     serve_forever(&mut worker);
 }

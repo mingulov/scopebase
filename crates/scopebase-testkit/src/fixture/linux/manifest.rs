@@ -169,8 +169,9 @@ const DESCRIPTOR_INVENTORY_STEPS: &[ScenarioStep] = &[
     step("s06-close", ActionConst::Close, ActorConst::Parent),
 ];
 
-/// Consumed by the TT02 prepare wiring follow-up.
-#[allow(dead_code)]
+/// Closed outage-injection triple, consumed by the TT02 prepare wiring and
+/// the developer driver. Pairing validity is checked by
+/// [`control_pairing_applies`] before any native effect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Control {
     pub kind: String,
@@ -243,6 +244,23 @@ fn control_applies(kind: &str, step: &ScenarioStep, point: &str, scenario: Scena
             at("s01-ready", Action::Ready, "before_ack") && step.actor == Actor::A
         }
         _ => false,
+    }
+}
+
+/// Public pairing check for driver/worker arming: the named step must be in
+/// the scenario script and the closed (kind, step, point) pairing must apply.
+/// This is the same predicate manifest admission uses; driver and worker
+/// re-check it before any native effect so a directly constructed [`Control`]
+/// cannot arm an inapplicable outage.
+pub fn control_pairing_applies(
+    kind: &str,
+    step_id: &str,
+    point: &str,
+    scenario: Scenario,
+) -> bool {
+    match scenario.steps().iter().find(|s| s.id == step_id) {
+        Some(step) => control_applies(kind, step, point, scenario),
+        None => false,
     }
 }
 
@@ -610,10 +628,79 @@ mod tests {
         yes("file-replacement", "partial_file_write", "s08-mutate", "before_ack");
         yes("descriptor-inventory", "inherit_canary", "s04-inventory", "before_inventory_exec");
         yes("file-replacement", "worker_exit", "s02-create-files", "after_file_register");
+        yes("leader-lifecycle", "worker_exit", "s01-ready", "after_root_grant");
+        yes("exec-aba", "worker_exit", "s01-ready", "after_root_grant");
+        yes(
+            "leader-lifecycle",
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_case_root_register",
+        );
+        yes(
+            "leader-lifecycle",
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_child_register",
+        );
+        yes(
+            "leader-lifecycle",
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_pidfd_register",
+        );
         no("leader-lifecycle", "partial_file_write", "s01-ready", "before_ack");
         no("leader-lifecycle", "inherit_canary", "s01-ready", "before_ack");
         no("leader-lifecycle", "cancel_after_ack", "s03-exit", "immediately_after_ack");
         no("leader-lifecycle", "bogus_kind", "s01-ready", "before_ack");
         no("leader-lifecycle", "wrong_run", "s02-live", "before_ack");
+        no("leader-lifecycle", "worker_exit", "s02-live", "after_root_grant");
+        no("leader-lifecycle", "worker_exit", "s01-ready", "after_file_register");
+        no(
+            "file-replacement",
+            "parent_failure_after_register",
+            "s02-create-files",
+            "after_child_register",
+        );
+        no("exec-failure", "partial_file_write", "s03-missing", "before_ack");
+    }
+
+    #[test]
+    fn public_pairing_check_matches_admission() {
+        assert!(control_pairing_applies(
+            "worker_exit",
+            "s01-ready",
+            "after_root_grant",
+            Scenario::LeaderLifecycle
+        ));
+        assert!(control_pairing_applies(
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_pidfd_register",
+            Scenario::ExecAba
+        ));
+        assert!(control_pairing_applies(
+            "partial_file_write",
+            "s08-mutate",
+            "before_ack",
+            Scenario::FileReplacement
+        ));
+        assert!(!control_pairing_applies(
+            "partial_file_write",
+            "s08-mutate",
+            "before_ack",
+            Scenario::LeaderLifecycle
+        ));
+        assert!(!control_pairing_applies(
+            "worker_exit",
+            "s99-nope",
+            "after_root_grant",
+            Scenario::LeaderLifecycle
+        ));
+        assert!(!control_pairing_applies(
+            "bogus_kind",
+            "s01-ready",
+            "before_ack",
+            Scenario::LeaderLifecycle
+        ));
     }
 }

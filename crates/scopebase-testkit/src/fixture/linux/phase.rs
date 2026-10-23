@@ -46,6 +46,8 @@ impl LinuxProcessFixture {
                 DriverErrorKind::Refused => FixtureErrorCategory::Denied,
                 DriverErrorKind::Cancelled => FixtureErrorCategory::Cancelled,
                 DriverErrorKind::Deferred => FixtureErrorCategory::Other,
+                DriverErrorKind::WorkerDeath => FixtureErrorCategory::InvalidProtocol,
+                DriverErrorKind::SetupFailure => FixtureErrorCategory::Other,
             };
             LinuxPhaseError {
                 category,

@@ -175,6 +175,8 @@ fn driver_to_fixture(
         DriverErrorKind::Refused => FixtureErrorCategory::Denied,
         DriverErrorKind::Cancelled => FixtureErrorCategory::Cancelled,
         DriverErrorKind::Deferred => FixtureErrorCategory::Other,
+        DriverErrorKind::WorkerDeath => FixtureErrorCategory::InvalidProtocol,
+        DriverErrorKind::SetupFailure => FixtureErrorCategory::Other,
     };
     typed_error(
         limits,
@@ -843,6 +845,19 @@ impl LinuxFixtureSession {
                 .map(|d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
                 .unwrap_or(u64::MAX)
         };
+        // Manifest outage controls reach the driver; other admitted kinds
+        // keep their existing status-quo handling on their own routes.
+        let control = match &admitted.control {
+            Some(armed)
+                if matches!(
+                    armed.kind.as_str(),
+                    "worker_exit" | "partial_file_write" | "parent_failure_after_register"
+                ) =>
+            {
+                Some(armed.clone())
+            }
+            _ => None,
+        };
         let config = LaunchConfig {
             worker: assets.image_a_path.clone(),
             image_a: assets.image_a_path.clone(),
@@ -854,6 +869,7 @@ impl LinuxFixtureSession {
             scenario,
             deadline_ns,
             cancel: Arc::clone(&self.cancellation),
+            control,
         };
         let pair = launch_pair(&config)
             .map_err(|e| driver_to_fixture(&limits, &key, FixtureStage::Prepare, &e))?;
