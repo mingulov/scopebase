@@ -46,3 +46,5 @@ extern crate self as scopebase_testkit;
 
 #[cfg(feature = "bpf-host")]
 pub mod bpf;
+#[cfg(feature = "object")]
+pub mod object;

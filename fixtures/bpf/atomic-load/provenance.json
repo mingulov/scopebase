@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_issue_provenance",
+  "area": "atomic-load",
+  "status": "PROVENANCE_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "frozen_tree": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree",
+    "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r000.git"
+  },
+  "selected_sources": [
+    {
+      "path": "llvm-bpf-atomic-load-report.md",
+      "sha256": "3d3541d3d4a11ae5a0475e13992f5fd62a92f91dd6d0372e322fd58612fc1dc3",
+      "lines": 140,
+      "role": "Unsubmitted upstream draft: minimal IR/C reproducers, 9-row compiler matrix, BPFHasLoadAcqStoreRel hypothesis."
+    },
+    {
+      "path": "llvm-bpf-toolchain-experiment.md",
+      "sha256": "486a12c8894a305b75c576fe8435eef94c30bb2071bcf8d18616ef4a946f0e94",
+      "lines": 216,
+      "role": "Confirms the load failure is separate from the RMW fix: PR 210371 does not fix generic/v3 loads."
+    }
+  ],
+  "toolchain_refs": ["ubuntu-clang-18.1.8", "ubuntu-llc-21.1.8", "llvm-23.1.2-pristine-llc", "rust-llvm-22.1.4", "bpf-linker-0.10.4"],
+  "patch_refs": [],
+  "patch_note": "Separate issue with no patch: PR 210371 is the RMW fix, not a load fix. Any future load repair gets its own register record.",
+  "issue_ids": ["H31"],
+  "backlog_ids": ["C01", "C02"],
+  "defect": "A minimal aligned 64-bit monotonic atomic load aborts BPF instruction selection (Cannot select AtomicLoad) on generic/v3 across LLVM 18/21/22/23; v4 lowers it to an ordinary u64 load. The relaxed-load pattern sits inside the BPFHasLoadAcqStoreRel predicate, so disabling acq/rel also removes the plain load.",
+  "tier": "historical-donor-evidence",
+  "tier_note": "Compiler-only reproductions; failing code never reaches the verifier. No kernel runtime claim.",
+  "cells": [
+    {
+      "id": "compile-generic-refusal",
+      "kernel": "n/a (compile-only)",
+      "basis": "observed-compile",
+      "expected": "Instruction-selection failure, distinct from verifier rejection.",
+      "status": "HISTORICAL"
+    },
+    {
+      "id": "compile-v3-refusal",
+      "kernel": "n/a (compile-only)",
+      "basis": "observed-compile",
+      "expected": "Instruction-selection failure, distinct from verifier rejection.",
+      "status": "HISTORICAL"
+    },
+    {
+      "id": "compile-v4-ordinary-load",
+      "kernel": "n/a (compile-only)",
+      "basis": "observed-compile",
+      "expected": "Ordinary u64 load plus exit; success must not be labeled an acquire-opcode requirement.",
+      "status": "HISTORICAL"
+    }
+  ],
+  "historical_license": {
+    "observation": "No SPDX header observed in these workspace files; workspace root carries no LICENSE file. Sibling product directory p11scope/ declares GPL-2.0-only/GPL-2.0-or-later texts, not asserted to govern these workspace files.",
+    "destination_license": "Apache-2.0",
+    "authorization": "OWNER-2026-10-23"
+  }
+}

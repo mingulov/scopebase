@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_issue_provenance",
+  "area": "atomic-rmw",
+  "status": "PROVENANCE_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "frozen_tree": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree",
+    "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r000.git"
+  },
+  "selected_sources": [
+    {
+      "path": "llvm-bpf-toolchain-experiment.md",
+      "sha256": "486a12c8894a305b75c576fe8435eef94c30bb2071bcf8d18616ef4a946f0e94",
+      "lines": 216,
+      "role": "Parked-decision record, compiler/patch identity, 7-case wrong-old-value matrix."
+    },
+    {
+      "path": "evidence/llvm-toolchain-review-20260922/kernel-oracle/cases.json",
+      "sha256": "f0dc285aae17930fbed7310ca34a988175c5ef5d1cefc9230755769483c9a59d",
+      "lines": 142,
+      "role": "28 oracle cases: op/width/live-dead with expected return values and IR hashes."
+    },
+    {
+      "path": "evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py",
+      "sha256": "f77b6293e69db0b04bfdc0e714dd90a3129ca33fadb7c8f123d056ca64d1c68d",
+      "lines": 139,
+      "role": "Independent old-value/update oracle and IR generator; compiles without running BPF."
+    },
+    {
+      "path": "evidence/llvm-toolchain-review-20260922/kernel-oracle/run.py",
+      "sha256": "34a42c5f51867ec23ecd643c4a7764c13c49dc8cba2d3fc6d3389b9db671edfd",
+      "lines": 91,
+      "role": "Bounded privileged executor of previously hashed, unattached compiler probes."
+    },
+    {
+      "path": "evidence/llvm-toolchain-review-20260922/kernel-oracle/run-raw-bpf.c",
+      "sha256": "d69a62cd5f29e24cedf012d26d1db9f30746e9a0e50194555dab17d3c1bc8727",
+      "lines": 76,
+      "role": "Owned unattached socket-filter loader with one BPF_PROG_TEST_RUN, bounded bytecode."
+    }
+  ],
+  "toolchain_refs": ["ubuntu-llc-18.1.8", "ubuntu-llc-21.1.8", "llvm-23.1.2-pristine-llc", "llvm-23.1.2-pr210371-llc"],
+  "patch_refs": ["llvm-used-result-rmw"],
+  "issue_ids": ["H29"],
+  "backlog_ids": ["C01", "C03"],
+  "defect": "With LLVM 21+, BPF atomic add/sub/and/or/xor return a wrong old value when the program uses the result; the stored value is correct and the verifier accepts the program. Seven live-result cases fail (32-bit add/sub/and/or/xor, 64-bit add/sub). PR 210371 corrects all of them.",
+  "tier": "historical-donor-evidence",
+  "tier_note": "Preserved 2026-09-22 experiment records, not a ScopeBase result. Stack-memory single-run checks only; no concurrent-update, ordering or performance claim.",
+  "cells": [
+    {
+      "id": "kernel-7.0-x86_64-runtime",
+      "kernel": "7.0.0-31-generic",
+      "basis": "observed-runtime",
+      "expected": "Per-case old and new values checked; 7 wrong-old failures pre-fix, all pass post-fix.",
+      "status": "HISTORICAL"
+    },
+    {
+      "id": "kernel-6.12-x86_64-runtime",
+      "kernel": "6.12 (exact build unbound)",
+      "basis": "unbound",
+      "expected": "RMW lowering is backend behavior; kernel rerun unbound until TC07 binds the cell.",
+      "status": "NOT_RUN"
+    }
+  ],
+  "historical_license": {
+    "observation": "No SPDX header observed in these workspace files; workspace root carries no LICENSE file. Sibling product directory p11scope/ declares GPL-2.0-only/GPL-2.0-or-later texts, not asserted to govern these workspace files.",
+    "destination_license": "Apache-2.0",
+    "authorization": "OWNER-2026-10-23"
+  }
+}

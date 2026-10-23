@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_issue_provenance",
+  "area": "metadata",
+  "status": "PROVENANCE_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "frozen_tree": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree",
+    "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r000.git"
+  },
+  "selected_sources": [
+    {
+      "path": "llvm-bpf-toolchain-experiment.md",
+      "sha256": "486a12c8894a305b75c576fe8435eef94c30bb2071bcf8d18616ef4a946f0e94",
+      "lines": 216,
+      "role": "Linker debug-metadata defect isolation, private repair 4727b15, full-pipeline object hashes, exit-zero-is-insufficient lesson."
+    }
+  ],
+  "toolchain_refs": ["rustc-nightly-2026-05-20", "llvm-23.1.2-pr210371-llc", "bpf-linker-0.11.1-unrepaired", "bpf-linker-0.11.1-repaired"],
+  "patch_refs": ["bpf-linker-debug-records"],
+  "issue_ids": ["H32"],
+  "backlog_ids": ["C04"],
+  "defect": "bpf-linker debug sanitation replaces the subprogram for static BTF linkage but does not traverse LLVM 23 debug records, leaving inconsistent old/new scopes that abort later codegen (Expected inlined-at fields to agree). A parser-based replay can exit zero while silently discarding all debug info, so qualification must verify the live module after sanitization and inspect emitted BTF, not just the exit status. Final objects: Detailed 1b09dfcde2843808146e4ae25d489ce728b8e295236a3b9f3d8b9e00d8e51999, Inventory 341b9cc026802b35a2674595b4ec71a2c05c655d457ee8d68223d4b22b60ff75.",
+  "tier": "historical-donor-evidence",
+  "tier_note": "Build/link-level evidence only. Full application host-binary, kernel/capture, supported-kernel and performance gates remain open.",
+  "cells": [
+    {
+      "id": "object-detailed-debug-retained",
+      "kernel": "n/a (object-only)",
+      "basis": "observed-build",
+      "expected": "Nonempty DWARF/BTF/BTF.ext, no linker diagnostics, exact hash above.",
+      "status": "HISTORICAL"
+    },
+    {
+      "id": "object-inventory-debug-retained",
+      "kernel": "n/a (object-only)",
+      "basis": "observed-build",
+      "expected": "Nonempty DWARF/BTF/BTF.ext, no linker diagnostics, exact hash above.",
+      "status": "HISTORICAL"
+    },
+    {
+      "id": "object-unrepaired-linker-red",
+      "kernel": "n/a (object-only)",
+      "basis": "observed-build",
+      "expected": "Unrepaired linker aborts Detailed codegen on the debug assertion.",
+      "status": "HISTORICAL"
+    }
+  ],
+  "historical_license": {
+    "observation": "No SPDX header observed in this workspace file; workspace root carries no LICENSE file. Sibling product directory p11scope/ declares GPL-2.0-only/GPL-2.0-or-later texts, not asserted to govern this workspace file.",
+    "destination_license": "Apache-2.0",
+    "authorization": "OWNER-2026-10-23"
+  }
+}
