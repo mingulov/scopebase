@@ -25,6 +25,17 @@ Run its suite explicitly: `cargo test --offline --locked --features btf
 --test btf`. The feature keeps no native state and confers no loader,
 kernel or runtime authority.
 
+The optional `adapters` feature adds narrow adapters over existing BPF
+loaders (`scopebase_bpf::adapters`): Aya, libbpf and bpfman shapes over
+the attach seams with `Arc<HeldFile>` authority, plus native configure
+and output-span contract vectors (`fixtures/bpf/native/`). The Aya shape
+is fully proven over scripted doubles; the real binding over upstream
+aya =0.14.0 compiles behind the further `aya` feature. libbpf is
+shape-only (`libbpf-rs` was unavailable offline) and bpfman is
+shape-only by design. Run each suite explicitly, e.g. `cargo test
+--offline --locked --features adapters,json --test aya_adapter`. Live
+attach cells need a privileged kernel and stay NOT_RUN here.
+
 `CpuTopology::parse_possible` accepts bounded ASCII kernel CPU lists, preserving
 strictly ascending IDs and exact original bytes. It refuses overlap, malformed
 input, out-of-range IDs and expansion limits. `PerCpuGeometry::checked` rounds

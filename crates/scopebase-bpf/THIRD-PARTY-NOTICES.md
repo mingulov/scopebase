@@ -10,6 +10,60 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
       },
       {
         "path": "LICENSE-MIT",
+        "sha256": "d4c1ce21c702ac8f22b5d23dedc46c21ceb3d42918ed1f631685a722249c71ba"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "assert_matches",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.5.0"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "937e2efb1ad10b57b31b14d860c2356d012dd33b6ead2e0fc6be2f24d4066326"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "71f5b27660dcd9b566402a9fb724b04453d6da50a46c5e165c32147b2405a5cb"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "aya",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.14.0"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "937e2efb1ad10b57b31b14d860c2356d012dd33b6ead2e0fc6be2f24d4066326"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "71f5b27660dcd9b566402a9fb724b04453d6da50a46c5e165c32147b2405a5cb"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "aya-obj",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.3.0"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
         "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
       }
     ],
@@ -87,6 +141,20 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "bundled": false,
     "files": [
       {
+        "path": "LICENSE",
+        "sha256": "45f522cacecb1023856e46df79ca625dfc550c94910078bd8aec6e02880b3d42"
+      }
+    ],
+    "license_expression": "MIT",
+    "name": "bytes",
+    "selected_option": "MIT",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.12.1"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
         "path": "LICENSE-APACHE",
         "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
       },
@@ -118,6 +186,24 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "selected_option": "Apache-2.0",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "version": "0.3.1"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "61d383b05b87d78f94d2937e2580cce47226d17823c0430fbcad09596537efcf"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "crc32fast",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.5.2"
   },
   {
     "bundled": false,
@@ -164,6 +250,24 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
       },
       {
         "path": "LICENSE-MIT",
+        "sha256": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "equivalent",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.0.2"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
         "sha256": "8764a597675778ddfd4e25f81b08a05dbcf089ac05662df7613fe67f150e3aa2"
       }
     ],
@@ -195,6 +299,38 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "bundled": false,
     "files": [
       {
+        "path": "LICENSE",
+        "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744"
+      }
+    ],
+    "license_expression": "Zlib",
+    "name": "foldhash",
+    "selected_option": "Zlib",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.2.0"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "hashbrown",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.17.1"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
         "path": "LICENSE-APACHE",
         "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
       },
@@ -208,6 +344,24 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "selected_option": "Apache-2.0",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "version": "0.4.15"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "ecc269ef87fd38a1d98e30bfac9ba964a9dbd9315c3770fed98d4d7cb5882055"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "indexmap",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "2.14.2"
   },
   {
     "bundled": false,
@@ -275,6 +429,24 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "bundled": false,
     "files": [
       {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "log",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.4.34"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
         "path": "COPYING",
         "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
       },
@@ -311,6 +483,42 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "bundled": false,
     "files": [
       {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "0b74dfa0bcee5c420c6b7f67b4b2658f9ab8388c97b8e733975f2cecbdd668a6"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "object",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "0.39.1"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "once_cell",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.21.4"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
         "path": "COPYRIGHT",
         "sha256": "377c2e7c53250cc5905c0b0532d35973392af16ffb9596a41d99d202cf3617c9"
       },
@@ -332,6 +540,24 @@ ScopeBase package dependency notices. Dependency references are not bundled unle
     "selected_option": "Apache-2.0",
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "version": "1.1.5"
+  },
+  {
+    "bundled": false,
+    "files": [
+      {
+        "path": "LICENSE-APACHE",
+        "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+      },
+      {
+        "path": "LICENSE-MIT",
+        "sha256": "fb77f0a9c53e473abe5103c8632ef9f0f2874d4fb3f17cb2d8c661aab9cee9d7"
+      }
+    ],
+    "license_expression": "MIT OR Apache-2.0",
+    "name": "scopeguard",
+    "selected_option": "Apache-2.0",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "version": "1.2.0"
   },
   {
     "bundled": false,

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "kind": "bp10_native_configure_vector",
+  "cases": [
+    {
+      "name": "fresh-configure-applied",
+      "loaded": false,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 1 },
+      "attempt": { "autoload": false, "target_pid": 4242, "generation": 2 },
+      "expect": "applied",
+      "rule": null,
+      "final": { "autoload": false, "target_pid": 4242, "generation": 2 }
+    },
+    {
+      "name": "autoload-flip-after-load-refused",
+      "loaded": true,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 1 },
+      "attempt": { "autoload": false, "target_pid": 0, "generation": 2 },
+      "expect": "refused",
+      "rule": "native.configure.autoload-immutable",
+      "final": { "autoload": true, "target_pid": 0, "generation": 1 }
+    },
+    {
+      "name": "target-change-after-load-refused",
+      "loaded": true,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 1 },
+      "attempt": { "autoload": true, "target_pid": 1234, "generation": 2 },
+      "expect": "refused",
+      "rule": "native.configure.target-immutable",
+      "final": { "autoload": true, "target_pid": 0, "generation": 1 }
+    },
+    {
+      "name": "generation-skip-refused",
+      "loaded": false,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 1 },
+      "attempt": { "autoload": true, "target_pid": 0, "generation": 3 },
+      "expect": "refused",
+      "rule": "native.configure.generation-monotonic",
+      "final": { "autoload": true, "target_pid": 0, "generation": 1 }
+    },
+    {
+      "name": "generation-replay-refused",
+      "loaded": true,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 2 },
+      "attempt": { "autoload": true, "target_pid": 0, "generation": 2 },
+      "expect": "refused",
+      "rule": "native.configure.generation-monotonic",
+      "final": { "autoload": true, "target_pid": 0, "generation": 2 }
+    },
+    {
+      "name": "generation-advance-before-load-applied",
+      "loaded": false,
+      "poisoned": false,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 1 },
+      "attempt": { "autoload": true, "target_pid": 0, "generation": 2 },
+      "expect": "applied",
+      "rule": null,
+      "final": { "autoload": true, "target_pid": 0, "generation": 2 }
+    },
+    {
+      "name": "poisoned-refuses-configure",
+      "loaded": true,
+      "poisoned": true,
+      "initial": { "autoload": true, "target_pid": 0, "generation": 2 },
+      "attempt": { "autoload": true, "target_pid": 0, "generation": 3 },
+      "expect": "refused",
+      "rule": "native.configure.poisoned",
+      "final": { "autoload": true, "target_pid": 0, "generation": 2 }
+    }
+  ]
+}
