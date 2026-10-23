@@ -368,11 +368,41 @@ pub(crate) enum TargetVerdict {
     Inconclusive(InconclusiveKind),
 }
 
+/// S11: members of the process error context whose failure breaks
+/// OUR view or authentication (observer ambient, observer directory
+/// lineage, creator liveness) rather than the target. No target work
+/// is meaningfully observed past such a failure, so it is an
+/// observer-side `MappingFailure`, never a target verdict — even
+/// when its `Reason` is verdict-shaped.
+#[cfg(feature = "process")]
+fn is_observer_member(member: crate::error::ProcMember) -> bool {
+    use crate::error::ProcMember::*;
+    matches!(
+        member,
+        Root | SelfLink | ObserverDirectory | ObserverStatus | ObserverPidNamespace | CreatorPidfd
+    )
+}
+
 /// Route a target sub-operation error: disappearance, denial, birth/view
 /// change and unclear liveness become verdicts; control stops, caller
 /// budgets, config faults and environmental or unreadable failures pass
 /// through as errors.
+///
+/// S11: the route consults the error's operation/member origin as well
+/// as its `Reason`. An observer-side member (our view broke; the
+/// target was never observed) passes through as an observer-side
+/// failure however verdict-shaped its `Reason` is. Member-less errors
+/// keep the historical `Reason`-only routing.
 fn route_target_error(error: &LinuxError) -> Result<TargetVerdict, ()> {
+    #[cfg(feature = "process")]
+    if let Some(member) = error
+        .process_context()
+        .and_then(crate::error::ProcessErrorContext::member)
+    {
+        if is_observer_member(member) {
+            return Err(());
+        }
+    }
     match error.reason() {
         Reason::Denied => Ok(TargetVerdict::Inconclusive(InconclusiveKind::TargetDenied)),
         Reason::Disappeared => Ok(TargetVerdict::Inconclusive(
@@ -523,12 +553,9 @@ fn run_observation(
         ctx,
         MAP_FILES_WORST_FDS,
         || {
-            request.process.read_map_files_identity(
-                range.start(),
-                range.end(),
-                proc,
-                control,
-            )
+            request
+                .process
+                .read_map_files_identity(range.start(), range.end(), proc, control)
         },
         crate::process::MapFilesObservation::charges,
     ) {
@@ -1070,6 +1097,91 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "process")]
+    fn error_with_member(reason: Reason, member: crate::error::ProcMember) -> LinuxError {
+        use crate::error::{ProcOperation, ProcessErrorContext};
+        let mut error = error_with(reason);
+        error.process = Some(ProcessErrorContext::new(
+            ProcOperation::ReadMaps,
+            Some(member),
+        ));
+        error
+    }
+
+    /// S11 observer-guard denial control: a verdict-shaped `Reason`
+    /// on an observer-side member (our view broke — e.g. the
+    /// post-acquisition observer-directory open denied) passes
+    /// through as an observer-side failure, never a target verdict.
+    /// Target-side members keep `Reason` routing, and member-less
+    /// errors keep the historical behavior.
+    #[test]
+    #[cfg(feature = "process")]
+    fn observer_origin_errors_pass_through_as_failures() {
+        use crate::error::ProcMember::*;
+        let verdict_shaped = [
+            Reason::Denied,
+            Reason::Disappeared,
+            Reason::ChangedSource,
+            Reason::WrongContext,
+            Reason::Inconclusive,
+        ];
+        for member in [
+            Root,
+            SelfLink,
+            ObserverDirectory,
+            ObserverStatus,
+            ObserverPidNamespace,
+            CreatorPidfd,
+        ] {
+            for reason in verdict_shaped {
+                assert!(
+                    route_target_error(&error_with_member(reason, member)).is_err(),
+                    "{member:?}/{reason:?} must pass through as an observer-side failure"
+                );
+            }
+        }
+        // Target-side members: Reason routing unchanged.
+        for member in [
+            TargetDirectory,
+            TargetStatus,
+            TargetStat,
+            TargetPidNamespace,
+            TargetMountNamespace,
+            Maps,
+            Mountinfo,
+            MapFiles,
+            Pidfd,
+        ] {
+            assert!(
+                matches!(
+                    route_target_error(&error_with_member(Reason::Denied, member)).unwrap(),
+                    TargetVerdict::Inconclusive(InconclusiveKind::TargetDenied)
+                ),
+                "{member:?}/Denied must stay a target verdict"
+            );
+            assert!(
+                matches!(
+                    route_target_error(&error_with_member(Reason::WrongContext, member)).unwrap(),
+                    TargetVerdict::Mismatch(MismatchKind::ViewChanged)
+                ),
+                "{member:?}/WrongContext must stay a target verdict"
+            );
+        }
+        // Member-less context: historical Reason routing preserved.
+        let mut bare = error_with(Reason::Denied);
+        bare.process = Some(crate::error::ProcessErrorContext::new(
+            crate::error::ProcOperation::ReadMaps,
+            None,
+        ));
+        assert!(
+            matches!(
+                route_target_error(&bare).unwrap(),
+                TargetVerdict::Inconclusive(InconclusiveKind::TargetDenied)
+            ),
+            "member-less Denied must stay a target verdict"
+        );
+    }
+
     #[test]
     fn policy_coherence_matrix() {
         let base = MappingLimits {
@@ -1228,6 +1340,11 @@ mod tests {
     /// deliberately updated. Error paths return early and acquire fewer.
     #[test]
     fn worst_case_constants_match_success_acquisitions() {
+        // S46: the probe mapping serializes on FD_TABLE with the
+        // fixed-hole tests, so no floating placement can steal a
+        // hole window. The mutex takes no fd; charge counts below
+        // are unaffected.
+        let _table = crate::FD_TABLE.lock().unwrap();
         let control = OperationControl::unlimited();
         let process = self_observation(&control);
         let birth = process.verify_birth(&control).expect("birth on live self");

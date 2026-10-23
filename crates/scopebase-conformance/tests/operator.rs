@@ -5,7 +5,7 @@
 //! and CLI dispatch against the in-crate delivery closure. The installed
 //! outside-checkout route is covered by tools/qualification/test_installed.py.
 use scopebase_conformance::{
-    commands, cleanup, closure, delivery, describe, plan, receipt, OperatorErrorKind,
+    cleanup, closure, commands, delivery, describe, plan, receipt, OperatorErrorKind,
     EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_USAGE,
 };
 use scopebase_testkit::{CaseOracle, ConformanceAdapter, Digest256, Qualification};
@@ -27,6 +27,13 @@ fn scratch(name: &str) -> PathBuf {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
+    // S14: scratch parents are 0700 regardless of ambient umask,
+    // so run dirs under them pass the exclusivity gate.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     dir
 }
 
@@ -311,6 +318,315 @@ fn receipt_is_not_runtime_authority() {
     assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
 }
 
+// S41: mandatory v1 bindings gate the seal. A sparse or malformed
+// envelope RESEALED over its sparse shape (self-consistent seal)
+// still fails on the bindings — never passes shallow admission.
+#[test]
+fn receipt_rejects_sparse_and_malformed_bindings() {
+    let root = delivery_root();
+    let out = scratch("receipt-bindings");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let envelope = read_json(&out.join("run").join("receipt.json"));
+    // Reseal exactly like the producer: drop the seal, hash the
+    // canonical bytes, reattach. Anyone can do this — which is why
+    // the bindings must gate admission, not the seal.
+    let reseal = |mut sparse: serde_json::Value| {
+        sparse.as_object_mut().unwrap().remove("envelope_sha256");
+        let digest =
+            scopebase_testkit::Digest256::of_bytes(&serde_json::to_vec(&sparse).unwrap()).as_str();
+        sparse["envelope_sha256"] = digest.into();
+        sparse
+    };
+    // Control: a resealed UNCHANGED envelope still verifies — the
+    // helper is faithful to the producer's seal.
+    let control_path = out.join("resealed-control.json");
+    std::fs::write(
+        &control_path,
+        serde_json::to_vec(&reseal(envelope.clone())).unwrap(),
+    )
+    .unwrap();
+    let report = receipt::verify_receipt(&control_path).unwrap();
+    assert_eq!(report.qualification, Qualification::Qualified);
+    // Removed bindings fail, one at a time.
+    for binding in [
+        "catalog_sha256",
+        "run_contract_sha256",
+        "fixture_manifest_sha256",
+        "mapping_policy",
+        "subject",
+    ] {
+        let mut sparse = envelope.clone();
+        sparse.as_object_mut().unwrap().remove(binding);
+        let path = out.join(format!("sparse-{binding}.json"));
+        std::fs::write(&path, serde_json::to_vec(&reseal(sparse)).unwrap()).unwrap();
+        let err = receipt::verify_receipt(&path).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            OperatorErrorKind::ReceiptInvalid,
+            "removed {binding} must fail"
+        );
+    }
+    // Malformed digests fail: short, non-hex, and non-string.
+    for (tag, bad) in [
+        ("short", serde_json::json!("abc")),
+        ("nonhex", serde_json::json!("zz".repeat(32))),
+        ("number", serde_json::json!(123)),
+    ] {
+        let mut sparse = envelope.clone();
+        sparse["catalog_sha256"] = bad;
+        let path = out.join(format!("malformed-{tag}.json"));
+        std::fs::write(&path, serde_json::to_vec(&reseal(sparse)).unwrap()).unwrap();
+        let err = receipt::verify_receipt(&path).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            OperatorErrorKind::ReceiptInvalid,
+            "malformed digest ({tag}) must fail"
+        );
+    }
+}
+
+// S39: receipt envelopes admit bounded. An oversized envelope
+// refuses before JSON admission, and a writer-less FIFO refuses
+// promptly instead of blocking the verifier. The FIFO call runs on
+// a worker with a join timeout so a regression trips the test
+// instead of hanging the suite.
+#[test]
+fn receipt_envelope_admits_bounded_inputs() {
+    let out = scratch("receipt-bounds");
+    let huge = out.join("huge-receipt.json");
+    std::fs::write(&huge, vec![b'x'; (1 << 20) + 1]).unwrap();
+    let err = receipt::verify_receipt(&huge).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+    assert!(
+        err.detail().contains("exceeds"),
+        "oversized envelope must refuse on the bound, not on parse: {}",
+        err.detail()
+    );
+    let fifo = out.join("fifo-receipt.json");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(receipt::verify_receipt(&fifo));
+    });
+    let outcome = done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("receipt read blocked on a writer-less FIFO");
+    let err = outcome.expect_err("FIFO envelope refuses");
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+}
+
+// S39: catalogs admit bounded. The oversized control is a sparse
+// file (one byte past the 64MiB cap, ~no disk): the size pre-check
+// refuses without reading. Same tripwire discipline as envelopes.
+#[test]
+fn catalog_admits_bounded_inputs() {
+    use std::io::{Seek, SeekFrom, Write};
+    let work = scratch("catalog-bounds");
+    let sparse = work.join("sparse-catalog.json");
+    let mut file = std::fs::File::create(&sparse).unwrap();
+    file.seek(SeekFrom::Start((1 << 26) + 1)).unwrap();
+    file.write_all(b"x").unwrap();
+    drop(file);
+    assert_eq!(
+        std::fs::metadata(&sparse).unwrap().len(),
+        (1 << 26) + 2,
+        "sparse control exceeds the cap"
+    );
+    let argv = |tail: &[&str]| {
+        let mut v = vec!["scopebase-conformance".to_string()];
+        v.extend(tail.iter().map(|s| s.to_string()));
+        v
+    };
+    assert_eq!(
+        commands::run_argv(&argv(&[
+            "describe",
+            "--catalog",
+            sparse.to_string_lossy().as_ref()
+        ])),
+        EXIT_INCOMPLETE,
+        "oversized catalog refuses"
+    );
+    // The bound itself (not a downstream parse error) must refuse:
+    // a delivery run against the sparse catalog fails on the read
+    // detail before any effect.
+    let mut adapter = delivery::DeliveryAdapter::new().unwrap();
+    let mut oracle = delivery::DeliveryOracle::new().unwrap();
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: sparse.clone(),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: delivery_root(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: work.join("run-sparse"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut adapter,
+        oracle: &mut oracle,
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+    assert!(
+        err.detail().contains("exceeds"),
+        "oversized catalog must refuse on the bound: {}",
+        err.detail()
+    );
+    assert!(
+        !work.join("run-sparse").exists(),
+        "oversized catalog fails before effects"
+    );
+    let fifo = work.join("fifo-catalog.json");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let args = argv(&["describe", "--catalog", fifo.to_string_lossy().as_ref()]);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(commands::run_argv(&args));
+    });
+    assert_eq!(
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("catalog read blocked on a writer-less FIFO"),
+        EXIT_INCOMPLETE,
+        "FIFO catalog refuses"
+    );
+}
+
+// S39: staged run contracts admit bounded. A delivery run stages a
+// small contract; the test replaces it with an oversized file (then
+// a FIFO) and full verification refuses on the staged read.
+#[test]
+fn staged_contract_admits_bounded_inputs() {
+    let root = delivery_root();
+    let out = scratch("staged-bounds");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let catalog = std::fs::read(root.join("catalog.json")).unwrap();
+    let receipt_path = out.join("run").join("receipt.json");
+    let staged = out.join("run").join("staging").join("contract.json");
+    std::fs::write(&staged, vec![b'x'; (1 << 20) + 1]).unwrap();
+    let err = receipt::verify_receipt_with_catalog(&receipt_path, &catalog).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+    assert!(
+        err.detail().contains("exceeds"),
+        "oversized staged contract must refuse on the bound: {}",
+        err.detail()
+    );
+    std::fs::remove_file(&staged).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &staged,
+        rustix::fs::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(receipt::verify_receipt_with_catalog(
+            &receipt_path,
+            &catalog,
+        ));
+    });
+    let outcome = done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("staged read blocked on a writer-less FIFO");
+    let err = outcome.expect_err("FIFO staged contract refuses");
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+}
+
+// S39: template overrides admit bounded. An oversized override fails
+// before any run effect (no output dir appears); a FIFO override
+// refuses promptly instead of hanging the run.
+#[test]
+fn template_override_admits_bounded_inputs() {
+    let root = delivery_root();
+    let out = scratch("template-bounds");
+    let huge = out.join("huge-template.json");
+    std::fs::write(&huge, vec![b'x'; (1 << 20) + 1]).unwrap();
+    let mut adapter = delivery::DeliveryAdapter::new().unwrap();
+    let mut oracle = delivery::DeliveryOracle::new().unwrap();
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(huge),
+        output_dir: out.join("run-huge"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut adapter,
+        oracle: &mut oracle,
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+    assert!(
+        err.detail().contains("exceeds"),
+        "oversized template must refuse on the bound: {}",
+        err.detail()
+    );
+    assert!(
+        !out.join("run-huge").exists(),
+        "oversized template fails before effects"
+    );
+    let fifo = out.join("fifo-template.json");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &fifo,
+        rustix::fs::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // The adapter/oracle build inside the worker: the request
+        // borrows them, so everything of the run lives here.
+        let outcome = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: Some(fifo),
+            output_dir: out.join("run-fifo"),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        });
+        let _ = done_tx.send(outcome.map(|_| ()));
+    });
+    let outcome = done_rx
+        .recv_timeout(std::time::Duration::from_secs(15))
+        .expect("template read blocked on a writer-less FIFO");
+    let err = outcome.expect_err("FIFO template refuses");
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+}
+
 // R37: full verification reads the envelope exactly once. A FIFO
 // serves its bytes to the first reader only: the old second read
 // hung on reopen, so completing with the right report proves the
@@ -542,18 +858,164 @@ fn oracle_judges_exact_kind_pairs() {
     );
 }
 
+// S40: step lists validate before comparison. Missing, null, scalar,
+// empty, or malformed step fields fail on EITHER side — never pass
+// by mutual equality — and a pass proves positive coverage. The
+// kinds stay a valid pair throughout; only the steps vary.
+#[test]
+fn oracle_rejects_malformed_step_shapes() {
+    use scopebase_testkit::{
+        AssertionVerdict, CaseOutcome, CaseSpec, CatalogLimits, CheckStatus, ExpectedEvidence,
+        ExpectedEvidenceValues, InvocationKey, InvocationKeyValues, Label, Observation,
+        ObservationValues, RunId, RunLimits, SchemaBinding, SchemaBindingValues, TruthKind,
+    };
+    let catalog_bytes = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    let catalog =
+        scopebase_testkit::CaseCatalog::load(&catalog_bytes, CatalogLimits::default()).unwrap();
+    let spec = catalog
+        .case(
+            &scopebase_testkit::CaseId::parse("TT07.closure").unwrap(),
+            1,
+        )
+        .unwrap();
+    let oracle = delivery::DeliveryOracle::new().unwrap();
+    let limits = RunLimits::default();
+    let judge = |expected_steps: Option<serde_json::Value>,
+                 actual_steps: Option<serde_json::Value>| {
+        let key = InvocationKey::new(
+            InvocationKeyValues {
+                run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+                case_key: scopebase_testkit::CaseKey::new(
+                    scopebase_testkit::CaseKeyValues {
+                        case_id: scopebase_testkit::CaseId::parse("TT07.closure").unwrap(),
+                        case_version: 1,
+                        cell_id: "installed".to_string(),
+                    },
+                    &limits,
+                )
+                .unwrap(),
+                attempt: 1,
+                operation_id: 1,
+            },
+            &limits,
+        )
+        .unwrap();
+        let mut expected_json = serde_json::json!({
+            "schema_version": 1,
+            "kind": "tt07-closure-v1-expected",
+        });
+        if let Some(steps) = expected_steps {
+            expected_json["steps"] = steps;
+        }
+        let mut actual_json = serde_json::json!({
+            "schema_version": 1,
+            "kind": "tt07-closure-v1-observation",
+        });
+        if let Some(steps) = actual_steps {
+            actual_json["steps"] = steps;
+        }
+        let expected = ExpectedEvidence::new(
+            ExpectedEvidenceValues {
+                key: key.clone(),
+                oracle: oracle.identity(),
+                fixture_schema: SchemaBinding::new(
+                    SchemaBindingValues {
+                        id: Label::parse("s").unwrap(),
+                        revision: 1,
+                    },
+                    &limits,
+                )
+                .unwrap(),
+                truth_kind: TruthKind::FixedBeforeExecute,
+                expected_bytes: serde_json::to_vec(&expected_json).unwrap(),
+                ledger_bytes: b"{}".to_vec(),
+                coverage: vec![],
+                effects: scopebase_testkit::EffectBatch::empty(&limits),
+            },
+            &limits,
+        )
+        .unwrap();
+        let observation = Observation::new(
+            ObservationValues {
+                key,
+                schema_id: Label::parse("o").unwrap(),
+                schema_revision: 1,
+                completed_steps: vec![],
+                bytes: serde_json::to_vec(&actual_json).unwrap(),
+                effects: scopebase_testkit::EffectBatch::empty(&limits),
+            },
+            &limits,
+        )
+        .unwrap();
+        let verdict: AssertionVerdict =
+            oracle.evaluate(spec, &expected, &CaseOutcome::Observed(observation));
+        *verdict.checks()[0].status()
+    };
+    let positive = || serde_json::json!([{"step_id": "s1", "value": "abc"}]);
+    // Control: identical positive templates pass.
+    assert_eq!(judge(Some(positive()), Some(positive())), CheckStatus::Pass);
+    // Missing steps on either side (or both) fail — the old
+    // `None == None` equality passed the both-missing case.
+    assert_eq!(judge(None, Some(positive())), CheckStatus::Fail);
+    assert_eq!(judge(Some(positive()), None), CheckStatus::Fail);
+    assert_eq!(judge(None, None), CheckStatus::Fail);
+    // Null, scalar, and empty step fields fail, even when equal.
+    for shape in [
+        serde_json::Value::Null,
+        serde_json::json!("s1"),
+        serde_json::json!([]),
+    ] {
+        assert_eq!(
+            judge(Some(positive()), Some(shape.clone())),
+            CheckStatus::Fail,
+            "actual shape must fail against a positive template: {shape}"
+        );
+        assert_eq!(
+            judge(Some(shape.clone()), Some(shape.clone())),
+            CheckStatus::Fail,
+            "mutually equal malformed shapes must fail: {shape}"
+        );
+    }
+    // Malformed records fail: non-string id, missing value, empty id,
+    // extra field — against a positive template and mutually equal.
+    for record in [
+        serde_json::json!([{"step_id": 1, "value": "abc"}]),
+        serde_json::json!([{"step_id": "s1"}]),
+        serde_json::json!([{"step_id": "", "value": "abc"}]),
+        serde_json::json!([{"step_id": "s1", "value": "abc", "extra": 1}]),
+        serde_json::json!(["s1"]),
+    ] {
+        assert_eq!(
+            judge(Some(positive()), Some(record.clone())),
+            CheckStatus::Fail,
+            "malformed actual must fail: {record}"
+        );
+        assert_eq!(
+            judge(Some(record.clone()), Some(record.clone())),
+            CheckStatus::Fail,
+            "mutually equal malformed records must fail: {record}"
+        );
+    }
+    // Differing positive contents still fail by comparison.
+    assert_eq!(
+        judge(
+            Some(positive()),
+            Some(serde_json::json!([{"step_id": "s1", "value": "abd"}]))
+        ),
+        CheckStatus::Fail
+    );
+}
+
 // describe/plan perform no active setup and create no files.
 #[test]
 fn describe_and_plan_have_no_effects() {
     let before = scratch("purity");
     let catalog = std::fs::read(delivery_root().join("catalog.json")).unwrap();
     let description = describe::describe(&catalog).unwrap();
-    assert!(
-        description
-            .profiles
-            .iter()
-            .any(|p| p.id == "operator-delivery-v1")
-    );
+    assert!(description
+        .profiles
+        .iter()
+        .any(|p| p.id == "operator-delivery-v1"));
     let doc = plan::plan(
         &catalog,
         "operator-delivery-v1",
@@ -734,7 +1196,10 @@ fn cli_verify_receipt_exits_zero_with_recorded_qualification() {
 fn cli_refusal_exit_and_effects() {
     let work = scratch("cli-refusal");
     // Usage error: no subcommand.
-    assert_eq!(commands::run_argv(&["scopebase-conformance".into()]), EXIT_USAGE);
+    assert_eq!(
+        commands::run_argv(&["scopebase-conformance".into()]),
+        EXIT_USAGE
+    );
     // Unknown subcommand.
     assert_eq!(
         commands::run_argv(&["scopebase-conformance".into(), "frobnicate".into()]),
@@ -803,10 +1268,7 @@ fn cli_flag_arity_is_strict() {
         EXIT_USAGE
     );
     // Trailing required flag.
-    assert_eq!(
-        commands::run_argv(&argv(&["cleanup", "--run"])),
-        EXIT_USAGE
-    );
+    assert_eq!(commands::run_argv(&argv(&["cleanup", "--run"])), EXIT_USAGE);
     // Explicit `--flag=value` still works (flag-like values allowed there).
     let missing = work.join("no-such-catalog.json");
     let code = commands::run_argv(&argv(&[
@@ -815,7 +1277,10 @@ fn cli_flag_arity_is_strict() {
     ]));
     assert_eq!(code, EXIT_INCOMPLETE);
     let leftovers: Vec<_> = std::fs::read_dir(&work).unwrap().collect();
-    assert!(leftovers.is_empty(), "arity refusals must not write effects");
+    assert!(
+        leftovers.is_empty(),
+        "arity refusals must not write effects"
+    );
 }
 
 // R47: positional arity is strict. Flags-only commands take no bare
@@ -858,6 +1323,18 @@ fn cli_positional_arity_is_strict() {
         commands::run_argv(&argv(&["verify-receipt", "a.json", "b.json"])),
         EXIT_USAGE
     );
+    // S43: option-first ordering still takes exactly one positional:
+    // `--catalog C` contributes no positional, so `R` is the one.
+    assert_eq!(
+        commands::run_argv(&argv(&[
+            "verify-receipt",
+            "--catalog",
+            "c.json",
+            "r.json",
+            "extra"
+        ])),
+        EXIT_USAGE
+    );
     // Flag values that look bare are still values, not positionals:
     // this reaches catalog I/O (exit 3), not a usage refusal.
     let missing = work.join("no-such-catalog.json");
@@ -871,6 +1348,79 @@ fn cli_positional_arity_is_strict() {
     assert!(
         leftovers.is_empty(),
         "arity refusals must not write effects"
+    );
+}
+
+// S43: option-first ordering selects the positional, not the flag
+// value. `verify-receipt --catalog C R` verifies R (exit 0); the old
+// first-bare-token lookup verified C (a catalog, not a receipt) and
+// ignored R.
+#[test]
+fn cli_verify_receipt_option_first_selects_positional() {
+    let root = delivery_root();
+    let out = scratch("cli-verify-order");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let receipt = out.join("run").join("receipt.json");
+    let catalog = root.join("catalog.json");
+    let code = commands::run_argv(&[
+        "scopebase-conformance".into(),
+        "verify-receipt".into(),
+        "--catalog".into(),
+        catalog.to_string_lossy().into(),
+        receipt.to_string_lossy().into(),
+    ]);
+    assert_eq!(code, 0, "option-first order must verify the receipt");
+    // `=` form behaves the same.
+    let code = commands::run_argv(&[
+        "scopebase-conformance".into(),
+        "verify-receipt".into(),
+        format!("--catalog={}", catalog.to_string_lossy()),
+        receipt.to_string_lossy().into(),
+    ]);
+    assert_eq!(code, 0, "equals-form option must verify the receipt");
+}
+
+// S43: a missing receipt positional is Usage before any I/O —
+// `--catalog C` alone (or bare `verify-receipt`) refuses instead of
+// verifying the flag value (or an absent path).
+#[test]
+fn cli_verify_receipt_missing_positional_is_usage() {
+    let root = delivery_root();
+    let catalog = root.join("catalog.json");
+    assert_eq!(
+        commands::run_argv(&[
+            "scopebase-conformance".into(),
+            "verify-receipt".into(),
+            "--catalog".into(),
+            catalog.to_string_lossy().into(),
+        ]),
+        EXIT_USAGE
+    );
+    assert_eq!(
+        commands::run_argv(&["scopebase-conformance".into(), "verify-receipt".into()]),
+        EXIT_USAGE
+    );
+    // A flag value that looks bare is still consumed as the value:
+    // `--catalog` with no value is Usage, never a receipt read.
+    assert_eq!(
+        commands::run_argv(&[
+            "scopebase-conformance".into(),
+            "verify-receipt".into(),
+            "--catalog".into(),
+        ]),
+        EXIT_USAGE
     );
 }
 
@@ -1121,6 +1671,109 @@ fn cleanup_survives_validation_to_deletion_swaps() {
     assert!(!calm.exists());
 }
 
+// S37: a writer-less FIFO substituted for the run manifest refuses
+// promptly instead of blocking the cleanup in `open`. The call runs
+// on a worker with a join timeout so a regression trips the test
+// instead of hanging the suite (the stranded worker holds no locks
+// and dies with the test process).
+#[test]
+fn cleanup_refuses_fifo_manifest_without_blocking() {
+    let out = scratch("cleanup-fifo-manifest");
+    let run = out.join("run");
+    std::fs::create_dir(&run).unwrap();
+    let manifest = run.join("run-manifest.json");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &manifest,
+        rustix::fs::Mode::from_bits_truncate(0o644),
+    )
+    .unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = cleanup::cleanup_run(&run, None);
+        let _ = done_tx.send(outcome);
+    });
+    let outcome = done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("cleanup blocked on a writer-less FIFO manifest");
+    let err = outcome.expect_err("FIFO manifest refuses");
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(
+        err.detail().contains("not a regular file"),
+        "unexpected detail: {}",
+        err.detail()
+    );
+}
+
+// S14: a run dir under a shared (world-writable) parent refuses:
+// a foreign swapper could race the verify/unlink window. The run
+// is left in place and the remedy names private staging.
+#[test]
+fn cleanup_refuses_shared_parent() {
+    let out = scratch("cleanup-shared-parent");
+    let shared = out.join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    let run = shared.join("run");
+    std::fs::create_dir(&run).unwrap();
+    std::fs::write(
+        run.join("run-manifest.json"),
+        r#"{"schema":"operator-run-manifest-v1","run_id":"cccccccccccccccccccccccccccccccc","profile":"p"}"#,
+    )
+    .unwrap();
+    let err = cleanup::cleanup_run(&run, None).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(
+        err.detail().contains("not exclusive"),
+        "remedy unnamed: {}",
+        err.detail()
+    );
+    assert!(
+        run.join("run-manifest.json").exists(),
+        "refusal removed data"
+    );
+}
+
+// S13: the nested unlink proof fires on multi-linked entries. A
+// hardlink planted inside a run dir would survive any single
+// unlink, so cleanup refuses loudly instead of reporting
+// "removed" over a surviving inode.
+#[test]
+fn cleanup_refuses_hardlinked_entry() {
+    let out = scratch("cleanup-hardlink");
+    let run = out.join("run");
+    std::fs::create_dir(&run).unwrap();
+    std::fs::write(
+        run.join("run-manifest.json"),
+        r#"{"schema":"operator-run-manifest-v1","run_id":"dddddddddddddddddddddddddddddddd","profile":"p"}"#,
+    )
+    .unwrap();
+    std::fs::write(run.join("a.txt"), b"linked").unwrap();
+    std::fs::hard_link(run.join("a.txt"), run.join("b.txt")).unwrap();
+    let err = cleanup::cleanup_run(&run, None).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(
+        err.detail().contains("replaced during removal"),
+        "unexpected detail: {}",
+        err.detail()
+    );
+    // The refused cleanup unlinked at most the first-visited name;
+    // the inode itself survives — that survival is exactly what
+    // the proof reports.
+    let survivor = [run.join("a.txt"), run.join("b.txt")]
+        .into_iter()
+        .filter_map(|p| std::fs::read(p).ok())
+        .find(|bytes| bytes == b"linked");
+    assert!(
+        survivor.is_some(),
+        "refused cleanup destroyed the inode it claimed survived"
+    );
+}
+
 // Unknown mapping policies are usage errors, not silent defaults.
 #[test]
 fn unknown_mapping_policy_is_usage_error() {
@@ -1168,7 +1821,13 @@ fn template_pins_delivery_coordinates() {
     let oracle = delivery::DeliveryOracle::new().unwrap();
     let identity = serde_json::to_value(oracle.identity()).unwrap();
     let pinned = &template["expected_oracle"];
-    for field in ["id", "revision", "schema_id", "source_sha256", "artifact_id"] {
+    for field in [
+        "id",
+        "revision",
+        "schema_id",
+        "source_sha256",
+        "artifact_id",
+    ] {
         assert_eq!(identity[field], pinned[field], "oracle pin {field}");
     }
     assert_eq!(pinned["provenance"]["kind"], "generated_build");
@@ -1443,8 +2102,7 @@ fn resealed_subject_swap_fails_catalog_verification() {
     copy_dir(&out.join("run"), &evil);
     let evil_receipt = evil.join("receipt.json");
     let mut envelope: serde_json::Value = read_json(&evil_receipt);
-    envelope["subject"]["package_name"] =
-        serde_json::Value::String("conformance-evil-fork".into());
+    envelope["subject"]["package_name"] = serde_json::Value::String("conformance-evil-fork".into());
     envelope.as_object_mut().unwrap().remove("envelope_sha256");
     let digest =
         scopebase_testkit::Digest256::of_bytes(&serde_json::to_vec(&envelope).unwrap()).as_str();
@@ -1495,7 +2153,10 @@ fn tiny_limits_still_deliver_schema_refusal() {
     .unwrap();
     let binding = |id: &str| {
         SchemaBinding::new(
-            SchemaBindingValues { id: label(id), revision: 1 },
+            SchemaBindingValues {
+                id: label(id),
+                revision: 1,
+            },
             &limits,
         )
         .unwrap()
@@ -1511,8 +2172,7 @@ fn tiny_limits_still_deliver_schema_refusal() {
         &limits,
     )
     .unwrap();
-    let access =
-        FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).unwrap();
+    let access = FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).unwrap();
     let mut adapter = delivery::DeliveryAdapter::new().unwrap();
     let error = adapter
         .execute(&invocation, &access)
@@ -1674,4 +2334,206 @@ fn dead_stderr_keeps_usage_code() {
         .output()
         .expect("spawn operator");
     assert_eq!(out.status.code(), Some(EXIT_USAGE));
+}
+
+// S42: a pure input failure (bundle assembly from the template
+// layout) refuses BEFORE the output dir is acquired: no run dir
+// at all, so there is nothing to strand and no cleanup to run.
+#[test]
+fn preflight_failure_leaves_no_run_dir() {
+    let root = copy_closure("s42-preflight");
+    let mut template = read_json(&root.join("contract-template.json"));
+    // Drop one layout case: bundle_manifest() can no longer assemble.
+    template["vector_layout"]
+        .as_object_mut()
+        .unwrap()
+        .remove("TT07.binding");
+    let broken = root.join("contract-template-broken.json");
+    std::fs::write(&broken, serde_json::to_vec(&template).unwrap()).unwrap();
+    let out = scratch("s42-preflight-out");
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: delivery_root().join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(broken),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    assert!(
+        !out.join("run").exists(),
+        "pre-effect refusal must not acquire a run dir"
+    );
+}
+
+// S42: a run stranded mid-flight (creating manifest + partial
+// staging, as after a kill between acquisition and seal) is
+// cleanable: cleanup accepts the creating shape and removes it.
+#[test]
+fn creating_run_is_cleanable() {
+    let out = scratch("s42-creating");
+    let run = out.join("run");
+    let staging = run.join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    let creating = serde_json::json!({
+        "schema": "operator-run-manifest-v1",
+        "run_id": "0123456789abcdef0123456789abcdef",
+        "profile": "operator-delivery-v1",
+        "operator": "scopebase-conformance test",
+        "mapping_policy": "no-new-target-mappings",
+        "state": "creating",
+    });
+    std::fs::write(
+        run.join("run-manifest.json"),
+        serde_json::to_vec_pretty(&creating).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(staging.join("closure-ledger.json"), b"partial").unwrap();
+    std::fs::write(staging.join("contract.json"), b"partial").unwrap();
+    let report = cleanup::cleanup_run(&run, None).unwrap();
+    assert!(!run.exists(), "creating run must be removable");
+    assert_eq!(report.run_id, "0123456789abcdef0123456789abcdef");
+    assert_eq!(report.profile, "operator-delivery-v1");
+}
+
+// S42: success overwrites the creating manifest with the sealed
+// one (receipt bound, no creating state left behind).
+#[test]
+fn successful_run_seals_manifest() {
+    let root = delivery_root();
+    let out = scratch("s42-sealed");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let manifest = read_json(&out.join("run").join("run-manifest.json"));
+    assert_eq!(manifest["receipt"], "receipt.json");
+    assert!(
+        manifest.get("state").is_none(),
+        "sealed manifest must not carry creating state"
+    );
+}
+
+// S36: a writer-less FIFO substituted at a staged name — per write
+// and after all staging — is invisible: the bundle read consumes
+// the descriptors retained at creation, never a reopened name.
+// (The old reopen-by-name blocked at open; the worker below turns
+// that hang into a tripwire failure instead of stalling the suite.)
+#[test]
+fn staged_fifo_substitution_is_invisible() {
+    let root = copy_closure("s36-staged");
+    let out = scratch("s36-staged-out");
+    let run_dir = out.join("run");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hook_dir = run_dir.clone();
+        let plant = |dir: &std::path::Path| {
+            for ledger in ["closure-ledger.json", "binding-ledger.json"] {
+                let staged = dir.join("staging").join(ledger);
+                // Only names already staged as regular files: the
+                // not-yet-written ledger must keep its name free for
+                // the exclusive create, and an earlier FIFO planting
+                // stays planted.
+                let is_regular = std::fs::symlink_metadata(&staged)
+                    .map(|m| m.file_type().is_file())
+                    .unwrap_or(false);
+                if !is_regular {
+                    continue;
+                }
+                std::fs::remove_file(&staged).unwrap();
+                rustix::fs::mkfifoat(
+                    rustix::fs::CWD,
+                    &staged,
+                    rustix::fs::Mode::from_bits_truncate(0o600),
+                )
+                .unwrap();
+            }
+        };
+        let hook = |_phase: delivery::DeliveryHookPhase| plant(&hook_dir);
+        let outcome = delivery::run_delivery_with_hook(
+            delivery::RunRequest {
+                catalog_path: delivery_root().join("catalog.json"),
+                profile: "operator-delivery-v1".into(),
+                fixture_root: root.clone(),
+                manifest_path: None,
+                template_path: None,
+                output_dir: run_dir.clone(),
+                mapping_policy: "no-new-target-mappings".into(),
+                adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+                oracle: &delivery::DeliveryOracle::new().unwrap(),
+            },
+            Some(&hook),
+        );
+        let _ = done_tx.send(outcome.map(|o| o.qualification));
+    });
+    let qualification = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("run blocked on a substituted staged FIFO")
+        .unwrap();
+    assert_eq!(qualification, Qualification::Qualified);
+}
+
+// S36: a writer-less FIFO substituted at a closure vector after
+// verification refuses on the same-descriptor type check instead
+// of blocking at open. (The old blocking File::open hung; the
+// worker turns that hang into a tripwire failure.)
+#[test]
+fn closure_fifo_substitution_fails_fast() {
+    let root = copy_closure("s36-closure");
+    let out = scratch("s36-closure-out");
+    let victim = root.join("vectors").join("closure-input.txt");
+    assert!(victim.exists());
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hook = |phase: delivery::DeliveryHookPhase| {
+            if phase != delivery::DeliveryHookPhase::AfterStaging {
+                return;
+            }
+            std::fs::remove_file(&victim).unwrap();
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &victim,
+                rustix::fs::Mode::from_bits_truncate(0o600),
+            )
+            .unwrap();
+        };
+        let outcome = delivery::run_delivery_with_hook(
+            delivery::RunRequest {
+                catalog_path: delivery_root().join("catalog.json"),
+                profile: "operator-delivery-v1".into(),
+                fixture_root: root.clone(),
+                manifest_path: None,
+                template_path: None,
+                output_dir: out.join("run"),
+                mapping_policy: "no-new-target-mappings".into(),
+                adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+                oracle: &delivery::DeliveryOracle::new().unwrap(),
+            },
+            Some(&hook),
+        );
+        let _ = done_tx.send(outcome.map(|o| o.qualification));
+    });
+    let outcome = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("run blocked on a substituted closure FIFO");
+    let err = outcome.expect_err("substituted vector must fail");
+    assert_eq!(err.kind(), OperatorErrorKind::Engine);
+    assert!(
+        err.detail().contains("not a regular file"),
+        "substitution must refuse on the type check: {}",
+        err.detail()
+    );
 }

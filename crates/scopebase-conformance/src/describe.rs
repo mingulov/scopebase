@@ -48,20 +48,14 @@ pub struct Description {
 ///
 /// Reads nothing but the supplied bytes and creates no files.
 pub fn describe(catalog_bytes: &[u8]) -> Result<Description, OperatorError> {
-    let catalog =
-        CaseCatalog::load(catalog_bytes, CatalogLimits::default()).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!("catalog rejected: {e}"),
-            )
-        })?;
-    let doc: serde_json::Value =
-        serde_json::from_slice(catalog_bytes).map_err(|_| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                "catalog is not JSON",
-            )
-        })?;
+    let catalog = CaseCatalog::load(catalog_bytes, CatalogLimits::default()).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("catalog rejected: {e}"),
+        )
+    })?;
+    let doc: serde_json::Value = serde_json::from_slice(catalog_bytes)
+        .map_err(|_| OperatorError::new(OperatorErrorKind::MissingInput, "catalog is not JSON"))?;
     let mut profiles = Vec::new();
     for profile in doc
         .get("profiles")
@@ -81,11 +75,11 @@ pub fn describe(catalog_bytes: &[u8]) -> Result<Description, OperatorError> {
             .cloned()
             .unwrap_or_default()
         {
-            let case_id = case
-                .get("case_id")
-                .and_then(|i| i.as_str())
-                .unwrap_or("?");
-            let version = case.get("case_version").and_then(|v| v.as_u64()).unwrap_or(0);
+            let case_id = case.get("case_id").and_then(|i| i.as_str()).unwrap_or("?");
+            let version = case
+                .get("case_version")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             required_cases.push(format!("{case_id}:v{version}"));
         }
         profiles.push(ProfileEntry {
@@ -111,10 +105,7 @@ pub fn describe(catalog_bytes: &[u8]) -> Result<Description, OperatorError> {
                 .and_then(|i| i.as_str())
                 .unwrap_or("?")
                 .to_string(),
-            version: case
-                .get("version")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32,
+            version: case.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             required_cells: case
                 .get("required_cells")
                 .and_then(|c| c.as_array())

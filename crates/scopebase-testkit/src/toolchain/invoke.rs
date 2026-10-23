@@ -20,6 +20,8 @@
 use scopebase_bpf::{ErrorKind, OperationError, Stage};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,7 +79,7 @@ impl NestedOutput {
 }
 
 #[derive(Debug)]
-struct Detail(&'static str);
+struct Detail(String);
 
 impl std::fmt::Display for Detail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -92,16 +94,16 @@ fn backend(error: std::io::Error, stage: Stage) -> OperationError {
         ErrorKind::Backend,
         stage,
         error.raw_os_error(),
-        Some(Box::new(Detail("tool backend failure"))),
+        Some(Box::new(Detail("tool backend failure".to_string()))),
     )
 }
 
-fn bound_exceeded(message: &'static str, stage: Stage) -> OperationError {
+fn bound_exceeded(message: impl Into<String>, stage: Stage) -> OperationError {
     OperationError::new(
         ErrorKind::LimitExceeded,
         stage,
         None,
-        Some(Box::new(Detail(message))),
+        Some(Box::new(Detail(message.into()))),
     )
 }
 
@@ -142,6 +144,35 @@ pub fn run_pinned(
     env: &[(OsString, OsString)],
     bounds: &NestedBounds,
 ) -> Result<NestedOutput, OperationError> {
+    run_pinned_with_builders(
+        closure,
+        tool_id,
+        tool_path,
+        args,
+        env,
+        bounds,
+        std::thread::Builder::new().name("invoke-stdout".to_string()),
+        std::thread::Builder::new().name("invoke-stderr".to_string()),
+    )
+}
+
+/// S33: test-only entry point with injectable reader-thread builders,
+/// so the second-reader-failure branch is forced (a denied builder),
+/// not wished for. Production callers use [`run_pinned`].
+#[doc(hidden)]
+// Eight args: run_pinned's six plus the two injected builders; a
+// struct would obscure the one-to-one delegation.
+#[allow(clippy::too_many_arguments)]
+pub fn run_pinned_with_builders(
+    closure: &CompilerClosure,
+    tool_id: &str,
+    tool_path: &Path,
+    args: &[OsString],
+    env: &[(OsString, OsString)],
+    bounds: &NestedBounds,
+    stdout_builder: std::thread::Builder,
+    stderr_builder: std::thread::Builder,
+) -> Result<NestedOutput, OperationError> {
     if closure.find(tool_id).is_none() {
         return Err(invalid("tool id not pinned in closure"));
     }
@@ -178,28 +209,45 @@ pub fn run_pinned(
         }
     }
 
-    let mut child = std::process::Command::new(tool_path)
+    let mut command = std::process::Command::new(tool_path);
+    command
         .args(args)
         .env_clear()
         .envs(env.iter().map(|(key, value)| (key, value)))
         .env("CARGO_NET_OFFLINE", "true")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                OperationError::new(
-                    ErrorKind::InvalidInput,
-                    Stage::Execute,
-                    error.raw_os_error(),
-                    Some(Box::new(Detail("tool executable missing"))),
-                )
-            } else {
-                backend(error, Stage::Execute)
-            }
-        })?;
+        .stderr(Stdio::piped());
+    // S33: the tool leads a fresh process group, so retirement can
+    // SIGKILL forked descendants holding pipes — not just the child.
+    // SAFETY: setpgid is async-signal-safe; the parent confirms the
+    // group below, so a failure here is harmless.
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            OperationError::new(
+                ErrorKind::InvalidInput,
+                Stage::Execute,
+                error.raw_os_error(),
+                Some(Box::new(Detail("tool executable missing".to_string()))),
+            )
+        } else {
+            backend(error, Stage::Execute)
+        }
+    })?;
 
+    // S33: the tool leads a fresh process group (its own pid), so
+    // retirement reaches forked descendants holding pipes. The
+    // parent side of the standard double-call runs here; the child
+    // side ran in pre_exec.
+    claim_tool_group(child.id());
+    let group = Some(child.id());
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let stdout_hit = Arc::new(AtomicBool::new(false));
@@ -209,28 +257,44 @@ pub fn run_pinned(
     // reader) instead of panicking; the error is Backend/Execute
     // like every other output-reader failure.
     let stdout_reader = match spawn_capped_reader_on(
-        std::thread::Builder::new().name("invoke-stdout".to_string()),
+        stdout_builder,
         stdout,
         bounds.max_stdout_bytes,
         stdout_hit.clone(),
     ) {
         Ok(handle) => handle,
         Err(error) => {
-            let _ = kill_and_wait(&mut child);
+            kill_tool_tree(group, &mut child);
             return Err(backend(error, Stage::Execute));
         }
     };
     let stderr_reader = match spawn_capped_reader_on(
-        std::thread::Builder::new().name("invoke-stderr".to_string()),
+        stderr_builder,
         stderr,
         bounds.max_stderr_bytes,
         stderr_hit.clone(),
     ) {
         Ok(handle) => handle,
         Err(error) => {
-            let _ = kill_and_wait(&mut child);
-            let _ = stdout_reader.join();
-            return Err(backend(error, Stage::Execute));
+            // S33: the sibling reader settles bounded (a silent
+            // descendant holding stdout must not hang cleanup), and
+            // an unsettled reader joins the spawn error in the
+            // report instead of vanishing with a bare `let _`.
+            kill_tool_tree(group, &mut child);
+            let spawn = backend(error, Stage::Execute);
+            match settle_one(stdout_reader, "stdout") {
+                Ok(_) => return Err(spawn),
+                Err(unsettled) => {
+                    return Err(OperationError::new(
+                        ErrorKind::Backend,
+                        Stage::Execute,
+                        spawn.raw_os_error(),
+                        Some(Box::new(Detail(format!(
+                            "reader spawn failed ({spawn}); {unsettled}"
+                        )))),
+                    ));
+                }
+            }
         }
     };
     // R05 sweep note: this addition cannot overflow. `timeout_ms` is a
@@ -242,8 +306,9 @@ pub fn run_pinned(
 
     loop {
         if stdout_hit.load(Ordering::SeqCst) || stderr_hit.load(Ordering::SeqCst) {
+            kill_tool_group(group);
             kill_and_wait(&mut child)?;
-            let (out, err) = join_readers(stdout_reader, stderr_reader)?;
+            let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
             return Err(capped_error(&out, &err));
         }
         match child
@@ -251,7 +316,10 @@ pub fn run_pinned(
             .map_err(|error| backend(error, Stage::Execute))?
         {
             Some(status) => {
-                let (out, err) = join_readers(stdout_reader, stderr_reader)?;
+                // S33: the child is reaped but its forked descendants
+                // may hold the pipes; settle bounded either way.
+                kill_tool_group(group);
+                let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
                 if out.overrun || err.overrun {
                     return Err(capped_error(&out, &err));
                 }
@@ -269,13 +337,16 @@ pub fn run_pinned(
                     ErrorKind::Backend,
                     Stage::Execute,
                     None,
-                    Some(Box::new(Detail("tool exited nonzero or signaled"))),
+                    Some(Box::new(Detail(
+                        "tool exited nonzero or signaled".to_string(),
+                    ))),
                 ));
             }
             None => {
                 if Instant::now() >= deadline {
+                    kill_tool_group(group);
                     kill_and_wait(&mut child)?;
-                    let (out, err) = join_readers(stdout_reader, stderr_reader)?;
+                    let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
                     if out.overrun || err.overrun {
                         return Err(capped_error(&out, &err));
                     }
@@ -365,6 +436,117 @@ pub(crate) fn spawn_capped_reader_on<R: Read + Send + 'static>(
     })
 }
 
+/// S33: bound on output-reader settlement after the tool tree is
+/// killed. SIGKILLed pipes EOF near-instantly; only a daemonized
+/// escapee beyond the process group can burn this, and then the
+/// reader detaches with an explicit unsettled error instead of
+/// hanging the caller.
+const SETTLE_BOUND: Duration = Duration::from_secs(10);
+
+/// S33: parent side of the tool-group double-call. The child called
+/// setpgid(0, 0) in pre_exec; this call wins the race when the child
+/// has not run yet. EACCES means the child already exec'd, so its
+/// own call established the group; ESRCH means it already exited and
+/// nothing will ever need the group. Only EINTR retries.
+fn claim_tool_group(child: u32) {
+    #[cfg(not(unix))]
+    let _ = child;
+    #[cfg(unix)]
+    loop {
+        // SAFETY: setpgid on an owned unreaped child pid.
+        let result = unsafe { libc::setpgid(child as libc::pid_t, child as libc::pid_t) };
+        if result == 0 {
+            return;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return;
+    }
+}
+
+/// S33: SIGKILL the tool process group: the child plus any forked
+/// descendants holding pipes. Idempotent (ESRCH is fine); not
+/// available off unix, where settlement still bounds the wait.
+fn kill_tool_group(group: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(group) = group {
+        // SAFETY: signal our own fresh tool group.
+        unsafe {
+            libc::killpg(group as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = group;
+}
+
+/// S33: retire the whole tool tree, ignoring errors: the group
+/// first (descendants), then the child handle itself.
+fn kill_tool_tree(group: Option<u32>, child: &mut Child) {
+    kill_tool_group(group);
+    let _ = kill_and_wait(child);
+}
+
+/// S33: join one output reader within the settlement bound. A reader
+/// still blocked past the bound (a daemonized descendant beyond the
+/// SIGKILLed group) is detached — its handle dropped without join —
+/// and reported as unsettled with its stream name, so unresolved
+/// output ownership is explicit, never a silent hang or a silently
+/// abandoned thread.
+fn settle_one(
+    handle: std::thread::JoinHandle<CappedOutput>,
+    name: &'static str,
+) -> Result<CappedOutput, OperationError> {
+    settle_before(handle, name, Instant::now() + SETTLE_BOUND)
+}
+
+/// S33: join one reader before a deadline. Shared by the bound-taking
+/// single/pair wrappers, so the detach path is identical everywhere.
+fn settle_before(
+    handle: std::thread::JoinHandle<CappedOutput>,
+    name: &'static str,
+    end: Instant,
+) -> Result<CappedOutput, OperationError> {
+    loop {
+        if handle.is_finished() {
+            return handle.join().map_err(|_| reader_failed());
+        }
+        if Instant::now() >= end {
+            drop(handle);
+            return Err(unsettled(name));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// S33: settle both readers under one bound.
+fn settle_pair(
+    stdout: std::thread::JoinHandle<CappedOutput>,
+    stderr: std::thread::JoinHandle<CappedOutput>,
+) -> Result<(CappedOutput, CappedOutput), OperationError> {
+    // One shared deadline: a second stuck reader must not double the
+    // bound. Poll-then-join keeps the pairing with `join_readers`'
+    // stdout-first error precedence.
+    let end = Instant::now() + SETTLE_BOUND;
+    let out = settle_before(stdout, "stdout", end)?;
+    let err = settle_before(stderr, "stderr", end)?;
+    Ok((out, err))
+}
+
+/// S33: unsettled-reader error. Partial bytes already collected are
+/// untrustworthy (truncated by detachment) and never returned.
+fn unsettled(name: &'static str) -> OperationError {
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        None,
+        Some(Box::new(Detail(format!(
+            "output reader unsettled: {name} still blocked after tool kill"
+        )))),
+    )
+}
+
 pub(crate) fn join_readers(
     stdout: std::thread::JoinHandle<CappedOutput>,
     stderr: std::thread::JoinHandle<CappedOutput>,
@@ -374,7 +556,7 @@ pub(crate) fn join_readers(
             ErrorKind::Backend,
             Stage::Execute,
             None,
-            Some(Box::new(Detail("output reader failed"))),
+            Some(Box::new(Detail("output reader failed".to_string()))),
         )
     };
     Ok((
@@ -398,7 +580,7 @@ fn reader_failed() -> OperationError {
         ErrorKind::Backend,
         Stage::Execute,
         None,
-        Some(Box::new(Detail("output reader failed"))),
+        Some(Box::new(Detail("output reader failed".to_string()))),
     )
 }
 
@@ -446,6 +628,31 @@ mod tests {
             out.read_error,
             "a mid-stream read failure must be reported, not treated as EOF"
         );
+    }
+
+    /// S33: a reader blocked on a held pipe detaches at the bound
+    /// with an explicit unsettled error instead of hanging the
+    /// caller. The socketpair stands in for a descendant-held pipe;
+    /// the short test deadline pins the detach path in ~0.2s, not
+    /// the 10s production bound.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn settle_detaches_blocked_reader_at_bound() {
+        use std::os::unix::net::UnixStream;
+        let (read_end, held) = UnixStream::pair().unwrap();
+        let hit = Arc::new(AtomicBool::new(false));
+        let handle = spawn_capped_reader(read_end, 1 << 20, hit).unwrap();
+        let start = Instant::now();
+        let Err(error) = settle_before(handle, "stdout", start + Duration::from_millis(200)) else {
+            panic!("blocked reader must detach, not join");
+        };
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "detach is bounded"
+        );
+        assert_eq!(error.kind(), scopebase_bpf::ErrorKind::Backend);
+        assert_eq!(error.stage(), scopebase_bpf::Stage::Execute);
+        drop(held);
     }
 
     /// R06: a denied reader-thread spawn surfaces as `Err` instead of

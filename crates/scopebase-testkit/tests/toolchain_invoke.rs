@@ -616,3 +616,134 @@ fn zero_byte_cap_admits_only_silent_tools() {
     .unwrap_err();
     assert_eq!(refusal(&error), (ErrorKind::LimitExceeded, Stage::Execute));
 }
+
+/// S33: a silent descendant holding stdout does not hang the exit
+/// path, and the tool tree retires it. The tool exits at once while
+/// its grandchild sleeps on the pipe; observing the exit proves the
+/// pidfile is written and the grandchild alive, so the kill below is
+/// fully deterministic. Old code joined the reader unbounded (hang);
+/// settlement SIGKILLs the group and joins. A detach-only fix would
+/// return while the grandchild still lived.
+#[cfg(target_os = "linux")]
+#[test]
+fn exited_tool_settles_descendant_held_stdout() {
+    let dir = std::env::temp_dir().join(format!(
+        "tc02-s33-exit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pidfile = dir.join("grandchild.pid");
+    let tool = fake_tool("fork-silent-grandchild");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = run_pinned(
+            &closure(),
+            "llvm-23.1.2-source",
+            &tool,
+            &[OsString::from(pidfile.as_os_str())],
+            &[],
+            &generous(),
+        );
+        let _ = tx.send(
+            out.map(|out| (out.code(), out.stdout().len()))
+                .map_err(refusal_owned),
+        );
+    });
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("invoke hung on descendant-held stdout");
+    let (code, stdout_len) = outcome.expect("exited tool succeeds");
+    assert_eq!(code, Some(0));
+    assert_eq!(stdout_len, 0, "tool and grandchild are silent");
+    assert_grandchild_dead(&dir.join("grandchild.pid"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S33: second-reader spawn failure completes (no hang) and reports
+/// the spawn error. The denied stderr builder forces the production
+/// cleanup branch with a forking tool: when the tool wins the
+/// startup race its grandchild is retired like above (asserted when
+/// the pidfile exists); when the instant group-kill lands first the
+/// tool dies pre-fork, which is equally correct — completion and
+/// the spawn report hold on both schedules.
+#[cfg(target_os = "linux")]
+#[test]
+fn second_reader_failure_completes_with_forking_tool() {
+    use scopebase_testkit::toolchain::run_pinned_with_builders;
+    let dir = std::env::temp_dir().join(format!(
+        "tc02-s33-fail-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pidfile = dir.join("grandchild.pid");
+    let tool = fake_tool("fork-silent-grandchild");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // R06: absurd stack size fails spawn deterministically.
+        let denied = std::thread::Builder::new().stack_size(usize::MAX);
+        let normal = std::thread::Builder::new().name("s33-stdout".to_string());
+        let out = run_pinned_with_builders(
+            &closure(),
+            "llvm-23.1.2-source",
+            &tool,
+            &[OsString::from(pidfile.as_os_str())],
+            &[],
+            &generous(),
+            normal,
+            denied,
+        );
+        let _ = tx.send(out.map(|_| ()).map_err(refusal_owned));
+    });
+    let outcome = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("cleanup hung on descendant-held stdout");
+    assert_eq!(
+        outcome.expect_err("spawn failure reports"),
+        (ErrorKind::Backend, Stage::Execute)
+    );
+    // Opportunistic: only when the tool forked before the kill.
+    if dir.join("grandchild.pid").exists() {
+        assert_grandchild_dead(&dir.join("grandchild.pid"));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+fn refusal_owned(error: OperationError) -> (ErrorKind, Stage) {
+    refusal(&error)
+}
+
+/// S33: the recorded grandchild must be dead: SIGKILL is async, so
+/// poll until its pid no longer names a sleep (gone, or conceivably
+/// reused by a non-sleep — either way our sleeper is retired).
+#[cfg(target_os = "linux")]
+fn assert_grandchild_dead(pidfile: &std::path::Path) {
+    let pid: i32 = std::fs::read_to_string(pidfile)
+        .expect("tool recorded its grandchild")
+        .trim()
+        .parse()
+        .expect("pidfile holds a pid");
+    let cmdline = format!("/proc/{pid}/cmdline");
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let sleeper = std::fs::read(&cmdline)
+            .map(|bytes| bytes.starts_with(b"sleep"))
+            .unwrap_or(false);
+        if !sleeper {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "grandchild {pid} survived tool-tree retirement"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

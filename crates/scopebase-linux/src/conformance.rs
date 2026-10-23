@@ -8,7 +8,7 @@
 //! APIs; no consumer-only helper is shared any other way.
 //! NEW (LX11): reference-only; no donor lines copied.
 use crate::error::LinuxError;
-use rustix::fs::{self as rfs, AtFlags, Mode, OFlags};
+use rustix::fs::{self as rfs, AtFlags, FileType, Mode, OFlags};
 use std::{
     ffi::CString,
     io::{self, Write as _},
@@ -87,6 +87,16 @@ pub struct FixtureRoot {
 impl FixtureRoot {
     /// Create `parent/name`. `name` must be one normal component; the parent
     /// must already exist. Fails (rather than reusing) when present.
+    ///
+    /// S14: the parent must be mutation-exclusive to this process —
+    /// owned by our euid with no group/other write bit — so no other
+    /// writer can swap the just-created name between `mkdirat` and
+    /// `open`, and none can race later destruction. A shared parent
+    /// (world-writable temp, group-writable project dir) refuses:
+    /// stage a private `0700` directory first. Same-uid processes
+    /// share all our rights and stay out of model, but every effect
+    /// below stays descriptor-bound, so even a same-uid swapper can
+    /// only strand (visible) residue, never redirect an effect.
     pub fn create(parent: &Path, name: &str) -> io::Result<Self> {
         if name.is_empty() || name.contains('\0') {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad root name"));
@@ -104,18 +114,21 @@ impl FixtureRoot {
             Mode::empty(),
         )
         .map_err(io::Error::from)?;
+        require_exclusive_parent(&parent_fd)?;
         let cname = CString::new(name)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad root name"))?;
         // mkdirat, not create_dir: fails (EEXIST) when present, like before.
         rfs::mkdirat(&parent_fd, &cname, Mode::from_bits_truncate(0o777))
             .map_err(io::Error::from)?;
-        let root_fd = rfs::openat(
-            &parent_fd,
-            &cname,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(io::Error::from)?;
+        // S48: transactional acquisition. The just-created empty
+        // directory is ours alone (exclusive parent, mkdirat
+        // succeeded), so a failed open removes it instead of
+        // leaking a root no owner can close.
+        let root_fd = open_created(&parent_fd, &cname, AtFlags::REMOVEDIR)?;
+        // S14: fresh roots are 0755 regardless of ambient umask, so
+        // they nest as exclusive parents and no umask ever admits
+        // group/other writers.
+        rfs::fchmod(&root_fd, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
         Ok(Self {
             path: parent.join(name),
             parent: parent_fd,
@@ -161,17 +174,26 @@ impl FixtureRoot {
         let dir = self.open_parent_dir(&pieces)?;
         let name = piece_cstr(pieces[pieces.len() - 1])?;
         match rfs::mkdirat(dir.as_fd(), &name, Mode::from_bits_truncate(0o777)) {
-            Ok(()) => {}
+            // S14: fresh dirs are 0755 regardless of umask (see
+            // create). Reused dirs keep their modes: not ours to
+            // dictate, and the gate judges them if nested under.
+            Ok(()) => {
+                let fresh = rfs::openat(
+                    dir.as_fd(),
+                    &name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?;
+                rfs::fchmod(&fresh, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+            }
             Err(rustix::io::Errno::EXIST) => {
                 // Present: verify it is a real directory, since
                 // mkdirat also reports EEXIST for symlinks and files.
                 rfs::openat(
                     dir.as_fd(),
                     &name,
-                    OFlags::RDONLY
-                        | OFlags::DIRECTORY
-                        | OFlags::NOFOLLOW
-                        | OFlags::CLOEXEC,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                     Mode::empty(),
                 )
                 .map_err(io::Error::from)?;
@@ -211,12 +233,7 @@ impl FixtureRoot {
         }
         drop(live);
         rfs::unlinkat(&self.parent, &self.name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
-        if rfs::fstat(&self.root).map_err(io::Error::from)?.st_nlink != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "fixture root replaced during close",
-            ));
-        }
+        prove_unlinked(self.root.as_fd(), "fixture root")?;
         Ok(())
     }
 
@@ -275,11 +292,19 @@ impl FixtureRoot {
 }
 
 /// Recursively remove every entry under `dir` (fd-relative; never
-/// resolves a path). Each entry is opened as a directory first:
-/// `NOFOLLOW` refuses symlinks with `ELOOP` and files with `ENOTDIR`,
-/// and either falls through to a plain unlink, which never follows a
-/// link. A swap between listing and open fails closed instead of
-/// mis-removing.
+/// resolves a path).
+///
+/// S13: one `O_PATH` hold per entry (follows nothing; holds files,
+/// dirs, symlinks and fifos without opening their data, so no fifo
+/// blocks the walk). Directories reopen through the hold with `"."`
+/// — no second name lookup, so renaming the entry itself mid-walk
+/// cannot redirect the recursion. Every unlink proves against the
+/// held inode afterwards: a swapped-in replacement takes the
+/// deletion while OUR inode stays linked, and `prove_unlinked`
+/// refuses loudly instead of reporting success over it.
+/// Multi-linked entries (hardlinks — never created by `FixtureRoot`,
+/// so always foreign evidence) refuse the same way: the inode would
+/// survive the unlink, and "removed" would be a lie.
 fn clear_dir(dir: BorrowedFd<'_>) -> io::Result<()> {
     let entries = rfs::Dir::read_from(dir).map_err(io::Error::from)?;
     for entry in entries {
@@ -288,21 +313,126 @@ fn clear_dir(dir: BorrowedFd<'_>) -> io::Result<()> {
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             continue;
         }
-        match rfs::openat(
+        let held = match rfs::openat(
             dir,
             name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            Ok(child) => {
-                clear_dir(child.as_fd())?;
-                rfs::unlinkat(dir, name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
-            }
-            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
-                rfs::unlinkat(dir, name, AtFlags::empty()).map_err(io::Error::from)?;
+            Ok(held) => held,
+            Err(rustix::io::Errno::NOENT) => {
+                // Already gone (a cooperative sibling retired it):
+                // converge rather than fail the whole removal.
+                continue;
             }
             Err(errno) => return Err(io::Error::from(errno)),
+        };
+        let mode = rfs::fstat(&held).map_err(io::Error::from)?.st_mode;
+        if FileType::from_raw_mode(mode) == FileType::Directory {
+            let dot = piece_cstr(std::ffi::OsStr::new("."))?;
+            let child = rfs::openat(
+                held.as_fd(),
+                &dot,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)?;
+            clear_dir(child.as_fd())?;
+            rfs::unlinkat(dir, name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
+        } else {
+            // Plain unlink never follows a link, whatever the entry
+            // changed into — dangling symlink, fifo, socket alike.
+            rfs::unlinkat(dir, name, AtFlags::empty()).map_err(io::Error::from)?;
         }
+        prove_unlinked(held.as_fd(), "entry")?;
+    }
+    Ok(())
+}
+
+/// Effective uid of this process, parsed from `/proc/self/status`
+/// (the Uid line's second field). `rustix/process` (native
+/// `geteuid`) sits behind the non-default `process` feature while
+/// this module must build with default features, and
+/// scopebase-linux already assumes procfs — so the parser adds no
+/// dependency for the S14 gate.
+fn euid() -> io::Result<u32> {
+    let text = std::fs::read_to_string("/proc/self/status").map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("cannot read own status: {error}"),
+        )
+    })?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            let mut ids = rest.split_whitespace();
+            ids.next();
+            if let Some(effective) = ids.next().and_then(|id| id.parse().ok()) {
+                return Ok(effective);
+            }
+            break;
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "own Uid line malformed",
+    ))
+}
+
+/// S14: prove the pinned parent is mutation-exclusive to us: owned
+/// by our euid with no group/other write bit. An ACL write grant to
+/// anyone would surface in the mask-backed group bits and trip the
+/// same test, so the mode check covers ACLs too. Without this, both
+/// the mkdir/open acquisition window and the verify/unlink
+/// destruction window below admit a foreign swapper.
+fn require_exclusive_parent(parent_fd: &OwnedFd) -> io::Result<()> {
+    let st = rfs::fstat(parent_fd).map_err(io::Error::from)?;
+    if st.st_uid != euid()? || st.st_mode & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "fixture parent not exclusive: stage a private 0700 directory",
+        ));
+    }
+    Ok(())
+}
+
+/// S48: open a just-created name, removing it when the open
+/// fails so a failed acquisition strands nothing. The caller
+/// passes the unlink shape matching what it created (`REMOVEDIR`
+/// for roots). With stable modes a just-created root always
+/// opens, so production reaches the cleanup only on a mid-call
+/// mode change or a resource fault; the test below pins a
+/// `NOFOLLOW` refusal through the same branch to prove the
+/// removal runs and the original error reports.
+fn open_created(parent_fd: &OwnedFd, name: &CString, cleanup: AtFlags) -> io::Result<OwnedFd> {
+    match rfs::openat(
+        parent_fd,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => Ok(fd),
+        Err(errno) => {
+            let opened = io::Error::from(errno);
+            if let Err(removed) = rfs::unlinkat(parent_fd, name, cleanup).map_err(io::Error::from) {
+                return Err(io::Error::new(
+                    opened.kind(),
+                    format!("root open failed: {opened} (cleanup: {removed})"),
+                ));
+            }
+            Err(opened)
+        }
+    }
+}
+
+/// S13: prove the held inode lost its name. Unlinking a swapped-in
+/// replacement leaves OUR inode linked and refuses instead of
+/// reporting success over a foreign deletion.
+fn prove_unlinked(held: BorrowedFd<'_>, what: &str) -> io::Result<()> {
+    if rfs::fstat(held).map_err(io::Error::from)?.st_nlink != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{what} replaced during removal"),
+        ));
     }
     Ok(())
 }
@@ -321,9 +451,11 @@ fn open_child_dir(parent: BorrowedFd<'_>, name: &CString) -> io::Result<OwnedFd>
     match rfs::openat(parent, name, flags, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(rustix::io::Errno::NOENT) => {
-            rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o777))
-                .map_err(io::Error::from)?;
-            rfs::openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)
+            rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o777)).map_err(io::Error::from)?;
+            let fresh = rfs::openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)?;
+            // S14: fresh intermediate dirs are 0755 (see create).
+            rfs::fchmod(&fresh, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+            Ok(fresh)
         }
         Err(errno) => Err(io::Error::from(errno)),
     }

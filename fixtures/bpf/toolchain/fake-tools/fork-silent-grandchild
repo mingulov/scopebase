@@ -1,0 +1,8 @@
+#!/bin/sh
+# TC02 fake tool: fork a silent grandchild holding stdout, record its pid,
+# then exit at once. The grandchild sleeps (bounded stray, self-cleans)
+# without writing, so readers see EOF only after it dies.
+# SPDX-License-Identifier: Apache-2.0
+sleep 300 &
+echo "$!" > "$1"
+exit 0

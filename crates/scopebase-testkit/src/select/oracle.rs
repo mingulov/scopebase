@@ -16,8 +16,8 @@
 
 use super::manifest::{Change, ChangeManifest};
 use super::selector::{
-    CellKey, Node, SelectionError, SelectionLimits, SelectionPlan, forward_closure,
-    owner_active_cases, validated_inputs,
+    forward_closure, owner_active_cases, validated_inputs, CellKey, Node, SelectionError,
+    SelectionLimits, SelectionPlan,
 };
 use crate::{CaseCatalog, CaseId, ProfileId};
 use std::collections::BTreeSet;
@@ -79,18 +79,21 @@ fn owner_closure(catalog: &CaseCatalog, owner: &ProfileId) -> ForwardClosure {
 
 fn change_hits(change: &Change, catalog: &CaseCatalog, closure: &ForwardClosure) -> bool {
     match change {
-        Change::Case { case_id, case_version } => {
-            closure.cases.contains(&(case_id.clone(), *case_version))
-        }
+        Change::Case {
+            case_id,
+            case_version,
+        } => closure.cases.contains(&(case_id.clone(), *case_version)),
         Change::Cell { cell_id } => closure.cells.contains(cell_id),
         Change::Profile { profile } => closure.owners.contains(profile),
         Change::Extension { extension } => closure.owners.contains(extension),
         Change::Obligation { kind, id } => {
             closure.obligations.contains(&(kind.clone(), id.clone()))
         }
-        Change::RegistrationRole { case_id, case_version, .. } => {
-            closure.cases.contains(&(case_id.clone(), *case_version))
-        }
+        Change::RegistrationRole {
+            case_id,
+            case_version,
+            ..
+        } => closure.cases.contains(&(case_id.clone(), *case_version)),
         // Broadening without a boundary affects every owner.
         Change::Unknown { boundary: None, .. } | Change::Environment { boundary: None, .. } => true,
         // A named boundary affects its closure plus every dependent: the
@@ -217,14 +220,8 @@ pub fn check_agreement(
 ) -> Result<(), OracleDisagreement> {
     let planned: BTreeSet<&CellKey> = plan.selected().iter().map(|c| c.key()).collect();
     let wanted: BTreeSet<&CellKey> = expected.iter().collect();
-    let missing: Vec<CellKey> = wanted
-        .difference(&planned)
-        .map(|k| (*k).clone())
-        .collect();
-    let extra: Vec<CellKey> = planned
-        .difference(&wanted)
-        .map(|k| (*k).clone())
-        .collect();
+    let missing: Vec<CellKey> = wanted.difference(&planned).map(|k| (*k).clone()).collect();
+    let extra: Vec<CellKey> = planned.difference(&wanted).map(|k| (*k).clone()).collect();
     if missing.is_empty() && extra.is_empty() {
         Ok(())
     } else {

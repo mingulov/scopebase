@@ -24,10 +24,10 @@
 pub use super::manifest::{control_pairing_applies, Control, Scenario, ScenarioStep};
 use super::oracle::{exited_unreaped_owned, TRICKY_COMM};
 use super::wire::{
-    canonical_json, parse_canonical, run_id_from_hex, sha256_of, validate_hello_reply,
-    Action, Actor, AdvanceReply, AdvanceRequest, CloseBody, CloseReason, Envelope, FdDirection,
-    FdRole, FdTransferBody, FragmentPrefix, InputChunkAck, MessageKind, RawRequest, WireError,
-    CHUNK_MAX, DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
+    canonical_json, parse_canonical, run_id_from_hex, sha256_of, validate_hello_reply, Action,
+    Actor, AdvanceReply, AdvanceRequest, CloseBody, CloseReason, Envelope, FdDirection, FdRole,
+    FdTransferBody, FragmentPrefix, InputChunkAck, MessageKind, RawRequest, WireError, CHUNK_MAX,
+    DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
 };
 use rustix::fd::{AsFd, OwnedFd};
 use rustix::io::{IoSlice, IoSliceMut};
@@ -176,20 +176,12 @@ fn setup_failure(step: Option<&str>, detail: impl Into<String>) -> DriverError {
     DriverError::new(DriverErrorKind::SetupFailure, step, detail.into())
 }
 fn io_error(step: Option<&str>, error: rustix::io::Errno) -> DriverError {
-    let mut e = DriverError::new(
-        DriverErrorKind::Io,
-        step,
-        format!("native io: {error}"),
-    );
+    let mut e = DriverError::new(DriverErrorKind::Io, step, format!("native io: {error}"));
     e.errno = Some(error.raw_os_error());
     e
 }
 fn std_io_error(step: Option<&str>, error: std::io::Error) -> DriverError {
-    let mut e = DriverError::new(
-        DriverErrorKind::Io,
-        step,
-        format!("native io: {error}"),
-    );
+    let mut e = DriverError::new(DriverErrorKind::Io, step, format!("native io: {error}"));
     e.errno = error.raw_os_error();
     e
 }
@@ -323,7 +315,10 @@ impl Channel {
                 tv_sec: chunk / 1000,
                 tv_nsec: (chunk % 1000) * 1_000_000,
             };
-            let mut fds = [rustix::event::PollFd::new(&self.sock, rustix::event::PollFlags::IN)];
+            let mut fds = [rustix::event::PollFd::new(
+                &self.sock,
+                rustix::event::PollFlags::IN,
+            )];
             let ready =
                 rustix::event::poll(&mut fds, Some(&timeout)).map_err(|e| io_error(step, e))?;
             if ready > 0 {
@@ -360,7 +355,9 @@ impl Channel {
             return Err(protocol(step, "payload exceeds ceiling"));
         }
         let seq = self.sequence;
-        self.sequence = seq.checked_add(1).ok_or_else(|| protocol(step, "sequence overflow"))?;
+        self.sequence = seq
+            .checked_add(1)
+            .ok_or_else(|| protocol(step, "sequence overflow"))?;
         let envelope = Envelope {
             kind,
             payload_len: payload.len() as u32,
@@ -446,15 +443,9 @@ impl Channel {
         let envelope = Envelope::decode(&header).map_err(|e| wire_error(step, e))?;
         if envelope.kind != expect {
             if envelope.kind == MessageKind::Error {
-                let body = parse_canonical(
-                    &data[HEADER_BYTES..received.bytes],
-                    PAYLOAD_MAX,
-                )
-                .map_err(|e| wire_error(step, e))?;
-                return Err(protocol(
-                    step,
-                    format!("worker error reply: {body}"),
-                ));
+                let body = parse_canonical(&data[HEADER_BYTES..received.bytes], PAYLOAD_MAX)
+                    .map_err(|e| wire_error(step, e))?;
+                return Err(protocol(step, format!("worker error reply: {body}")));
             }
             return Err(protocol(step, "unexpected reply kind"));
         }
@@ -613,7 +604,10 @@ fn authenticate_executable(
     let exe = std::path::PathBuf::from(format!("/proc/{pid}/exe"));
     let bytes = read_bounded(&exe, IMAGE_BYTES_MAX).map_err(|e| std_io_error(step, e))?;
     if &sha256_of(&bytes) != expected_sha {
-        return Err(refused(step, "worker executable digest differs from expected image"));
+        return Err(refused(
+            step,
+            "worker executable digest differs from expected image",
+        ));
     }
     Ok(())
 }
@@ -694,9 +688,11 @@ fn resume_after_exec(
     marker: &'static str,
     target_index: usize,
 ) -> Result<(), DriverError> {
-    let new_epoch = inner.a.image_epoch.checked_add(1).ok_or_else(|| {
-        protocol(Some(step_id), "image epoch overflow at resume")
-    })?;
+    let new_epoch = inner
+        .a
+        .image_epoch
+        .checked_add(1)
+        .ok_or_else(|| protocol(Some(step_id), "image epoch overflow at resume"))?;
     let completed = inner.completed.len() as u32;
     let deadline_ns = inner.deadline_ns;
     let manifest_sha_hex = inner.manifest_sha_hex.clone();
@@ -725,7 +721,12 @@ fn resume_after_exec(
     inner.a.next_record = 1;
     let expected = inner.image_shas[target_index];
     authenticate_executable(inner.a.child.pid, &expected, Some(step_id))?;
-    let root = inner.case_root.as_ref().expect("case root").as_fd().try_clone_to_owned();
+    let root = inner
+        .case_root
+        .as_ref()
+        .expect("case root")
+        .as_fd()
+        .try_clone_to_owned();
     match root {
         Ok(owned) => {
             let body = FdTransferBody {
@@ -741,7 +742,9 @@ fn resume_after_exec(
                 &body.encode(),
                 Some(&owned),
             )?;
-            let (_, reply, _) = inner.a.recv(Some(step_id), MessageKind::FdTransferReply, false)?;
+            let (_, reply, _) = inner
+                .a
+                .recv(Some(step_id), MessageKind::FdTransferReply, false)?;
             let echo = FdTransferBody::decode(&reply).map_err(|e| wire_error(Some(step_id), e))?;
             if echo != body {
                 return Err(protocol(Some(step_id), "post-exec root regrant not echoed"));
@@ -881,14 +884,16 @@ fn exit_of(status: std::process::ExitStatus) -> ReapedExit {
     }
 }
 
-fn premeasure(path: &std::path::Path, marker: &'static str) -> Result<([u8; 32], String), DriverError> {
+fn premeasure(
+    path: &std::path::Path,
+    marker: &'static str,
+) -> Result<([u8; 32], String), DriverError> {
     use std::os::unix::ffi::OsStrExt;
     let path_bytes = path.as_os_str().as_bytes();
     if path_bytes.is_empty() || path_bytes.len() > 4096 || path_bytes.contains(&0) {
         return Err(refused(None, format!("{marker} path is not admittable")));
     }
-    let bytes = read_bounded(path, IMAGE_BYTES_MAX)
-        .map_err(|e| std_io_error(None, e))?;
+    let bytes = read_bounded(path, IMAGE_BYTES_MAX).map_err(|e| std_io_error(None, e))?;
     Ok((sha256_of(&bytes), hex_bytes(path_bytes)))
 }
 
@@ -897,7 +902,9 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         return Err(protocol(None, "operation id must be positive"));
     }
     let run_id = run_id_from_hex(&config.run_hex).map_err(|e| wire_error(None, e))?;
-    if !config.worker.is_absolute() || !config.image_a.is_absolute() || !config.image_b.is_absolute()
+    if !config.worker.is_absolute()
+        || !config.image_a.is_absolute()
+        || !config.image_b.is_absolute()
     {
         return Err(refused(None, "worker and image paths must be absolute"));
     }
@@ -949,9 +956,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     }
     // SAFETY: the caller's root File outlives this borrow.
     let root_fd = unsafe { rustix::fd::BorrowedFd::borrow_raw(config.root.as_raw_fd()) };
-    if let Err(e) =
-        rustix::fs::mkdirat(&root_fd, &case_name, rustix::fs::Mode::from_bits_truncate(0o700))
-    {
+    if let Err(e) = rustix::fs::mkdirat(
+        &root_fd,
+        &case_name,
+        rustix::fs::Mode::from_bits_truncate(0o700),
+    ) {
         return Err(refused(None, format!("case directory refused: {e}")));
     }
     let case_root: OwnedFd = rustix::fs::openat(
@@ -1029,7 +1038,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     channel_a.child.pidfd = open_pidfd(channel_a.child.pid);
     if parent_failure.as_deref() == Some("after_pidfd_register") {
         let pid = channel_a.child.pid;
-        let pidfd_state = if channel_a.child.pidfd.is_some() { "held" } else { "missing" };
+        let pidfd_state = if channel_a.child.pidfd.is_some() {
+            "held"
+        } else {
+            "missing"
+        };
         kill_and_reap_setup(&mut channel_a);
         let (dir_note, dir_removed) = dir_retirement_note(&case_dir_owned);
         if channel_a.child.pidfd.is_some() {
@@ -1119,7 +1132,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     let mut failed: Option<DriverError> = None;
     for (index, (slot, marker)) in [(Actor::A, "A"), (Actor::B, "B")].into_iter().enumerate() {
         let outcome = (|| -> Result<(), DriverError> {
-            let channel = if index == 0 { &mut inner.a } else { &mut inner.b };
+            let channel = if index == 0 {
+                &mut inner.a
+            } else {
+                &mut inner.b
+            };
             // Outage controls are A-only; B always boots clean.
             let hello_control = if index == 0 { worker_control } else { None };
             hello_exchange(
@@ -1143,7 +1160,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
             Ok(())
         })();
         if let Err(error) = outcome {
-            let channel = if index == 0 { &mut inner.a } else { &mut inner.b };
+            let channel = if index == 0 {
+                &mut inner.a
+            } else {
+                &mut inner.b
+            };
             let gone = channel.observed_gone();
             failed = Some(if gone {
                 refused(
@@ -1160,7 +1181,12 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         }
     }
     if failed.is_none() {
-        let root = inner.case_root.as_ref().expect("case root").as_fd().try_clone_to_owned();
+        let root = inner
+            .case_root
+            .as_ref()
+            .expect("case root")
+            .as_fd()
+            .try_clone_to_owned();
         match root {
             Ok(owned) => {
                 let body = FdTransferBody {
@@ -1169,7 +1195,13 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                     image_epoch: 1,
                     grant_id: 1,
                 };
-                let sent = inner.a.send(None, MessageKind::FdTransferRequest, 1, &body.encode(), Some(&owned));
+                let sent = inner.a.send(
+                    None,
+                    MessageKind::FdTransferRequest,
+                    1,
+                    &body.encode(),
+                    Some(&owned),
+                );
                 let outcome = sent.and_then(|_| {
                     let (_, reply, _) = inner.a.recv(None, MessageKind::FdTransferReply, false)?;
                     let echo = FdTransferBody::decode(&reply).map_err(|e| wire_error(None, e))?;
@@ -1232,12 +1264,19 @@ fn drain_records(
             offset: 0,
             max_chunk_bytes: CHUNK_MAX as u32,
         };
-        channel.send(Some(step_id), MessageKind::RawRequest, 0, &request.encode(), None)?;
+        channel.send(
+            Some(step_id),
+            MessageKind::RawRequest,
+            0,
+            &request.encode(),
+            None,
+        )?;
         let (_, first_bytes, _) = channel.recv(Some(step_id), MessageKind::RawReply, false)?;
         if first_bytes.len() < 48 {
             return Err(protocol(Some(step_id), "raw reply shorter than prefix"));
         }
-        let prefix = FragmentPrefix::decode(&first_bytes[..48]).map_err(|e| wire_error(Some(step_id), e))?;
+        let prefix =
+            FragmentPrefix::decode(&first_bytes[..48]).map_err(|e| wire_error(Some(step_id), e))?;
         if prefix.index != index || prefix.offset != 0 {
             return Err(protocol(Some(step_id), "fragment index or offset mismatch"));
         }
@@ -1249,14 +1288,22 @@ fn drain_records(
             let follow = RawRequest {
                 record_index: index,
                 offset: assembled.len() as u32,
-                max_chunk_bytes: (prefix.total_bytes - assembled.len() as u32).min(CHUNK_MAX as u32),
+                max_chunk_bytes: (prefix.total_bytes - assembled.len() as u32)
+                    .min(CHUNK_MAX as u32),
             };
-            channel.send(Some(step_id), MessageKind::RawRequest, 0, &follow.encode(), None)?;
+            channel.send(
+                Some(step_id),
+                MessageKind::RawRequest,
+                0,
+                &follow.encode(),
+                None,
+            )?;
             let (_, more, _) = channel.recv(Some(step_id), MessageKind::RawReply, false)?;
             if more.len() < 48 {
                 return Err(protocol(Some(step_id), "continuation shorter than prefix"));
             }
-            let next = FragmentPrefix::decode(&more[..48]).map_err(|e| wire_error(Some(step_id), e))?;
+            let next =
+                FragmentPrefix::decode(&more[..48]).map_err(|e| wire_error(Some(step_id), e))?;
             if next.index != index
                 || next.total_bytes != prefix.total_bytes
                 || next.offset != assembled.len() as u32
@@ -1272,7 +1319,8 @@ fn drain_records(
         if sha256_of(&assembled) != prefix.whole_sha256 {
             return Err(protocol(Some(step_id), "record digest mismatch"));
         }
-        let value = parse_canonical(&assembled, PAYLOAD_MAX).map_err(|e| wire_error(Some(step_id), e))?;
+        let value =
+            parse_canonical(&assembled, PAYLOAD_MAX).map_err(|e| wire_error(Some(step_id), e))?;
         if value["invocation"] != *invocation
             || value["step_id"] != step_id
             || value["record_index"] != index
@@ -1333,22 +1381,46 @@ fn advance_a_with_reply(
         return Err(protocol(Some(step_id), "channel not authenticated"));
     }
     let epoch = inner.a.image_epoch;
-    let reply = advance_exchange(&mut inner.a, action, Actor::A, epoch, blob_mask, script_index, step_id)?;
+    let reply = advance_exchange(
+        &mut inner.a,
+        action,
+        Actor::A,
+        epoch,
+        blob_mask,
+        script_index,
+        step_id,
+    )?;
     if reply.image_epoch != epoch {
         return Err(protocol(Some(step_id), "unexpected epoch change"));
     }
     if reply.pid != inner.a.child.pid {
-        return Err(protocol(Some(step_id), "reply pid differs from owned child"));
+        return Err(protocol(
+            Some(step_id),
+            "reply pid differs from owned child",
+        ));
     }
     let first = reply.first_record;
     let count = reply.record_count;
     if count == 0 {
         match action {
             Action::ExecB | Action::ExecA | Action::ExecFromSibling => {}
-            _ => return Err(protocol(Some(step_id), "only exec steps drain zero records")),
+            _ => {
+                return Err(protocol(
+                    Some(step_id),
+                    "only exec steps drain zero records",
+                ))
+            }
         }
     } else {
-        drain_records(&mut inner.a, &inner.invocation, &mut inner.raw, step_id, first, count, "a")?;
+        drain_records(
+            &mut inner.a,
+            &inner.invocation,
+            &mut inner.raw,
+            step_id,
+            first,
+            count,
+            "a",
+        )?;
     }
     Ok(reply)
 }
@@ -1365,11 +1437,15 @@ fn worker_advance(
 }
 
 fn verify_tricky_comm(pid: u32, step_id: &str) -> Result<(), DriverError> {
-    let stat = std::fs::read(format!("/proc/{pid}/stat")).map_err(|e| std_io_error(Some(step_id), e))?;
+    let stat =
+        std::fs::read(format!("/proc/{pid}/stat")).map_err(|e| std_io_error(Some(step_id), e))?;
     let (comm, _, _) = super::oracle::parse_stat_comm_state_starttime(&stat)
         .map_err(|e| protocol(Some(step_id), format!("stat parse: {}", e.detail())))?;
     if comm != TRICKY_COMM.as_bytes() {
-        return Err(protocol(Some(step_id), "worker comm differs from tricky literal"));
+        return Err(protocol(
+            Some(step_id),
+            "worker comm differs from tricky literal",
+        ));
     }
     Ok(())
 }
@@ -1382,7 +1458,10 @@ fn fstat_size(fd: &OwnedFd, step_id: &str) -> Result<u64, DriverError> {
 
 fn read_fd_all(fd: &OwnedFd, step_id: &str) -> Result<Vec<u8>, DriverError> {
     use std::os::unix::fs::FileExt;
-    let dup: OwnedFd = fd.try_clone().map_err(std::io::Error::from).map_err(|e| std_io_error(Some(step_id), e))?;
+    let dup: OwnedFd = fd
+        .try_clone()
+        .map_err(std::io::Error::from)
+        .map_err(|e| std_io_error(Some(step_id), e))?;
     let file: std::fs::File = dup.into();
     let mut out = Vec::new();
     let mut chunk = [0u8; 8192];
@@ -1423,7 +1502,9 @@ fn pull_file(
         &body.encode(),
         None,
     )?;
-    let (_, reply, fd) = inner.a.recv(Some(step_id), MessageKind::FdTransferReply, true)?;
+    let (_, reply, fd) = inner
+        .a
+        .recv(Some(step_id), MessageKind::FdTransferReply, true)?;
     let echo = FdTransferBody::decode(&reply).map_err(|e| wire_error(Some(step_id), e))?;
     if echo != body {
         return Err(protocol(Some(step_id), "fd pull not echoed"));
@@ -1465,7 +1546,10 @@ fn pidfd_ready(
             tv_sec: 0,
             tv_nsec: 100_000_000,
         };
-        let mut fds = [rustix::event::PollFd::new(pidfd, rustix::event::PollFlags::IN)];
+        let mut fds = [rustix::event::PollFd::new(
+            pidfd,
+            rustix::event::PollFlags::IN,
+        )];
         let ready =
             rustix::event::poll(&mut fds, Some(&timeout)).map_err(|e| io_error(step_id, e))?;
         if ready > 0 {
@@ -1492,7 +1576,8 @@ fn exe_sha_of(pid: u32, live: Option<u32>, step_id: &str) -> Result<[u8; 32], Dr
 
 fn task_tids_of(pid: u32, step_id: &str) -> Result<Vec<u32>, DriverError> {
     let mut tids = Vec::new();
-    let dir = std::fs::read_dir(format!("/proc/{pid}/task")).map_err(|e| std_io_error(Some(step_id), e))?;
+    let dir = std::fs::read_dir(format!("/proc/{pid}/task"))
+        .map_err(|e| std_io_error(Some(step_id), e))?;
     for entry in dir {
         let entry = entry.map_err(|e| std_io_error(Some(step_id), e))?;
         let tid = entry
@@ -1548,7 +1633,10 @@ fn poll_leader_zombie(pid: u32, sibling: u32, step_id: &str) -> Result<(), Drive
 /// /proc/PID/fd, then killed and exactly reaped before the next spawns.
 fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError> {
     if inner.file_a.is_none() || inner.file_b.is_none() {
-        return Err(protocol(Some(step_id), "inventory needs offered FileA/B first"));
+        return Err(protocol(
+            Some(step_id),
+            "inventory needs offered FileA/B first",
+        ));
     }
     const CANARY_HEX: &str = "53424649585455524543414e41525931";
     let token: Vec<u8> = (0..CANARY_HEX.len())
@@ -1557,9 +1645,8 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
         .collect();
     // NOTE: plain pipe() is NOT cloexec; only the explicit stderr grant may
     // cross exec, never the parent's own canary ends.
-    let (canary_read, canary_write) =
-        rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
-            .map_err(|e| io_error(Some(step_id), e))?;
+    let (canary_read, canary_write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+        .map_err(|e| io_error(Some(step_id), e))?;
     {
         let mut writer: std::fs::File = canary_write
             .try_clone()
@@ -1567,7 +1654,9 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
             .map_err(|e| std_io_error(Some(step_id), e))?
             .into();
         use std::io::Write;
-        writer.write_all(&token).map_err(|e| std_io_error(Some(step_id), e))?;
+        writer
+            .write_all(&token)
+            .map_err(|e| std_io_error(Some(step_id), e))?;
     }
     let canary_ino = rustix::fs::fstat(&canary_read)
         .map_err(|e| io_error(Some(step_id), e))?
@@ -1607,17 +1696,29 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
         .reaped = true;
 
     let Some((fd_no, dev, ino, fdinfo_hex)) = positive_hit else {
-        return Err(protocol(Some(step_id), "positive child lacks the canary FD"));
+        return Err(protocol(
+            Some(step_id),
+            "positive child lacks the canary FD",
+        ));
     };
     if fd_no != 2 {
-        return Err(protocol(Some(step_id), "canary must arrive only as the granted stderr"));
+        return Err(protocol(
+            Some(step_id),
+            "canary must arrive only as the granted stderr",
+        ));
     }
     if negative_hit.is_some() {
-        return Err(protocol(Some(step_id), "negative child unexpectedly holds the canary"));
+        return Err(protocol(
+            Some(step_id),
+            "negative child unexpectedly holds the canary",
+        ));
     }
     for (channel, what) in [(&mut inner.a, "A"), (&mut inner.b, "B")] {
         if channel.observed_gone() {
-            return Err(protocol(Some(step_id), format!("child {what} died during inventory")));
+            return Err(protocol(
+                Some(step_id),
+                format!("child {what} died during inventory"),
+            ));
         }
     }
     let positive_values = serde_json::json!({
@@ -1661,7 +1762,9 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
             "errno": null,
             "producer_charges": null,
         });
-        let bytes = canonical_json(&body).map_err(|e| wire_error(Some(step_id), e))?.into_bytes();
+        let bytes = canonical_json(&body)
+            .map_err(|e| wire_error(Some(step_id), e))?
+            .into_bytes();
         inner.raw.push(DrainedRecord {
             actor: actor.to_string(),
             step_id: step_id.to_string(),
@@ -1693,7 +1796,10 @@ fn spawn_inventory_child(
     .map_err(|e| io_error(Some(step_id), e))?;
     let stderr = match canary {
         Some(fd) => {
-            let owned: OwnedFd = fd.try_clone().map_err(std::io::Error::from).map_err(|e| std_io_error(Some(step_id), e))?;
+            let owned: OwnedFd = fd
+                .try_clone()
+                .map_err(std::io::Error::from)
+                .map_err(|e| std_io_error(Some(step_id), e))?;
             Stdio::from(owned)
         }
         None => Stdio::null(),
@@ -1711,9 +1817,19 @@ fn spawn_inventory_child(
         .spawn()
         .map_err(|e| std_io_error(Some(step_id), e))?;
     let pid = child.id();
-    match child.try_wait().map_err(|e| std_io_error(Some(step_id), e))? {
-        None => Ok(InventoryChild { child, pid, _sock: parent_end }),
-        Some(_) => Err(protocol(Some(step_id), "inventory child exited before inspection")),
+    match child
+        .try_wait()
+        .map_err(|e| std_io_error(Some(step_id), e))?
+    {
+        None => Ok(InventoryChild {
+            child,
+            pid,
+            _sock: parent_end,
+        }),
+        Some(_) => Err(protocol(
+            Some(step_id),
+            "inventory child exited before inspection",
+        )),
     }
 }
 
@@ -1722,7 +1838,8 @@ fn scan_child_for_canary(
     want_link: &str,
     step_id: &str,
 ) -> Result<Option<(u32, u64, u64, String)>, DriverError> {
-    let dir = std::fs::read_dir(format!("/proc/{pid}/fd")).map_err(|e| std_io_error(Some(step_id), e))?;
+    let dir =
+        std::fs::read_dir(format!("/proc/{pid}/fd")).map_err(|e| std_io_error(Some(step_id), e))?;
     for entry in dir {
         let entry = entry.map_err(|e| std_io_error(Some(step_id), e))?;
         let link = std::fs::read_link(entry.path()).map_err(|e| std_io_error(Some(step_id), e))?;
@@ -1732,12 +1849,18 @@ fn scan_child_for_canary(
                 .to_string_lossy()
                 .parse()
                 .map_err(|_| protocol(Some(step_id), "non-numeric child fd"))?;
-            let stat = std::fs::metadata(entry.path()).map_err(|e| std_io_error(Some(step_id), e))?;
+            let stat =
+                std::fs::metadata(entry.path()).map_err(|e| std_io_error(Some(step_id), e))?;
             use std::os::unix::fs::MetadataExt;
             let fdinfo = std::fs::read(format!("/proc/{pid}/fdinfo/{fd_no}"))
                 .map_err(|e| std_io_error(Some(step_id), e))?;
             let capped = fdinfo.len().min(4096);
-            return Ok(Some((fd_no, stat.dev(), stat.ino(), hex_bytes(&fdinfo[..capped]))));
+            return Ok(Some((
+                fd_no,
+                stat.dev(),
+                stat.ino(),
+                hex_bytes(&fdinfo[..capped]),
+            )));
         }
     }
     Ok(None)
@@ -1778,7 +1901,10 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
     let script = scenario.steps();
     let position = script.iter().position(|s| s.id == step_id);
     let Some(index) = position else {
-        return Err(protocol(Some(step_id), "step is not in the scenario script"));
+        return Err(protocol(
+            Some(step_id),
+            "step is not in the scenario script",
+        ));
     };
     if index != inner.cursor {
         return Err(protocol(Some(step_id), "step is out of order"));
@@ -1883,7 +2009,12 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
                     rustix::process::pidfd_send_signal(fd, rustix::process::Signal::TERM)
                         .map_err(|e| io_error(Some(step_id), e))?;
                 }
-                None => return Err(protocol(Some(step_id), "parent exit needs the original pidfd")),
+                None => {
+                    return Err(protocol(
+                        Some(step_id),
+                        "parent exit needs the original pidfd",
+                    ))
+                }
             }
             if !pidfd_ready(inner.a.child.pidfd.as_ref(), Some(step_id), EXIT_WAIT_MS)? {
                 return Err(DriverError::new(
@@ -1906,7 +2037,10 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             inner.a.child.child.take();
         }
         Action::Close => {
-            return Err(protocol(Some(step_id), "close must run through both channels"));
+            return Err(protocol(
+                Some(step_id),
+                "close must run through both channels",
+            ));
         }
         Action::ExecB | Action::ExecA | Action::ExecFromSibling => {
             let (marker, target): (&'static str, usize) = match action {
@@ -1917,7 +2051,10 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             let from_sibling = action == Action::ExecFromSibling;
             let live_before = if from_sibling { inner.tid } else { None };
             if from_sibling && live_before.is_none() {
-                return Err(protocol(Some(step_id), "nonleader exec without a live sibling"));
+                return Err(protocol(
+                    Some(step_id),
+                    "nonleader exec without a live sibling",
+                ));
             }
             let sha_before = exe_sha_of(inner.a.child.pid, live_before, step_id)?;
             worker_advance(&mut inner, action, 0, script_index, step_id)?;
@@ -1927,12 +2064,18 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             }
             let sha_after = exe_sha_of(inner.a.child.pid, None, step_id)?;
             if sha_before == sha_after && inner.image_shas[0] != inner.image_shas[1] {
-                return Err(protocol(Some(step_id), "exec left the running image unchanged"));
+                return Err(protocol(
+                    Some(step_id),
+                    "exec left the running image unchanged",
+                ));
             }
             if from_sibling {
                 let tids = task_tids_of(inner.a.child.pid, step_id)?;
                 if tids != vec![inner.a.child.pid] {
-                    return Err(protocol(Some(step_id), "nonleader exec left sibling threads behind"));
+                    return Err(protocol(
+                        Some(step_id),
+                        "nonleader exec left sibling threads behind",
+                    ));
                 }
             }
         }
@@ -1942,7 +2085,10 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             worker_advance(&mut inner, action, 0, script_index, step_id)?;
             let sha_after = exe_sha_of(inner.a.child.pid, live, step_id)?;
             if sha_before != sha_after {
-                return Err(protocol(Some(step_id), "failed exec changed the running image"));
+                return Err(protocol(
+                    Some(step_id),
+                    "failed exec changed the running image",
+                ));
             }
             let witnessed = inner.raw.iter().any(|r| {
                 if r.step_id != step_id || r.kind != "exec" {
@@ -1964,7 +2110,10 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             let pid = inner.a.child.pid;
             let tids = task_tids_of(pid, step_id)?;
             if tids.len() != 2 || !tids.contains(&pid) {
-                return Err(protocol(Some(step_id), "sibling start lacks exactly two tasks"));
+                return Err(protocol(
+                    Some(step_id),
+                    "sibling start lacks exactly two tasks",
+                ));
             }
             let sibling = *tids.iter().find(|t| **t != pid).unwrap();
             if reply.tid != sibling {
@@ -2086,14 +2235,15 @@ fn record_create_death(inner: &mut PairInner, step_id: &str, death: DriverError)
         return death;
     };
     let mut notes = Vec::with_capacity(2);
-    for (leaf, slot, sample) in
-        [("a", "linux.file-a"), ("b", "linux.file-b")]
-            .into_iter()
-            .zip(samples.iter())
-            .map(|((leaf, slot), sample)| (leaf, slot, sample))
+    for (leaf, slot, sample) in [("a", "linux.file-a"), ("b", "linux.file-b")]
+        .into_iter()
+        .zip(samples.iter())
+        .map(|((leaf, slot), sample)| (leaf, slot, sample))
     {
         match sample {
-            LeafSample::Bytes(bytes) => notes.push(format!("{leaf}: present {} bytes", bytes.len())),
+            LeafSample::Bytes(bytes) => {
+                notes.push(format!("{leaf}: present {} bytes", bytes.len()))
+            }
             LeafSample::Absent => notes.push(format!("{leaf}: absent")),
             LeafSample::Unreadable => notes.push(format!("{leaf}: unreadable")),
         }
@@ -2118,12 +2268,21 @@ fn record_mutate_death(inner: &mut PairInner, step_id: &str, death: DriverError)
     let (mutation_len, matched_prefix) = match inner.blobs[2].as_ref() {
         Some(mutation) => (
             mutation.len(),
-            readback.iter().zip(mutation.iter()).take_while(|(a, b)| a == b).count(),
+            readback
+                .iter()
+                .zip(mutation.iter())
+                .take_while(|(a, b)| a == b)
+                .count(),
         ),
         None => (0, 0),
     };
-    if push_parent_mutation(inner, step_id, "linux.file-a", &LeafSample::Bytes(readback.clone()))
-        .is_err()
+    if push_parent_mutation(
+        inner,
+        step_id,
+        "linux.file-a",
+        &LeafSample::Bytes(readback.clone()),
+    )
+    .is_err()
     {
         return death;
     }
@@ -2211,15 +2370,30 @@ pub(crate) fn heartbeat_b(shared: &SharedPair, step_id: &str) -> Result<(), Driv
         return Err(protocol(Some(step_id), "heartbeat step is not in script"));
     };
     let epoch = inner.b.image_epoch;
-    let reply =
-        advance_exchange(&mut inner.b, action, Actor::B, epoch, 0, (position + 1) as u32, step_id)?;
+    let reply = advance_exchange(
+        &mut inner.b,
+        action,
+        Actor::B,
+        epoch,
+        0,
+        (position + 1) as u32,
+        step_id,
+    )?;
     if reply.pid != inner.b.child.pid {
         return Err(protocol(Some(step_id), "B reply pid mismatch"));
     }
     let first = reply.first_record;
     let count = reply.record_count;
     let pair: &mut PairInner = &mut inner;
-    drain_records(&mut pair.b, &pair.invocation, &mut pair.raw, step_id, first, count, "b")
+    drain_records(
+        &mut pair.b,
+        &pair.invocation,
+        &mut pair.raw,
+        step_id,
+        first,
+        count,
+        "b",
+    )
 }
 
 pub(crate) fn upload_blobs_shared(
@@ -2257,10 +2431,14 @@ pub(crate) fn upload_blobs_shared(
             };
             let mut payload = prefix.encode().to_vec();
             payload.extend_from_slice(&bytes[offset as usize..(offset + chunk) as usize]);
-            inner.a.send(None, MessageKind::InputChunkRequest, 0, &payload, None)?;
+            inner
+                .a
+                .send(None, MessageKind::InputChunkRequest, 0, &payload, None)?;
             let (_, ack_bytes, _) = inner.a.recv(None, MessageKind::InputChunkAck, false)?;
             let ack = InputChunkAck::decode(&ack_bytes).map_err(|e| wire_error(None, e))?;
-            if ack.blob_index != slot || ack.total_bytes != total || ack.next_offset != offset + chunk
+            if ack.blob_index != slot
+                || ack.total_bytes != total
+                || ack.next_offset != offset + chunk
             {
                 return Err(protocol(None, "chunk ack mismatch"));
             }
@@ -2356,10 +2534,19 @@ impl LivePair {
     }
     fn pulled_file(&self, is_a: bool) -> std::io::Result<std::fs::File> {
         let inner = self.inner.lock().expect("pair lock");
-        let fd = if is_a { inner.file_a.as_ref() } else { inner.file_b.as_ref() }.ok_or_else(|| {
+        let fd = if is_a {
+            inner.file_a.as_ref()
+        } else {
+            inner.file_b.as_ref()
+        }
+        .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                if is_a { "file A not pulled" } else { "file B not pulled" },
+                if is_a {
+                    "file A not pulled"
+                } else {
+                    "file B not pulled"
+                },
             )
         })?;
         let owned: OwnedFd = fd.try_clone().map_err(std::io::Error::from)?;
@@ -2393,8 +2580,7 @@ impl LivePair {
         }
         if let Some(case_root) = inner.case_root.as_ref() {
             for leaf in ["a", "b", "a-original", "missing-executable"] {
-                let _ =
-                    rustix::fs::unlinkat(case_root, leaf, rustix::fs::AtFlags::empty());
+                let _ = rustix::fs::unlinkat(case_root, leaf, rustix::fs::AtFlags::empty());
             }
         }
         drop(inner.case_root.take());
@@ -2475,7 +2661,11 @@ pub(crate) fn deadline_hold_run(
     {
         let mut inner = shared.lock().expect("pair lock");
         for what in ["A", "B"] {
-            let channel = if what == "A" { &mut inner.a } else { &mut inner.b };
+            let channel = if what == "A" {
+                &mut inner.a
+            } else {
+                &mut inner.b
+            };
             if channel.observed_gone() {
                 return Err(protocol(
                     Some(completed_prefix),
@@ -2490,4 +2680,3 @@ pub(crate) fn deadline_hold_run(
         extra_worker_datagrams: 0,
     })
 }
-

@@ -27,13 +27,13 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("scopebase-tt03-worker is Linux-only");
 
-use scopebase_testkit::fixture::linux::TRICKY_COMM;
 use scopebase_testkit::fixture::linux::wire::{
     canonical_json, parse_canonical, parse_hello_control, sha256_of, validate_hello_request,
     Action, Actor, AdvanceReply, AdvanceRequest, Charges, CloseBody, CloseReason, Envelope,
     FdDirection, FdRole, FdTransferBody, FragmentPrefix, HelloControl, InputChunkAck, MessageKind,
     ProducerCharges, RawRecord, RawRequest, DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
 };
+use scopebase_testkit::fixture::linux::TRICKY_COMM;
 use scopebase_testkit::fixture::linux::{control_pairing_applies, Scenario};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -87,7 +87,10 @@ impl Blob {
 
 enum PostReply {
     None,
-    Exec { target: PathBuf, marker: &'static str },
+    Exec {
+        target: PathBuf,
+        marker: &'static str,
+    },
     Handover,
 }
 
@@ -145,7 +148,9 @@ fn self_task_file(name: &str) -> String {
 
 fn decode_hex_lower(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0
-        || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || !s
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return Err("path_hex must be lowercase hex".to_string());
     }
@@ -157,7 +162,8 @@ fn decode_hex_lower(s: &str) -> Result<Vec<u8>, String> {
 
 fn parse_resume_env(value: &str, slot: Actor) -> Result<(u32, &'static str), String> {
     let mut parts = value.split(':');
-    let (epoch_s, marker_s, slot_s) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+    let (epoch_s, marker_s, slot_s) = match (parts.next(), parts.next(), parts.next(), parts.next())
+    {
         (Some(e), Some(m), Some(s), None) => (e, m, s),
         _ => return Err("resume env must be <epoch>:<marker>:<slot>".to_string()),
     };
@@ -212,7 +218,9 @@ fn term_disposition_default() -> bool {
         return false;
     }
     masks.iter().all(|mask| {
-        u64::from_str_radix(mask, 16).map(|bits| bits & (1 << 14) == 0).unwrap_or(false)
+        u64::from_str_radix(mask, 16)
+            .map(|bits| bits & (1 << 14) == 0)
+            .unwrap_or(false)
     })
 }
 
@@ -294,8 +302,9 @@ impl Worker {
             ));
         }
         let header: [u8; HEADER_BYTES] = data[..HEADER_BYTES].try_into().unwrap();
-        let envelope =
-            Envelope::decode(&header).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.detail().to_string()))?;
+        let envelope = Envelope::decode(&header).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.detail().to_string())
+        })?;
         if received.bytes != HEADER_BYTES + envelope.payload_len as usize {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -324,7 +333,13 @@ impl Worker {
         Ok((envelope, data[HEADER_BYTES..received.bytes].to_vec(), fds))
     }
 
-    fn reply_envelope(&self, request: &Envelope, kind: MessageKind, payload_len: u32, fd_count: u16) -> Envelope {
+    fn reply_envelope(
+        &self,
+        request: &Envelope,
+        kind: MessageKind,
+        payload_len: u32,
+        fd_count: u16,
+    ) -> Envelope {
         Envelope {
             kind,
             payload_len,
@@ -480,7 +495,9 @@ impl Worker {
         match (mode, self.resume_pending) {
             ("boot", false) => {}
             ("resume", true) => {}
-            ("boot", true) => return Err("boot hello after exec state; resume required".to_string()),
+            ("boot", true) => {
+                return Err("boot hello after exec state; resume required".to_string())
+            }
             ("resume", false) => return Err("resume hello without post-exec state".to_string()),
             _ => return Err("hello mode must be boot or resume".to_string()),
         }
@@ -492,8 +509,7 @@ impl Worker {
         }
         let scenario = Scenario::parse(value["scenario"].as_str().unwrap_or(""))
             .ok_or_else(|| "hello scenario is not a closed scenario".to_string())?;
-        let control =
-            parse_hello_control(&value["control"]).map_err(|e| e.detail().to_string())?;
+        let control = parse_hello_control(&value["control"]).map_err(|e| e.detail().to_string())?;
         match (mode, control) {
             ("boot", None) => self.armed = None,
             ("boot", Some(armed)) => {
@@ -518,12 +534,16 @@ impl Worker {
                     .collect()
             })
             .unwrap_or_default();
-        let images = value["images"].as_array().ok_or("hello images must be an array")?;
+        let images = value["images"]
+            .as_array()
+            .ok_or("hello images must be an array")?;
         if images.len() != 2 {
             return Err("hello must carry exactly two images".to_string());
         }
         for (index, image) in images.iter().enumerate() {
-            let path_hex = image["path_hex"].as_str().ok_or("image path_hex must be hex")?;
+            let path_hex = image["path_hex"]
+                .as_str()
+                .ok_or("image path_hex must be hex")?;
             let bytes = decode_hex_lower(path_hex)?;
             if bytes.is_empty() || bytes.len() > 4096 || bytes.contains(&0) {
                 return Err("image path is not admittable".to_string());
@@ -564,8 +584,7 @@ impl Worker {
     }
 
     fn serve_advance(&mut self, request: &Envelope, payload: &[u8]) -> Result<(), String> {
-        let decoded =
-            AdvanceRequest::decode(payload).map_err(|e| e.detail().to_string())?;
+        let decoded = AdvanceRequest::decode(payload).map_err(|e| e.detail().to_string())?;
         if decoded.actor != self.slot {
             return Err("advance actor mismatch".to_string());
         }
@@ -761,7 +780,8 @@ impl Worker {
         let encoded = reply.encode();
         let envelope =
             self.reply_envelope(request, MessageKind::AdvanceReply, encoded.len() as u32, 0);
-        self.send(envelope, &encoded, None).map_err(|e| e.to_string())?;
+        self.send(envelope, &encoded, None)
+            .map_err(|e| e.to_string())?;
         match post {
             PostReply::None => Ok(()),
             PostReply::Exec { target, marker } => self.exec_into(target, marker),
@@ -775,7 +795,10 @@ impl Worker {
     /// refuses instead of executing an unexpected program.
     fn attempt_missing_exec(&mut self) -> Result<i32, String> {
         use std::os::unix::io::AsRawFd;
-        let root = self.case_root.as_ref().ok_or("exec_missing needs the case root")?;
+        let root = self
+            .case_root
+            .as_ref()
+            .ok_or("exec_missing needs the case root")?;
         self.charges.native_attempts += 1;
         match rustix::fs::openat(
             root,
@@ -810,9 +833,12 @@ impl Worker {
     /// resume state cannot be mistaken for a post-exec barrier.
     fn exec_into(&mut self, target: PathBuf, marker: &'static str) -> Result<(), String> {
         let epoch = self.epoch.checked_add(1).ok_or("epoch overflow")?;
-        std::env::set_var(RESUME_ENV, format!("{epoch}:{marker}:{}", self.slot.as_str()));
-        let argv0 = std::ffi::CString::new(target.as_os_str().as_bytes())
-            .map_err(|e| e.to_string())?;
+        std::env::set_var(
+            RESUME_ENV,
+            format!("{epoch}:{marker}:{}", self.slot.as_str()),
+        );
+        let argv0 =
+            std::ffi::CString::new(target.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
         let a1 = std::ffi::CString::new("--scopebase-fixture-v1").unwrap();
         let a2 = std::ffi::CString::new("--slot").unwrap();
         let a3 = std::ffi::CString::new(self.slot.as_str()).unwrap();
@@ -839,7 +865,9 @@ impl Worker {
         // SAFETY: errno read immediately on the failing thread.
         let errno = unsafe { *libc::__errno_location() };
         std::env::remove_var(RESUME_ENV);
-        Err(format!("execve of image {marker} failed with errno {errno}"))
+        Err(format!(
+            "execve of image {marker} failed with errno {errno}"
+        ))
     }
 
     /// Real sibling spawn: a second OS thread reports its kernel TID and then
@@ -925,7 +953,10 @@ impl Worker {
     }
 
     fn create_files(&mut self) -> Result<(), String> {
-        let root = self.case_root.as_ref().ok_or("create needs the case root")?;
+        let root = self
+            .case_root
+            .as_ref()
+            .ok_or("create needs the case root")?;
         for (index, leaf) in [(0usize, "a"), (1, "b")] {
             let blob = &self.blobs[index];
             if !blob.complete() {
@@ -949,7 +980,8 @@ impl Worker {
             self.charges.file_work_bytes += bytes.len() as u64;
             use std::os::unix::fs::FileExt;
             let mut back = vec![0u8; bytes.len()];
-            file.read_exact_at(&mut back, 0).map_err(|e| e.to_string())?;
+            file.read_exact_at(&mut back, 0)
+                .map_err(|e| e.to_string())?;
             if back != bytes {
                 return Err("create readback mismatch".to_string());
             }
@@ -969,7 +1001,10 @@ impl Worker {
     }
 
     fn replace_file_a(&mut self) -> Result<(), String> {
-        let root = self.case_root.as_ref().ok_or("replace needs the case root")?;
+        let root = self
+            .case_root
+            .as_ref()
+            .ok_or("replace needs the case root")?;
         self.charges.native_attempts += 2;
         rustix::fs::renameat(root, "a", root, "a-original").map_err(|e| e.to_string())?;
         rustix::fs::renameat(root, "b", root, "a").map_err(|e| e.to_string())?;
@@ -978,7 +1013,10 @@ impl Worker {
     }
 
     fn unlink_original_a(&mut self) -> Result<(), String> {
-        let root = self.case_root.as_ref().ok_or("unlink needs the case root")?;
+        let root = self
+            .case_root
+            .as_ref()
+            .ok_or("unlink needs the case root")?;
         self.charges.native_attempts += 1;
         rustix::fs::unlinkat(root, "a-original", rustix::fs::AtFlags::empty())
             .map_err(|e| e.to_string())?;
@@ -997,7 +1035,9 @@ impl Worker {
             return Err("partial write needs the complete mutation blob".to_string());
         }
         let file_a = self.file_a.as_ref().ok_or("partial write needs file A")?;
-        let size = rustix::fs::fstat(file_a).map_err(|e| e.to_string())?.st_size as usize;
+        let size = rustix::fs::fstat(file_a)
+            .map_err(|e| e.to_string())?
+            .st_size as usize;
         if mutation.len() != size || size < 2 {
             return Err(
                 "partial-write premise unsatisfied: file and mutation must share length >= 2"
@@ -1008,14 +1048,16 @@ impl Worker {
         let file: std::fs::File = dup.into();
         use std::os::unix::fs::FileExt;
         let mut current = [0u8; 2];
-        file.read_exact_at(&mut current, 0).map_err(|e| e.to_string())?;
+        file.read_exact_at(&mut current, 0)
+            .map_err(|e| e.to_string())?;
         if current[0] == mutation[0] || current[1] == mutation[1] {
             return Err(
                 "partial-write premise unsatisfied: bytes 0 and 1 must each differ".to_string(),
             );
         }
         self.charges.native_attempts += 1;
-        file.write_all_at(&mutation[..1], 0).map_err(|e| e.to_string())?;
+        file.write_all_at(&mutation[..1], 0)
+            .map_err(|e| e.to_string())?;
         self.charges.file_work_bytes += 1;
         std::process::exit(EXIT_CONTROL_DEATH);
     }
@@ -1029,18 +1071,20 @@ impl Worker {
             return Err("mutate needs the complete mutation blob".to_string());
         }
         let file_a = self.file_a.as_ref().ok_or("mutate needs file A")?;
-        let size = rustix::fs::fstat(file_a).map_err(|e| e.to_string())?.st_size as usize;
+        let size = rustix::fs::fstat(file_a)
+            .map_err(|e| e.to_string())?
+            .st_size as usize;
         if mutation.len() != size {
             return Err("mutation must equal file A length".to_string());
         }
-        let dup: rustix::fd::OwnedFd =
-            file_a.try_clone().map_err(|e| e.to_string())?;
+        let dup: rustix::fd::OwnedFd = file_a.try_clone().map_err(|e| e.to_string())?;
         let file: std::fs::File = dup.into();
         use std::os::unix::fs::FileExt;
         file.write_all_at(&mutation, 0).map_err(|e| e.to_string())?;
         self.charges.file_work_bytes += mutation.len() as u64;
         let mut back = vec![0u8; mutation.len()];
-        file.read_exact_at(&mut back, 0).map_err(|e| e.to_string())?;
+        file.read_exact_at(&mut back, 0)
+            .map_err(|e| e.to_string())?;
         if back != mutation {
             return Err("mutate readback mismatch".to_string());
         }
@@ -1056,8 +1100,7 @@ impl Worker {
         if decoded.offset as usize > record.len() {
             return Err("fragment offset outside record".to_string());
         }
-        let end =
-            (decoded.offset as usize + decoded.max_chunk_bytes as usize).min(record.len());
+        let end = (decoded.offset as usize + decoded.max_chunk_bytes as usize).min(record.len());
         let chunk = &record[decoded.offset as usize..end];
         let prefix = FragmentPrefix {
             index: decoded.record_index,
@@ -1068,8 +1111,7 @@ impl Worker {
         };
         let mut body = prefix.encode().to_vec();
         body.extend_from_slice(chunk);
-        let envelope =
-            self.reply_envelope(request, MessageKind::RawReply, body.len() as u32, 0);
+        let envelope = self.reply_envelope(request, MessageKind::RawReply, body.len() as u32, 0);
         self.send(envelope, &body, None).map_err(|e| e.to_string())
     }
 
@@ -1077,8 +1119,7 @@ impl Worker {
         if payload.len() < 48 {
             return Err("chunk shorter than prefix".to_string());
         }
-        let prefix =
-            FragmentPrefix::decode(&payload[..48]).map_err(|e| e.detail().to_string())?;
+        let prefix = FragmentPrefix::decode(&payload[..48]).map_err(|e| e.detail().to_string())?;
         if prefix.index < 1 || prefix.index > 3 {
             return Err("chunk blob index outside 1..3".to_string());
         }
@@ -1094,7 +1135,8 @@ impl Worker {
                 blob.total = Some(prefix.total_bytes);
                 blob.digest = Some(prefix.whole_sha256);
             }
-            Some(total) if total == prefix.total_bytes && blob.digest == Some(prefix.whole_sha256) => {}
+            Some(total)
+                if total == prefix.total_bytes && blob.digest == Some(prefix.whole_sha256) => {}
             _ => return Err("chunk contradicts declared blob".to_string()),
         }
         if prefix.offset as usize != blob.data.len() {
@@ -1115,7 +1157,8 @@ impl Worker {
         let encoded = ack.encode();
         let envelope =
             self.reply_envelope(request, MessageKind::InputChunkAck, encoded.len() as u32, 0);
-        self.send(envelope, &encoded, None).map_err(|e| e.to_string())
+        self.send(envelope, &encoded, None)
+            .map_err(|e| e.to_string())
     }
 
     fn serve_fd(
@@ -1142,7 +1185,8 @@ impl Worker {
                     encoded.len() as u32,
                     0,
                 );
-                self.send(envelope, &encoded, None).map_err(|e| e.to_string())?;
+                self.send(envelope, &encoded, None)
+                    .map_err(|e| e.to_string())?;
                 if self.armed == Some(ArmedOutage::WorkerExitAfterRootGrant) {
                     std::process::exit(EXIT_CONTROL_DEATH);
                 }
@@ -1162,8 +1206,7 @@ impl Worker {
                     self.file_b.as_ref()
                 }
                 .ok_or("pull needs a created file")?;
-                let pass: rustix::fd::OwnedFd =
-                    file.try_clone().map_err(|e| e.to_string())?;
+                let pass: rustix::fd::OwnedFd = file.try_clone().map_err(|e| e.to_string())?;
                 let encoded = body.encode();
                 let envelope = self.reply_envelope(
                     request,
@@ -1171,7 +1214,8 @@ impl Worker {
                     encoded.len() as u32,
                     1,
                 );
-                self.send(envelope, &encoded, Some(&pass)).map_err(|e| e.to_string())
+                self.send(envelope, &encoded, Some(&pass))
+                    .map_err(|e| e.to_string())
             }
             _ => Err("fd direction and role pair refused".to_string()),
         }
@@ -1188,7 +1232,8 @@ impl Worker {
         let encoded = body.encode();
         let envelope =
             self.reply_envelope(request, MessageKind::CloseReply, encoded.len() as u32, 0);
-        self.send(envelope, &encoded, None).map_err(|e| e.to_string())?;
+        self.send(envelope, &encoded, None)
+            .map_err(|e| e.to_string())?;
         std::process::exit(0);
     }
 
@@ -1254,8 +1299,7 @@ fn main() {
         Err(_) => (1, boot_marker, false),
     };
     // SAFETY: fd 0 is the inherited protocol socket; it is never closed here.
-    let sock: rustix::fd::BorrowedFd<'static> =
-        unsafe { rustix::fd::BorrowedFd::borrow_raw(0) };
+    let sock: rustix::fd::BorrowedFd<'static> = unsafe { rustix::fd::BorrowedFd::borrow_raw(0) };
     let mut worker = Worker {
         sock,
         slot,

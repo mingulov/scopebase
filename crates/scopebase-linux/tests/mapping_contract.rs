@@ -466,11 +466,8 @@ fn map_files_observation_holds_its_object_descriptor() {
             // shadow open through /proc/self/fd stats the same identity.
             use std::os::fd::AsRawFd;
             use std::os::unix::fs::MetadataExt;
-            let shadow = std::fs::File::open(format!(
-                "/proc/self/fd/{}",
-                obs.object().as_raw_fd()
-            ))
-            .expect("held object descriptor is open");
+            let shadow = std::fs::File::open(format!("/proc/self/fd/{}", obs.object().as_raw_fd()))
+                .expect("held object descriptor is open");
             let live = shadow.metadata().expect("shadow stats");
             assert_eq!((live.dev(), live.ino()), (dev, ino));
             assert!(obs.charges().fd_acquisitions() >= 2);

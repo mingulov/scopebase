@@ -690,6 +690,26 @@ impl Data {
         }
     }
 
+    /// S04: register nibbles follow object endianness. Genuine `llc
+    /// -march=bpfeb` output swaps them: a pseudo-call emits register
+    /// byte 0x01 and `mov32 r1, 1` emits 0x10 (LE: 0x10 and 0x01).
+    /// Decoding `src` as the high nibble unconditionally treats every
+    /// big-endian pseudo-call as a helper call and lets unrelocated
+    /// sites evade the initializer guard.
+    fn dst_reg(self, regs: u8) -> u8 {
+        match self {
+            Self::Little => regs & 15,
+            Self::Big => regs >> 4,
+        }
+    }
+
+    fn src_reg(self, regs: u8) -> u8 {
+        match self {
+            Self::Little => regs >> 4,
+            Self::Big => regs & 15,
+        }
+    }
+
     fn u64(self, bytes: &[u8]) -> u64 {
         let mut wide = [0u8; 8];
         wide.copy_from_slice(&bytes[..8]);
@@ -1144,6 +1164,7 @@ pub fn prune_dead_code_with_report(
     check_btf_gates(&image, &dead, &mut work)?;
     let (kept, cursor) = plan_kept(&funcs, &live);
     check_entry_calls(&image, text_idx, &funcs, &relocs, &kept, &mut work)?;
+    check_data_refs(&image, text_idx, &relocs, &kept, &mut work)?;
     let mut out = bytes.to_vec();
     compact_text(&image, text_idx, &kept, cursor, &mut out, &mut work)?;
     let map = rewrite_symtab(
@@ -1354,7 +1375,7 @@ fn check_call_coverage(
             if code != OP_CALL {
                 continue;
             }
-            let source = body[at + 1] >> 4;
+            let source = image.data.src_reg(body[at + 1]);
             if source != 0 && source != 1 {
                 return Err(refuse(
                     ErrorKind::Unsupported,
@@ -1411,7 +1432,7 @@ fn call_dest(
         ));
     }
     let at = reloc.offset as usize;
-    if body[at] != OP_CALL || body[at + 1] >> 4 != 1 {
+    if body[at] != OP_CALL || image.data.src_reg(body[at + 1]) != 1 {
         return Err(refuse(
             ErrorKind::InvalidInput,
             format!("call reloc at {:#x} is not a call", reloc.offset),
@@ -1687,6 +1708,93 @@ fn check_entry_calls(
             return Err(refuse(
                 ErrorKind::InvalidInput,
                 format!("{edge} target {dest:#x} shifted to {new:#x}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// S02: data references (wide loads, absolute fixups) against the
+/// `.text` section symbol carry a raw addend no rewrite pass touches:
+/// `rewrite_relocs` remaps the site and the symbol index only. After
+/// compaction the stale addend silently retargets (a moved callback
+/// still in bounds selects the wrong function), so a stripped or
+/// shifted section-symbol data reference refuses, mirroring R01's
+/// rule for section-symbol calls. Function-symbol references ride
+/// the rewritten values; references into unmoved sections are safe.
+fn check_data_refs(
+    image: &Image<'_>,
+    text_idx: usize,
+    relocs: &[Reloc],
+    kept: &[(u64, u64, u64)],
+    work: &mut u64,
+) -> Result<(), OperationError> {
+    for reloc in relocs {
+        if reloc.typ == R_BPF_64_32 {
+            continue;
+        }
+        charge(work, 1)?;
+        let Some(sym) = image.symbols.get(reloc.sym_idx) else {
+            continue;
+        };
+        if sym.kind() != STT_SECTION || sym.shndx as usize != text_idx {
+            continue;
+        }
+        let target = image
+            .sections
+            .get(reloc.target_sect)
+            .ok_or_else(|| refuse(ErrorKind::InvalidInput, "data reloc outside sections"))?;
+        let body = image.body(target)?;
+        let site = reloc.offset as usize;
+        let end = site
+            .checked_add(8)
+            .ok_or_else(|| refuse(ErrorKind::InvalidInput, "data reloc site overflows"))?;
+        let addend = match reloc.typ {
+            R_BPF_64_64 if target.executable() => {
+                let slot = body.get(site..end).ok_or_else(|| {
+                    refuse(ErrorKind::InvalidInput, "data reloc site outside section")
+                })?;
+                if slot[0] != OP_LD_IMM64 {
+                    return Err(refuse(
+                        ErrorKind::InvalidInput,
+                        "section-symbol address fixup is not a wide load",
+                    ));
+                }
+                u64::from(image.data.u32(&slot[4..8]))
+            }
+            R_BPF_64_64 | R_BPF_64_ABS64 => {
+                let slot = body.get(site..end).ok_or_else(|| {
+                    refuse(ErrorKind::InvalidInput, "data reloc site outside section")
+                })?;
+                image.data.u64(slot)
+            }
+            R_BPF_64_ABS32 => {
+                let quad = site
+                    .checked_add(4)
+                    .ok_or_else(|| refuse(ErrorKind::InvalidInput, "data reloc site overflows"))?;
+                let slot = body.get(site..quad).ok_or_else(|| {
+                    refuse(ErrorKind::InvalidInput, "data reloc site outside section")
+                })?;
+                u64::from(image.data.u32(slot))
+            }
+            _ => continue,
+        };
+        let dest = sym.value.checked_add(addend).ok_or_else(|| {
+            refuse(
+                ErrorKind::InvalidInput,
+                "section-symbol data reference overflows",
+            )
+        })?;
+        let Some(new) = remap(kept, dest) else {
+            return Err(refuse(
+                ErrorKind::InvalidInput,
+                format!("section-symbol data reference {dest:#x} dangles over stripped code"),
+            ));
+        };
+        if new != dest {
+            return Err(refuse(
+                ErrorKind::InvalidInput,
+                format!("section-symbol data reference {dest:#x} shifted to {new:#x}"),
             ));
         }
     }
@@ -2639,7 +2747,9 @@ fn check_path_guard(
     work: &mut u64,
 ) -> Result<(), OperationError> {
     // R09: index call relocs by site section once, so per-function
-    // scans stay linear in the section's own relocs (no V x R walk).
+    // scans cover only the section's own relocs. S09: every
+    // inspected row is charged below, so the walk is bounded by the
+    // work ceiling rather than linear by construction.
     let mut by_sect: std::collections::BTreeMap<usize, Vec<&Reloc>> =
         std::collections::BTreeMap::new();
     for reloc in relocs {
@@ -2659,13 +2769,31 @@ fn check_path_guard(
     let mut stack: Vec<(usize, u64, u64)> = Vec::new();
     let mut found = false;
     for sym in &image.symbols {
-        if sym.name.as_deref() != Some(path) || sym.kind() != STT_FUNC || sym.size == 0 {
+        // S09: charge every root candidate inspected.
+        charge(work, 1)?;
+        if sym.name.as_deref() != Some(path) || sym.kind() != STT_FUNC {
             continue;
         }
         let Some(section) = image.sections.get(sym.shndx as usize) else {
             continue;
         };
         if !section.executable() {
+            continue;
+        }
+        // S08: a zero-size path root has an unknown extent — legal
+        // in ELF, unprovable for the guard — so that is a finding,
+        // not a silent skip. The path EXISTS, so it still counts
+        // as found; only its body is unprovable.
+        if sym.size == 0 {
+            found = true;
+            push_section_finding(
+                violations,
+                retained,
+                limits,
+                "init.unresolved-extent",
+                section,
+                Some(sym.value),
+            )?;
             continue;
         }
         found = true;
@@ -2694,28 +2822,56 @@ fn check_path_guard(
         if !section.executable() {
             continue;
         }
+        // S08: validate the popped extent BEFORE scanning. A root
+        // whose extent runs past its section clamps to a short or
+        // empty scan under a plain `min`, silently "proving" bodies
+        // it never read. (Followed callees are validated at push
+        // time, so a popped-invalid extent is necessarily a root.)
+        // The subtraction cannot underflow: `value >= section.len`
+        // short-circuits first.
+        if value >= section.len || size > section.len - value {
+            push_section_finding(
+                violations,
+                retained,
+                limits,
+                "init.unresolved-extent",
+                section,
+                Some(value),
+            )?;
+            continue;
+        }
         let end = value.saturating_add(size);
         let site_relocs: &[&Reloc] = by_sect.get(&sect_idx).map(Vec::as_slice).unwrap_or(&empty);
         for reloc in site_relocs {
+            // S09: charge every inspected row, in or out of range:
+            // the per-function filter scans the section's relocs.
+            charge(work, 1)?;
             if reloc.offset < value || reloc.offset >= end {
                 continue;
             }
-            charge(work, 1)?;
             let target = &image.sections[reloc.target_sect];
             let (callee, dest) = call_dest(image, target, reloc)?;
             let target_sym = &image.symbols[callee];
             // F23: match by resolved destination, not by reloc spelling,
             // so a section-symbol call landing in `forbidden` (or inside
             // it) is the same guarded edge as a direct call.
-            let hits = image.symbols.iter().any(|cand| {
-                cand.kind() == STT_FUNC
+            // S09: the destination match scans the symbol table per
+            // edge; every inspected candidate is charged.
+            let mut hits = false;
+            for cand in &image.symbols {
+                charge(work, 1)?;
+                if cand.kind() == STT_FUNC
                     && cand.shndx == target_sym.shndx
                     && cand.name.as_deref() == Some(forbidden)
                     && (cand.value == dest
                         || (cand.size > 0
                             && dest > cand.value
                             && dest < cand.value.saturating_add(cand.size)))
-            });
+                {
+                    hits = true;
+                    break;
+                }
+            }
             if hits {
                 push_section_finding(
                     violations,
@@ -2730,14 +2886,47 @@ fn check_path_guard(
             // callee symbol's own section (cross-section calls included).
             // Interior destinations enqueue their container; padding with
             // no function is a dead end, not a new finding.
-            if let Some(next) = image.symbols.iter().find(|cand| {
-                cand.kind() == STT_FUNC
-                    && cand.shndx == target_sym.shndx
-                    && cand.size > 0
-                    && dest >= cand.value
-                    && dest < cand.value.saturating_add(cand.size)
-            }) {
+            // S09: charged per inspected candidate like the match above.
+            // S08: a callee whose extent is unknown (zero-size FUNC) or
+            // invalid (past its section) is a finding — the guard cannot
+            // prove the subtree avoids `forbidden` — never a silent stop.
+            // A usable aliased extent still wins over an unusable one.
+            let mut usable: Option<&Symbol> = None;
+            let mut unusable = false;
+            for cand in &image.symbols {
+                charge(work, 1)?;
+                if cand.kind() != STT_FUNC || cand.shndx != target_sym.shndx {
+                    continue;
+                }
+                let contains = if cand.size == 0 {
+                    dest == cand.value
+                } else {
+                    dest >= cand.value && dest < cand.value.saturating_add(cand.size)
+                };
+                if !contains {
+                    continue;
+                }
+                let extent_ok = cand.size > 0
+                    && image.sections.get(cand.shndx as usize).is_some_and(|sect| {
+                        cand.value < sect.len && cand.size <= sect.len - cand.value
+                    });
+                if extent_ok {
+                    usable = Some(cand);
+                    break;
+                }
+                unusable = true;
+            }
+            if let Some(next) = usable {
                 stack.push((next.shndx as usize, next.value, next.size));
+            } else if unusable {
+                push_section_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "init.unresolved-extent",
+                    section,
+                    Some(reloc.offset),
+                )?;
             }
         }
         // F23: linked-style static calls without a covering relocation
@@ -2755,7 +2944,7 @@ fn check_path_guard(
                 at = at.saturating_add(16);
                 continue;
             }
-            if slot[0] == OP_CALL && slot[1] >> 4 != 0 {
+            if slot[0] == OP_CALL && image.data.src_reg(slot[1]) != 0 {
                 let covered = site_relocs.iter().any(|r| r.offset == at);
                 if !covered {
                     push_section_finding(
@@ -2919,6 +3108,55 @@ fn check_opt_out(
     Ok(())
 }
 
+/// S03: whether the opcode writes its dst register. Stores address
+/// memory through dst instead of writing it, except atomic 0xDB which
+/// returns the old value into dst. Jumps never reach here (they abort
+/// the walk first) and report no write.
+fn writes_dst(op: u8) -> bool {
+    match op & 7 {
+        0 | 1 | 4 | 7 => true,
+        3 => op == 0xDB,
+        _ => false,
+    }
+}
+
+/// S03: control leaves straight-line attribution here. JMP class (any
+/// jump, exit 0x95) can skip the textual register load, and any call
+/// clobbers r1-r5, so a register value inferred past one is unsound.
+fn breaks_straight_line(op: u8) -> bool {
+    matches!(op & 7, 5 | 6)
+}
+
+/// Second slot of a wide `ld_imm64` pair: decode as data, not code.
+fn is_wide_second(slots: &[(u8, u8, i16, i32)], position: usize) -> bool {
+    position > 0 && slots[position - 1].0 == OP_LD_IMM64
+}
+
+/// S03: a jump lands strictly between the attributed register load and
+/// the tail call (or on the call itself), so some path reaches the
+/// call without executing the load. BPF has no indirect jumps: every
+/// static target is enumerable, and any landing in `(def, call]` kills
+/// the attribution. Out-of-range targets cannot land there; a landing
+/// on a wide second slot is malformed and kills attribution too.
+fn jump_lands_between(
+    slots: &[(u8, u8, i16, i32)],
+    def: usize,
+    call: usize,
+    work: &mut u64,
+) -> Result<bool, OperationError> {
+    for (index, (op, _, off, _)) in slots.iter().enumerate() {
+        charge(work, 1)?;
+        if !matches!(op & 7, 5 | 6) || *op == OP_CALL || *op == 0x95 {
+            continue;
+        }
+        let target = index as i64 + 1 + i64::from(*off);
+        if target > def as i64 && target <= call as i64 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_program(
     violations: &mut Vec<RuleViolation>,
@@ -2953,9 +3191,16 @@ fn check_program(
     }
     let start = program.value as usize;
     let code = &body[start..start + program.size as usize];
-    let slots: Vec<(u8, u8, i32)> = code
+    let slots: Vec<(u8, u8, i16, i32)> = code
         .chunks_exact(8)
-        .map(|slot| (slot[0], slot[1], data.u32(&slot[4..8]) as i32))
+        .map(|slot| {
+            (
+                slot[0],
+                slot[1],
+                data.u16(&slot[2..4]) as i16,
+                data.u32(&slot[4..8]) as i32,
+            )
+        })
         .collect();
     let owned: Vec<(u64, String)> = references
         .iter()
@@ -2969,39 +3214,72 @@ fn check_program(
         .map(|(address, array)| ((address - program.value) / 8, array))
         .collect();
     let mut tail_calls = 0u32;
-    for (position, (op, regs, imm)) in slots.iter().enumerate() {
+    for (position, (op, regs, _, imm)) in slots.iter().enumerate() {
         charge(work, 1)?;
         if *op != OP_CALL || *regs != 0 || *imm != TAIL_CALL_HELPER {
             continue;
         }
         tail_calls += 1;
         let call_off = program.value + position as u64 * 8;
-        // Straight-line index constant in r3 within the 16-slot window,
-        // skipping wide-load second slots.
-        let mut index: Option<u64> = None;
+        // S03: the index constant and the map load are only sound on a
+        // straight-line path. A branch can skip the textual MOV (the
+        // executed slot is then certified wrongly), a call clobbers
+        // r1-r5, and any other r3/r2 write between the load and the
+        // tail call replaces the attributed value. The walk gives up
+        // (unknown slot/array) on any branch, exit, call, or foreign
+        // write instead of inferring across it. S04: dst/src decode
+        // per object endianness.
         let floor = position.saturating_sub(16);
+        let mut index: Option<u64> = None;
+        let mut index_def = 0usize;
         for previous in (floor..position).rev() {
-            if previous > 0 && slots[previous - 1].0 == OP_LD_IMM64 {
+            if is_wide_second(&slots, previous) {
                 continue;
             }
-            let (prev_op, prev_regs, prev_imm) = slots[previous];
-            if prev_regs & 15 != 3 {
+            let (prev_op, prev_regs, _, prev_imm) = slots[previous];
+            if breaks_straight_line(prev_op) {
+                break;
+            }
+            if !writes_dst(prev_op) || data.dst_reg(prev_regs) != 3 {
                 continue;
             }
             if prev_op == 0xB7 || prev_op == 0xB4 {
                 index = Some(prev_imm as u32 as u64);
-            } else if prev_op == OP_LD_IMM64 && prev_regs >> 4 == 0 {
-                let high = slots.get(previous + 1).map(|slot| slot.2).unwrap_or(0);
+                index_def = previous;
+            } else if prev_op == OP_LD_IMM64
+                && data.src_reg(prev_regs) == 0
+                && previous + 1 < position
+            {
+                let high = slots[previous + 1].3;
                 index = Some(prev_imm as u32 as u64 | ((high as u32 as u64) << 32));
+                index_def = previous;
             }
             break;
         }
+        if index.is_some() && jump_lands_between(&slots, index_def, position, work)? {
+            index = None;
+        }
         let mut array: Option<&str> = None;
+        let mut array_def = 0usize;
         for previous in (floor..position).rev() {
-            if slots[previous].0 == OP_LD_IMM64 && slots[previous].1 == 0x02 {
-                array = arrays_at.get(&(previous as u64)).map(String::as_str);
+            if is_wide_second(&slots, previous) {
+                continue;
+            }
+            let (prev_op, prev_regs, _, _) = slots[previous];
+            if breaks_straight_line(prev_op) {
                 break;
             }
+            if !writes_dst(prev_op) || data.dst_reg(prev_regs) != 2 {
+                continue;
+            }
+            if prev_op == OP_LD_IMM64 && data.src_reg(prev_regs) == 0 {
+                array = arrays_at.get(&(previous as u64)).map(String::as_str);
+                array_def = previous;
+            }
+            break;
+        }
+        if array.is_some() && jump_lands_between(&slots, array_def, position, work)? {
+            array = None;
         }
         let Some(array) = array else {
             push_section_finding(
@@ -3051,8 +3329,9 @@ fn check_program(
     }
     // Only a program that never addresses its frame and calls no BPF
     // subprogram is provably exempt from the private stack.
-    let stackless = !slots.iter().any(|(op, regs, _)| {
-        ((regs & 15) == 10 || (regs >> 4) == 10) && *op != 0x95 || (*op == OP_CALL && *regs == 0x10)
+    let stackless = !slots.iter().any(|(op, regs, _, _)| {
+        (data.dst_reg(*regs) == 10 || data.src_reg(*regs) == 10) && *op != 0x95
+            || (*op == OP_CALL && data.dst_reg(*regs) == 0 && data.src_reg(*regs) == 1)
     });
     // A program with tail calls that all fail already reports its slot
     // or array defect above (the donor aborts there too); the missing

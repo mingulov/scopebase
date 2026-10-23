@@ -608,7 +608,19 @@ record!(
         script: OperationScript,
         limits: RunLimits
     },
-    |_: &CaseInvocationValues, _: &RunLimits| Ok(())
+    // S01: the embedded limits are the adapter-facing contract: every
+    // field an adapter echoes or consumes must fit them, not just the
+    // constructor ceiling. Without this, a publicly constructible
+    // value (default ceiling, embedded name_bytes=1, a normal key)
+    // panics a downstream adapter's fitted refusal instead of being
+    // rejected here at construction.
+    |v: &CaseInvocationValues, _: &RunLimits| {
+        v.key.check_bounds(&v.limits)?;
+        v.observation_schema.check_bounds(&v.limits)?;
+        v.fixture_schema.check_bounds(&v.limits)?;
+        v.script.check_bounds(&v.limits)?;
+        Ok(())
+    }
 );
 impl Decode for RunLimits {
     fn decode(v: Value, l: &RunLimits) -> Result<Self, HarnessError> {

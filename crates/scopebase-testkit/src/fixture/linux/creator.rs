@@ -39,7 +39,11 @@ impl CreatorError {
 }
 impl fmt::Display for CreatorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "creator {:?}/{:?}: {}", self.stage, self.reason, self.detail)
+        write!(
+            f,
+            "creator {:?}/{:?}: {}",
+            self.stage, self.reason, self.detail
+        )
     }
 }
 impl std::error::Error for CreatorError {}
@@ -119,7 +123,11 @@ impl Counter {
     }
 }
 
-fn check_cloexec(fd: &OwnedFd, counter: &mut Counter, stage: GuardStage) -> Result<(), CreatorError> {
+fn check_cloexec(
+    fd: &OwnedFd,
+    counter: &mut Counter,
+    stage: GuardStage,
+) -> Result<(), CreatorError> {
     counter.syscall();
     let flags = rustix::io::fcntl_getfd(fd).map_err(|e| rustix_error(stage, e))?;
     if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
@@ -149,7 +157,8 @@ fn open_child(
         | rustix::fs::ResolveFlags::NO_SYMLINKS
         | rustix::fs::ResolveFlags::NO_MAGICLINKS
         | rustix::fs::ResolveFlags::NO_XDEV;
-    let fd = rustix::fs::openat2(dir, name, oflags, rustix::fs::Mode::empty(), resolve).map_err(|e| rustix_error(stage, e))?;
+    let fd = rustix::fs::openat2(dir, name, oflags, rustix::fs::Mode::empty(), resolve)
+        .map_err(|e| rustix_error(stage, e))?;
     check_cloexec(&fd, counter, stage)?;
     Ok(fd)
 }
@@ -207,10 +216,7 @@ fn explicit_close(fd: OwnedFd, counter: &mut Counter, _what: &str) {
     explicit_close_fd(fd);
 }
 
-fn parse_own_status(
-    status: &[u8],
-    me: u32,
-) -> Result<(), CreatorError> {
+fn parse_own_status(status: &[u8], me: u32) -> Result<(), CreatorError> {
     let text = std::str::from_utf8(status).map_err(|_| {
         CreatorError::new(
             GuardStage::ObserverStatus,
@@ -281,12 +287,8 @@ fn namespace_sample(
     let ns_dir = open_child(numeric, "ns", true, counter, GuardStage::ActivePidNamespace)?;
     let before_link = readlink_bounded(&ns_dir, "pid", counter, GuardStage::ActivePidNamespace)?;
     counter.syscall();
-    let before_stat = rustix::fs::statat(
-        &ns_dir,
-        "pid",
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
+    let before_stat = rustix::fs::statat(&ns_dir, "pid", rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
     counter.syscall();
     let handle = rustix::fs::openat(
         &ns_dir,
@@ -308,7 +310,8 @@ fn namespace_sample(
         ));
     }
     counter.syscall();
-    let fstat = rustix::fs::fstat(&handle).map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
+    let fstat =
+        rustix::fs::fstat(&handle).map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
     counter.syscall();
     let kind = unsafe { rustix::ioctl::ioctl(&handle, NsGetNstype) }.map_err(|e| {
         if e.raw_os_error() == 25 {
@@ -332,12 +335,8 @@ fn namespace_sample(
     }
     let after_link = readlink_bounded(&ns_dir, "pid", counter, GuardStage::ActivePidNamespace)?;
     counter.syscall();
-    let after_stat = rustix::fs::statat(
-        &ns_dir,
-        "pid",
-        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
+    let after_stat = rustix::fs::statat(&ns_dir, "pid", rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+        .map_err(|e| rustix_error(GuardStage::ActivePidNamespace, e))?;
     for link in [&before_link, &after_link] {
         let text = std::str::from_utf8(link).map_err(|_| {
             CreatorError::new(
@@ -468,8 +467,8 @@ impl CreatorContext {
         .map_err(|e| rustix_error(GuardStage::ProcRoot, e))?;
         check_cloexec(&proc_root, &mut counter, GuardStage::ProcRoot)?;
         counter.syscall();
-        let fstype = rustix::fs::fstatfs(&proc_root)
-            .map_err(|e| rustix_error(GuardStage::ProcRoot, e))?;
+        let fstype =
+            rustix::fs::fstatfs(&proc_root).map_err(|e| rustix_error(GuardStage::ProcRoot, e))?;
         if fstype.f_type != rustix::fs::PROC_SUPER_MAGIC {
             return Err(CreatorError::new(
                 GuardStage::ProcRoot,
@@ -487,10 +486,20 @@ impl CreatorContext {
                 "self link differs from creator".to_string(),
             ));
         }
-        let numeric =
-            open_child(&proc_root, &me.to_string(), true, &mut counter, GuardStage::ObserverDirectory)?;
-        let status =
-            open_child(&numeric, "status", false, &mut counter, GuardStage::ObserverStatus)?;
+        let numeric = open_child(
+            &proc_root,
+            &me.to_string(),
+            true,
+            &mut counter,
+            GuardStage::ObserverDirectory,
+        )?;
+        let status = open_child(
+            &numeric,
+            "status",
+            false,
+            &mut counter,
+            GuardStage::ObserverStatus,
+        )?;
         let status_bytes = read_to_end_bounded(&status, &mut counter, GuardStage::ObserverStatus)?;
         parse_own_status(&status_bytes, me).map_err(|mut e| {
             e.attempts = counter.attempts;
@@ -581,8 +590,7 @@ impl CreatorContext {
         const POLLNVAL: i32 = 0x20;
         match (poll.poll_count, poll.poll_revents) {
             (Some(0), Some(0)) => {}
-            (Some(1), Some(flags))
-                if flags & POLLIN != 0 && flags & (POLLERR | POLLNVAL) == 0 => {
+            (Some(1), Some(flags)) if flags & POLLIN != 0 && flags & (POLLERR | POLLNVAL) == 0 => {
                 let mut e = CreatorError::new(
                     GuardStage::CreatorPidfd,
                     GuardReason::WrongContext,
@@ -603,7 +611,8 @@ impl CreatorContext {
                 return Err(e);
             }
         }
-        let self_link = readlink_bounded(&self.proc_root, "self", &mut counter, GuardStage::SelfLink)?;
+        let self_link =
+            readlink_bounded(&self.proc_root, "self", &mut counter, GuardStage::SelfLink)?;
         if self_link != self.creator_tgid.to_string().as_bytes() {
             let mut e = CreatorError::new(
                 GuardStage::SelfLink,
@@ -625,16 +634,22 @@ impl CreatorContext {
             e.attempts = counter.attempts;
             e
         })?;
-        let status = open_child(&numeric, "status", false, &mut counter, GuardStage::ObserverStatus)
+        let status = open_child(
+            &numeric,
+            "status",
+            false,
+            &mut counter,
+            GuardStage::ObserverStatus,
+        )
+        .map_err(|mut e| {
+            e.attempts = counter.attempts;
+            e
+        })?;
+        let status_bytes = read_to_end_bounded(&status, &mut counter, GuardStage::ObserverStatus)
             .map_err(|mut e| {
             e.attempts = counter.attempts;
             e
         })?;
-        let status_bytes =
-            read_to_end_bounded(&status, &mut counter, GuardStage::ObserverStatus).map_err(|mut e| {
-                e.attempts = counter.attempts;
-                e
-            })?;
         parse_own_status(&status_bytes, self.creator_tgid).map_err(|mut e| {
             e.attempts = counter.attempts;
             e
@@ -686,8 +701,14 @@ impl CreatorContext {
 
 fn poll_nonterminal(pidfd: &OwnedFd, counter: &mut Counter) -> Result<GuardEvidence, CreatorError> {
     counter.syscall();
-    let mut fds = [rustix::event::PollFd::new(pidfd, rustix::event::PollFlags::IN)];
-    let zero = rustix::event::Timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut fds = [rustix::event::PollFd::new(
+        pidfd,
+        rustix::event::PollFlags::IN,
+    )];
+    let zero = rustix::event::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let count = rustix::event::poll(&mut fds, Some(&zero))
         .map_err(|e| rustix_error(GuardStage::CreatorPidfd, e))?;
     let revents = fds[0].revents();
@@ -730,7 +751,10 @@ mod tests {
     fn guard_costs_and_nonterminal_poll() {
         let context = CreatorContext::acquire().unwrap();
         let evidence = context.guard().unwrap();
-        assert_eq!((evidence.poll_count, evidence.poll_revents), (Some(0), Some(0)));
+        assert_eq!(
+            (evidence.poll_count, evidence.poll_revents),
+            (Some(0), Some(0))
+        );
         assert_eq!(evidence.temp_closes, 4);
         assert_eq!(evidence.native_attempts, 19 + evidence.data_attempts);
         assert!(evidence.data_attempts >= 5);
@@ -741,15 +765,12 @@ mod tests {
     #[test]
     fn own_status_vectors() {
         let me = 4242u32;
-        let good = format!(
-            "Name:\tsleep\nPid:\t{me}\nTgid:\t{me}\nNSpid:\t{me}\n"
-        );
+        let good = format!("Name:\tsleep\nPid:\t{me}\nTgid:\t{me}\nNSpid:\t{me}\n");
         assert!(parse_own_status(good.as_bytes(), me).is_ok());
         assert!(parse_own_status(good.as_bytes(), me + 1).is_err());
         let nested = format!("Name:\tsleep\nPid:\t{me}\nTgid:\t{me}\nNSpid:\t9\t{me}\n");
         assert!(parse_own_status(nested.as_bytes(), me).is_err());
-        let doubled =
-            format!("Name:\tsleep\nPid:\t{me}\nPid:\t{me}\nTgid:\t{me}\nNSpid:\t{me}\n");
+        let doubled = format!("Name:\tsleep\nPid:\t{me}\nPid:\t{me}\nTgid:\t{me}\nNSpid:\t{me}\n");
         assert!(parse_own_status(doubled.as_bytes(), me).is_err());
         assert!(parse_own_status(b"\xff\xfe", me).is_err());
     }

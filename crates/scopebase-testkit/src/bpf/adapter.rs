@@ -675,9 +675,8 @@ enum PreparedBranch {
 /// reached if joint allowance changed between the two checks; the original
 /// admitted context is still moved into the error finisher, never dropped.
 fn finish_output_refusal(response: OneStepResponse, failure: OneStepOutputFailure) -> CaseError {
-    let mut diagnostic =
-        OneStepDiagnostic::new(b"bpf:limit_exceeded/admission")
-            .expect("fixed diagnostic fits admitted scratch");
+    let mut diagnostic = OneStepDiagnostic::new(b"bpf:limit_exceeded/admission")
+        .expect("fixed diagnostic fits admitted scratch");
     let required = match failure {
         OneStepOutputFailure::Length { required } => Some(required),
         OneStepOutputFailure::Capacity { required } => Some(required),
@@ -766,8 +765,12 @@ impl ResponsePreparedAdapter for BpfHostAdapter {
         // double counting.
         const CALL_INLINE: usize = size_of::<BpfPreparedCall<'_>>();
         if invocation.limits() != &self.run {
-            let error_only =
-                OneStepErrorResponse::prepare(invocation.key(), &self.run, self.reserve, CALL_INLINE)?;
+            let error_only = OneStepErrorResponse::prepare(
+                invocation.key(),
+                &self.run,
+                self.reserve,
+                CALL_INLINE,
+            )?;
             return Ok(BpfPreparedCall {
                 adapter: self,
                 invocation,
@@ -775,8 +778,12 @@ impl ResponsePreparedAdapter for BpfHostAdapter {
             });
         }
         if !dialect_ok(invocation) {
-            let error_only =
-                OneStepErrorResponse::prepare(invocation.key(), &self.run, self.reserve, CALL_INLINE)?;
+            let error_only = OneStepErrorResponse::prepare(
+                invocation.key(),
+                &self.run,
+                self.reserve,
+                CALL_INLINE,
+            )?;
             return Ok(BpfPreparedCall {
                 adapter: self,
                 invocation,
@@ -1151,11 +1158,7 @@ mod tests {
     }
     /// Finish a scalar operation refusal through an actually admitted Ready
     /// response, exactly as the consuming call does. No fresh metadata copy.
-    fn finish_refusal(
-        a: &mut BpfHostAdapter,
-        i: &CaseInvocation,
-        refusal: OpRefusal,
-    ) -> CaseError {
+    fn finish_refusal(a: &mut BpfHostAdapter, i: &CaseInvocation, refusal: OpRefusal) -> CaseError {
         let call = a.prepare_response(i).unwrap();
         match call.ready {
             PreparedBranch::Ready(response) => response.finish_error(
@@ -1354,22 +1357,14 @@ mod tests {
         );
         // Over-capacity and allocation failures documented for the source
         // domain constructor route exactly, preserving kind+stage.
-        let over_capacity = b::OperationError::new(
-            b::ErrorKind::LimitExceeded,
-            b::Stage::Allocate,
-            None,
-            None,
-        )
-        .with_required_size(129);
+        let over_capacity =
+            b::OperationError::new(b::ErrorKind::LimitExceeded, b::Stage::Allocate, None, None)
+                .with_required_size(129);
         assert!(
             !BpfHostAdapter::is_source_grammar_failure(&over_capacity),
             "adapter.source-capacity-is-exact"
         );
-        let e = finish_refusal(
-            &mut a,
-            &i,
-            BpfHostAdapter::library_refusal(over_capacity),
-        );
+        let e = finish_refusal(&mut a, &i, BpfHostAdapter::library_refusal(over_capacity));
         full_error(&e, &i, CaseErrorCategory::Refused, "allocate", true);
         assert_eq!(
             e.diagnostic_bytes(),
@@ -1382,11 +1377,7 @@ mod tests {
             !BpfHostAdapter::is_source_grammar_failure(&alloc_failure),
             "adapter.source-allocation-is-exact"
         );
-        let e = finish_refusal(
-            &mut a,
-            &i,
-            BpfHostAdapter::library_refusal(alloc_failure),
-        );
+        let e = finish_refusal(&mut a, &i, BpfHostAdapter::library_refusal(alloc_failure));
         full_error(&e, &i, CaseErrorCategory::Refused, "allocate", true);
         assert_eq!(
             e.diagnostic_bytes(),
@@ -1615,10 +1606,7 @@ mod tests {
         assert_eq!(v.bytes(), b"supported");
         assert!(v.effects().registrations().is_empty());
         let header = rsp01_test_support::observation_bytes(&v);
-        assert!(
-            header <= admitted,
-            "adapter.Q<=R: {header} <= {admitted}"
-        );
+        assert!(header <= admitted, "adapter.Q<=R: {header} <= {admitted}");
         let demand = size_of::<Vec<u8>>() + v.bytes().capacity();
         let joint = (base + f + demand) as u64;
         assert!(
@@ -1679,7 +1667,14 @@ mod tests {
         assert!(dialect <= a.reserve, "dialect R<=F: {dialect}");
         // Key sensitivity: the maximum valid cell admits strictly more
         // storage than the short cell under identical limits.
-        let maxed = invocation_cell(&l, "bp03-host-v1", "assess-filter", &["counts"], &"c".repeat(256), 1);
+        let maxed = invocation_cell(
+            &l,
+            "bp03-host-v1",
+            "assess-filter",
+            &["counts"],
+            &"c".repeat(256),
+            1,
+        );
         let maxed_charge = match bound.prepare_response(&maxed).unwrap().ready {
             PreparedBranch::Binding(response) => response.admitted_bytes(),
             _ => unreachable!(),
@@ -1695,8 +1690,7 @@ mod tests {
         // Ready admits strictly more than error-only for the same key: schema
         // and step storage are simultaneous alternatives, never double
         // counted, never omitted from the Ready charge.
-        let mut ready_adapter =
-            BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
+        let mut ready_adapter = BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
         let ready_charge = match ready_adapter.prepare_response(&i).unwrap().ready {
             PreparedBranch::Ready(response) => response.admitted_bytes(),
             _ => unreachable!(),
@@ -1730,9 +1724,8 @@ mod tests {
                 Ok(text)
             };
             let mut budget = ResponseBudget::new(0, 64).unwrap();
-            let error =
-                crate::ids::rsp01_copy_key_with(i.key(), &l, &mut budget, &mut allocate)
-                    .unwrap_err();
+            let error = crate::ids::rsp01_copy_key_with(i.key(), &l, &mut budget, &mut allocate)
+                .unwrap_err();
             assert_eq!(error.kind, Kind::CapacityExceeded);
             assert_eq!(error.component, component);
             assert_eq!(error.observed_bytes, Some(capacities.iter().sum()));
@@ -1775,7 +1768,11 @@ mod tests {
         }
         BUFFER_EXCESS.with(|v| v.set(0));
         let v = prepared(&mut a, &i, &fixture).unwrap();
-        assert_eq!(v.bytes(), b"supported", "restored twin admits identical bytes");
+        assert_eq!(
+            v.bytes(),
+            b"supported",
+            "restored twin admits identical bytes"
+        );
     }
     #[test]
     fn prp03_bpf_preparation_failure_and_overflow_are_scalar() {
@@ -1786,9 +1783,8 @@ mod tests {
         // Fallible allocation at the first copy boundary is scalar: no key,
         // diagnostic source or partial context escapes.
         let mut budget = ResponseBudget::new(0, 4096).unwrap();
-        let error =
-            crate::ids::rsp01_copy_key_with(i.key(), &l, &mut budget, &mut |_| Err(()))
-                .unwrap_err();
+        let error = crate::ids::rsp01_copy_key_with(i.key(), &l, &mut budget, &mut |_| Err(()))
+            .unwrap_err();
         assert_eq!(error.kind, Kind::Allocation);
         assert_eq!(error.component, Part::RunId);
         assert_eq!(error.requested_bytes, Some(32));
@@ -1806,9 +1802,15 @@ mod tests {
         // maximum valid invocation: even the largest valid key, schema and
         // step prepare Ready. Scalar CapacityExceeded therefore stays a
         // defensive seam-level property, proved exact above.
-        let maxed = invocation_cell(&l, "bp03-host-v1", "assess-filter", &["counts"], &"c".repeat(256), 1);
-        let mut maxed_adapter =
-            BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
+        let maxed = invocation_cell(
+            &l,
+            "bp03-host-v1",
+            "assess-filter",
+            &["counts"],
+            &"c".repeat(256),
+            1,
+        );
+        let mut maxed_adapter = BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
         let maxed_ready = match maxed_adapter.prepare_response(&maxed) {
             Ok(call) => call,
             Err(error) => panic!(
@@ -1823,8 +1825,7 @@ mod tests {
         // Restored twin with the same bytes shape minus the excess admits.
         let input = [FixtureInput::new(label("counts"), b"2\n2\n1\n0\n")];
         let fixture = FixtureAccess::new(&input, &[], EffectBatch::empty(&l), &l).unwrap();
-        let mut fitting =
-            BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
+        let mut fitting = BpfHostAdapter::new(subject(&l, 16), limits(), l.clone()).unwrap();
         let v = prepared(&mut fitting, &i, &fixture).unwrap();
         assert_eq!(v.bytes(), b"supported");
     }
@@ -1837,7 +1838,14 @@ mod tests {
         let fixture = FixtureAccess::new(&input, &[], EffectBatch::empty(&l), &l).unwrap();
         // Distinct invocations admit distinct contexts; each result carries
         // its own key.
-        let second = invocation_cell(&l, "bp03-host-v1", "to-testkit-profile", &["profile"], "model-2", 2);
+        let second = invocation_cell(
+            &l,
+            "bp03-host-v1",
+            "to-testkit-profile",
+            &["profile"],
+            "model-2",
+            2,
+        );
         let profile_input = [FixtureInput::new(label("profile"), b"a\n")];
         let profile_fixture =
             FixtureAccess::new(&profile_input, &[], EffectBatch::empty(&l), &l).unwrap();
@@ -1888,7 +1896,13 @@ mod tests {
         let missing = invocation(&l, "bp03-host-v1", "assess-filter", &["counts"]);
         let empty = FixtureAccess::new(&[], &[], EffectBatch::empty(&l), &l).unwrap();
         let e = prepared(&mut a, &missing, &empty).unwrap_err();
-        full_error(&e, &missing, CaseErrorCategory::InvalidOutput, "input", true);
+        full_error(
+            &e,
+            &missing,
+            CaseErrorCategory::InvalidOutput,
+            "input",
+            true,
+        );
         assert_eq!(e.diagnostic_bytes(), b"missing-input");
         assert_eq!(*e.errno(), None);
     }
@@ -2015,8 +2029,8 @@ mod tests {
     }
     #[test]
     fn prp11_bpf_prepared_scalar_failure_keeps_primary_cause() {
-        use crate::ResponsePreparationFailureKind as Kind;
         use crate::ResponsePreparationComponent as Part;
+        use crate::ResponsePreparationFailureKind as Kind;
         // A scalar preparation failure carries no keyed outcome: kind,
         // component and exact byte demands only. Through the real adapter it
         // is unreachable by public construction (name/label maxima keep every

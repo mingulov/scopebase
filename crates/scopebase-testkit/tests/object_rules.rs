@@ -205,6 +205,18 @@ impl Endian {
     fn i32(self, value: i32) -> [u8; 4] {
         self.u32(value as u32)
     }
+
+    /// S04: genuine register-byte encoding per endianness. Genuine
+    /// `llc -march=bpfeb` output swaps the nibbles (pseudo-call 0x01,
+    /// `mov32 r1, 1` 0x10); LE-encoded bytes under a BE contract are
+    /// a different program, not a BE test.
+    fn regs(self, dst: u8, src: u8) -> u8 {
+        assert!(dst < 16 && src < 16);
+        match self {
+            Self::Little => dst | src << 4,
+            Self::Big => src | dst << 4,
+        }
+    }
 }
 
 /// Minimal synthetic ELF64 BPF relocatable builder.
@@ -438,28 +450,38 @@ fn exit(endian: Endian) -> [u8; 8] {
 }
 
 fn call_sub(endian: Endian, imm: i32) -> [u8; 8] {
-    insn(endian, 0x85, 0x10, 0, imm)
+    insn(endian, 0x85, endian.regs(0, 1), 0, imm)
 }
 
 fn call_helper(endian: Endian, id: i32) -> [u8; 8] {
-    insn(endian, 0x85, 0x00, 0, id)
+    insn(endian, 0x85, endian.regs(0, 0), 0, id)
 }
 
 fn mov32_r3(endian: Endian, imm: i32) -> [u8; 8] {
-    insn(endian, 0xB4, 0x03, 0, imm)
+    insn(endian, 0xB4, endian.regs(3, 0), 0, imm)
+}
+
+/// `mov64 rdst, rsrc`: register-to-register copy (clobber control).
+fn mov64(endian: Endian, dst: u8, src: u8) -> [u8; 8] {
+    insn(endian, 0xBF, endian.regs(dst, src), 0, 0)
+}
+
+/// Unconditional jump by `off` slots (branch control).
+fn jump(endian: Endian, off: i16) -> [u8; 8] {
+    insn(endian, 0x05, endian.regs(0, 0), off, 0)
 }
 
 /// `ld_imm64` wide load: two slots, second slot zero.
 fn ldimm64(endian: Endian, dst: u8, imm: i32) -> [u8; 16] {
     let mut wide = [0u8; 16];
-    wide[0..8].copy_from_slice(&insn(endian, 0x18, dst, 0, imm));
+    wide[0..8].copy_from_slice(&insn(endian, 0x18, endian.regs(dst, 0), 0, imm));
     wide
 }
 
 /// `stxw [r10+off], rsrc`: touches the frame so the function is provably
 /// not stackless.
 fn stxw_frame(endian: Endian, src: u8, off: i16) -> [u8; 8] {
-    insn(endian, 0x63, 0x0A | (src << 4), off, 0)
+    insn(endian, 0x63, endian.regs(10, src), off, 0)
 }
 
 /// Minimal hand-encoded BTF image builder.
@@ -1977,8 +1999,9 @@ enum NestedEdge {
 /// twin calling `memset` directly (permitted: unreachable from the
 /// root, so a scoped traversal reports nothing for it). `emit` always
 /// calls `helper` through its function symbol; the helper edge
-/// follows `style`.
-fn nested_guard_fixture(style: NestedEdge) -> Vec<u8> {
+/// follows `style`. Extent sizes are parameters so S08 controls can
+/// pin unknown (zero) and invalid (past-section) extents.
+fn nested_guard_fixture(style: NestedEdge, emit_size: u64, helper_size: u64) -> Vec<u8> {
     let endian = Endian::Little;
     let mut text = Vec::new();
     text.extend_from_slice(&call_sub(endian, -1)); // emit@0 -> helper
@@ -1997,8 +2020,8 @@ fn nested_guard_fixture(style: NestedEdge) -> Vec<u8> {
     entry.extend_from_slice(&call_sub(endian, -1));
     entry.extend_from_slice(&exit(endian));
     let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
-    let emit = obj.func("emit", true, text_idx, 0, 8);
-    let helper = obj.func("helper", true, text_idx, 8, 8);
+    let emit = obj.func("emit", true, text_idx, 0, emit_size);
+    let helper = obj.func("helper", true, text_idx, 8, helper_size);
     let memset = obj.func("memset", true, text_idx, 16, 8);
     let unrelated = obj.func("unrelated", true, text_idx, 24, 8);
     obj.func("entry", true, uprobe_idx, 0, 24);
@@ -2055,7 +2078,7 @@ fn init_guard_follows_nested_helper_calls() {
     // unreachable from the root and stays silent (scoping). Old
     // root-only code reported nothing.
     let guard = single_rule_manifest("stack", 3);
-    let bytes = nested_guard_fixture(NestedEdge::Direct);
+    let bytes = nested_guard_fixture(NestedEdge::Direct, 8, 8);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert_eq!(rule_ids(&violations), ["init.path-guard"]);
     assert_eq!(violations[0].offset, Some(8));
@@ -2066,7 +2089,7 @@ fn init_guard_follows_nested_section_calls() {
     // R09 + F23: the nested edge through a section symbol is the same
     // guarded edge as a direct nested call.
     let guard = single_rule_manifest("stack", 3);
-    let bytes = nested_guard_fixture(NestedEdge::Section);
+    let bytes = nested_guard_fixture(NestedEdge::Section, 8, 8);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert_eq!(rule_ids(&violations), ["init.path-guard"]);
     assert_eq!(violations[0].offset, Some(8));
@@ -2078,7 +2101,7 @@ fn init_guard_reports_nested_unresolved_calls() {
     // finding, never a silent pass: the traversal scans helper
     // bodies, not just the root. Old code reported nothing.
     let guard = single_rule_manifest("stack", 3);
-    let bytes = nested_guard_fixture(NestedEdge::Linked);
+    let bytes = nested_guard_fixture(NestedEdge::Linked, 8, 8);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert_eq!(rule_ids(&violations), ["init.unresolved-call"]);
     assert_eq!(violations[0].offset, Some(8));
@@ -2092,6 +2115,114 @@ fn init_guard_terminates_on_call_cycles() {
     let bytes = cyclic_guard_fixture();
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert!(violations.is_empty(), "unexpected: {violations:?}");
+}
+
+#[test]
+fn init_guard_reports_zero_size_nested_extent() {
+    // S08: emit -> helper -> memset where helper has a legal unknown
+    // ELF size (0). Old code stopped traversal silently — the root
+    // call stayed "covered" while memset was never visited — so the
+    // nested forbidden edge MUST surface as an unprovable extent at
+    // the call site instead.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Direct, 8, 0);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-extent"]);
+    assert_eq!(violations[0].offset, Some(0));
+}
+
+#[test]
+fn init_guard_reports_invalid_nested_extent() {
+    // S08: helper's extent runs past `.text` (8 + 0x1000 > 40):
+    // corrupt and unprovable. A finding names the call site; the
+    // traversal never follows into the corrupt extent.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Direct, 8, 0x1000);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-extent"]);
+    assert_eq!(violations[0].offset, Some(0));
+}
+
+#[test]
+fn init_guard_reports_out_of_range_root() {
+    // S08: emit's own extent runs past `.text`, so the root cannot
+    // be scanned: a finding, never a clamped silent scan. The
+    // unrelated twin's edge — which the old clamped scan
+    // misattributed to emit — stays silent with no traversal.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Direct, 0x1000, 8);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-extent"]);
+    assert_eq!(violations[0].offset, Some(0));
+}
+
+#[test]
+fn init_guard_reports_zero_size_root() {
+    // S08: the guarded path itself has unknown extent: it EXISTS
+    // (no path-missing) but its body is unprovable.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Direct, 0, 8);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-extent"]);
+    assert_eq!(violations[0].offset, Some(0));
+}
+
+/// S09: chain of 64 ordinary functions sharing `.text`, each calling
+/// the next (`emit` -> h1 -> ... -> h63). No `memset` exists, so the
+/// destination match never early-breaks: worst-case symbol scans.
+fn chain_guard_fixture() -> Vec<u8> {
+    const CHAIN: u64 = 64;
+    let endian = Endian::Little;
+    let mut text = Vec::new();
+    for _ in 0..CHAIN - 1 {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let emit = obj.func("emit", true, text_idx, 0, 8);
+    let mut helpers = Vec::new();
+    for i in 1..CHAIN {
+        helpers.push(obj.func(&format!("h{i}"), true, text_idx, i * 8, 8));
+    }
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let mut edges: Vec<(u64, u32, u32)> = vec![(0, helpers[0], R_BPF_64_32)];
+    for i in 1..CHAIN - 1 {
+        edges.push((i * 8, helpers[i as usize], R_BPF_64_32));
+    }
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    obj.build()
+}
+
+#[test]
+fn init_guard_charges_quadratic_traversal_work() {
+    // S09: every visited function scans its section's relocs and
+    // every edge scans the symbol table twice; all of it is charged,
+    // so a deliberately tight ceiling must refuse. The generous
+    // control traverses clean (no forbidden edge exists).
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = chain_guard_fixture();
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+    // Calibrated boundary (deterministic: work is input-determined,
+    // never timing): new code needs more than 6000 steps, pre-S09
+    // code passes at 6000.
+    let mut tight = limits();
+    tight.work_steps = 6000;
+    let error = check_verifier_rules(
+        &bytes,
+        &contract(),
+        std::slice::from_ref(&guard),
+        None,
+        &tight,
+    )
+    .expect_err("charged walk must exhaust a tight ceiling");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
 }
 
 #[test]
@@ -2517,6 +2648,216 @@ fn product_fixture() -> Vec<u8> {
         ],
     );
     obj.build()
+}
+
+/// S03: carrier with a caller-built uprobe body; `map_loads_at` lists
+/// byte offsets carrying TAIL_CALLS map fixups. Mirrors
+/// `stack_carrier` (same arrays, same rooted `.text`) so findings
+/// come only from the custom body.
+fn stack_carrier_custom(body: Vec<u8>, map_loads_at: &[u64]) -> Vec<u8> {
+    let endian = Endian::Little;
+    let mut obj = ObjBuilder::little();
+    let maps_idx = obj.section(".maps", SHT_PROGBITS, 0, vec![0u8; 64]);
+    let mut array_syms = std::collections::BTreeMap::new();
+    for (slot, name) in ["TAIL_CALLS", "STACK_GUARD", "PAIR_CALLS"]
+        .into_iter()
+        .enumerate()
+    {
+        let sym = obj.symbol(
+            name,
+            (STB_GLOBAL << 4) | STT_OBJECT,
+            maps_idx as u16,
+            slot as u64 * 16,
+            16,
+        );
+        array_syms.insert(name, sym);
+    }
+    let relocs: Vec<(u64, u32, u32)> = map_loads_at
+        .iter()
+        .map(|at| (*at, array_syms["TAIL_CALLS"], R_BPF_64_64))
+        .collect();
+    let start = 0u64;
+    let size = body.len() as u64;
+    let section_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, body);
+    obj.func("big", true, section_idx, start, size);
+    obj.reloc_section(".reluprobe", section_idx, &relocs);
+    let mut text = Vec::new();
+    text.extend_from_slice(&exit(endian));
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    obj.func("live", true, text_idx, 0, 8);
+    obj.build()
+}
+
+/// S03: the finding's branch-over-MOV counterexample. The executed
+/// path runs `mov32 r3, 1` (forbidden slot) and jumps over the
+/// textual `mov32 r3, -1`; certifying the textual constant would
+/// bless the forbidden slot as opt-out. The checker must refuse to
+/// attribute across the branch.
+#[test]
+fn tail_call_behind_branch_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, 1)); // 2: executed r3 = 1
+    body.extend_from_slice(&jump(endian, 1)); // 3: skip slot 4
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 4: skipped opt-out
+    body.extend_from_slice(&call_helper(endian, 12)); // 5: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-array"]);
+}
+
+/// S03: `mov64 r2, r4` between the map load and the tail call replaces
+/// the attributed map pointer; the earlier TAIL_CALLS load must not
+/// be certified.
+#[test]
+fn tail_call_after_register_clobber_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&mov64(endian, 2, 4)); // 3: r2 = r4 (clobber)
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-array"]);
+}
+
+/// S03: a jump lands past the index load but on the map load, so one
+/// path reaches the tail call with the map known and the index stale.
+/// The slot check must report unknown-slot rather than the skipped
+/// constant. (Landing between the map load and the call would kill
+/// the array too; this layout isolates the index path.)
+#[test]
+fn tail_call_with_jump_into_prologue_reports_unknown_slot() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&jump(endian, 1)); // 0: lands on slot 2
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 1: skipped r3 load
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 2-3: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov64(endian, 0, 0)); // 4: neutral filler
+    body.extend_from_slice(&call_helper(endian, 12)); // 5: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[16]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S04: an unrelocated big-endian pseudo-call (genuine bpfeb register
+/// byte 0x01) must be recognized as a call and refused. Before the
+/// fix it decoded as a helper call and evaded the guard.
+#[test]
+fn big_endian_unrelocated_pseudo_call_refuses() {
+    let endian = Endian::Big;
+    let mut obj = ObjBuilder::new(endian);
+    let mut text = Vec::new();
+    text.extend_from_slice(&call_sub(endian, -1));
+    assert_eq!(text[1], 0x01, "genuine bpfeb pseudo-call encoding");
+    text.extend_from_slice(&exit(endian));
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let live = obj.func("live", true, text_idx, 0, 16);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    // Only the entry call is relocated; the .text pseudo-call is not.
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, live, R_BPF_64_32)]);
+    let bytes = obj.build();
+    let error = prune_dead_code_with_report(&bytes, &contract_big(), &load_allowlist(), &limits())
+        .expect_err("repair must refuse");
+    assert_refusal(
+        &error,
+        ErrorKind::Unsupported,
+        Stage::Inspect,
+        "unrelocated",
+    );
+}
+
+/// S02: `.text` with a live root holding a section-symbol `ld_imm64`
+/// callback (`addend`), a dead allowlisted `memcpy`, and two live
+/// callees. Pruning `memcpy` shifts `helper` 104->88 and `other`
+/// 120->104; a callback naming 104 still lands in bounds but now
+/// selects `other`.
+fn moved_callback_carrier(addend: i32) -> Vec<u8> {
+    let endian = Endian::Little;
+    let mut obj = ObjBuilder::little();
+    let mut text = Vec::new();
+    text.extend_from_slice(&ldimm64(endian, 1, addend)); // root slots 0-1
+    text.extend_from_slice(&call_sub(endian, -1)); // 2: helper
+    text.extend_from_slice(&call_sub(endian, -1)); // 3: other
+    for _ in 0..7 {
+        text.extend_from_slice(&exit(endian)); // 4-10
+    }
+    for _ in 0..2 {
+        text.extend_from_slice(&exit(endian)); // memcpy [88,104)
+    }
+    for _ in 0..2 {
+        text.extend_from_slice(&exit(endian)); // helper [104,120)
+    }
+    for _ in 0..2 {
+        text.extend_from_slice(&exit(endian)); // other [120,136)
+    }
+    assert_eq!(text.len(), 136);
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+    let root = obj.func("root", true, text_idx, 0, 88);
+    obj.func("memcpy", true, text_idx, 88, 16);
+    let helper = obj.func("helper", true, text_idx, 104, 16);
+    let other = obj.func("other", true, text_idx, 120, 16);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, root, R_BPF_64_32)]);
+    obj.reloc_section(
+        ".rel.text",
+        text_idx,
+        &[
+            (0, text_sym, R_BPF_64_64),
+            (16, helper, R_BPF_64_32),
+            (24, other, R_BPF_64_32),
+        ],
+    );
+    obj.build()
+}
+
+/// S02: the callback still lands in bounds after compaction but now
+/// selects `other` instead of `helper`. No rewrite pass touches the
+/// raw addend, so the repair must refuse rather than retarget.
+#[test]
+fn shifted_section_data_reference_refuses_repair() {
+    let bytes = moved_callback_carrier(104);
+    let error = prune_error(&bytes, &load_allowlist(), &limits());
+    assert_refusal(
+        &error,
+        ErrorKind::InvalidInput,
+        Stage::Inspect,
+        "shifted to 0x58",
+    );
+}
+
+/// S02 control: the same callback naming unmoved code (`root` + 8)
+/// prunes cleanly; the gate fires on shifts, not on the reference
+/// form itself.
+#[test]
+fn unshifted_section_data_reference_prunes() {
+    let bytes = moved_callback_carrier(8);
+    let (out, report) =
+        prune_dead_code_with_report(&bytes, &contract(), &load_allowlist(), &limits())
+            .expect("unshifted callback prunes");
+    assert_eq!(report.removed(), &["memcpy".to_owned()]);
+    assert_eq!((report.text_before(), report.text_after()), (136, 120));
+    assert_eq!(report.output_sha256(), &digest(&out));
 }
 
 #[test]

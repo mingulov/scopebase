@@ -28,21 +28,72 @@ fn smoke_name() -> String {
     format!("lx11-observe-smoke-{}", std::process::id())
 }
 
+/// S14: private smoke staging. Created before validation; the
+/// `Drop` guard removes it on every exit path (empty-only — residue
+/// fails visibly instead of hiding), so even a refused run strands
+/// nothing. R34's validate-then-create still holds: the staging dir
+/// is the only pre-validation creation, and the guard retires it.
+struct Staging {
+    path: Option<std::path::PathBuf>,
+}
+
+impl Staging {
+    fn create(tag: &str) -> Option<Self> {
+        // Exclusive create, skipping stale names from crashed runs
+        // (same pid reused) — never removing anything.
+        for n in 0..1024u32 {
+            let dir = std::env::temp_dir().join(format!(
+                "scopebase-staging-{tag}-{}-{n}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+                    return Some(Self { path: Some(dir) });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.path.as_ref().expect("staging held")
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            // Best-effort: `Drop` cannot report. Empty-only, so a
+            // failure leaves visible residue rather than hiding it.
+            let _ = std::fs::remove_dir(&path);
+        }
+    }
+}
+
 /// R34: every string smoke interpolates, resolved and validated BEFORE
 /// anything is created. The own-binary lookup also happens here so a
 /// `;` refusal (or a current_exe failure) strands nothing.
-fn smoke_paths() -> Option<(String, String)> {
-    let exe = std::env::current_exe().ok()?;
-    let empty = std::env::temp_dir()
-        .join(smoke_name())
-        .join("empty.bin")
-        .to_string_lossy()
-        .into_owned();
-    let exe = exe.to_string_lossy().into_owned();
-    let (Some(exe), Some(empty)) = (script_value(&exe), script_value(&empty)) else {
-        return None;
+///
+/// S35: paths enter strictly. A lossy conversion would map a native
+/// path beneath a non-UTF-8 directory onto a DIFFERENT (replacement
+/// character) name — selecting another file for the mapping probe or
+/// another executable for the spawn probe — so unrepresentable paths
+/// refuse here, before any resource is created or child executed. A
+/// literal U+FFFD in a valid-Unicode path is a real name and passes
+/// through byte-identical; only unrepresentable bytes refuse.
+fn smoke_paths(staging: &std::path::Path) -> Result<(String, String), &'static str> {
+    let exe = std::env::current_exe().map_err(|_| "smoke cannot locate its binary")?;
+    let empty = staging.join(smoke_name()).join("empty.bin");
+    let empty = empty.to_str().ok_or("smoke paths are not valid Unicode")?;
+    let exe = exe.to_str().ok_or("smoke paths are not valid Unicode")?;
+    let (Some(exe), Some(empty)) = (script_value(exe), script_value(empty)) else {
+        return Err("smoke paths contain ';'");
     };
-    Some((exe.to_owned(), empty.to_owned()))
+    Ok((exe.to_owned(), empty.to_owned()))
 }
 
 fn main() {
@@ -122,13 +173,22 @@ fn smoke() -> i32 {
     )) {
         return output_failed();
     }
-    // R34: validate-then-create. Nothing exists yet, so a refusal
-    // here strands nothing by construction.
-    let Some((exe, empty)) = smoke_paths() else {
-        cli::err_line("smoke paths contain ';'");
+    // S14: private staging first; its guard retires it on every
+    // exit path below. R34: validate-then-create. The staging dir
+    // is the only thing existing yet, and the guard owns it, so a
+    // refusal here still strands nothing by construction.
+    let Some(staging) = Staging::create("observe-smoke") else {
+        cli::err_line("smoke staging failed");
         return 1;
     };
-    let root = match FixtureRoot::create(&std::env::temp_dir(), &smoke_name()) {
+    let (exe, empty) = match smoke_paths(staging.path()) {
+        Ok(paths) => paths,
+        Err(message) => {
+            cli::err_line(message);
+            return 1;
+        }
+    };
+    let root = match FixtureRoot::create(staging.path(), &smoke_name()) {
         Ok(root) => root,
         Err(error) => {
             cli::err_line(&format!("smoke root: {error}"));
@@ -218,7 +278,11 @@ mod tests {
     // subprocess leftover test, which owns TMPDIR safely.
     #[test]
     fn smoke_paths_predict_without_creating() {
-        let (exe, empty) = smoke_paths().expect("clean layout predicts");
+        // S14: prediction takes the staging path but creates
+        // nothing — the probe dir below never exists.
+        let probe =
+            std::env::temp_dir().join(format!("scopebase-probe-observe-{}", std::process::id()));
+        let (exe, empty) = smoke_paths(&probe).expect("clean layout predicts");
         // In unit tests this resolves the test executable, in production
         // the product binary; both carry the crate name either way.
         assert!(exe.contains("observe"), "own binary: {exe}");
@@ -231,5 +295,30 @@ mod tests {
             !std::path::Path::new(&empty).exists(),
             "prediction created nothing"
         );
+    }
+
+    // S35: unrepresentable smoke paths refuse with their own message;
+    // a literal U+FFFD name is valid Unicode and passes through
+    // byte-identical — the helper never confuses invalid bytes with
+    // the replacement character. Pure prediction: nothing created.
+    #[test]
+    fn smoke_paths_refuse_non_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/with-\xff-byte".to_vec(),
+        ));
+        assert_eq!(
+            smoke_paths(&bad).unwrap_err(),
+            "smoke paths are not valid Unicode"
+        );
+        let semi = std::path::Path::new("/tmp/with;semi");
+        assert_eq!(smoke_paths(semi).unwrap_err(), "smoke paths contain ';'");
+        let doppel = std::path::Path::new("/tmp/with-\u{FFFD}-char");
+        let (_, empty) = smoke_paths(doppel).expect("replacement char is representable");
+        assert!(
+            empty.contains("\u{FFFD}") && empty.ends_with("empty.bin"),
+            "doppelganger name passes through exactly: {empty}"
+        );
+        assert!(!doppel.exists(), "prediction created nothing");
     }
 }

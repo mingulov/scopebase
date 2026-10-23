@@ -106,11 +106,7 @@ pub struct CellKey {
 }
 
 impl CellKey {
-    pub fn new(
-        case_id: CaseId,
-        case_version: u32,
-        cell_id: &str,
-    ) -> Result<Self, SelectionError> {
+    pub fn new(case_id: CaseId, case_version: u32, cell_id: &str) -> Result<Self, SelectionError> {
         if case_version == 0 || cell_id.is_empty() || cell_id.len() > 65536 {
             return Err(SelectionError(SelectionErrorKind::InvalidManifest));
         }
@@ -263,7 +259,9 @@ impl Node {
     fn step(&self) -> ExplanationStep {
         match self {
             Node::Profile(p) => ExplanationStep::Profile { profile: p.clone() },
-            Node::Extension(e) => ExplanationStep::Extension { extension: e.clone() },
+            Node::Extension(e) => ExplanationStep::Extension {
+                extension: e.clone(),
+            },
             Node::Case(id, v) => ExplanationStep::Case {
                 case_id: id.clone(),
                 case_version: *v,
@@ -338,10 +336,7 @@ pub(crate) fn reverse_index(catalog: &CaseCatalog) -> BTreeMap<Node, BTreeSet<No
 
 /// Forward profile/extension closure of one boundary root over `graph_edges`.
 /// The oracle reuses this forward walk; it never touches the reverse index.
-pub(crate) fn forward_closure(
-    catalog: &CaseCatalog,
-    root: &ProfileId,
-) -> BTreeSet<Node> {
+pub(crate) fn forward_closure(catalog: &CaseCatalog, root: &ProfileId) -> BTreeSet<Node> {
     let mut seen = BTreeSet::new();
     let mut todo = vec![root.clone()];
     while let Some(next) = todo.pop() {
@@ -392,11 +387,17 @@ fn validate_change(
     let unknown = SelectionError(SelectionErrorKind::UnknownChangeTarget);
     let malformed = SelectionError(SelectionErrorKind::InvalidManifest);
     match change {
-        Change::Case { case_id, case_version } => {
+        Change::Case {
+            case_id,
+            case_version,
+        } => {
             if *case_version == 0 {
                 return Err(malformed);
             }
-            if !catalog.cases.contains_key(&(case_id.clone(), *case_version)) {
+            if !catalog
+                .cases
+                .contains_key(&(case_id.clone(), *case_version))
+            {
                 return Err(unknown);
             }
         }
@@ -431,7 +432,11 @@ fn validate_change(
                 return Err(unknown);
             }
         }
-        Change::RegistrationRole { case_id, case_version, .. } => {
+        Change::RegistrationRole {
+            case_id,
+            case_version,
+            ..
+        } => {
             if *case_version == 0 {
                 return Err(malformed);
             }
@@ -577,7 +582,10 @@ pub fn select_affected(
     for (index, change) in manifest.changes().iter().enumerate() {
         let target = ExplanationStep::ChangeTarget;
         match change {
-            Change::Case { case_id, case_version } => {
+            Change::Case {
+                case_id,
+                case_version,
+            } => {
                 let node = Node::Case(case_id.clone(), *case_version);
                 let path = vec![target, node.step()];
                 seed(node, index, path, &mut affected, &mut queue)?;
@@ -622,7 +630,11 @@ pub fn select_affected(
                     seed(node, index, path, &mut affected, &mut queue)?;
                 }
             }
-            Change::RegistrationRole { case_id, case_version, role } => {
+            Change::RegistrationRole {
+                case_id,
+                case_version,
+                role,
+            } => {
                 let node = Node::Case(case_id.clone(), *case_version);
                 let path = vec![
                     target,
@@ -646,7 +658,10 @@ pub fn select_affected(
                     &seed,
                 )?;
             }
-            Change::Environment { attribute, boundary } => {
+            Change::Environment {
+                attribute,
+                boundary,
+            } => {
                 unresolved.push(UnresolvedImpact {
                     change_index: index,
                     boundary: boundary.clone(),
@@ -703,7 +718,9 @@ pub fn select_affected(
                     case_id: case_id.clone(),
                     case_version,
                 });
-                full.push(ExplanationStep::Cell { cell_id: cell.clone() });
+                full.push(ExplanationStep::Cell {
+                    cell_id: cell.clone(),
+                });
                 if full.len() > limits.max_path_steps {
                     return Err(SelectionError(SelectionErrorKind::LimitExceeded));
                 }
@@ -734,8 +751,7 @@ pub fn select_affected(
         }
         Ok(())
     };
-    let mut in_scope_profiles: Vec<&ProfileId> =
-        inputs.closure_profiles.iter().collect();
+    let mut in_scope_profiles: Vec<&ProfileId> = inputs.closure_profiles.iter().collect();
     in_scope_profiles.sort();
     for profile in in_scope_profiles {
         if affected.contains_key(&Node::Profile(profile.clone())) {
@@ -748,8 +764,7 @@ pub fn select_affected(
             )?;
         }
     }
-    let mut in_scope_extensions: Vec<&ProfileId> =
-        inputs.closure_extensions.iter().collect();
+    let mut in_scope_extensions: Vec<&ProfileId> = inputs.closure_extensions.iter().collect();
     in_scope_extensions.sort();
     for extension in in_scope_extensions {
         if affected.contains_key(&Node::Extension(extension.clone())) {
@@ -816,7 +831,9 @@ fn seed_broadening(
         &mut VecDeque<Node>,
     ) -> Result<(), SelectionError>,
 ) -> Result<(), SelectionError> {
-    let broaden = ExplanationStep::BoundaryBroadening { boundary: boundary.clone() };
+    let broaden = ExplanationStep::BoundaryBroadening {
+        boundary: boundary.clone(),
+    };
     match boundary {
         None => {
             // Whole-request broadening: every requested-closure owner, plus
@@ -825,7 +842,12 @@ fn seed_broadening(
                 .profiles
                 .keys()
                 .map(|p| Node::Profile(p.clone()))
-                .chain(catalog.extensions.keys().map(|e| Node::Extension(e.clone())))
+                .chain(
+                    catalog
+                        .extensions
+                        .keys()
+                        .map(|e| Node::Extension(e.clone())),
+                )
                 .chain(
                     catalog
                         .cases
@@ -835,11 +857,7 @@ fn seed_broadening(
                 .collect();
             owners.sort();
             for node in owners {
-                let path = vec![
-                    ExplanationStep::ChangeTarget,
-                    broaden.clone(),
-                    node.step(),
-                ];
+                let path = vec![ExplanationStep::ChangeTarget, broaden.clone(), node.step()];
                 seed(node, index, path, affected, queue)?;
             }
         }
@@ -850,11 +868,7 @@ fn seed_broadening(
             let mut closure: Vec<Node> = forward_closure(catalog, &root).into_iter().collect();
             closure.sort();
             for node in &closure {
-                let path = vec![
-                    ExplanationStep::ChangeTarget,
-                    broaden.clone(),
-                    node.step(),
-                ];
+                let path = vec![ExplanationStep::ChangeTarget, broaden.clone(), node.step()];
                 seed(node.clone(), index, path, affected, queue)?;
             }
             // Declared cases of the broadened closure, so case-level
@@ -871,11 +885,7 @@ fn seed_broadening(
                 }
             }
             for node in cases {
-                let path = vec![
-                    ExplanationStep::ChangeTarget,
-                    broaden.clone(),
-                    node.step(),
-                ];
+                let path = vec![ExplanationStep::ChangeTarget, broaden.clone(), node.step()];
                 seed(node, index, path, affected, queue)?;
             }
         }

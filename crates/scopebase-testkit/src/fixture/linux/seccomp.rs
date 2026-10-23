@@ -76,9 +76,11 @@ const BPF_JEQ_K: u16 = 0x15;
 const BPF_RET_K: u16 = 0x06;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
-// `struct seccomp_data` field offsets: nr (int) at 0, arch (__u32) at 4.
+// `struct seccomp_data` field offsets: nr (int) at 0, arch (__u32) at 4,
+// args[0] (u64) at 16 (the ptrace request rides in its low word).
 const SECCOMP_DATA_NR_OFF: u32 = 0;
 const SECCOMP_DATA_ARCH_OFF: u32 = 4;
+const SECCOMP_DATA_ARG0_OFF: u32 = 16;
 // `AUDIT_ARCH_X86_64` from linux/audit.h.
 const AUDIT_ARCH_X86_64: u32 = 0xC000_003E;
 
@@ -114,6 +116,36 @@ pub fn install_deny_one(nr: libc::c_long, action: DenyAction) -> Result<(), Secc
         stmt(BPF_RET_K, deny),
         stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
     ];
+    install_program(&program)
+}
+
+/// S05/S31: deny one ptrace `request` (e.g. `PTRACE_GETREGS`) with
+/// the action errno while every other ptrace request — TRACEME,
+/// SETOPTIONS, SYSCALL included — stays allowed. Same confined-helper
+/// contract as [`install_deny_one`].
+#[cfg(target_arch = "x86_64")]
+pub fn install_deny_ptrace_request(
+    request: libc::c_uint,
+    action: DenyAction,
+) -> Result<(), SeccompError> {
+    let deny = SECCOMP_RET_ERRNO | (action.errno() & 0xffff);
+    let program = [
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
+        jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
+        stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
+        jump(BPF_JEQ_K, libc::SYS_ptrace as u32, 0, 3),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG0_OFF),
+        jump(BPF_JEQ_K, request, 0, 1),
+        stmt(BPF_RET_K, deny),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    install_program(&program)
+}
+
+/// Latch `NO_NEW_PRIVS` and install one classic-BPF program.
+#[cfg(target_arch = "x86_64")]
+fn install_program(program: &[libc::sock_filter]) -> Result<(), SeccompError> {
     // SAFETY: `prctl` with explicit `c_ulong` arguments; the program
     // array outlives the synchronous install call.
     let nnp = unsafe {
@@ -156,6 +188,18 @@ pub fn install_deny_one(nr: libc::c_long, action: DenyAction) -> Result<(), Secc
 /// Non-x86_64 builds refuse without touching process state.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn install_deny_one(_nr: libc::c_long, _action: DenyAction) -> Result<(), SeccompError> {
+    Err(SeccompError {
+        stage: "unsupported_arch",
+        errno: libc::ENOSYS,
+    })
+}
+
+/// Non-x86_64 builds refuse without touching process state.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn install_deny_ptrace_request(
+    _request: libc::c_uint,
+    _action: DenyAction,
+) -> Result<(), SeccompError> {
     Err(SeccompError {
         stage: "unsupported_arch",
         errno: libc::ENOSYS,

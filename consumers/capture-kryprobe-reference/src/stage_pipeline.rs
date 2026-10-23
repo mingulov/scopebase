@@ -89,10 +89,16 @@ impl StagePipeline {
         if count > self.count_limit.saturating_sub(self.counts) {
             return Err(ContractError::CapacityExceeded);
         }
-        if self.byte_limit.is_some_and(|limit| bytes > limit.saturating_sub(self.bytes)) {
+        if self
+            .byte_limit
+            .is_some_and(|limit| bytes > limit.saturating_sub(self.bytes))
+        {
             return Err(ContractError::CapacityExceeded);
         }
-        let ticket = self.next.checked_add(1).ok_or(ContractError::CapacityExceeded)?;
+        let ticket = self
+            .next
+            .checked_add(1)
+            .ok_or(ContractError::CapacityExceeded)?;
         self.next = ticket;
         self.live.insert(ticket, (count, bytes));
         self.counts += count;

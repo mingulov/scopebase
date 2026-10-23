@@ -62,12 +62,7 @@ unsafe impl GlobalAlloc for Observer {
         System.alloc_zeroed(layout)
     }
 
-    unsafe fn realloc(
-        &self,
-        ptr: *mut u8,
-        layout: Layout,
-        new_size: usize,
-    ) -> *mut u8 {
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if ARMED.load(Ordering::Relaxed) && measured_here() {
             ALLOC_ENTRIES.with(|c| c.set(c.get().wrapping_add(1)));
         }
@@ -261,7 +256,12 @@ fn main() {
         let (result, alloc, dealloc) = measure(|| call.execute(&f));
         let e = result.unwrap_err();
         assert_eq!(e.diagnostic_bytes(), b"run-limits-mismatch");
-        check("observer_binding_preflight_zero_work", alloc, dealloc, Some(0));
+        check(
+            "observer_binding_preflight_zero_work",
+            alloc,
+            dealloc,
+            Some(0),
+        );
         drop(e);
     }
 
@@ -323,7 +323,12 @@ fn main() {
         let v = result.unwrap();
         assert_eq!(v.bytes(), b"supported");
         println!("ALLOC_ATTRIBUTION filter direct_bpf={direct} adapter_output_reservation=1");
-        check("observer_filter_public_call", alloc, dealloc, Some(direct + 1));
+        check(
+            "observer_filter_public_call",
+            alloc,
+            dealloc,
+            Some(direct + 1),
+        );
         drop(v);
     }
 
@@ -376,20 +381,24 @@ fn main() {
         let (_, direct_base, _) = measure(|| {
             let _ = scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
         });
-        let candidate = scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
+        let candidate =
+            scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
         let (_, direct_candidate, _) = measure(|| {
-            let _ =
-                scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
+            let _ = scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
         });
         // import-observation attribution: direct decode plus direct encode
         // with the fixed ceiling, plus the two fixed adapter buffers.
-        let value =
-            scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
+        let value = scopebase_bpf::CapabilityObservation::from_json(raw, &decode(262144)).unwrap();
         let (_, direct_encode, _) = measure(|| {
             let _ = value.to_json(&decode(262144)).unwrap();
         });
         let mut a = BpfHostAdapter::new(subject(&l), bpf_limits(), l.clone()).unwrap();
-        let i = invocation(&l, "bp03-host-json-v1", "context-applies", &["base", "candidate"]);
+        let i = invocation(
+            &l,
+            "bp03-host-json-v1",
+            "context-applies",
+            &["base", "candidate"],
+        );
         let refs = [
             FixtureInput::new(label("base"), raw),
             FixtureInput::new(label("candidate"), raw),
@@ -465,7 +474,12 @@ fn main() {
             )
             .unwrap();
         });
-        check("observer_mutant_generic_observation_new", alloc, dealloc, None);
+        check(
+            "observer_mutant_generic_observation_new",
+            alloc,
+            dealloc,
+            None,
+        );
     }
     {
         // format! refusal diagnostic: dynamic formatting allocates.

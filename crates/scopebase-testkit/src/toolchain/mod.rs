@@ -32,6 +32,8 @@ pub use executor::{
     ExecutorClose, ExecutorLimits, ExecutorReport, ExecutorUsage, OutputReleaseError,
 };
 pub use identity::{CompilerClosure, PinnedTool};
+#[doc(hidden)]
+pub use invoke::run_pinned_with_builders;
 pub use invoke::{run_pinned, NestedBounds, NestedOutput};
 pub use scope::{
     BuildExit, BuildRequest, BuildScopeBackend, DirectScope, RoleBinding, RoleSelection, ScopePoll,

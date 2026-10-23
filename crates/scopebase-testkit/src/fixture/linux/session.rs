@@ -83,10 +83,15 @@ impl SlotSet {
         }
     }
     fn sealed_count(&self) -> u32 {
-        [ &self.early, &self.shared, &self.case_retire, &self.run_retire ]
-            .iter()
-            .filter(|s| s.get().is_some())
-            .count() as u32
+        [
+            &self.early,
+            &self.shared,
+            &self.case_retire,
+            &self.run_retire,
+        ]
+        .iter()
+        .filter(|s| s.get().is_some())
+        .count() as u32
     }
     fn earliest(&self) -> Option<&[u8]> {
         self.early
@@ -254,16 +259,15 @@ fn check_image_path(path: &std::path::Path, what: &str) -> Result<(), String> {
         return Err(format!("{what} must be absolute"));
     }
     if bytes.is_empty() || bytes.len() > 4096 || bytes.contains(&0) {
-        return Err(format!("{what} must be nonempty, NUL-free, at most 4096 bytes"));
+        return Err(format!(
+            "{what} must be nonempty, NUL-free, at most 4096 bytes"
+        ));
     }
     Ok(())
 }
 
 fn empty_ledger(reason: &str) -> Vec<u8> {
-    format!(
-        "{{\"ledger\":\"constructor\",\"aux_acquired\":0,\"refusal\":{reason:?}}}"
-    )
-    .into_bytes()
+    format!("{{\"ledger\":\"constructor\",\"aux_acquired\":0,\"refusal\":{reason:?}}}").into_bytes()
 }
 
 impl LinuxFixtureSession {
@@ -316,8 +320,7 @@ impl LinuxFixtureSession {
                 match file.metadata() {
                     Ok(m) if m.is_file() || m.is_dir() => {}
                     _ => {
-                        let detail =
-                            format!("{what} must be an accessible file or directory");
+                        let detail = format!("{what} must be an accessible file or directory");
                         return Some((detail.clone(), empty_ledger(&detail)));
                     }
                 }
@@ -647,7 +650,8 @@ impl LinuxFixtureSession {
             if i > 0 {
                 report_bytes.push(b',');
             }
-            report_bytes.extend_from_slice(format!("{{\"owner\":{name:?},\"errno\":{errno}}}").as_bytes());
+            report_bytes
+                .extend_from_slice(format!("{{\"owner\":{name:?},\"errno\":{errno}}}").as_bytes());
         }
         report_bytes.extend_from_slice(b"],\"unresolved_owners\":[");
         for (i, name) in unresolved.iter().enumerate() {
@@ -656,9 +660,7 @@ impl LinuxFixtureSession {
             }
             report_bytes.extend_from_slice(format!("{name:?}").as_bytes());
         }
-        report_bytes.extend_from_slice(
-            b"],\"conformance\":\"subset-first-increment\"}",
-        );
+        report_bytes.extend_from_slice(b"],\"conformance\":\"subset-first-increment\"}");
         if report_bytes.len() as u64 > budget.max_retained_bytes {
             let report = self.seal_unresolved(
                 budget.max_retained_bytes,
@@ -731,7 +733,11 @@ impl Drop for LinuxFixtureSession {
             let _ = entry.pair.shutdown();
         }
         if let Some(assets) = self.assets.take() {
-            for fd in [assets.image_a.into(), assets.image_b.into(), assets.root.into()] {
+            for fd in [
+                assets.image_a.into(),
+                assets.image_b.into(),
+                assets.root.into(),
+            ] {
                 super::creator::explicit_close_fd(fd);
             }
             let _ = assets.creator.close();
@@ -758,7 +764,10 @@ impl SessionProbe {
 }
 
 fn file_scenario(scenario: Scenario) -> bool {
-    matches!(scenario, Scenario::FileReplacement | Scenario::DescriptorInventory)
+    matches!(
+        scenario,
+        Scenario::FileReplacement | Scenario::DescriptorInventory
+    )
 }
 
 fn file_identity_bytes(file: &std::fs::File) -> Option<Vec<u8>> {
@@ -869,7 +878,11 @@ impl LinuxFixtureSession {
             registrations.push(registration);
             Ok(())
         };
-        push("linux.case-root", "linux-case-root", &operation_id.to_le_bytes())?;
+        push(
+            "linux.case-root",
+            "linux-case-root",
+            &operation_id.to_le_bytes(),
+        )?;
         push("linux.child-a", "linux-child", &pair.a_pid().to_le_bytes())?;
         push("linux.child-b", "linux-child", &pair.b_pid().to_le_bytes())?;
         for (index, file) in files.iter().enumerate() {
@@ -979,7 +992,9 @@ impl LinuxFixtureSession {
             )
         })?;
         let deadline_ns = {
-            let remaining = self.execution_deadline.saturating_duration_since(Instant::now());
+            let remaining = self
+                .execution_deadline
+                .saturating_duration_since(Instant::now());
             std::time::SystemTime::now()
                 .checked_add(remaining)
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1560,7 +1575,10 @@ impl FixtureSession for LinuxFixtureSession {
         });
         let expected_bytes = serde_json::to_vec(&expected).map_err(|e| {
             FixtureError::harness(
-                he(HarnessErrorKind::InvalidInput, &format!("snapshot encode: {e}")),
+                he(
+                    HarnessErrorKind::InvalidInput,
+                    &format!("snapshot encode: {e}"),
+                ),
                 Some(key.clone()),
                 FixtureStage::Collect,
             )
@@ -1990,7 +2008,12 @@ impl LinuxOuterCleanupAdmissionError {
 }
 impl std::fmt::Display for LinuxOuterCleanupAdmissionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "cleanup admission {:?}: {}", self.kind, String::from_utf8_lossy(&self.diagnostic))
+        write!(
+            f,
+            "cleanup admission {:?}: {}",
+            self.kind,
+            String::from_utf8_lossy(&self.diagnostic)
+        )
     }
 }
 impl std::error::Error for LinuxOuterCleanupAdmissionError {}

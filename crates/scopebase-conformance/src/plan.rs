@@ -51,13 +51,12 @@ pub fn plan(
     mapping_policy: &str,
 ) -> Result<PlanDoc, OperatorError> {
     crate::delivery::check_mapping_policy(mapping_policy)?;
-    let catalog =
-        CaseCatalog::load(catalog_bytes, CatalogLimits::default()).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!("catalog rejected: {e}"),
-            )
-        })?;
+    let catalog = CaseCatalog::load(catalog_bytes, CatalogLimits::default()).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("catalog rejected: {e}"),
+        )
+    })?;
     let id = ProfileId::parse(profile).map_err(|_| {
         OperatorError::new(
             OperatorErrorKind::UnknownProfile,
@@ -94,7 +93,7 @@ pub fn plan(
     if !closure_complete {
         // Account each pinned file individually without failing fast.
         match manifest_bytes {
-            Err(closure::BoundedReadError::NotFound) => {
+            Err(closure::BoundedReadError::NotFound(_)) => {
                 missing.push(MANIFEST_FILE.into());
             }
             Err(closure::BoundedReadError::Refused(_)) => {
@@ -125,7 +124,7 @@ pub fn plan(
                                 &path,
                                 closure::MAX_CLOSURE_FILE_BYTES,
                             ) {
-                                Err(closure::BoundedReadError::NotFound) => missing.push(path),
+                                Err(closure::BoundedReadError::NotFound(_)) => missing.push(path),
                                 Err(closure::BoundedReadError::Refused(_)) => {
                                     mismatched.push(path);
                                 }

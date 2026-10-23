@@ -757,16 +757,14 @@ pub fn parse_canonical(bytes: &[u8], max_bytes: usize) -> Result<serde_json::Val
     Ok(value)
 }
 
-fn exact_keys(
-    value: &serde_json::Value,
-    keys: &[&str],
-    what: &str,
-) -> Result<(), WireError> {
+fn exact_keys(value: &serde_json::Value, keys: &[&str], what: &str) -> Result<(), WireError> {
     let map = value
         .as_object()
         .ok_or_else(|| WireError::new(format!("{what} must be an object")))?;
     if map.len() != keys.len() || keys.iter().any(|k| !map.contains_key(*k)) {
-        return Err(WireError::new(format!("{what} keys must be exactly closed")));
+        return Err(WireError::new(format!(
+            "{what} keys must be exactly closed"
+        )));
     }
     Ok(())
 }
@@ -889,7 +887,9 @@ pub fn validate_hello_reply(value: &serde_json::Value, slot: &str) -> Result<(),
     if value["signal_profile"]
         != serde_json::json!({"term_blocked": false, "term_disposition": "default"})
     {
-        return Err(WireError::new("hello signal profile must be default/unblocked"));
+        return Err(WireError::new(
+            "hello signal profile must be default/unblocked",
+        ));
     }
     Ok(())
 }
@@ -1230,7 +1230,10 @@ mod tests {
     #[test]
     fn canonical_vectors() {
         let v: serde_json::Value = serde_json::json!({"b":1,"a":[true,null,"x"]});
-        assert_eq!(canonical_json(&v).unwrap(), r#"{"a":[true,null,"x"],"b":1}"#);
+        assert_eq!(
+            canonical_json(&v).unwrap(),
+            r#"{"a":[true,null,"x"],"b":1}"#
+        );
         let v: serde_json::Value = serde_json::json!({"s":"a\"b\\c\nd\tE"});
         assert_eq!(
             canonical_json(&v).unwrap(),
@@ -1330,10 +1333,7 @@ mod tests {
 
     #[test]
     fn hello_control_shapes() {
-        assert_eq!(
-            parse_hello_control(&serde_json::Value::Null).unwrap(),
-            None
-        );
+        assert_eq!(parse_hello_control(&serde_json::Value::Null).unwrap(), None);
         let good = serde_json::json!({
             "kind": "worker_exit", "step_id": "s01-ready", "point": "after_root_grant",
         });

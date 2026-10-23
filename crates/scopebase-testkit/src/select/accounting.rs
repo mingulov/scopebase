@@ -102,8 +102,7 @@ impl RunAccounting {
         inherited: &BTreeMap<CellKey, EvidenceRef>,
     ) -> Self {
         let declared: BTreeSet<&CellKey> = plan.declared().iter().collect();
-        let selected: BTreeSet<&CellKey> =
-            plan.selected().iter().map(|c| c.key()).collect();
+        let selected: BTreeSet<&CellKey> = plan.selected().iter().map(|c| c.key()).collect();
         let executed_selected: Vec<CellKey> = selected
             .intersection(&executed.iter().collect())
             .map(|k| (*k).clone())
@@ -210,9 +209,7 @@ impl RunAccounting {
         if self.full_matrix_complete && self.missing_selected.is_empty() {
             Ok(())
         } else {
-            Err(AccountingError(
-                AccountingErrorKind::IncompleteDenominator,
-            ))
+            Err(AccountingError(AccountingErrorKind::IncompleteDenominator))
         }
     }
 }
@@ -238,11 +235,7 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    pub fn new(
-        attempt: u32,
-        outcome: AttemptOutcome,
-        detail: &str,
-    ) -> Result<Self, GateError> {
+    pub fn new(attempt: u32, outcome: AttemptOutcome, detail: &str) -> Result<Self, GateError> {
         if attempt == 0 || detail.len() > 4096 {
             return Err(GateError(GateErrorKind::InvalidAttempt));
         }

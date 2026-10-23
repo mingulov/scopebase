@@ -68,6 +68,7 @@ pub fn cleanup_run(
         Mode::empty(),
     )
     .map_err(|e| refused(format!("run dir parent not openable: {e}")))?;
+    require_exclusive_parent(parent_fd.as_fd())?;
     let root_fd = rustix::fs::openat(
         &parent_fd,
         name_c.as_c_str(),
@@ -119,11 +120,7 @@ pub fn cleanup_run(
         .map_err(|e| refused(format!("run dir not removable: {e}")))?;
     // Prove OUR directory lost its name: a swap-and-replace between
     // the re-verify and the unlink leaves our fd linked.
-    let after = dev_ino_nlink(root_fd.as_fd())
-        .map_err(|e| refused(format!("run dir not statable: {e}")))?;
-    if after != 0 {
-        return Err(refused("run dir replaced during removal"));
-    }
+    prove_unlinked(root_fd.as_fd(), "run dir")?;
     let profile = manifest
         .get("profile")
         .and_then(|p| p.as_str())
@@ -133,6 +130,34 @@ pub fn cleanup_run(
         run_id: run_id.to_string(),
         profile,
     })
+}
+
+/// S14: prove the pinned parent is mutation-exclusive to us:
+/// owned by our euid with no group/other write bit (the
+/// mask-backed mode check covers ACL grants too). Without this,
+/// the verify/unlink destruction window below admits a foreign
+/// swapper. Mirrors `scopebase_linux::conformance`'s gate; this
+/// crate has `rustix/process`, so the euid is native.
+fn require_exclusive_parent(parent: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
+    let st = rustix::fs::fstat(parent)
+        .map_err(|e| refused(format!("run dir parent not statable: {e}")))?;
+    if st.st_uid != rustix::process::geteuid().as_raw() || st.st_mode & 0o022 != 0 {
+        return Err(refused(
+            "run dir parent not exclusive: stage run dirs under a private 0700 directory",
+        ));
+    }
+    Ok(())
+}
+
+/// S13: prove the held inode lost its name. Unlinking a swapped-in
+/// replacement leaves OUR inode linked and refuses instead of
+/// reporting success over a foreign deletion.
+fn prove_unlinked(held: std::os::fd::BorrowedFd<'_>, what: &str) -> Result<(), OperatorError> {
+    let after = dev_ino_nlink(held).map_err(|e| refused(format!("{what} not statable: {e}")))?;
+    if after != 0 {
+        return Err(refused(format!("{what} replaced during removal")));
+    }
+    Ok(())
 }
 
 fn dev_ino(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<(u64, u64)> {
@@ -153,10 +178,15 @@ fn read_at(
     max: u64,
 ) -> Result<Vec<u8>, OperatorError> {
     use std::io::Read as _;
+    // S37: `O_NONBLOCK` like the R39 closure reads — the open must
+    // never block on a writer-less FIFO substituted for the
+    // manifest. Regular files ignore the flag, so their reads are
+    // unchanged; the same descriptor is type-checked below and
+    // non-regular objects refuse instead of hanging.
     let fd = rustix::fs::openat(
         dir,
         name,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
         Mode::empty(),
     )
     .map_err(|e| refused(format!("run manifest not readable: {e}")))?;
@@ -181,11 +211,20 @@ fn read_at(
 }
 
 /// Recursively remove every entry under `dir` (fd-relative; never
-/// resolves a path). Each entry is opened as a directory first:
-/// `NOFOLLOW` refuses symlinks with `ELOOP` and files with
-/// `ENOTDIR`, and either falls through to a plain unlink, which
-/// never follows a link. A swap between listing and open fails
-/// closed instead of mis-removing.
+/// resolves a path).
+///
+/// S13: one `O_PATH` hold per entry (follows nothing; holds files,
+/// dirs, symlinks and fifos without opening their data, so no fifo
+/// blocks the walk). Directories reopen through the hold with `"."`
+/// — no second name lookup, so renaming the entry itself mid-walk
+/// cannot redirect the recursion. Every unlink proves against the
+/// held inode afterwards: a swapped-in replacement takes the
+/// deletion while OUR inode stays linked, and `prove_unlinked`
+/// refuses loudly instead of reporting success over it.
+/// Multi-linked entries (hardlinks — never created by the
+/// operator, so always foreign evidence) refuse the same way: the
+/// inode would survive the unlink, and "removed" would be a lie.
+/// Mirrors `scopebase_linux::conformance`'s walk.
 fn clear_dir(dir: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
     let entries = rustix::fs::Dir::read_from(dir)
         .map_err(|e| refused(format!("run dir not listable: {e}")))?;
@@ -195,25 +234,43 @@ fn clear_dir(dir: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             continue;
         }
-        match rustix::fs::openat(
+        let held = match rustix::fs::openat(
             dir,
             name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         ) {
-            Ok(child) => {
-                clear_dir(child.as_fd())?;
-                rustix::fs::unlinkat(dir, name, AtFlags::REMOVEDIR)
-                    .map_err(|e| refused(format!("run entry not removable: {e}")))?;
-            }
-            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
-                rustix::fs::unlinkat(dir, name, AtFlags::empty())
-                    .map_err(|e| refused(format!("run entry not removable: {e}")))?;
+            Ok(held) => held,
+            Err(rustix::io::Errno::NOENT) => {
+                // Already gone (a cooperative sibling retired it):
+                // converge rather than fail the whole removal.
+                continue;
             }
             Err(errno) => {
                 return Err(refused(format!("run entry not openable: {errno}")));
             }
+        };
+        let mode = rustix::fs::fstat(&held)
+            .map_err(|e| refused(format!("run entry not statable: {e}")))?
+            .st_mode;
+        if rustix::fs::FileType::from_raw_mode(mode) == rustix::fs::FileType::Directory {
+            let child = rustix::fs::openat(
+                held.as_fd(),
+                c".",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|e| refused(format!("run entry not openable: {e}")))?;
+            clear_dir(child.as_fd())?;
+            rustix::fs::unlinkat(dir, name, AtFlags::REMOVEDIR)
+                .map_err(|e| refused(format!("run entry not removable: {e}")))?;
+        } else {
+            // Plain unlink never follows a link, whatever the entry
+            // changed into — dangling symlink, fifo, socket alike.
+            rustix::fs::unlinkat(dir, name, AtFlags::empty())
+                .map_err(|e| refused(format!("run entry not removable: {e}")))?;
         }
+        prove_unlinked(held.as_fd(), "run entry")?;
     }
     Ok(())
 }

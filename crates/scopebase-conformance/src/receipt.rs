@@ -3,7 +3,7 @@
 //!
 //! NEW (TT07): no donor lines copied.
 
-use crate::closure::VerifiedClosure;
+use crate::closure::{self, BoundedReadError, VerifiedClosure};
 use crate::error::{OperatorError, OperatorErrorKind};
 use scopebase_testkit::{Qualification, RunContract, RunLimits, RunReport};
 use std::path::Path;
@@ -41,13 +41,12 @@ pub fn build(
     mapping_policy: &str,
     run_id: &str,
 ) -> Result<serde_json::Value, OperatorError> {
-    let report_bytes = report
-        .to_json(contract.limits().clone())
-        .map_err(|e| OperatorError::new(OperatorErrorKind::Engine, format!("receipt encode: {e}")))?;
-    let report_value: serde_json::Value =
-        serde_json::from_slice(&report_bytes).map_err(|e| {
-            OperatorError::new(OperatorErrorKind::Engine, format!("receipt shape: {e}"))
-        })?;
+    let report_bytes = report.to_json(contract.limits().clone()).map_err(|e| {
+        OperatorError::new(OperatorErrorKind::Engine, format!("receipt encode: {e}"))
+    })?;
+    let report_value: serde_json::Value = serde_json::from_slice(&report_bytes).map_err(|e| {
+        OperatorError::new(OperatorErrorKind::Engine, format!("receipt shape: {e}"))
+    })?;
     let envelope = serde_json::json!({
         "schema": RECEIPT_SCHEMA,
         "schema_version": RECEIPT_SCHEMA_VERSION,
@@ -63,7 +62,9 @@ pub fn build(
         "report": report_value,
     });
     let digest = scopebase_testkit::Digest256::of_bytes(
-        serde_json::to_vec(&envelope_canonical(&envelope)).unwrap().as_slice(),
+        serde_json::to_vec(&envelope_canonical(&envelope))
+            .unwrap()
+            .as_slice(),
     )
     .as_str();
     let mut sealed = envelope;
@@ -81,12 +82,22 @@ pub fn verify_receipt(path: &Path) -> Result<ReceiptReport, OperatorError> {
 
 /// Read the receipt envelope bytes: the single read site shared by
 /// shallow and full verification.
+///
+/// S39/S42: bounded through the envelope reader — an oversized
+/// envelope refuses here instead of inflating the verifier before
+/// JSON admission. Regular files read capped; FIFOs stream under
+/// the rendezvous bound (R37 serves the envelope over a FIFO by
+/// design), and a writer-less envelope refuses as missing input.
 fn read_envelope_bytes(path: &Path) -> Result<Vec<u8>, OperatorError> {
-    std::fs::read(path).map_err(|e| {
-        OperatorError::new(
+    closure::read_envelope_stream(path, closure::MAX_RECEIPT_BYTES).map_err(|e| match e {
+        BoundedReadError::NotFound(detail) => OperatorError::new(
             OperatorErrorKind::MissingInput,
-            format!("cannot read receipt {}: {e}", path.display()),
-        )
+            format!("cannot read receipt {}: {detail}", path.display()),
+        ),
+        BoundedReadError::Refused(detail) => OperatorError::new(
+            OperatorErrorKind::ReceiptInvalid,
+            format!("receipt {} unreadable: {detail}", path.display()),
+        ),
     })
 }
 
@@ -145,6 +156,38 @@ fn verify_envelope(bytes: &[u8]) -> Result<(ReceiptReport, serde_json::Value), O
         )
     })?;
     invalid_if(!report_value.is_object(), "receipt report is not an object")?;
+    // S41: mandatory v1 bindings gate the seal. The seal is
+    // self-consistent over any sparse shape (anyone can recompute
+    // it), so a resealed envelope with removed or malformed bindings
+    // must fail HERE, before seal admission — never by seal mismatch
+    // alone, which only proves the bytes changed.
+    for binding in [
+        "catalog_sha256",
+        "run_contract_sha256",
+        "fixture_manifest_sha256",
+    ] {
+        let shaped = envelope
+            .get(binding)
+            .and_then(|s| s.as_str())
+            .is_some_and(|d| d.len() == 64 && d.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !shaped {
+            return Err(OperatorError::new(
+                OperatorErrorKind::ReceiptInvalid,
+                format!("receipt binding {binding} is missing or malformed"),
+            ));
+        }
+    }
+    invalid_if(
+        envelope
+            .get("mapping_policy")
+            .and_then(|p| p.as_str())
+            .is_none_or(|p| p.is_empty()),
+        "receipt lacks its mapping policy",
+    )?;
+    invalid_if(
+        !envelope.get("subject").is_some_and(|s| s.is_object()),
+        "receipt lacks its subject",
+    )?;
     let sealed = envelope
         .get("envelope_sha256")
         .and_then(|s| s.as_str())
@@ -196,12 +239,18 @@ pub fn verify_receipt_with_catalog(
                 "receipt has no staged contract",
             )
         })?;
-    let contract_bytes = std::fs::read(&staged).map_err(|_| {
-        OperatorError::new(
-            OperatorErrorKind::ReceiptInvalid,
-            "receipt has no staged contract",
-        )
-    })?;
+    // S39: the staged contract admits through the bounded reader.
+    let contract_bytes = closure::read_bounded(&staged, closure::MAX_STAGED_CONTRACT_BYTES)
+        .map_err(|e| match e {
+            BoundedReadError::NotFound(_) => OperatorError::new(
+                OperatorErrorKind::ReceiptInvalid,
+                "receipt has no staged contract",
+            ),
+            BoundedReadError::Refused(detail) => OperatorError::new(
+                OperatorErrorKind::ReceiptInvalid,
+                format!("receipt staged contract unreadable: {detail}"),
+            ),
+        })?;
     let catalog = scopebase_testkit::CaseCatalog::load(
         catalog_bytes,
         scopebase_testkit::CatalogLimits::default(),

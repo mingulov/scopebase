@@ -11,7 +11,9 @@ fn pool_pressure_views_copies_and_cancel() {
     let mut pipe = StagePipeline::new(2, Some(16));
     let obs = pipe.reserve(1, 8).expect("CP12:first observes");
     assert_eq!(obs.stage(), OBSERVE);
-    let view = obs.transfer(VIEW).unwrap_or_else(|_| panic!("CP12:to view"));
+    let view = obs
+        .transfer(VIEW)
+        .unwrap_or_else(|_| panic!("CP12:to view"));
     // A shared view aliases the observation: no new ticket, no new charge.
     let alias = view.shared_clone();
     assert_eq!(alias.ticket(), view.ticket(), "CP12:alias keeps ticket");
@@ -21,7 +23,11 @@ fn pool_pressure_views_copies_and_cancel() {
     // Pool pressure: a third observation refuses loudly; nothing is
     // silently dropped and no silent eviction frees room.
     let err = pipe.reserve(1, 8).unwrap_err();
-    assert_eq!(err, ContractError::CapacityExceeded, "CP12:pressure refuses");
+    assert_eq!(
+        err,
+        ContractError::CapacityExceeded,
+        "CP12:pressure refuses"
+    );
     assert_eq!(pipe.live_tickets(), 2, "CP12:no silent eviction");
     // Cancellation retains the live charge until the last view retires.
     assert!(pipe.cancel(view.ticket()), "CP12:live ticket cancels");

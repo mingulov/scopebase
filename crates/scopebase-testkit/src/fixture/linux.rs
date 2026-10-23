@@ -31,7 +31,6 @@ pub use driver::{
     InventoryRecord, LaunchConfig, LivePair, ReapedExit, Scenario, ScenarioStep, ShutdownReport,
 };
 pub use manifest::{control_pairing_applies, Control};
-pub use wire::{Action, Actor};
 pub use oracle::{
     clean_shutdown_gate, exited_unreaped_owned, generation_of, gone_from_result,
     parse_stat_comm_state_starttime, stat_is_zombie, verify_retirement_exactly_once,
@@ -40,8 +39,8 @@ pub use oracle::{
 };
 pub use phase::{LinuxPhaseError, LinuxProcessFixture};
 pub use session::{
-    LinuxFixtureAdmissionCleanupReport, LinuxFixtureAdmissionCustody,
-    LinuxFixtureAdmissionFailure, LinuxFixtureFiles, LinuxFixtureSession,
-    LinuxOuterCleanupAdmissionError, LinuxOuterCleanupAdmissionErrorKind,
-    LinuxOuterCleanupBudget, LinuxOuterCleanupReport,
+    LinuxFixtureAdmissionCleanupReport, LinuxFixtureAdmissionCustody, LinuxFixtureAdmissionFailure,
+    LinuxFixtureFiles, LinuxFixtureSession, LinuxOuterCleanupAdmissionError,
+    LinuxOuterCleanupAdmissionErrorKind, LinuxOuterCleanupBudget, LinuxOuterCleanupReport,
 };
+pub use wire::{Action, Actor};

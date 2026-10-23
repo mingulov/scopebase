@@ -1298,13 +1298,17 @@ fn audit_follows_worker_thread_maps() {
     );
 }
 
-/// R25: the tracer compares TracerPid against its own TID, not the
-/// process ID. The audit runs on a worker thread (TID != PID) over
-/// a subject whose fork child naps across the parent's exec: the
-/// child must be followed to its exit, so the signal file it writes
-/// after the exec is present when the audit returns. The old
-/// PID-compare prune dropped the live child and returned before
-/// the signal landed.
+/// R25/S47: the tracer compares TracerPid against its own TID, not
+/// the process ID. The audit runs on a worker thread (TID != PID)
+/// over a subject whose fork child rendezvouses across the parent's
+/// exec: the child waits for the marker only the post-exec image
+/// writes (which proves the tracer processed the exec), then stops
+/// itself and writes the signal once resumed. The child must be
+/// followed to its exit, so the signal is present when the audit
+/// returns. The old PID-compare prune dropped the live child and
+/// never resumed it, so the signal never landed. No nap schedules
+/// this: the marker causal chain plus the mtime order below force
+/// and verify the interleaving on any scheduler.
 #[test]
 fn audit_from_worker_thread_follows_exec_survivor() {
     let yama = match audit::preflight() {
@@ -1316,6 +1320,7 @@ fn audit_from_worker_thread_follows_exec_survivor() {
     };
     let dir = temp_dir("audit-survivor");
     let signal = dir.join("survivor.signal");
+    let marker = dir.join("survivor.marker");
     let st = std::fs::metadata(&dir).unwrap();
     let config = AuditConfig {
         target_dev: st.dev() as u64,
@@ -1325,6 +1330,7 @@ fn audit_from_worker_thread_follows_exec_survivor() {
     };
     let subject = audit_subject_bin();
     let signal_arg = signal.to_string_lossy().into_owned();
+    let marker_arg = marker.to_string_lossy().into_owned();
     // The audit itself runs on a worker thread: the tracer TID
     // differs from the process ID, which is exactly the case the
     // old PID-compare prune got wrong.
@@ -1337,6 +1343,8 @@ fn audit_from_worker_thread_follows_exec_survivor() {
                     "fork-exec-survivor".to_string(),
                     "--signal".to_string(),
                     signal_arg,
+                    "--marker".to_string(),
+                    marker_arg,
                 ],
                 &config,
             )
@@ -1357,6 +1365,21 @@ fn audit_from_worker_thread_follows_exec_survivor() {
             .trim(),
         "hi",
         "audit returned before the exec-surviving child exited"
+    );
+    // S47: the schedule, verified explicitly. The marker proves the
+    // tracer processed the exec (no post-exec byte runs before the
+    // resume); the mtime order proves the child wrote only after.
+    let marker_time = std::fs::metadata(&marker)
+        .expect("post-exec marker exists")
+        .modified()
+        .expect("marker mtime");
+    let signal_time = std::fs::metadata(&signal)
+        .expect("signal exists")
+        .modified()
+        .expect("signal mtime");
+    assert!(
+        signal_time >= marker_time,
+        "survivor must write after the processed exec"
     );
     pass(
         "FS10",
@@ -1475,6 +1498,431 @@ fn audit_forwards_genuine_sigtrap() {
     );
 }
 
+/// S30: an anonymous mremap is ordinary allocator activity: the
+/// audit classifies it anonymous, never unattributed. Before the fix
+/// every anonymous remap was unattributed (no pathname) and a
+/// successful mmap→mremap refused the audit.
+#[test]
+fn audit_mremap_anon_stays_attributed() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-mremap-anon");
+    let target_file = dir.join("mremap-target.bin");
+    std::fs::write(&target_file, pattern_bytes(91, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let report = dir.join("mremap.report");
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "mremap-anon".to_string(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("mremap-anon audit run");
+    assert_eq!(traced.exit_code, Some(0), "subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&report)
+            .expect("subject wrote its report")
+            .trim(),
+        "mremapped=0",
+        "fixture unexercised: anonymous mremap failed"
+    );
+    let ours = traced.mmaps.iter().find(|e| {
+        e.nr == libc::SYS_mremap && e.succeeded() && e.len == 4096 && e.new_len == 8192
+    });
+    let Some(ours) = ours else {
+        panic!("audit missed the 4K->8K anonymous mremap");
+    };
+    assert!(
+        ours.anonymous,
+        "remap of anonymous memory must stay anonymous"
+    );
+    assert!(
+        !ours.unattributed,
+        "anonymous remap must not be unattributed"
+    );
+    assert!(
+        traced
+            .mmaps
+            .iter()
+            .filter(|e| e.nr == libc::SYS_mremap && e.succeeded())
+            .all(|e| !e.unattributed),
+        "a successful mremap was left unattributed"
+    );
+}
+
+/// S30 control: a file-backed mremap keeps its target identity
+/// across the remap. This passed before the fix too: it pins that
+/// the anonymous/missing distinction did not disturb file remaps.
+#[test]
+fn audit_mremap_file_preserves_identity() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-mremap-file");
+    let target_file = dir.join("mremap-target.bin");
+    std::fs::write(&target_file, pattern_bytes(93, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let report = dir.join("mremap.report");
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "mremap-file".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("mremap-file audit run");
+    assert_eq!(traced.exit_code, Some(0), "subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&report)
+            .expect("subject wrote its report")
+            .trim(),
+        "mremapped=0",
+        "fixture unexercised: file mremap failed"
+    );
+    let ours = traced.mmaps.iter().find(|e| {
+        e.nr == libc::SYS_mremap && e.succeeded() && e.len == 4096 && e.new_len == 8192
+    });
+    let Some(ours) = ours else {
+        panic!("audit missed the 4K->8K file mremap");
+    };
+    assert!(!ours.anonymous, "file remap must not be anonymous");
+    assert_eq!(
+        ours.dev,
+        Some(config.target_dev),
+        "remap lost the target device"
+    );
+    assert_eq!(
+        ours.ino,
+        Some(config.target_ino),
+        "remap lost the target inode"
+    );
+    assert!(!ours.unattributed, "file remap must verify");
+}
+
+/// S06: a worker that execs is renumbered to the leader before the
+/// EXEC event; the tracer must reset the syscall phase there. The
+/// post-exec target map really happens (the report proves it), so a
+/// phase-keeping tracer records it with a following entry's -ENOSYS
+/// instead of its success.
+#[test]
+fn audit_nonleader_exec_keeps_phase() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-nonleader-exec");
+    let target_file = dir.join("exec-target.bin");
+    std::fs::write(&target_file, pattern_bytes(95, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let report = dir.join("exec.report");
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "nonleader-exec".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("nonleader-exec audit run");
+    assert_eq!(traced.exit_code, Some(0), "post-exec subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&report)
+            .expect("subject wrote its report")
+            .trim(),
+        "mapped=0",
+        "fixture unexercised: post-exec map failed"
+    );
+    assert!(
+        traced.threads_seen >= 2,
+        "tracer saw {} threads, want main + exec worker",
+        traced.threads_seen
+    );
+    let hit = traced
+        .target_backed_mmaps()
+        .into_iter()
+        .find(|e| e.succeeded() && e.len >= 4096);
+    let Some(hit) = hit else {
+        panic!("post-exec target map recorded as failure (inverted phase)");
+    };
+    assert!(
+        !hit.unattributed,
+        "post-exec target map failed verification"
+    );
+}
+
+/// S06: the same post-exec map after a plain leader exec (no
+/// renumber, threads_seen stays 1). The phase reset plus
+/// self-synchronization must hold here too: the execve exit stop
+/// still follows the event and must consume without flipping.
+#[test]
+fn audit_leader_exec_keeps_phase() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-leader-exec");
+    let target_file = dir.join("exec-target.bin");
+    std::fs::write(&target_file, pattern_bytes(95, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let report = dir.join("exec.report");
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "leader-exec".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("leader-exec audit run");
+    assert_eq!(traced.exit_code, Some(0), "post-exec subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&report)
+            .expect("subject wrote its report")
+            .trim(),
+        "mapped=0",
+        "fixture unexercised: post-exec map failed"
+    );
+    assert_eq!(
+        traced.threads_seen, 1,
+        "leader exec must not invent threads (saw {})",
+        traced.threads_seen
+    );
+    let hit = traced
+        .target_backed_mmaps()
+        .into_iter()
+        .find(|e| e.succeeded() && e.len >= 4096);
+    let Some(hit) = hit else {
+        panic!("post-exec target map recorded as failure (inverted phase)");
+    };
+    assert!(
+        !hit.unattributed,
+        "post-exec target map failed verification"
+    );
+}
+
+fn audit_denial_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tt04-audit-denial"))
+}
+
+/// Run the denial driver; returns its stdout, skipping the test on
+/// environmental refusal (no ptrace / no seccomp install).
+fn denial_verdict(mode: &str, dir: &Path, subject: &[String]) -> String {
+    let target_file = dir.join("denial-target.bin");
+    if !target_file.exists() {
+        std::fs::write(&target_file, pattern_bytes(97, 8192)).unwrap();
+    }
+    let output = std::process::Command::new(audit_denial_bin())
+        .arg(mode)
+        .arg("--target")
+        .arg(&target_file)
+        .arg("--timeout")
+        .arg("10")
+        .arg("--")
+        .arg(audit_subject_bin())
+        .args(subject)
+        .output()
+        .expect("denial driver runs");
+    assert!(
+        output.status.success(),
+        "denial driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if let Some(setup) = stdout.strip_prefix("setup=") {
+        skip("FS10", &format!("denial driver environmental: {setup}"));
+    }
+    stdout
+}
+
+/// S05: a caller seccomp filter denying only PTRACE_GETREGS still
+/// permits TRACEME, SETOPTIONS and SYSCALL. The audit must report
+/// an incomplete audit, never an exit-zero run with empty ledgers.
+#[test]
+fn audit_getregs_denial_is_incomplete_not_clean() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-deny-getregs");
+    let report = dir.join("denied.report");
+    let verdict = denial_verdict(
+        "getregs",
+        &dir,
+        &[
+            "mremap-anon".to_string(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+    );
+    if verdict.starts_with("setup=") {
+        return;
+    }
+    assert!(
+        verdict.starts_with("verdict=err") && verdict.contains("PTRACE_GETREGS"),
+        "GETREGS denial must fail loud, got: {verdict}"
+    );
+}
+
+/// S32: with the wait syscall itself denied (EPERM, never ECHILD),
+/// every observation wait fails loud but proves nothing dead: the
+/// audit must fail with the unreaped tracees still named in
+/// unresolved custody, never a clean-looking drain. The old drain
+/// treated every non-interruption wait error as disappearance and
+/// reported no survivors. (~12s: the bounded drain grace still
+/// caps the unobservable retire.)
+#[test]
+fn audit_waitpid_denial_retains_unresolved_custody() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-deny-waitpid");
+    let report = dir.join("denied.report");
+    let verdict = denial_verdict(
+        "waitpid",
+        &dir,
+        &[
+            "mremap-anon".to_string(),
+            "--report".to_string(),
+            report.to_string_lossy().into_owned(),
+        ],
+    );
+    if verdict.starts_with("setup=") {
+        return;
+    }
+    for expect in ["verdict=err", "audit wait", "unresolved tracees:"] {
+        assert!(
+            verdict.contains(expect),
+            "waitpid denial must fail loud with custody retained, missing {expect:?} in: {verdict}"
+        );
+    }
+}
+
+/// S31: with PTRACE_GETEVENTMSG denied, a clone birth is an explicit
+/// custody failure, and the unknown newborn is retired by the sweep
+/// (named in the error, nothing unreaped) instead of stranding
+/// stopped and invisible.
+#[test]
+fn audit_eventmsg_denial_retires_unknown_child() {
+    match audit::preflight() {
+        Ok(_) => {}
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-deny-eventmsg");
+    let target_file = dir.join("denial-target.bin");
+    std::fs::write(&target_file, pattern_bytes(97, 8192)).unwrap();
+    let worker_report = dir.join("denied.report");
+    let verdict = denial_verdict(
+        "eventmsg",
+        &dir,
+        &[
+            "thread-plant".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            worker_report.to_string_lossy().into_owned(),
+        ],
+    );
+    if verdict.starts_with("setup=") {
+        return;
+    }
+    for expect in ["verdict=err", "PTRACE_GETEVENTMSG", "unreaped: []"] {
+        assert!(
+            verdict.contains(expect),
+            "denied birth must fail loud and retire the unknown, missing {expect:?} in: {verdict}"
+        );
+    }
+    // The fork-child variant: a separate-process unknown retires the
+    // same way. The child is retired before the marker it polls for
+    // can exist, so no signal file appears.
+    let signal = dir.join("denied.signal");
+    let verdict = denial_verdict(
+        "eventmsg",
+        &dir,
+        &[
+            "fork-exec-survivor".to_string(),
+            "--signal".to_string(),
+            signal.to_string_lossy().into_owned(),
+            "--marker".to_string(),
+            dir.join("denied.marker").to_string_lossy().into_owned(),
+        ],
+    );
+    if verdict.starts_with("setup=") {
+        return;
+    }
+    for expect in ["verdict=err", "PTRACE_GETEVENTMSG", "unreaped: []"] {
+        assert!(
+            verdict.contains(expect),
+            "denied fork birth must fail loud and retire the unknown, missing {expect:?} in: {verdict}"
+        );
+    }
+    assert!(
+        !signal.exists(),
+        "retired fork child must never run its signal leg"
+    );
+}
+
 /// F16: the audit deadline bounds a hung subject. `sleep 300` never
 /// returns from its syscall; the tracer must kill it at the deadline
 /// instead of blocking in waitpid for the full sleep. The old
@@ -1545,9 +1993,12 @@ fn clean_gate_rejects_nonpositive_verdicts() {
         ])
         .status()
         .expect("subject runs");
-    assert_eq!(status.code(), Some(0), "subject exits 0 even when not positive");
-    let verdict =
-        std::fs::read_to_string(&gate_report).expect("subject wrote its report");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "subject exits 0 even when not positive"
+    );
+    let verdict = std::fs::read_to_string(&gate_report).expect("subject wrote its report");
     assert!(
         verdict.starts_with("verdict="),
         "control unexercised: no verdict to gate, got {verdict:?}"
@@ -1570,7 +2021,10 @@ fn clean_gate_rejects_nonpositive_verdicts() {
     ] {
         assert!(!positive_verdict(rejected), "gate must reject {rejected:?}");
     }
-    pass("FS10", &format!("gate rejects {}; accepts positives", verdict.trim()));
+    pass(
+        "FS10",
+        &format!("gate rejects {}; accepts positives", verdict.trim()),
+    );
 }
 
 /// FS01 ext4 control: hardlink alias identity, rename/delete path
@@ -1946,8 +2400,7 @@ fn restricted_denial_is_real() {
     std::fs::write(&locked, pattern_bytes(71, 4096)).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let err = hold_with(&locked, SymlinkPolicy::Follow)
-        .expect_err("mode-000 open must be refused");
+    let err = hold_with(&locked, SymlinkPolicy::Follow).expect_err("mode-000 open must be refused");
     let stage = format!("{:?}", err.stage());
     assert!(
         stage.contains("ReopenHeld"),
@@ -2043,9 +2496,7 @@ fn fork_exec_exit_verdicts() {
     );
     let victim = pre_rows
         .iter()
-        .find(|e| {
-            e.path.as_ref().is_some_and(|p| p.starts_with('/')) && e.end - e.start >= 4096
-        })
+        .find(|e| e.path.as_ref().is_some_and(|p| p.starts_with('/')) && e.end - e.start >= 4096)
         .expect("fixture unexercised: no file-backed pre-exec range");
     // The observer matches whole maps rows, so the victim range is
     // the full row, not a prefix of it.
@@ -2054,9 +2505,7 @@ fn fork_exec_exit_verdicts() {
     // leg held the unrelated exit-leg life.bin, so its post-exec
     // Mismatch was preordained (wrong file mismatches with or
     // without an exec) and proved nothing about exec invalidation.
-    let victim_file = hold(Path::new(
-        victim.path.as_ref().expect("victim has a path"),
-    ));
+    let victim_file = hold(Path::new(victim.path.as_ref().expect("victim has a path")));
     // Pre-exec positive: the held backing file genuinely resolves at
     // the victim range before the exec.
     match observe(&pool, &victim_file, &eobs, vrange, policy, &ctl) {

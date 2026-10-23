@@ -5,9 +5,12 @@
 //! exact packaged `scopebase-capture` calls with this consumer's own fixed
 //! script constants. Capture contract refusals are observed data encoded as
 //! `refuse=<Variant>;`; only adapter-level failures (missing slot, unknown
-//! operation, malformed script) become `CaseError`.
+//! operation, malformed script) become `CaseError`, as `InvalidOutput`
+//! (S44; observation-bounds stays an operational `Refused`).
 use scopebase_capture::{
-    bounds::{classify_alternatives, combine_disjoint_sites, CandidateCoverage, MatchClass, SiteCount},
+    bounds::{
+        classify_alternatives, combine_disjoint_sites, CandidateCoverage, MatchClass, SiteCount,
+    },
     correction::{Correction, Revision, Versioned},
     domain::{
         BindingId, CaptureId, ChannelId, Epoch, Origin, PhysicalSiteId, ProducerId, SourceRef,
@@ -26,8 +29,8 @@ use scopebase_capture::{
 use scopebase_testkit::{
     BindingProvenance, CaseError, CaseErrorCategory, CaseErrorValues, CaseInvocation,
     ConformanceAdapter, ConsumerBinding, ConsumerBindingValues, Digest256, EffectBatch,
-    EvidenceTier, FixtureAccess, HarnessError, Label, Observation, ObservationValues,
-    RefusalCause, RefusalEvidence, RefusalEvidenceValues, RetireRequest, RetirementReport,
+    EvidenceTier, FixtureAccess, HarnessError, Label, Observation, ObservationValues, RefusalCause,
+    RefusalEvidence, RefusalEvidenceValues, RetireRequest, RetirementReport,
     RetirementReportValues, RunLimits, SubjectBinding, SubjectBindingValues,
 };
 
@@ -35,6 +38,9 @@ const PACKAGE: &str = "capture-ossl-reference";
 const CONSUMER: &str = "ossl-adapter";
 const SCHEMA_ID: &str = "ossl-reference-v1";
 const SCHEMA_REVISION: u32 = 1;
+const FIXTURE_SCHEMA_ID: &str = "ossl-fixture-v1";
+const FIXTURE_SCHEMA_REVISION: u32 = 1;
+const SCRIPT_SCHEMA_ID: &str = "ossl-script";
 
 /// RB4 (R02): truncate a refusal diagnostic to an invocation byte
 /// ceiling. Diagnostics are bounded context inside an already-honest
@@ -62,7 +68,7 @@ pub struct OsslReferenceAdapter {
     // never the adapter default.
     schema: Label,
     method_execute: Label,
-    stage_dispatch: Label,
+    stage_schema: Label,
     stage_admission: Label,
     stage_collect: Label,
     slot_script: Label,
@@ -110,7 +116,7 @@ impl OsslReferenceAdapter {
             subject,
             schema: Label::parse(SCHEMA_ID).expect("CP11:fixed schema parses"),
             method_execute: Label::parse("execute").expect("CP11:fixed label parses"),
-            stage_dispatch: Label::parse("dispatch").expect("CP11:fixed stage parses"),
+            stage_schema: Label::parse("adapter-schema").expect("CP11:fixed stage parses"),
             stage_admission: Label::parse("admission").expect("CP11:fixed stage parses"),
             stage_collect: Label::parse("collect").expect("CP11:fixed stage parses"),
             slot_script: Label::parse("script").expect("CP11:fixed slot parses"),
@@ -157,6 +163,59 @@ impl OsslReferenceAdapter {
         .expect("RB4:fitted refusal cause fits invocation limits")
     }
 
+    // S44: missing/malformed operation data after dialect admission
+    // is InvalidOutput (attempted step set, cause Unknown), never an
+    // operational Refused. Operational refusals keep `refusal` below.
+    fn invalid_output(
+        &self,
+        invocation: &CaseInvocation,
+        step: Option<Label>,
+        stage: &Label,
+        diagnostic: &str,
+    ) -> CaseError {
+        let l = invocation.limits();
+        CaseError::new(
+            CaseErrorValues {
+                key: invocation.key().clone(),
+                step_id: step,
+                stage: stage.truncate(l.label_bytes()),
+                category: CaseErrorCategory::InvalidOutput,
+                errno: None,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
+                completed_steps: Vec::new(),
+                partial_observation: None,
+                effects: EffectBatch::empty(l),
+            },
+            l,
+        )
+        .expect("S44:pre-fitted invalid-output fits invocation limits")
+    }
+
+    // S34 (R33): dialect rejection before any slot read or effect.
+    // Alien schemas, wrong arity/shape and unknown opcodes never
+    // reach operation matching: UnsupportedSchema, like the Linux
+    // reference adapters.
+    fn unsupported(&self, invocation: &CaseInvocation, diagnostic: &str) -> CaseError {
+        let l = invocation.limits();
+        CaseError::new(
+            CaseErrorValues {
+                key: invocation.key().clone(),
+                step_id: None,
+                stage: self.stage_schema.truncate(l.label_bytes()),
+                category: CaseErrorCategory::UnsupportedSchema,
+                errno: None,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
+                completed_steps: Vec::new(),
+                partial_observation: None,
+                effects: EffectBatch::empty(l),
+            },
+            l,
+        )
+        .expect("CP11:pre-fitted dialect rejection fits invocation limits")
+    }
+
     fn refusal(
         &self,
         invocation: &CaseInvocation,
@@ -195,17 +254,44 @@ impl ConformanceAdapter for OsslReferenceAdapter {
         invocation: &CaseInvocation,
         fixture: &FixtureAccess<'_>,
     ) -> Result<Observation, CaseError> {
-        let Some(step) = invocation.script().steps().first() else {
-            return Err(self.refusal(
-                invocation,
-                None,
-                &self.stage_dispatch,
-                "CP11:script has no steps",
-            ));
+        // S34 (R33): entire-script preflight before any slot read
+        // or effect. Schema, step count, parameters and declared
+        // inputs validate here; malformed scripts stay InvalidOutput
+        // below (S44), while dialect mismatches refuse above as
+        // UnsupportedSchema.
+        if invocation.observation_schema().id().as_str() != SCHEMA_ID
+            || *invocation.observation_schema().revision() != SCHEMA_REVISION
+        {
+            return Err(self.unsupported(invocation, "CP11:unsupported observation schema"));
+        }
+        if invocation.fixture_schema().id().as_str() != FIXTURE_SCHEMA_ID
+            || *invocation.fixture_schema().revision() != FIXTURE_SCHEMA_REVISION
+        {
+            return Err(self.unsupported(invocation, "CP11:unsupported fixture schema"));
+        }
+        if invocation.script().schema_id().as_str() != SCRIPT_SCHEMA_ID {
+            return Err(self.unsupported(invocation, "CP11:unsupported script schema"));
+        }
+        let [step] = invocation.script().steps() else {
+            return Err(self.unsupported(invocation, "CP11:exactly one step"));
         };
+        if !step.parameters().is_empty() {
+            return Err(self.unsupported(invocation, "CP11:step takes no parameters"));
+        }
         let op = step.operation().as_str();
+        if !is_known_op(op) {
+            // S34: an unknown opcode is a dialect this adapter does
+            // not speak: pre-read UnsupportedSchema, like an alien
+            // script id — before any slot is touched.
+            return Err(self.unsupported(invocation, "CP11:unknown operation"));
+        }
+        let mut declared: Vec<&str> = step.inputs().iter().map(|i| i.as_str()).collect();
+        declared.sort_unstable();
+        if declared != ["script"] {
+            return Err(self.unsupported(invocation, "CP11:unsupported step shape"));
+        }
         let Some(raw) = fixture.input(&self.slot_script) else {
-            return Err(self.refusal(
+            return Err(self.invalid_output(
                 invocation,
                 Some(step.step_id().clone()),
                 &self.stage_admission,
@@ -213,25 +299,22 @@ impl ConformanceAdapter for OsslReferenceAdapter {
             ));
         };
         let Some(case) = parse_case(raw) else {
-            return Err(self.refusal(
+            return Err(self.invalid_output(
                 invocation,
                 Some(step.step_id().clone()),
                 &self.stage_admission,
                 "CP11:malformed script",
             ));
         };
+        // S34: the operation admitted above, so a missing outcome
+        // is unknown case data, never an unknown opcode.
         let Some(outcome) = run_scenario(op, case) else {
-            let stage = if is_known_op(op) {
-                &self.stage_admission
-            } else {
-                &self.stage_dispatch
-            };
-            let message = if is_known_op(op) {
-                "CP11:unknown case"
-            } else {
-                "CP11:unknown operation"
-            };
-            return Err(self.refusal(invocation, Some(step.step_id().clone()), stage, message));
+            return Err(self.invalid_output(
+                invocation,
+                Some(step.step_id().clone()),
+                &self.stage_admission,
+                "CP11:unknown case",
+            ));
         };
         let body = match outcome {
             Ok(text) => text,
@@ -282,11 +365,7 @@ fn parse_case(raw: &[u8]) -> Option<&str> {
     let text = std::str::from_utf8(raw).ok()?;
     let mut parts = text.split(';');
     let name = parts.next()?.strip_prefix("case=")?;
-    if name.is_empty()
-        || !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    {
+    if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return None;
     }
     if parts.any(|rest| !rest.is_empty()) {

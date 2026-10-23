@@ -41,9 +41,7 @@ fn fit_bytes(bytes: &[u8], ceiling: u64) -> Vec<u8> {
 
 /// F26: truncate a completed-step list to the invocation step ceiling.
 fn fit_steps(steps: Vec<Label>, limits: &RunLimits) -> Vec<Label> {
-    let max = limits
-        .steps_per_invocation()
-        .min(usize::MAX as u64) as usize;
+    let max = limits.steps_per_invocation().min(usize::MAX as u64) as usize;
     steps.into_iter().take(max).collect()
 }
 
@@ -152,6 +150,35 @@ impl HeldfileReferenceAdapter {
         .expect("RB4:fitted refusal cause fits invocation limits")
     }
 
+    // S44: missing/malformed operation data after dialect admission
+    // is InvalidOutput (attempted step set, cause Unknown), never an
+    // operational Refused. Operational refusals keep `refusal` below.
+    fn invalid_output(
+        &self,
+        invocation: &CaseInvocation,
+        step: Option<Label>,
+        stage: &Label,
+        diagnostic: &str,
+    ) -> CaseError {
+        let l = invocation.limits();
+        CaseError::new(
+            CaseErrorValues {
+                key: invocation.key().clone(),
+                step_id: step,
+                stage: stage.truncate(l.label_bytes()),
+                category: CaseErrorCategory::InvalidOutput,
+                errno: None,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
+                completed_steps: Vec::new(),
+                partial_observation: None,
+                effects: EffectBatch::empty(l),
+            },
+            l,
+        )
+        .expect("S44:pre-fitted invalid-output fits invocation limits")
+    }
+
     fn refusal(
         &self,
         invocation: &CaseInvocation,
@@ -216,7 +243,7 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
     ) -> Result<Observation, CaseError> {
         // F27: envelope preflight before any slot read or effect. Schema,
         // step count, parameters and declared inputs are validated here;
-        // malformed scripts stay Refused below.
+        // malformed scripts stay InvalidOutput below (S44).
         if invocation.observation_schema().id().as_str() != SCHEMA_ID
             || *invocation.observation_schema().revision() != SCHEMA_REVISION
         {
@@ -256,7 +283,7 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
             return Err(self.unsupported(invocation, "LX11:unsupported step shape"));
         }
         let Some(raw) = fixture.input(&self.slot_script) else {
-            return Err(self.refusal(
+            return Err(self.invalid_output(
                 invocation,
                 Some(step.step_id().clone()),
                 &self.stage_admission,
@@ -265,7 +292,7 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
         };
         let body = if op == "parse-maps" || op == "parse-mountinfo" {
             let Some(body) = fixture.input(&self.slot_body) else {
-                return Err(self.refusal(
+                return Err(self.invalid_output(
                     invocation,
                     Some(step.step_id().clone()),
                     &self.stage_admission,
@@ -277,7 +304,7 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
             None
         };
         let Some(text) = run_scenario(op, raw, body) else {
-            return Err(self.refusal(
+            return Err(self.invalid_output(
                 invocation,
                 Some(step.step_id().clone()),
                 &self.stage_admission,

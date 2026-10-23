@@ -110,6 +110,11 @@ path = "src/bin/scopebase-tt04-audit-subject.rs"
 required-features = ["linux-fixtures"]
 
 [[bin]]
+name = "scopebase-tt04-audit-denial"
+path = "src/bin/scopebase-tt04-audit-denial.rs"
+required-features = ["linux-fixtures"]
+
+[[bin]]
 name = "scopebase-tt03-seccomp-probe"
 path = "src/bin/scopebase-tt03-seccomp-probe.rs"
 required-features = ["linux-fixtures"]

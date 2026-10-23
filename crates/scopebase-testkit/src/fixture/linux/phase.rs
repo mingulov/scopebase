@@ -15,10 +15,18 @@ pub struct LinuxProcessFixture {
 
 impl LinuxProcessFixture {
     pub(crate) fn bind(inner: SharedPair, pid: u32) -> Self {
-        Self { inner, pid, excluded: false }
+        Self {
+            inner,
+            pid,
+            excluded: false,
+        }
     }
     pub(crate) fn bind_excluded(inner: SharedPair, pid: u32) -> Self {
-        Self { inner, pid, excluded: true }
+        Self {
+            inner,
+            pid,
+            excluded: true,
+        }
     }
     pub fn pid(&self) -> u32 {
         self.pid

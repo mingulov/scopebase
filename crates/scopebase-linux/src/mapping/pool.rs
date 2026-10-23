@@ -160,6 +160,12 @@ pub(crate) struct TestHooks {
     /// After a drain claims a record (`retiring` set, claim recorded),
     /// before the cancel checkpoint and unmap. Receives the record id.
     pub(crate) after_claim: Mutex<Option<ClaimHook>>,
+    /// S46: after a drain's unmap succeeds, before the commit lock
+    /// removes the record by id. Receives the record id. Lets the
+    /// R10 recycle test force the true post-unmap/precommit
+    /// interleaving: the replacement maps and queues while the
+    /// stale claim is still open.
+    pub(crate) before_commit: Mutex<Option<ClaimHook>>,
     /// In `ActivePermit::retire` after the counters update, before the
     /// anchor release check.
     pub(crate) after_retire_counters: Mutex<Option<UnitHook>>,
@@ -172,6 +178,7 @@ impl TestHooks {
     fn new() -> Self {
         Self {
             after_claim: Mutex::new(None),
+            before_commit: Mutex::new(None),
             after_retire_counters: Mutex::new(None),
             anchor_releasing: Mutex::new(None),
         }
@@ -181,6 +188,14 @@ impl TestHooks {
 #[cfg(test)]
 fn fire_after_claim(shared: &Shared, id: u64) {
     let hook = shared.test_hooks.after_claim.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook(id);
+    }
+}
+
+#[cfg(test)]
+fn fire_before_commit(shared: &Shared, id: u64) {
+    let hook = shared.test_hooks.before_commit.lock().unwrap().clone();
     if let Some(hook) = hook {
         hook(id);
     }
@@ -904,6 +919,8 @@ fn drain_shared(shared: &Arc<Shared>, control: &OperationControl) -> MappingDrai
         attempted += 1;
         match super::custody::unmap_raw(addr, len) {
             Ok(()) => {
+                #[cfg(test)]
+                fire_before_commit(shared, id);
                 let mut state = lock_report(shared);
                 // The queue may have shifted under a concurrent drain, and
                 // the range may have been recycled into a second queued
@@ -981,20 +998,44 @@ mod tests {
     /// R10: remap `len` bytes at the exact address `addr` (which must be
     /// currently unmapped). Deterministic address reuse for the recycle
     /// regression; a floating mmap would only usually reuse the range.
+    /// S46: non-clobbering fixed placement. `FIXED_NOREPLACE`
+    /// refuses with `EEXIST` when any page of the range is occupied
+    /// instead of silently destroying whatever a competitor mapped
+    /// there after our unmap; the returned address is validated to
+    /// be exactly the requested range. An `EEXIST` here is a loud
+    /// test-assumption violation (a competitor stole the hole),
+    /// never silent corruption. Callers hold `FD_TABLE`, which
+    /// serializes every in-tree direct mmap; out-of-tree occupants
+    /// (allocator arenas, thread stacks) never reuse a hole freed
+    /// by our direct munmap, so a refusal names a real regression
+    /// in that discipline.
     fn test_mmap_fixed(held: &HeldFile, addr: *mut c_void, len: usize) -> *mut c_void {
         let placed = unsafe {
             rustix::mm::mmap(
                 addr,
                 len,
                 rustix::mm::ProtFlags::READ,
-                rustix::mm::MapFlags::PRIVATE | rustix::mm::MapFlags::FIXED,
+                rustix::mm::MapFlags::PRIVATE
+                    | rustix::mm::MapFlags::FIXED
+                    | rustix::mm::MapFlags::FIXED_NOREPLACE,
                 held.as_fd(),
                 0,
             )
-        }
-        .unwrap();
+        };
+        let placed = placed.unwrap_or_else(|errno| {
+            panic!("fixed placement collided (EEXIST expected only here): {errno}")
+        });
         assert_eq!(placed, addr, "fixed remap must reuse the range");
         placed
+    }
+
+    /// S46: crash-free liveness probe for a range the test owns. A
+    /// same-protection `mprotect` succeeds exactly when every page
+    /// is mapped — unlike a read, it reports `ENOMEM` instead of
+    /// delivering `SIGSEGV` when the range is gone.
+    fn assert_range_live(addr: *mut c_void, len: usize, what: &str) {
+        let result = unsafe { rustix::mm::mprotect(addr, len, rustix::mm::MprotectFlags::READ) };
+        assert!(result.is_ok(), "{what} is no longer mapped: {result:?}");
     }
 
     fn page() -> usize {
@@ -1046,6 +1087,9 @@ mod tests {
 
     #[test]
     fn same_pool_reconstruction_cannot_reset_capacity() {
+        // S46: direct mmaps serialize on FD_TABLE with the fixed-hole
+        // tests, so no floating placement can steal a hole window.
+        let _table = crate::FD_TABLE.lock().unwrap();
         let pool = test_pool(1, page());
         let (path, held) = test_held("reconstruct");
         let (permit, addr) = activate_one(&pool, &held);
@@ -1076,6 +1120,8 @@ mod tests {
         // Mappings headroom remains but the byte budget is spent: the
         // pool.rs:570 path refuses with LimitKind::MappedBytes, and a
         // checked retire reopens admission.
+        // S46: direct mmaps serialize on FD_TABLE (see above).
+        let _table = crate::FD_TABLE.lock().unwrap();
         let pool = test_pool(8, page());
         let (path, held) = test_held("mapped-bytes");
         let (permit, addr) = activate_one(&pool, &held);
@@ -1226,14 +1272,56 @@ mod tests {
         super::super::custody::inject_unmap_failures(0);
     }
 
+    /// S46: fixed placement REFUSES an occupied range instead of
+    /// destroying it. The old `FIXED`-only helper silently clobbered
+    /// whatever a competitor mapped in the hole; the `NOREPLACE`
+    /// placement fails loudly. (A `should_panic`: the refusal IS the
+    /// asserted behavior, and the occupant below survives it.)
+    #[test]
+    #[should_panic(expected = "fixed placement collided")]
+    fn fixed_placement_refuses_occupied_range() {
+        // The setup mapping serializes on FD_TABLE; the lock is
+        // released before the asserting call, because this test
+        // passes BY PANICKING and a panic while holding the mutex
+        // would poison every other table test. The refusing call is
+        // a single failing syscall (no mapping, no window), so it
+        // needs no serialization; the occupant outlives it via the
+        // guard's unwind cleanup.
+        let (_path, held, addr) = {
+            let _table = crate::FD_TABLE.lock().unwrap();
+            let (_path, held) = test_held("noreplace");
+            let addr = test_mmap(&held, page());
+            (_path, held, addr)
+        };
+        let _guard = super::super::custody::TestCleanupGuard::new(addr, page());
+        // The backing file must go even on the asserting panic (this
+        // test passes by panicking, so no tail cleanup runs).
+        struct FileGuard(std::path::PathBuf);
+        impl Drop for FileGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _file = FileGuard(_path);
+        // Occupied by our own live mapping: must refuse, never replace.
+        let _ = test_mmap_fixed(&held, addr, page());
+    }
+
     #[test]
     fn commit_removes_claimed_id_after_recycle_reorder() {
-        // R10: post-unmap address reuse plus a reorder. A claims R1 (range
-        // X) and pauses; X is really unmapped, remapped at the same
-        // address, and queued as R2 (same token, new id); a decoy commit
+        // R10: post-unmap address reuse plus a reorder. A claims R1
+        // (range X) and pauses; A then unmaps M1's still-live range
+        // (the CORRECT occupant) and pauses again pre-commit; X is
+        // remapped at the same address and queued as R2 (same token,
+        // new id) while A's stale claim is still open; a decoy commit
         // then moves R2 ahead of R1. A's commit must remove R1 (its
         // claim), not the first token match (the live R2). First-match
         // code strands R1 Retiring and drops R2 instead.
+        // S46: the old flow released A before its unmap, so A
+        // destroyed the M2 replacement instead of testing a live
+        // post-unmap/precommit interleaving. The replacement's
+        // mapping must REMAIN LIVE across A's commit, and its queue
+        // record must be retained.
         let _table = crate::FD_TABLE.lock().unwrap();
         super::super::custody::inject_unmap_failures(0);
         let pool = test_pool(4, 4 * page());
@@ -1253,11 +1341,15 @@ mod tests {
         let (a_release_tx, a_release_rx) = std::sync::mpsc::channel::<()>();
         let (x2_claimed_tx, x2_claimed_rx) = std::sync::mpsc::channel();
         let (x2_release_tx, x2_release_rx) = std::sync::mpsc::channel::<()>();
+        // S46: A's second pause — after its unmap, before its commit.
+        let (a_unmapped_tx, a_unmapped_rx) = std::sync::mpsc::channel();
+        let (a_commit_tx, a_commit_rx) = std::sync::mpsc::channel::<()>();
         // Receivers ride a mutex: only one drain waits on each by design,
         // but the closure type must be Sync.
         let x_release_rx = Mutex::new(x_release_rx);
         let a_release_rx = Mutex::new(a_release_rx);
         let x2_release_rx = Mutex::new(x2_release_rx);
+        let a_commit_rx = Mutex::new(a_commit_rx);
         *pool.shared.test_hooks.after_claim.lock().unwrap() = Some(Arc::new(move |id| {
             if id == 1 {
                 x_claimed_tx.send(()).unwrap();
@@ -1274,6 +1366,14 @@ mod tests {
                 panic!("unexpected claim of record {id}");
             }
         }));
+        // S46: A pauses a second time after its unmap, before its
+        // commit. Other records' commits pass through immediately.
+        *pool.shared.test_hooks.before_commit.lock().unwrap() = Some(Arc::new(move |id| {
+            if id == 2 {
+                a_unmapped_tx.send(()).unwrap();
+                a_commit_rx.lock().unwrap().recv().unwrap();
+            }
+        }));
         // X runs under a cancellable control: after A commits, X is
         // cancelled out of its second claim (a real second unmap would
         // succeed even on the gone range — Linux munmap never fails for
@@ -1286,10 +1386,14 @@ mod tests {
             x_claimed_rx.recv().unwrap();
             let a = scope.spawn(|| pool.retry_unresolved(&OperationControl::unlimited()));
             a_claimed_rx.recv().unwrap();
-            // Recycle X: M1's range is still live (the injected failure
-            // never touched the kernel), so unmap it for real, remap the
-            // identical range, and queue the second record for it.
-            unsafe { rustix::mm::munmap(addr_x, page()) }.unwrap();
+            // S46: A unmaps FIRST, while M1's range is still the live
+            // occupant (the injected failure never touched the kernel,
+            // so this unmap is correct and complete), then pauses
+            // pre-commit. Only then is X recycled: the hole is
+            // genuinely free, the NOREPLACE remap cannot clobber, and
+            // R2 queues while A's stale claim is still open.
+            a_release_tx.send(()).unwrap();
+            a_unmapped_rx.recv().unwrap();
             let reservation = Reservation::reserve(&pool.shared, page()).unwrap();
             let addr_m2 = test_mmap_fixed(&held, addr_x, page());
             let permit2 = reservation.activate(addr_m2, page(), Arc::clone(&held));
@@ -1316,12 +1420,12 @@ mod tests {
                 vec![(3, addr_x, page(), true), (2, addr_x, page(), true)],
                 "reorder puts the live same-token record first"
             );
-            // A unmaps X (M2's range: the token is stale the moment the
-            // kernel reuses it, which is exactly why the commit must use
-            // the id) and commits R1 by id; A then finds R2 held by X and
-            // ends its pass. X is cancelled out of its R2 claim and
-            // unwinds it by id, leaving R2 queued and unretiring.
-            a_release_tx.send(()).unwrap();
+            // A commits R1 by id (its unmap long done, before the
+            // recycle — M2's live range is untouched); A then finds
+            // R2 held by X and ends its pass. X is cancelled out of
+            // its R2 claim and unwinds it by id, leaving R2 queued
+            // and unretiring.
+            a_commit_tx.send(()).unwrap();
             let a_report = a.join().unwrap();
             assert_eq!((a_report.attempted(), a_report.retired()), (1, 1));
             x_token.cancel();
@@ -1334,27 +1438,31 @@ mod tests {
                 vec![(3, addr_x, page(), false)],
                 "commit removed the claimed R1, not the live R2"
             );
+            // S46: the replacement mapping REMAINS LIVE across A's
+            // commit of the stale token, and its queue record is
+            // retained (asserted above).
+            assert_range_live(addr_m2, page(), "M2 replacement");
+            // M2 stays mapped past the scope: the cleanup drain below
+            // unmaps it live through R2's token.
             guard2.disarm();
         });
-        // The rendezvous is over: uninstall the hook so the cleanup drain
-        // cannot block in it.
+        // The rendezvous is over: uninstall the hooks so the cleanup
+        // drain cannot block in them.
         *pool.shared.test_hooks.after_claim.lock().unwrap() = None;
-        // Retire the surviving R2 against a fresh live range: M3 holds X
-        // mapped while the drain unmaps it through R2's token, then M3's
-        // permit retires against the now-gone range and the pool closes.
-        let reservation = Reservation::reserve(&pool.shared, page()).unwrap();
-        let addr_m3 = test_mmap_fixed(&held, addr_x, page());
-        let permit3 = reservation.activate(addr_m3, page(), Arc::clone(&held));
-        let mut guard3 = super::super::custody::TestCleanupGuard::new(addr_m3, page());
+        *pool.shared.test_hooks.before_commit.lock().unwrap() = None;
+        // Retire the surviving R2 through its live occupant: the drain
+        // unmaps M2's range through R2's token and retires the record,
+        // then the pool closes. M2 still occupies addr_x (asserted
+        // live above), so the re-guard covers the drain window.
+        let mut guard2 = super::super::custody::TestCleanupGuard::new(addr_x, page());
         let report = pool.retry_unresolved(&OperationControl::unlimited());
         assert_eq!(
             (report.attempted(), report.retired(), report.unresolved()),
             (1, 1, 0)
         );
-        permit3.retire();
+        guard2.disarm();
         guard_d.disarm();
         guard1.disarm();
-        guard3.disarm();
         pool.close(&OperationControl::unlimited()).unwrap();
         std::fs::remove_file(path).unwrap();
         super::super::custody::inject_unmap_failures(0);
@@ -1404,6 +1512,178 @@ mod tests {
     }
 
     #[test]
+    fn retire_empty_observation_overlaps_acquisition_and_install() {
+        // S12: the serial order test cannot see the concurrent
+        // check/install window. Retirement's empty observation MUST
+        // overlap a new custody acquisition plus its anchor install,
+        // and the install must be OBSERVED (anchor kept), not erased.
+        // The after_retire_counters hook runs with no locks held,
+        // after R1's counters hit zero and before the release check:
+        // the racer acquires R2 and drops its handle (installing
+        // R2's anchor) exactly in that window, every run.
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(2, 2 * page());
+        let (path, held) = test_held("overlap-install");
+        let (permit1, addr1) = activate_one(&pool, &held);
+        let mut guard1 = super::super::custody::TestCleanupGuard::new(addr1, page());
+        // Second handle for the racer's install; the main handle
+        // drops now (R1 occupied -> anchor installed).
+        let racer_pool = pool.clone();
+        let weak = Arc::downgrade(&pool.shared);
+        drop(pool);
+        assert!(
+            weak.upgrade().is_some(),
+            "occupied drop installs the anchor"
+        );
+        // Synchronous racer inside the hook: all pool locks are down
+        // at the hook point, so reserve/activate/drop take them freely.
+        // R2's address is an opaque never-mapped token, not a real
+        // mapping: the race under test is over pool state
+        // (locks/counters/anchor/queue), and `retire` never touches
+        // the mapping — the caller unmaps. Real placement is S46's
+        // separately covered subject; no guard is needed for a token
+        // that is never unmapped.
+        const R2_TOKEN: *mut c_void = 0x4000 as *mut c_void;
+        let racer = Arc::new(Mutex::new(Some(racer_pool)));
+        let racer_hook = Arc::clone(&racer);
+        let held_hook = Arc::clone(&held);
+        let permit2_holder: Arc<Mutex<Option<ActivePermit>>> = Arc::new(Mutex::new(None));
+        let permit2_hook = Arc::clone(&permit2_holder);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let log_counters = Arc::clone(&log);
+        let log_release = Arc::clone(&log);
+        let shared = weak.upgrade().unwrap();
+        *shared.test_hooks.after_retire_counters.lock().unwrap() = Some(Arc::new(move || {
+            log_counters.lock().unwrap().push("counters");
+            // First (only) firing does the racing install; later
+            // firings (cleanup retires) find nothing and pass through.
+            let Some(racer_pool) = racer_hook.lock().unwrap().take() else {
+                return;
+            };
+            let reservation = Reservation::reserve(&racer_pool.shared, page()).unwrap();
+            let permit2 = reservation.activate(R2_TOKEN, page(), Arc::clone(&held_hook));
+            *permit2_hook.lock().unwrap() = Some(permit2);
+            drop(racer_pool);
+        }));
+        *shared.test_hooks.anchor_releasing.lock().unwrap() = Some(Arc::new(move || {
+            log_release.lock().unwrap().push("release");
+        }));
+        drop(shared);
+        unsafe { rustix::mm::munmap(addr1, page()) }.unwrap();
+        guard1.disarm();
+        permit1.retire();
+        // The racing install landed before the release check: the
+        // check observed R2 occupied and KEPT the anchor (no
+        // "release" in the log), and the new custody is retained.
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["counters"],
+            "release check kept the anchor over the racing install"
+        );
+        let shared = weak.upgrade().expect("anchor survives the overlap");
+        assert!(
+            shared.anchor.lock().unwrap().is_some(),
+            "anchor slot still holds the domain"
+        );
+        assert_eq!(
+            lock_report(&shared).active_mappings,
+            1,
+            "R2 custody retained"
+        );
+        assert_eq!(
+            permit2_holder.lock().unwrap().as_ref().unwrap().addr(),
+            R2_TOKEN,
+            "R2 token carried through"
+        );
+        drop(shared);
+        // Cleanup: uninstall the hooks, retire R2 (no unmap: the
+        // token was never mapped), and prove the anchor releases
+        // once the domain is truly empty.
+        let shared = weak.upgrade().unwrap();
+        *shared.test_hooks.after_retire_counters.lock().unwrap() = None;
+        *shared.test_hooks.anchor_releasing.lock().unwrap() = None;
+        drop(shared);
+        let permit2 = permit2_holder.lock().unwrap().take().unwrap();
+        permit2.retire();
+        assert!(weak.upgrade().is_none(), "empty domain releases its anchor");
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn retire_acquire_race_retains_unresolved() {
+        // S12: hammer the retire-vs-acquire race with real threads.
+        // R1 retires while a racer acquires R2, installs its anchor
+        // (second-handle drop), and queues R2 unresolved: every
+        // serialization must retain R2's anchor and record. All
+        // addresses are opaque never-mapped tokens (see the overlap
+        // test): the race is over pool state, the injected failure
+        // never touches the kernel, and the drain's token unmap is a
+        // no-op success on Linux. Protected code passes every round
+        // by mutual exclusion; a check-then-unlock-then-take release
+        // loses the anchor (RED-verified with a widened window).
+        const ROUNDS: usize = 200;
+        const R_TOKEN: *mut c_void = 0x5000 as *mut c_void;
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        // One backing file for all rounds: permits hold owner Arcs,
+        // and no round maps anything real.
+        let (path, held) = test_held("race-retain");
+        for _ in 0..ROUNDS {
+            let pool = test_pool(2, 2 * page());
+            let reservation = Reservation::reserve(&pool.shared, page()).unwrap();
+            let permit1 = reservation.activate(R_TOKEN, page(), Arc::clone(&held));
+            let racer_pool = pool.clone();
+            let weak = Arc::downgrade(&pool.shared);
+            drop(pool);
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let barrier_main = Arc::clone(&barrier);
+            std::thread::scope(|scope| {
+                let racer = scope.spawn({
+                    let barrier = Arc::clone(&barrier);
+                    let held = Arc::clone(&held);
+                    move || {
+                        barrier.wait();
+                        let reservation = Reservation::reserve(&racer_pool.shared, page()).unwrap();
+                        let permit2 = reservation.activate(R_TOKEN, page(), held);
+                        drop(racer_pool);
+                        // R2 retires unresolved: the injected failure
+                        // queues the record without touching the kernel.
+                        super::super::custody::inject_unmap_failures(1);
+                        drop(super::super::MappingCustody::new(permit2));
+                        super::super::custody::inject_unmap_failures(0);
+                    }
+                });
+                barrier_main.wait();
+                permit1.retire();
+                racer.join().unwrap();
+            });
+            let shared = weak.upgrade().expect("anchor survives the race");
+            assert_eq!(
+                lock_report(&shared).unresolved.len(),
+                1,
+                "R2 record retained"
+            );
+            // Drain the survivor through the shared domain directly
+            // (no handles remain by design) and prove the anchor
+            // releases once truly empty.
+            let report = drain_shared(&shared, &OperationControl::unlimited());
+            assert_eq!(
+                (report.attempted(), report.retired(), report.unresolved()),
+                (1, 1, 0)
+            );
+            drop(shared);
+            assert!(
+                weak.upgrade().is_none(),
+                "drained domain releases its anchor"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
     fn last_pool_handle_retains_terminal_custody() {
         let _table = crate::FD_TABLE.lock().unwrap();
         super::super::custody::inject_unmap_failures(0);
@@ -1439,6 +1719,8 @@ mod tests {
     fn close_reconciles_live_custody_before_shutting_down() {
         // Scripted admit/retire/close history: close fails Closing while a
         // live custody is out, then succeeds after its checked retire.
+        // S46: direct mmaps serialize on FD_TABLE (see above).
+        let _table = crate::FD_TABLE.lock().unwrap();
         let pool = test_pool(1, page());
         let (path, held) = test_held("close-retry");
         let (permit, addr) = activate_one(&pool, &held);

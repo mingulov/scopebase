@@ -178,7 +178,11 @@ impl ChildGuard {
         Self { pid: Some(pid) }
     }
 
-    fn disarm(mut self) {
+    /// S29: borrowed disarm for paths that learn the terminal state
+    /// without taking ownership (a reaped child) as well as the
+    /// success path that transfers custody to the owner. A disarmed
+    /// guard never signals in drop.
+    fn disarm(&mut self) {
         self.pid = None;
     }
 }
@@ -364,19 +368,17 @@ impl OwnedTarget {
         // second, so a second pipe() failure closes (not leaks) the
         // first pair via these guards' Drop.
         // SAFETY: pipe() just reported success; both ends are ours.
-        let cmd_owned = [
-            unsafe { OwnedFd::from_raw_fd(cmd_pipe[0]) },
-            unsafe { OwnedFd::from_raw_fd(cmd_pipe[1]) },
-        ];
+        let cmd_owned = [unsafe { OwnedFd::from_raw_fd(cmd_pipe[0]) }, unsafe {
+            OwnedFd::from_raw_fd(cmd_pipe[1])
+        }];
         // SAFETY: valid out-pointers; return value checked immediately.
         if unsafe { libc::pipe(out_pipe.as_mut_ptr()) } != 0 {
             return Err(TargetError::new("fixture pipe failed"));
         }
         // SAFETY: pipe() just reported success; both ends are ours.
-        let out_owned = [
-            unsafe { OwnedFd::from_raw_fd(out_pipe[0]) },
-            unsafe { OwnedFd::from_raw_fd(out_pipe[1]) },
-        ];
+        let out_owned = [unsafe { OwnedFd::from_raw_fd(out_pipe[0]) }, unsafe {
+            OwnedFd::from_raw_fd(out_pipe[1])
+        }];
         // Both pairs exist: release them to the raw-fd fork protocol
         // below, which closes or File-wraps every end on all paths
         // (fork failure closes all four; otherwise the child's ends
@@ -485,7 +487,7 @@ impl OwnedTarget {
         // below drops the guard, which retires the child. Closing
         // the pipes alone would NOT stop it (it inherited writer
         // copies of every end), and nothing else would reap it.
-        let guard = ChildGuard::armed(pid);
+        let mut guard = ChildGuard::armed(pid);
         // SAFETY: the child's ends, owned by this scope.
         unsafe {
             libc::close(cmd_read);
@@ -498,7 +500,18 @@ impl OwnedTarget {
         let mut line = [0u8; 6];
         read_exact_deadline(&mut out, &mut line, deadline)?;
         if &line != b"ready\n" {
-            let code = wait_pid_exited(pid, Duration::from_secs(5)).unwrap_or(-99);
+            // S29: a successful wait reaps the child, so its terminal
+            // state transfers into the guard: dropping it armed would
+            // SIGKILL a freed PID that may already be reused. Only an
+            // unreaped (still possibly live) child stays armed for the
+            // drop's kill-and-reap.
+            let code = match wait_pid_exited(pid, Duration::from_secs(5)) {
+                Ok(code) => {
+                    guard.disarm();
+                    code
+                }
+                Err(_) => -99,
+            };
             return Err(TargetError::new(format!(
                 "fixture child refused to map (exit {code})"
             )));
@@ -856,6 +869,80 @@ mod tests {
         assert!(
             !Path::new(&format!("/proc/{pid}")).exists(),
             "child guard left {pid} alive or zombie"
+        );
+    }
+
+    /// S29: a disarmed guard never signals in drop, even for a live
+    /// pid. (The pre-fix `disarm` consumed the guard, so this shape
+    /// does not compile there; the race it closes is latent by
+    /// nature — kill-after-reap needs a recycled pid in a
+    /// microsecond window — so the state machine, not a timing
+    /// collision, is the regression.)
+    #[test]
+    fn child_guard_disarmed_drop_never_signals() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sleep spawns");
+        let pid = child.id() as libc::pid_t;
+        std::mem::forget(child);
+        let mut guard = ChildGuard::armed(pid);
+        guard.disarm();
+        drop(guard);
+        assert!(
+            Path::new(&format!("/proc/{pid}")).exists(),
+            "disarmed guard signalled live {pid}"
+        );
+        // SAFETY: signal and reap an owned live child.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: out-pointer for our own child's status.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid || got < 0 || Instant::now() >= end {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "cleanup left {pid} behind"
+        );
+    }
+
+    /// S29: the actual mapping-refusal construction path. A sysfs
+    /// attribute opens and stats 4096 bytes (passing admission) but
+    /// its mmap fails ENODEV, so the child writes `mmap-fail` and
+    /// exits 3; the parent must report that exit, with the reaped
+    /// child disarmed rather than signalled after the wait.
+    #[test]
+    fn mapping_refusal_reports_exit_without_resignal() {
+        let candidate = [
+            "/sys/devices/system/cpu/online",
+            "/sys/kernel/uevent_seqnum",
+            "/sys/power/state",
+        ]
+        .into_iter()
+        .find(|path| {
+            std::fs::File::open(path)
+                .and_then(|file| file.metadata())
+                .is_ok_and(|meta| meta.len() as usize >= 4096)
+        });
+        let Some(path) = candidate else {
+            eprintln!("SKIP mapping_refusal: no mmap-denying sysfs attribute");
+            return;
+        };
+        let error = match OwnedTarget::mapping(Path::new(path)) {
+            Ok(_) => panic!("mmap of {path} must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("refused to map (exit 3)"),
+            "unexpected refusal: {error}"
         );
     }
 }

@@ -58,8 +58,11 @@ impl Label {
     /// ceilings validate to >= 1 byte, and `max(1)` pins even a raw 0.
     /// Adapter-invented metadata (stage, method) fits this way; caller
     /// echoes are admitted, and observation bodies must refuse (R07).
+    /// S07: the clamp runs in u64 before narrowing: `as usize` first
+    /// would turn 2^32 into 0 on 32-bit targets and panic below on an
+    /// empty prefix.
     pub fn truncate(&self, max_bytes: u64) -> Label {
-        let max = (max_bytes.max(1) as usize).min(self.as_str().len());
+        let max = (max_bytes.max(1).min(self.as_str().len() as u64)) as usize;
         Label::parse(&self.as_str()[..max]).expect("R02: label prefix parses")
     }
 }
@@ -204,7 +207,12 @@ pub(crate) fn rsp01_copy_key(
     limits: &RunLimits,
     budget: &mut crate::prepared::ResponseBudget,
 ) -> Result<InvocationKey, crate::ResponsePreparationFailure> {
-    rsp01_copy_key_with(key, limits, budget, &mut crate::prepared::response_string_storage)
+    rsp01_copy_key_with(
+        key,
+        limits,
+        budget,
+        &mut crate::prepared::response_string_storage,
+    )
 }
 #[allow(dead_code)]
 pub(crate) fn rsp01_copy_key_with<F>(
@@ -213,13 +221,25 @@ pub(crate) fn rsp01_copy_key_with<F>(
     budget: &mut crate::prepared::ResponseBudget,
     allocate: &mut F,
 ) -> Result<InvocationKey, crate::ResponsePreparationFailure>
-where F: FnMut(usize) -> Result<String, ()> {
-    use crate::{ResponsePreparationComponent as Part, ResponsePreparationFailure as Failure,
-        ResponsePreparationFailureKind as Kind};
-    let invalid = |component| Failure { kind: Kind::InvalidInvocation, component,
-        requested_bytes: None, observed_bytes: None };
+where
+    F: FnMut(usize) -> Result<String, ()>,
+{
+    use crate::{
+        ResponsePreparationComponent as Part, ResponsePreparationFailure as Failure,
+        ResponsePreparationFailureKind as Kind,
+    };
+    let invalid = |component| Failure {
+        kind: Kind::InvalidInvocation,
+        component,
+        requested_bytes: None,
+        observed_bytes: None,
+    };
     let run = key.run_id().as_str();
-    if run.len() != 32 || !run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if run.len() != 32
+        || !run
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(invalid(Part::RunId));
     }
     let case = key.case_key();
@@ -228,21 +248,29 @@ where F: FnMut(usize) -> Result<String, ()> {
     }
     // CaseKey::new accepts arbitrary nonempty cell bytes up to both ceilings.
     // In particular slash, spaces and non-ASCII must not acquire ID grammar.
-    if case.cell_id().is_empty() || case.cell_id().len() > 65536
+    if case.cell_id().is_empty()
+        || case.cell_id().len() > 65536
         || case.cell_id().len() as u64 > limits.name_bytes()
-        || case.cell_id().len() as u64 > limits.retained_bytes() {
+        || case.cell_id().len() as u64 > limits.retained_bytes()
+    {
         return Err(invalid(Part::CellId));
     }
     if *key.attempt() == 0 || *key.operation_id() == 0 {
         return Err(invalid(Part::Total));
     }
     let run_id = RunId(budget.copy_string_with(run, Part::RunId, allocate)?);
-    let case_id = CaseId(budget.copy_string_with(case.case_id().as_str(), Part::CaseId, allocate)?);
+    let case_id =
+        CaseId(budget.copy_string_with(case.case_id().as_str(), Part::CaseId, allocate)?);
     let cell_id = budget.copy_string_with(case.cell_id(), Part::CellId, allocate)?;
     Ok(InvocationKey(InvocationKeyValues {
         run_id,
-        case_key: CaseKey(CaseKeyValues { case_id, case_version: *case.case_version(), cell_id }),
-        attempt: *key.attempt(), operation_id: *key.operation_id(),
+        case_key: CaseKey(CaseKeyValues {
+            case_id,
+            case_version: *case.case_version(),
+            cell_id,
+        }),
+        attempt: *key.attempt(),
+        operation_id: *key.operation_id(),
     }))
 }
 #[allow(dead_code)]
@@ -255,7 +283,9 @@ pub(crate) fn rsp01_copy_label(
     if check(text, 96).is_err() || text.len() as u64 > limits.label_bytes() {
         return Err(crate::ResponsePreparationFailure {
             kind: crate::ResponsePreparationFailureKind::InvalidInvocation,
-            component, requested_bytes: None, observed_bytes: None,
+            component,
+            requested_bytes: None,
+            observed_bytes: None,
         });
     }
     Ok(Label(budget.copy_string(text, component)?))
@@ -264,11 +294,16 @@ pub(crate) fn rsp01_copy_label(
 // Actual recursively owned capacities for independent finite-header accounting.
 #[allow(dead_code)]
 pub(crate) fn rsp01_key_capacities(key: &InvocationKey) -> [usize; 3] {
-    [key.0.run_id.0.capacity(), key.0.case_key.0.case_id.0.capacity(),
-        key.0.case_key.0.cell_id.capacity()]
+    [
+        key.0.run_id.0.capacity(),
+        key.0.case_key.0.case_id.0.capacity(),
+        key.0.case_key.0.cell_id.capacity(),
+    ]
 }
 #[allow(dead_code)]
-pub(crate) fn rsp01_label_capacity(label: &Label) -> usize { label.0.capacity() }
+pub(crate) fn rsp01_label_capacity(label: &Label) -> usize {
+    label.0.capacity()
+}
 
 #[cfg(test)]
 mod tests {
@@ -289,10 +324,33 @@ mod tests {
             let label = Label::parse(text).unwrap();
             for ceiling in 0..=96u64 {
                 let fitted = label.truncate(ceiling);
-                let expect = (ceiling.max(1) as usize).min(text.len());
+                let expect = (ceiling.max(1).min(text.len() as u64)) as usize;
                 assert_eq!(fitted.as_str(), &text[..expect], "{text} @ {ceiling}");
                 assert!(Label::parse(fitted.as_str()).is_ok());
             }
+        }
+    }
+
+    /// S07: huge ceilings (at and beyond 2^32) yield the whole label
+    /// on every target: narrowing before clamping would wrap to 0 on
+    /// 32-bit and panic. These pass on 64-bit either way; they pin
+    /// the u64-first order for targets where it matters.
+    #[test]
+    fn label_truncate_huge_ceilings_keep_whole_label() {
+        let label = Label::parse("adapter-dialect").unwrap();
+        for ceiling in [
+            97u64,
+            u32::MAX as u64,
+            1u64 << 32,
+            (1u64 << 32) + 1,
+            1u64 << 40,
+            u64::MAX,
+        ] {
+            assert_eq!(
+                label.truncate(ceiling).as_str(),
+                "adapter-dialect",
+                "ceiling {ceiling}"
+            );
         }
     }
 }

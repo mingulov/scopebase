@@ -27,17 +27,78 @@ fn smoke_name() -> String {
     format!("lx11-heldfile-smoke-{}", std::process::id())
 }
 
+/// S14: private smoke staging. Created before validation; the
+/// `Drop` guard removes it on every exit path (empty-only — residue
+/// fails visibly instead of hiding), so even a refused run strands
+/// nothing. R34's validate-then-create still holds: the staging dir
+/// is the only pre-validation creation, and the guard retires it.
+struct Staging {
+    path: Option<std::path::PathBuf>,
+}
+
+impl Staging {
+    fn create(tag: &str) -> Option<Self> {
+        // Exclusive create, skipping stale names from crashed runs
+        // (same pid reused) — never removing anything.
+        for n in 0..1024u32 {
+            let dir = std::env::temp_dir().join(format!(
+                "scopebase-staging-{tag}-{}-{n}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+                    return Some(Self { path: Some(dir) });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.path.as_ref().expect("staging held")
+    }
+}
+
+impl Drop for Staging {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            // Best-effort: `Drop` cannot report. Empty-only, so a
+            // failure leaves visible residue rather than hiding it.
+            let _ = std::fs::remove_dir(&path);
+        }
+    }
+}
+
 /// R34: predicted smoke layout, validated BEFORE anything is created.
 /// The `;` refusal must strand nothing, so every interpolated string
 /// is checked while the filesystem is still untouched.
-fn smoke_paths() -> Option<(String, String)> {
-    let root = std::env::temp_dir().join(smoke_name());
-    let file = root.join("a.txt").to_string_lossy().into_owned();
-    let root_path = root.to_string_lossy().into_owned();
+///
+/// S35: paths enter strictly. A lossy conversion would map a native
+/// path beneath a non-UTF-8 directory onto a DIFFERENT (replacement
+/// character) name — selecting another file for the open/read/walk
+/// probes — so unrepresentable paths refuse here, before any
+/// resource is created. A literal U+FFFD in a valid-Unicode path is
+/// a real name and passes through byte-identical; only
+/// unrepresentable bytes refuse.
+fn smoke_paths(staging: &std::path::Path) -> Result<(String, String), &'static str> {
+    let root = staging.join(smoke_name());
+    let file = root
+        .join("a.txt")
+        .to_str()
+        .ok_or("smoke paths are not valid Unicode")?
+        .to_owned();
+    let root_path = root
+        .to_str()
+        .ok_or("smoke paths are not valid Unicode")?
+        .to_owned();
     let (Some(file), Some(root_path)) = (script_value(&file), script_value(&root_path)) else {
-        return None;
+        return Err("smoke paths contain ';'");
     };
-    Some((file.to_owned(), root_path.to_owned()))
+    Ok((file.to_owned(), root_path.to_owned()))
 }
 
 /// R34: populate a freshly created smoke root. Split from creation so
@@ -157,13 +218,22 @@ fn smoke() -> i32 {
     )) {
         return output_failed();
     }
-    // R34: validate-then-create. Nothing exists yet, so a refusal
-    // here strands nothing by construction.
-    let Some((file, root_path)) = smoke_paths() else {
-        cli::err_line("smoke paths contain ';'");
+    // S14: private staging first; its guard retires it on every
+    // exit path below. R34: validate-then-create. The staging dir
+    // is the only thing existing yet, and the guard owns it, so a
+    // refusal here still strands nothing by construction.
+    let Some(staging) = Staging::create("heldfile-smoke") else {
+        cli::err_line("smoke staging failed");
         return 1;
     };
-    let root = match FixtureRoot::create(&std::env::temp_dir(), &smoke_name()) {
+    let (file, root_path) = match smoke_paths(staging.path()) {
+        Ok(paths) => paths,
+        Err(message) => {
+            cli::err_line(message);
+            return 1;
+        }
+    };
+    let root = match FixtureRoot::create(staging.path(), &smoke_name()) {
         Ok(root) => root,
         Err(error) => {
             cli::err_line(&format!("smoke root: {error}"));
@@ -262,14 +332,44 @@ mod tests {
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::SeqCst)
         );
-        let path = std::env::temp_dir().join(&name);
-        let _ = std::fs::remove_dir_all(&path);
-        let root = FixtureRoot::create(&std::env::temp_dir(), &name).expect("create partial root");
+        // S14: the partial root stages under a private parent.
+        let staging = Staging::create("r34-partial").expect("staging");
+        let path = staging.path().join(&name);
+        let root = FixtureRoot::create(staging.path(), &name).expect("create partial root");
         root.write_file("sub", b"blocker")
             .expect("plant blocker file");
         let err = write_smoke_files(&root).unwrap_err();
         assert!(err.contains("smoke nested"), "nested write refused: {err}");
         root.close().expect("close retires the partial tree");
         assert!(!path.exists(), "partial setup left residue");
+    }
+
+    // S35: unrepresentable smoke paths refuse with their own message;
+    // a literal U+FFFD name is valid Unicode and passes through
+    // byte-identical — the helper never confuses invalid bytes with
+    // the replacement character. Pure prediction: nothing created.
+    #[test]
+    fn smoke_paths_refuse_non_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/with-\xff-byte".to_vec(),
+        ));
+        assert_eq!(
+            smoke_paths(&bad).unwrap_err(),
+            "smoke paths are not valid Unicode"
+        );
+        let semi = std::path::Path::new("/tmp/with;semi");
+        assert_eq!(smoke_paths(semi).unwrap_err(), "smoke paths contain ';'");
+        let doppel = std::path::Path::new("/tmp/with-\u{FFFD}-char");
+        let (file, root_path) = smoke_paths(doppel).expect("replacement char is representable");
+        assert!(
+            file.contains("\u{FFFD}") && file.ends_with("a.txt"),
+            "doppelganger name passes through exactly: {file}"
+        );
+        assert!(
+            root_path.contains("\u{FFFD}"),
+            "doppelganger root passes through exactly: {root_path}"
+        );
+        assert!(!doppel.exists(), "prediction created nothing");
     }
 }

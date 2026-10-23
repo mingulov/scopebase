@@ -412,3 +412,58 @@ fn prepared_call_is_consuming_and_bound() {
     assert_eq!(v.key(), second.key());
     assert_eq!(v.bytes(), b"ok:a");
 }
+/// S01: fields must fit the EMBEDDED limits, not just the constructor
+/// ceiling. The counterexample (default ceiling, embedded name_bytes=1,
+/// a normal 5-byte cell_id) must be rejected at construction instead of
+/// panicking a downstream adapter's fitted echo.
+#[test]
+fn invocation_fields_must_fit_embedded_limits() {
+    let ceiling = RunLimits::default();
+    let mut narrow = ceiling.values();
+    narrow.name_bytes = 1;
+    let embedded = RunLimits::new(narrow).unwrap();
+    let script = serde_json::json!({"schema_version":1,"kind":"steps-v1","schema_id":"bp03-host-v1","steps":[{"step_id":"only-step","operation":"assess-filter","inputs":["counts"],"parameters":[]}]});
+    let err = CaseInvocation::new(
+        CaseInvocationValues {
+            key: InvocationKey::new(
+                InvocationKeyValues {
+                    run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+                    case_key: CaseKey::new(
+                        CaseKeyValues {
+                            case_id: CaseId::parse("H22.model-filter").unwrap(),
+                            case_version: 1,
+                            cell_id: "model".into(),
+                        },
+                        &ceiling,
+                    )
+                    .unwrap(),
+                    attempt: 1,
+                    operation_id: 1,
+                },
+                &ceiling,
+            )
+            .unwrap(),
+            observation_schema: SchemaBinding::new(
+                SchemaBindingValues {
+                    id: label("bp03-model-result"),
+                    revision: 1,
+                },
+                &ceiling,
+            )
+            .unwrap(),
+            fixture_schema: SchemaBinding::new(
+                SchemaBindingValues {
+                    id: label("bp03-fixed-input"),
+                    revision: 1,
+                },
+                &ceiling,
+            )
+            .unwrap(),
+            script: OperationScript::load(&serde_json::to_vec(&script).unwrap(), &ceiling).unwrap(),
+            limits: embedded,
+        },
+        &ceiling,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), HarnessErrorKind::LimitExceeded);
+}

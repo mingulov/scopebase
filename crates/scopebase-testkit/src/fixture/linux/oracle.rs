@@ -67,9 +67,8 @@ pub fn exited_unreaped_owned(pid: u32, max_attempts: u32) -> io::Result<Option<i
         .ok()
         .filter(|n| *n > 0)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pid out of range"))?;
-    let target = rustix::process::Pid::from_raw(raw).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "pid must be positive")
-    })?;
+    let target = rustix::process::Pid::from_raw(raw)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pid must be positive"))?;
     let options = rustix::process::WaitIdOptions::EXITED
         | rustix::process::WaitIdOptions::NOHANG
         | rustix::process::WaitIdOptions::NOWAIT;
@@ -119,7 +118,9 @@ pub fn generation_of(
         None => {}
     }
     let Some(retained) = retained else {
-        return Err(OracleError::new("missing retained start time is unknown, never exit"));
+        return Err(OracleError::new(
+            "missing retained start time is unknown, never exit",
+        ));
     };
     match read_current() {
         Ok(current) => Ok(if current == retained {
@@ -173,7 +174,9 @@ pub fn parse_stat_comm_state_starttime(stat: &[u8]) -> Result<(Vec<u8>, u8, u64)
         return Err(OracleError::new("stat comm delimiters cross"));
     }
     let comm = stat[open + 1..close].to_vec();
-    let rest: Vec<&[u8]> = stat[close + 1..].split(|b| b.is_ascii_whitespace()).collect();
+    let rest: Vec<&[u8]> = stat[close + 1..]
+        .split(|b| b.is_ascii_whitespace())
+        .collect();
     let rest: Vec<&[u8]> = rest.into_iter().filter(|f| !f.is_empty()).collect();
     if rest.len() < 20 {
         return Err(OracleError::new("stat has too few post-comm fields"));
@@ -535,7 +538,9 @@ mod tests {
 
     #[test]
     fn absence_vectors() {
-        assert!(gone_from_result(&Err(io::Error::from(io::ErrorKind::NotFound))));
+        assert!(gone_from_result(&Err(io::Error::from(
+            io::ErrorKind::NotFound
+        ))));
         assert!(!gone_from_result(&Ok(12345)));
         assert!(!gone_from_result(&Err(io::Error::from_raw_os_error(13))));
         assert!(!gone_from_result(&Err(io::Error::new(
@@ -555,13 +560,9 @@ mod tests {
         assert_eq!(state, b'R');
         assert_eq!(start, 987654);
         assert!(!stat_is_zombie(live).unwrap());
-        let zombie =
-            b"4242 (a) Z 1 (b) Z 1 1 1 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 100 200";
+        let zombie = b"4242 (a) Z 1 (b) Z 1 1 1 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 100 200";
         assert!(stat_is_zombie(zombie).unwrap());
-        assert_eq!(
-            parse_stat_comm_state_starttime(zombie).unwrap().2,
-            987654
-        );
+        assert_eq!(parse_stat_comm_state_starttime(zombie).unwrap().2, 987654);
         assert!(parse_stat_comm_state_starttime(b"12 (oops R 1 2").is_err());
         assert!(parse_stat_comm_state_starttime(b"12 (ok) R 1").is_err());
         assert!(parse_stat_comm_state_starttime(

@@ -6,8 +6,9 @@
 //! Pure argv-to-exit dispatch over explicit paths; no repo-relative defaults.
 //! All commands accept only explicit `--flag value` options (plus `--help`).
 
-use crate::error::{OperatorError, OperatorErrorKind, EXIT_OK};
+use crate::closure;
 pub use crate::error::exit_for_kind;
+use crate::error::{OperatorError, OperatorErrorKind, EXIT_OK};
 use scopebase_testkit::cli;
 use std::path::PathBuf;
 
@@ -68,12 +69,15 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
         "describe" => {
             let catalog = required(&argv[2..], "--catalog")?;
             reject_unknown(&argv[2..], &["--catalog"], &["describe --catalog PATH"], 0)?;
-            let bytes = std::fs::read(catalog).map_err(|e| {
-                OperatorError::new(
-                    OperatorErrorKind::MissingInput,
-                    format!("cannot read catalog {catalog}: {e}"),
-                )
-            })?;
+            // S39: catalogs admit through the bounded reader.
+            let bytes =
+                closure::read_bounded(std::path::Path::new(catalog), closure::MAX_CATALOG_BYTES)
+                    .map_err(|e| {
+                        OperatorError::new(
+                            OperatorErrorKind::MissingInput,
+                            format!("cannot read catalog {catalog}: {e}"),
+                        )
+                    })?;
             let description = crate::describe::describe(&bytes)?;
             emit(&render(&description)?)
         }
@@ -84,17 +88,30 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
             let policy = optional(&argv[2..], "--mapping-policy", "no-new-target-mappings");
             reject_unknown(
                 &argv[2..],
-                &["--catalog", "--profile", "--fixture-root", "--mapping-policy"],
+                &[
+                    "--catalog",
+                    "--profile",
+                    "--fixture-root",
+                    "--mapping-policy",
+                ],
                 &["plan --catalog PATH --profile ID --fixture-root PATH"],
                 0,
             )?;
-            let bytes = std::fs::read(catalog).map_err(|e| {
-                OperatorError::new(
-                    OperatorErrorKind::MissingInput,
-                    format!("cannot read catalog {catalog}: {e}"),
-                )
-            })?;
-            let doc = crate::plan::plan(&bytes, profile, PathBuf::from(fixture_root).as_path(), policy)?;
+            // S39: catalogs admit through the bounded reader.
+            let bytes =
+                closure::read_bounded(std::path::Path::new(catalog), closure::MAX_CATALOG_BYTES)
+                    .map_err(|e| {
+                        OperatorError::new(
+                            OperatorErrorKind::MissingInput,
+                            format!("cannot read catalog {catalog}: {e}"),
+                        )
+                    })?;
+            let doc = crate::plan::plan(
+                &bytes,
+                profile,
+                PathBuf::from(fixture_root).as_path(),
+                policy,
+            )?;
             emit(&render(&doc)?)
         }
         "run" => {
@@ -153,15 +170,15 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
         }
         "verify-receipt" => {
             let rest = &argv[2..];
-            let target = rest
-                .iter()
-                .find(|a| !a.starts_with("--"))
-                .ok_or_else(usage)?;
-            let catalog = flag_value(rest, "--catalog");
-            reject_unknown(rest, &["--catalog"], &["verify-receipt PATH [--catalog PATH]"], 1)?;
+            let (target, catalog) = verify_receipt_args(rest)?;
             let report = match catalog {
                 Some(path) => {
-                    let bytes = std::fs::read(path).map_err(|e| {
+                    // S39: catalogs admit through the bounded reader.
+                    let bytes = closure::read_bounded(
+                        std::path::Path::new(path),
+                        closure::MAX_CATALOG_BYTES,
+                    )
+                    .map_err(|e| {
                         OperatorError::new(
                             OperatorErrorKind::MissingInput,
                             format!("cannot read catalog {path}: {e}"),
@@ -209,11 +226,65 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
 
 fn required<'a>(args: &'a [String], name: &str) -> Result<&'a str, OperatorError> {
     flag_value(args, name).ok_or_else(|| {
-        OperatorError::new(
-            OperatorErrorKind::Usage,
-            format!("missing required {name}"),
-        )
+        OperatorError::new(OperatorErrorKind::Usage, format!("missing required {name}"))
     })
+}
+
+fn usage_msg(detail: String) -> OperatorError {
+    OperatorError::new(OperatorErrorKind::Usage, detail)
+}
+
+/// S43: `verify-receipt` takes exactly one positional (the receipt)
+/// plus an optional `--catalog PATH`, parsed together. The old
+/// first-bare-token lookup selected the `--catalog` VALUE as the
+/// receipt in option-first order (`--catalog C R` verified C and
+/// ignored R), and a missing receipt (`--catalog C` alone) passed
+/// the maximum-only arity check and performed I/O on C. Flag values
+/// are consumed as values in both `--flag V` and `--flag=V` forms
+/// (F33 discipline: a following option is never a value), bare
+/// tokens are positionals, and anything but exactly one positional
+/// is Usage before any I/O.
+fn verify_receipt_args(rest: &[String]) -> Result<(&str, Option<&str>), OperatorError> {
+    const FORMS: &str = "verify-receipt PATH [--catalog PATH]";
+    let mut catalog: Option<&str> = None;
+    let mut positional: Option<&str> = None;
+    let mut index = 0;
+    while index < rest.len() {
+        let arg = &rest[index];
+        if arg == "--catalog" {
+            match rest.get(index + 1).filter(|next| !next.starts_with("--")) {
+                Some(value) => {
+                    catalog = Some(value);
+                    index += 2;
+                }
+                None => {
+                    return Err(usage_msg(format!(
+                        "option --catalog needs a value; expected {FORMS}"
+                    )));
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--catalog=") {
+            catalog = Some(value);
+            index += 1;
+        } else if arg.starts_with("--") {
+            let name = arg.split('=').next().unwrap_or(arg);
+            return Err(usage_msg(format!(
+                "unknown option {name}; expected {FORMS}"
+            )));
+        } else {
+            if positional.is_some() {
+                return Err(usage_msg(format!(
+                    "unexpected positional argument {arg}; expected {FORMS}"
+                )));
+            }
+            positional = Some(arg);
+            index += 1;
+        }
+    }
+    match positional {
+        Some(target) => Ok((target, catalog)),
+        None => Err(usage_msg(format!("missing receipt PATH; expected {FORMS}"))),
+    }
 }
 
 fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {

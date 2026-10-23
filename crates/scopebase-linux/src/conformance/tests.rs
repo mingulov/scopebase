@@ -6,6 +6,37 @@ use crate::{
     file::{HeldFile, ProcFdResolver, SymlinkPolicy},
     procfs::{parse_maps, ParseLimits},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// S14: private staging for roots under test. Exclusive by
+/// construction: we create it (exclusive `create_dir`, skipping
+/// stale names from crashed runs — never removing anything we did
+/// not just create), we own it, mode 0700. Pair with
+/// `drop_staging`, whose empty-only removal fails loudly on
+/// stranded residue instead of hiding it.
+fn staging(tag: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..1024 {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("lx11-staging-{}-{tag}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                    .expect("staging mode");
+                return dir;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("staging: {error}"),
+        }
+    }
+    panic!("staging names exhausted");
+}
+
+fn drop_staging(dir: &Path) {
+    std::fs::remove_dir(dir).expect("staging drops empty");
+}
 
 #[test]
 fn ledger_renders_exact_sequence() {
@@ -25,8 +56,9 @@ fn refusal_encodes_stage_reason_and_line() {
     let resolver = ProcFdResolver::open_self().expect("self resolver");
     // F29: the absent path lives in an exclusively owned root, so no
     // shared-temp file is ever removed to establish absence.
+    let absence_stage = staging("absence");
     let absence_root = FixtureRoot::create(
-        &std::env::temp_dir(),
+        &absence_stage,
         &format!("lx11-conformance-{}-absence", std::process::id()),
     )
     .expect("root");
@@ -46,8 +78,9 @@ fn refusal_encodes_stage_reason_and_line() {
     let token = crate::control::CancelToken::new();
     token.cancel();
     let control = OperationControl::new(None, token);
+    let cancel_stage = staging("cancel");
     let root = FixtureRoot::create(
-        &std::env::temp_dir(),
+        &cancel_stage,
         &format!("lx11-conformance-{}-cancel", std::process::id()),
     )
     .expect("root");
@@ -65,13 +98,16 @@ fn refusal_encodes_stage_reason_and_line() {
         .expect_err("cancelled read refuses");
     assert_eq!(refusal_of(&error), "refuse=ReadFile:Cancelled;");
     root.close().expect("cleanup");
+    drop_staging(&cancel_stage);
     absence_root.close().expect("absence cleanup");
+    drop_staging(&absence_stage);
 }
 
 #[test]
 fn fixture_root_owns_tree_and_cleans_up() {
     let name = format!("lx11-conformance-{}-tree", std::process::id());
-    let root = FixtureRoot::create(&std::env::temp_dir(), &name).expect("root");
+    let stage = staging("tree");
+    let root = FixtureRoot::create(&stage, &name).expect("root");
     assert!(root.path().is_dir());
     let file = root.write_file("sub/b.txt", b"second").expect("nested");
     assert_eq!(std::fs::read(&file).expect("read back"), b"second");
@@ -81,6 +117,7 @@ fn fixture_root_owns_tree_and_cleans_up() {
     let kept = root.path().to_path_buf();
     root.close().expect("close removes tree");
     assert!(!kept.exists());
+    drop_staging(&stage);
 }
 
 #[test]
@@ -94,8 +131,9 @@ fn fixture_root_rejects_escapes() {
     // canary (all these escapes resolve to parent/out.txt); the old
     // test instead asserted on shared temp/out.txt, whose absence
     // depended on unrelated files.
+    let stage = staging("escape");
     let parent = FixtureRoot::create(
-        &std::env::temp_dir(),
+        &stage,
         &format!("lx11-conformance-{}-escape-parent", std::process::id()),
     )
     .expect("parent");
@@ -112,6 +150,7 @@ fn fixture_root_rejects_escapes() {
     );
     root.close().expect("cleanup");
     parent.close().expect("parent cleanup");
+    drop_staging(&stage);
 }
 
 /// F25: symlinks planted inside the root never redirect writes or
@@ -122,13 +161,16 @@ fn fixture_root_rejects_escapes() {
 #[test]
 fn fixture_root_refuses_symlinks_at_every_level() {
     use std::os::unix::fs::symlink;
+    let stage = staging("symlink");
     let parent = FixtureRoot::create(
-        &std::env::temp_dir(),
+        &stage,
         &format!("lx11-conformance-{}-symlink-parent", std::process::id()),
     )
     .expect("parent");
     let outside = parent.subdir("outside").expect("outside dir");
-    let canary = parent.write_file("outside/canary.txt", b"canary").expect("canary");
+    let canary = parent
+        .write_file("outside/canary.txt", b"canary")
+        .expect("canary");
     let root = FixtureRoot::create(parent.path(), "link-root").expect("root");
 
     // Intermediate symlink: linkdir -> ../outside. The DIRECTORY
@@ -149,14 +191,21 @@ fn fixture_root_refuses_symlinks_at_every_level() {
         !outside.join("pwned.txt").exists(),
         "intermediate link wrote outside the root"
     );
-    assert!(root.subdir("linkdir/new").is_err(), "subdir through link refuses");
+    assert!(
+        root.subdir("linkdir/new").is_err(),
+        "subdir through link refuses"
+    );
 
     // Final symlink: link.txt -> ../outside/canary.txt.
     symlink("../outside/canary.txt", root.path().join("link.txt")).expect("plant final link");
     let err = root
         .write_file("link.txt", b"evil")
         .expect_err("final symlink refuses");
-    assert_eq!(err.raw_os_error(), Some(rustix::io::Errno::LOOP.raw_os_error()), "want ELOOP, saw {err}");
+    assert_eq!(
+        err.raw_os_error(),
+        Some(rustix::io::Errno::LOOP.raw_os_error()),
+        "want ELOOP, saw {err}"
+    );
     assert_eq!(
         std::fs::read(&canary).expect("canary reads"),
         b"canary",
@@ -172,11 +221,14 @@ fn fixture_root_refuses_symlinks_at_every_level() {
     );
 
     // Positive control: real nested paths still work beside the links.
-    let file = root.write_file("sub/deep.txt", b"deep").expect("nested write");
+    let file = root
+        .write_file("sub/deep.txt", b"deep")
+        .expect("nested write");
     assert_eq!(std::fs::read(&file).expect("read back"), b"deep");
     assert!(root.subdir("sub").is_ok(), "existing dir reuses");
     root.close().expect("cleanup");
     parent.close().expect("parent cleanup");
+    drop_staging(&stage);
 }
 
 /// R14: replacing an ancestor redirects neither writes nor cleanup.
@@ -185,11 +237,16 @@ fn fixture_root_refuses_symlinks_at_every_level() {
 /// original, and close must retire it while the plant stands.
 #[test]
 fn fixture_root_survives_ancestor_replacement() {
-    let tag = format!("lx11-conformance-{}-anc", std::process::id());
-    let grand = std::env::temp_dir().join(&tag);
+    let grand = staging("anc");
     let old = grand.join("a");
     let moved = grand.join("b");
-    std::fs::create_dir_all(&old).expect("grand/a");
+    std::fs::create_dir(&old).expect("grand/a");
+    // The ancestor is a create-parent: pin exclusive modes rather
+    // than inheriting the ambient umask.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).expect("old mode");
+    }
     let root = FixtureRoot::create(&old, "root").expect("root");
     root.write_file("before.txt", b"before")
         .expect("pre-move write");
@@ -230,9 +287,7 @@ fn fixture_root_survives_ancestor_replacement() {
 /// an error instead of deleting it.
 #[test]
 fn fixture_root_close_refuses_root_replacement() {
-    let tag = format!("lx11-conformance-{}-swap", std::process::id());
-    let base = std::env::temp_dir().join(&tag);
-    std::fs::create_dir_all(&base).expect("base");
+    let base = staging("swap");
     let root = FixtureRoot::create(&base, "root").expect("root");
     root.write_file("owned.txt", b"owned").expect("owned write");
     std::fs::rename(base.join("root"), base.join("orig")).expect("move original away");
@@ -263,9 +318,7 @@ fn fixture_root_close_refuses_root_replacement() {
 /// removed, so the plant survives and the error names replacement.
 #[test]
 fn fixture_root_close_refuses_empty_replacement() {
-    let tag = format!("lx11-conformance-{}-empty", std::process::id());
-    let base = std::env::temp_dir().join(&tag);
-    std::fs::create_dir_all(&base).expect("base");
+    let base = staging("empty");
     let root = FixtureRoot::create(&base, "root").expect("root");
     std::fs::rename(base.join("root"), base.join("orig")).expect("move original away");
     std::fs::create_dir(base.join("root")).expect("plant empty replacement");
@@ -285,9 +338,8 @@ fn fixture_root_close_refuses_empty_replacement() {
 #[test]
 fn fixture_root_close_unlinks_symlinks_without_following() {
     use std::os::unix::fs::symlink;
-    let tag = format!("lx11-conformance-{}-links", std::process::id());
-    let base = std::env::temp_dir().join(&tag);
-    std::fs::create_dir_all(base.join("outside")).expect("base");
+    let base = staging("links");
+    std::fs::create_dir(base.join("outside")).expect("outside");
     std::fs::write(base.join("outside").join("canary.txt"), b"canary").expect("canary");
     let root = FixtureRoot::create(&base, "root").expect("root");
     root.write_file("sub/deep.txt", b"deep").expect("nested");
@@ -301,4 +353,136 @@ fn fixture_root_close_unlinks_symlinks_without_following() {
         "close followed a symlink out of the root"
     );
     std::fs::remove_dir_all(&base).expect("base cleanup");
+}
+
+/// S14/D1: shared parents refuse. A world-writable or
+/// group-writable parent admits a foreign swapper into both the
+/// mkdir/open acquisition window and the verify/unlink destruction
+/// window, so creation refuses with `PermissionDenied` and names
+/// the private-0700 staging remedy. (Foreign OWNERSHIP also
+/// refuses, by the same check, but no unprivileged test can
+/// fabricate another owner's directory.)
+#[test]
+fn fixture_root_refuses_shared_parents() {
+    use std::os::unix::fs::PermissionsExt;
+    let stage = staging("shared");
+    for (tag, mode) in [("world", 0o777), ("group", 0o770)] {
+        let shared = stage.join(tag);
+        std::fs::create_dir(&shared).expect("shared dir");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(mode))
+            .expect("shared mode");
+        let err = FixtureRoot::create(&shared, "root").expect_err("shared parent refuses");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "{tag}: wrong kind: {err}"
+        );
+        assert!(
+            err.to_string().contains("0700"),
+            "{tag}: remedy unnamed: {err}"
+        );
+        assert!(!shared.join("root").exists(), "{tag}: refusal left residue");
+        std::fs::remove_dir(&shared).expect("shared cleanup");
+    }
+    drop_staging(&stage);
+}
+
+/// S14/D2: fresh roots nest. Creation pins 0755 regardless of
+/// ambient umask, so a root can parent another root three deep;
+/// closing inside-out retires every level.
+#[test]
+fn fixture_root_nests_three_deep() {
+    let stage = staging("nest");
+    let outer = FixtureRoot::create(&stage, "outer").expect("outer");
+    let middle = FixtureRoot::create(outer.path(), "middle").expect("middle");
+    let inner = FixtureRoot::create(middle.path(), "inner").expect("inner");
+    inner.write_file("deep.txt", b"deep").expect("deep write");
+    assert_eq!(
+        std::fs::read(middle.path().join("inner").join("deep.txt")).expect("deep read"),
+        b"deep"
+    );
+    let kept = outer.path().to_path_buf();
+    inner.close().expect("inner close");
+    middle.close().expect("middle close");
+    outer.close().expect("outer close");
+    assert!(!kept.exists(), "nested tree not retired");
+    drop_staging(&stage);
+}
+
+/// S13/D5: the nested unlink proof fires on multi-linked entries.
+/// A hardlink planted inside the root would survive any single
+/// unlink, so close refuses loudly instead of reporting "removed"
+/// over a surviving inode. (Pre-proof code returned `Ok` here,
+/// unlinking both names across two visits.)
+#[test]
+fn fixture_root_close_refuses_hardlinked_entry() {
+    let stage = staging("hardlink");
+    let root = FixtureRoot::create(&stage, "root").expect("root");
+    let first = root.write_file("a.txt", b"linked").expect("write");
+    std::fs::hard_link(&first, stage.join("root").join("b.txt")).expect("plant hardlink");
+    let err = root.close().expect_err("close refuses the surviving inode");
+    assert!(
+        err.to_string().contains("replaced during removal"),
+        "unexpected error: {err}"
+    );
+    // The refused close unlinked at most the first-visited name
+    // (readdir order is unspecified); the inode itself survives
+    // under the other name — that survival is exactly what the
+    // proof reports.
+    let a = stage.join("root").join("a.txt");
+    let b = stage.join("root").join("b.txt");
+    let survivor = [a.as_path(), b.as_path()]
+        .into_iter()
+        .filter_map(|p| std::fs::read(p).ok())
+        .find(|bytes| bytes == b"linked");
+    assert!(
+        survivor.is_some(),
+        "refused close destroyed the inode it claimed survived"
+    );
+    // Manual retirement: remove whichever names remain, then the dir.
+    let _ = std::fs::remove_file(&a);
+    let _ = std::fs::remove_file(&b);
+    std::fs::remove_dir(stage.join("root")).expect("remove root");
+    drop_staging(&stage);
+}
+
+/// S48: transactional acquisition. `open_created` removes the
+/// name when the follow-up open fails, so a failed acquisition
+/// strands nothing. With stable modes a just-created root always
+/// opens (any parent permitting `mkdirat` also permits the
+/// lookup), so production reaches the cleanup only on a mid-call
+/// mode change or a resource fault; this test pins a
+/// directory-shape refusal through the same branch to prove the
+/// removal runs and the ORIGINAL error — not a cleanup wrapper
+/// — reports.
+#[test]
+fn fixture_root_create_cleans_up_after_open_failure() {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+    use std::os::unix::fs::symlink;
+    let stage = staging("txcreate");
+    symlink("dangling-target", stage.join("link")).expect("plant link");
+    let parent_fd = rustix::fs::open(
+        &stage,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .expect("parent fd");
+    let name = CString::new("link").expect("cstr");
+    // `O_DIRECTORY | O_NOFOLLOW` on a symlink refuses with
+    // `ENOTDIR` (the directory shape is checked first).
+    let err = open_created(&parent_fd, &name, AtFlags::empty()).expect_err("symlink refuses");
+    assert_eq!(
+        err.raw_os_error(),
+        Some(rustix::io::Errno::NOTDIR.raw_os_error()),
+        "want ENOTDIR, saw {err}"
+    );
+    assert!(
+        !err.to_string().contains("cleanup"),
+        "clean removal must not wrap the error: {err}"
+    );
+    assert!(
+        !stage.join("link").exists() && std::fs::symlink_metadata(stage.join("link")).is_err(),
+        "failed acquisition stranded the name"
+    );
+    drop_staging(&stage);
 }

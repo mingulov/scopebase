@@ -73,10 +73,7 @@ impl Scenario {
     }
     pub fn prepare_prefix_len(self) -> usize {
         match self {
-            Self::LeaderLifecycle
-            | Self::ExecAba
-            | Self::ExecFailure
-            | Self::ThreadLifecycle => 1,
+            Self::LeaderLifecycle | Self::ExecAba | Self::ExecFailure | Self::ThreadLifecycle => 1,
             Self::TrickyComm => 2,
             Self::FileReplacement | Self::DescriptorInventory => 3,
         }
@@ -138,20 +135,32 @@ const EXEC_FAILURE_STEPS: &[ScenarioStep] = &[
 ];
 const THREAD_LIFECYCLE_STEPS: &[ScenarioStep] = &[
     step("s01-ready", ActionConst::Ready, ActorConst::A),
-    step("s02-start-sibling", ActionConst::StartSibling, ActorConst::A),
+    step(
+        "s02-start-sibling",
+        ActionConst::StartSibling,
+        ActorConst::A,
+    ),
     step("s03-sibling", ActionConst::CaptureRaw, ActorConst::A),
     step("s04-exit-leader", ActionConst::ExitLeader, ActorConst::A),
     step("s05-leader-exited", ActionConst::CaptureRaw, ActorConst::A),
     step("s06-missing", ActionConst::ExecMissing, ActorConst::A),
     step("s07-still-sibling", ActionConst::CaptureRaw, ActorConst::A),
-    step("s08-exec-sibling", ActionConst::ExecFromSibling, ActorConst::A),
+    step(
+        "s08-exec-sibling",
+        ActionConst::ExecFromSibling,
+        ActorConst::A,
+    ),
     step("s09-new-image", ActionConst::CaptureRaw, ActorConst::A),
     step("s10-close", ActionConst::Close, ActorConst::Parent),
 ];
 const FILE_REPLACEMENT_STEPS: &[ScenarioStep] = &[
     step("s01-ready", ActionConst::Ready, ActorConst::A),
     step("s02-create-files", ActionConst::CreateFiles, ActorConst::A),
-    step("s03-offer-files", ActionConst::OfferFiles, ActorConst::Parent),
+    step(
+        "s03-offer-files",
+        ActionConst::OfferFiles,
+        ActorConst::Parent,
+    ),
     step("s04-original", ActionConst::CaptureRaw, ActorConst::A),
     step("s05-replace", ActionConst::ReplaceFileA, ActorConst::A),
     step("s06-replaced", ActionConst::CaptureRaw, ActorConst::A),
@@ -163,7 +172,11 @@ const FILE_REPLACEMENT_STEPS: &[ScenarioStep] = &[
 const DESCRIPTOR_INVENTORY_STEPS: &[ScenarioStep] = &[
     step("s01-ready", ActionConst::Ready, ActorConst::A),
     step("s02-create-files", ActionConst::CreateFiles, ActorConst::A),
-    step("s03-offer-files", ActionConst::OfferFiles, ActorConst::Parent),
+    step(
+        "s03-offer-files",
+        ActionConst::OfferFiles,
+        ActorConst::Parent,
+    ),
     step("s04-inventory", ActionConst::Inventory, ActorConst::Parent),
     step("s05-responding-ab", ActionConst::CaptureRaw, ActorConst::A),
     step("s06-close", ActionConst::Close, ActorConst::Parent),
@@ -225,7 +238,11 @@ fn control_applies(kind: &str, step: &ScenarioStep, point: &str, scenario: Scena
         }
         "worker_exit" => {
             at("s01-ready", Action::Ready, "after_root_grant")
-                || at("s02-create-files", Action::CreateFiles, "after_file_register")
+                || at(
+                    "s02-create-files",
+                    Action::CreateFiles,
+                    "after_file_register",
+                )
         }
         "partial_file_write" => {
             scenario == Scenario::FileReplacement
@@ -252,12 +269,7 @@ fn control_applies(kind: &str, step: &ScenarioStep, point: &str, scenario: Scena
 /// This is the same predicate manifest admission uses; driver and worker
 /// re-check it before any native effect so a directly constructed [`Control`]
 /// cannot arm an inapplicable outage.
-pub fn control_pairing_applies(
-    kind: &str,
-    step_id: &str,
-    point: &str,
-    scenario: Scenario,
-) -> bool {
+pub fn control_pairing_applies(kind: &str, step_id: &str, point: &str, scenario: Scenario) -> bool {
     match scenario.steps().iter().find(|s| s.id == step_id) {
         Some(step) => control_applies(kind, step, point, scenario),
         None => false,
@@ -292,12 +304,17 @@ fn closed_keys(value: &serde_json::Value, keys: &[&str], what: &str) -> Result<(
         .as_object()
         .ok_or_else(|| ManifestError::new(format!("{what} must be an object")))?;
     if map.len() != keys.len() || keys.iter().any(|k| !map.contains_key(*k)) {
-        return Err(ManifestError::new(format!("{what} keys must be exactly closed")));
+        return Err(ManifestError::new(format!(
+            "{what} keys must be exactly closed"
+        )));
     }
     Ok(())
 }
 
-fn decode_hex_field(value: &serde_json::Value, name: &str) -> Result<Option<Vec<u8>>, ManifestError> {
+fn decode_hex_field(
+    value: &serde_json::Value,
+    name: &str,
+) -> Result<Option<Vec<u8>>, ManifestError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -321,7 +338,10 @@ fn decode_hex_field(value: &serde_json::Value, name: &str) -> Result<Option<Vec<
         .map(Some)
 }
 
-pub fn admit_manifest(bytes: &[u8], expected_run_hex: &str) -> Result<AdmittedManifest, ManifestError> {
+pub fn admit_manifest(
+    bytes: &[u8],
+    expected_run_hex: &str,
+) -> Result<AdmittedManifest, ManifestError> {
     if bytes.len() > 6_569_984 {
         return Err(ManifestError::new("manifest exceeds encoded ceiling"));
     }
@@ -400,7 +420,9 @@ pub fn admit_manifest(bytes: &[u8], expected_run_hex: &str) -> Result<AdmittedMa
             .ok_or_else(|| ManifestError::new("steps must be an array"))?;
         let script = scenario.steps();
         if steps.len() != script.len() {
-            return Err(ManifestError::new("steps must equal the exact scenario script"));
+            return Err(ManifestError::new(
+                "steps must equal the exact scenario script",
+            ));
         }
         for (got, want) in steps.iter().zip(script.iter()) {
             closed_keys(got, &["id", "action", "actor"], "step")?;
@@ -408,7 +430,9 @@ pub fn admit_manifest(bytes: &[u8], expected_run_hex: &str) -> Result<AdmittedMa
                 || got["action"] != want.action.as_str()
                 || got["actor"] != want.actor.as_str()
             {
-                return Err(ManifestError::new("steps must equal the exact scenario script"));
+                return Err(ManifestError::new(
+                    "steps must equal the exact scenario script",
+                ));
             }
         }
         let key = &raw["key"];
@@ -421,7 +445,11 @@ pub fn admit_manifest(bytes: &[u8], expected_run_hex: &str) -> Result<AdmittedMa
             return Err(ManifestError::new("invocation run must equal manifest"));
         }
         let case_key = &key["case_key"];
-        closed_keys(case_key, &["case_id", "case_version", "cell_id"], "case key")?;
+        closed_keys(
+            case_key,
+            &["case_id", "case_version", "cell_id"],
+            "case key",
+        )?;
         match case_key["case_id"].as_str() {
             Some(s) if !s.is_empty() && s.len() <= 96 && s.is_ascii() => {}
             _ => return Err(ManifestError::new("case_id must be ASCII 1..96")),
@@ -467,8 +495,10 @@ pub fn admit_manifest(bytes: &[u8], expected_run_hex: &str) -> Result<AdmittedMa
                 point: point.to_string(),
             })
         };
-        let expected_file_a_hex = decode_hex_field(&raw["expected_file_a_hex"], "expected_file_a_hex")?;
-        let expected_file_b_hex = decode_hex_field(&raw["expected_file_b_hex"], "expected_file_b_hex")?;
+        let expected_file_a_hex =
+            decode_hex_field(&raw["expected_file_a_hex"], "expected_file_a_hex")?;
+        let expected_file_b_hex =
+            decode_hex_field(&raw["expected_file_b_hex"], "expected_file_b_hex")?;
         let mutation_hex = decode_hex_field(&raw["mutation_hex"], "mutation_hex")?;
         let driver_schedule = if raw["driver_schedule"].is_null() {
             None
@@ -622,13 +652,43 @@ mod tests {
                 "{kind} at {step}/{point} must not apply"
             );
         };
-        yes("leader-lifecycle", "cancel_before_create", "s01-ready", "before_first_creation");
+        yes(
+            "leader-lifecycle",
+            "cancel_before_create",
+            "s01-ready",
+            "before_first_creation",
+        );
         yes("leader-lifecycle", "wrong_run", "s01-ready", "before_ack");
-        yes("leader-lifecycle", "cancel_after_ack", "s02-live", "immediately_after_ack");
-        yes("file-replacement", "partial_file_write", "s08-mutate", "before_ack");
-        yes("descriptor-inventory", "inherit_canary", "s04-inventory", "before_inventory_exec");
-        yes("file-replacement", "worker_exit", "s02-create-files", "after_file_register");
-        yes("leader-lifecycle", "worker_exit", "s01-ready", "after_root_grant");
+        yes(
+            "leader-lifecycle",
+            "cancel_after_ack",
+            "s02-live",
+            "immediately_after_ack",
+        );
+        yes(
+            "file-replacement",
+            "partial_file_write",
+            "s08-mutate",
+            "before_ack",
+        );
+        yes(
+            "descriptor-inventory",
+            "inherit_canary",
+            "s04-inventory",
+            "before_inventory_exec",
+        );
+        yes(
+            "file-replacement",
+            "worker_exit",
+            "s02-create-files",
+            "after_file_register",
+        );
+        yes(
+            "leader-lifecycle",
+            "worker_exit",
+            "s01-ready",
+            "after_root_grant",
+        );
         yes("exec-aba", "worker_exit", "s01-ready", "after_root_grant");
         yes(
             "leader-lifecycle",
@@ -648,20 +708,50 @@ mod tests {
             "s01-ready",
             "after_pidfd_register",
         );
-        no("leader-lifecycle", "partial_file_write", "s01-ready", "before_ack");
-        no("leader-lifecycle", "inherit_canary", "s01-ready", "before_ack");
-        no("leader-lifecycle", "cancel_after_ack", "s03-exit", "immediately_after_ack");
+        no(
+            "leader-lifecycle",
+            "partial_file_write",
+            "s01-ready",
+            "before_ack",
+        );
+        no(
+            "leader-lifecycle",
+            "inherit_canary",
+            "s01-ready",
+            "before_ack",
+        );
+        no(
+            "leader-lifecycle",
+            "cancel_after_ack",
+            "s03-exit",
+            "immediately_after_ack",
+        );
         no("leader-lifecycle", "bogus_kind", "s01-ready", "before_ack");
         no("leader-lifecycle", "wrong_run", "s02-live", "before_ack");
-        no("leader-lifecycle", "worker_exit", "s02-live", "after_root_grant");
-        no("leader-lifecycle", "worker_exit", "s01-ready", "after_file_register");
+        no(
+            "leader-lifecycle",
+            "worker_exit",
+            "s02-live",
+            "after_root_grant",
+        );
+        no(
+            "leader-lifecycle",
+            "worker_exit",
+            "s01-ready",
+            "after_file_register",
+        );
         no(
             "file-replacement",
             "parent_failure_after_register",
             "s02-create-files",
             "after_child_register",
         );
-        no("exec-failure", "partial_file_write", "s03-missing", "before_ack");
+        no(
+            "exec-failure",
+            "partial_file_write",
+            "s03-missing",
+            "before_ack",
+        );
     }
 
     #[test]

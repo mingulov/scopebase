@@ -226,23 +226,16 @@ fn valid_session(
 fn finalize_static_checks_and_one_shot() {
     let (dir, _root) = temp_root("finalize");
     let (mut session, _, _) = valid_session(&dir, "leader-lifecycle");
-    let mk = |deadline: Instant, attempts: u64, records: u64, bytes: u64| {
-        LinuxOuterCleanupBudget {
-            deadline,
-            max_native_attempts: attempts,
-            max_records: records,
-            max_retained_bytes: bytes,
-        }
+    let mk = |deadline: Instant, attempts: u64, records: u64, bytes: u64| LinuxOuterCleanupBudget {
+        deadline,
+        max_native_attempts: attempts,
+        max_records: records,
+        max_retained_bytes: bytes,
     };
     let soon = Instant::now() + Duration::from_secs(2);
     assert!(matches!(
         session
-            .finalize(mk(
-                Instant::now() - Duration::from_secs(1),
-                64,
-                8,
-                65536
-            ))
+            .finalize(mk(Instant::now() - Duration::from_secs(1), 64, 8, 65536))
             .unwrap_err()
             .kind(),
         LinuxOuterCleanupAdmissionErrorKind::ExpiredDeadline
@@ -255,10 +248,7 @@ fn finalize_static_checks_and_one_shot() {
         LinuxOuterCleanupAdmissionErrorKind::AllowanceOutOfRange
     ));
     assert!(matches!(
-        session
-            .finalize(mk(soon, 64, 0, 65536))
-            .unwrap_err()
-            .kind(),
+        session.finalize(mk(soon, 64, 0, 65536)).unwrap_err().kind(),
         LinuxOuterCleanupAdmissionErrorKind::AllowanceOutOfRange
     ));
     assert!(matches!(
@@ -330,18 +320,8 @@ fn custody_finalize_close_only_and_one_shot() {
         max_records: 8,
         max_retained_bytes: 65536,
     };
-    let first = failure
-        .custody
-        .finalize(mk())
-        .unwrap()
-        .as_bytes()
-        .to_vec();
-    let again = failure
-        .custody
-        .finalize(mk())
-        .unwrap()
-        .as_bytes()
-        .to_vec();
+    let first = failure.custody.finalize(mk()).unwrap().as_bytes().to_vec();
+    let again = failure.custody.finalize(mk()).unwrap().as_bytes().to_vec();
     assert_eq!(first, again);
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -496,10 +476,7 @@ fn live_pair_with_images(
     scenario: Scenario,
     op: u64,
     distinct: bool,
-) -> (
-    scopebase_testkit::fixture::linux::LivePair,
-    PathBuf,
-) {
+) -> (scopebase_testkit::fixture::linux::LivePair, PathBuf) {
     let (dir, root) = temp_root("live");
     let (fa, pa, fb, pb) = if distinct {
         stage_distinct_images(&dir)
@@ -527,10 +504,7 @@ fn live_pair_with_images(
 fn live_pair(
     scenario: Scenario,
     op: u64,
-) -> (
-    scopebase_testkit::fixture::linux::LivePair,
-    PathBuf,
-) {
+) -> (scopebase_testkit::fixture::linux::LivePair, PathBuf) {
     live_pair_with_images(scenario, op, false)
 }
 
@@ -571,10 +545,7 @@ fn live_pair_with_control(
     scenario: Scenario,
     op: u64,
     control: Control,
-) -> (
-    scopebase_testkit::fixture::linux::LivePair,
-    PathBuf,
-) {
+) -> (scopebase_testkit::fixture::linux::LivePair, PathBuf) {
     let (dir, root) = temp_root("live-outage");
     let (cfg, dir) = launch_config_with_control(&dir, root, scenario, op, Some(control));
     let pair = launch_pair(&cfg).unwrap();
@@ -629,7 +600,13 @@ fn exe_sha256_as(pid: u32, live_tid: Option<u32>) -> [u8; 32] {
 fn task_tids(pid: u32) -> Vec<u32> {
     let mut tids: Vec<u32> = std::fs::read_dir(format!("/proc/{pid}/task"))
         .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().parse::<u32>().unwrap())
+        .map(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .parse::<u32>()
+                .unwrap()
+        })
         .collect();
     tids.sort_unstable();
     tids
@@ -710,10 +687,7 @@ fn wnowait_lifecycle_order() {
     assert_eq!(exited_unreaped_owned(pair.a_pid(), 4).unwrap(), None);
     pair.terminate_a().unwrap();
     assert!(pair.a_exit_ready(5000).unwrap());
-    assert_eq!(
-        pair.a_exited_unreaped().unwrap(),
-        Some(libc::CLD_KILLED)
-    );
+    assert_eq!(pair.a_exited_unreaped().unwrap(), Some(libc::CLD_KILLED));
     let reaped = pair.reap_a().unwrap();
     assert_eq!(reaped.signal, Some(libc::SIGKILL));
     assert_eq!(
@@ -864,7 +838,9 @@ fn accepted_components_consumed() {
         max_read_calls: 4,
         max_buffer_capacity: 128,
     };
-    let read = held.read_all(limits, &OperationControl::unlimited()).unwrap();
+    let read = held
+        .read_all(limits, &OperationControl::unlimited())
+        .unwrap();
     assert_eq!(read.bytes(), b"0123456789abcdef");
     assert!(read.charges().read_calls() >= 1);
     let maps = std::fs::read("/proc/self/maps").unwrap();
@@ -980,15 +956,25 @@ fn exec_aba_preserves_birth_not_image() {
     let start = proc_starttime(pair.a_pid());
     a.advance(&label("s01-ready")).unwrap();
     a.advance(&label("s02-a")).unwrap();
-    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    a.advance(&label("s03-exec-b"))
+        .expect("real exec to image B");
     let sha_b = exe_sha256(pair.a_pid());
     assert_ne!(sha_a, sha_b, "executable image changed at A->B");
-    assert_eq!(proc_starttime(pair.a_pid()), start, "birth preserved at A->B");
+    assert_eq!(
+        proc_starttime(pair.a_pid()),
+        start,
+        "birth preserved at A->B"
+    );
     assert_eq!(a.pid(), pair.a_pid(), "same PID across exec");
     a.advance(&label("s04-b")).unwrap();
-    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    a.advance(&label("s05-exec-a"))
+        .expect("real exec back to image A");
     assert_eq!(exe_sha256(pair.a_pid()), sha_a, "executable image restored");
-    assert_eq!(proc_starttime(pair.a_pid()), start, "birth preserved at B->A");
+    assert_eq!(
+        proc_starttime(pair.a_pid()),
+        start,
+        "birth preserved at B->A"
+    );
     a.advance(&label("s06-a2")).unwrap();
     a.advance(&label("s07-close")).unwrap();
     pair.shutdown();
@@ -1011,19 +997,34 @@ fn thread_lifecycle_sibling_phases() {
         v
     });
     a.advance(&label("s03-sibling")).unwrap();
-    a.advance(&label("s04-exit-leader")).expect("leader-only native exit");
-    assert_eq!(task_state(pair.a_pid(), pair.a_pid()), b'Z', "leader is a zombie");
-    assert_ne!(task_state(pair.a_pid(), sibling), b'Z', "sibling stays live");
+    a.advance(&label("s04-exit-leader"))
+        .expect("leader-only native exit");
+    assert_eq!(
+        task_state(pair.a_pid(), pair.a_pid()),
+        b'Z',
+        "leader is a zombie"
+    );
+    assert_ne!(
+        task_state(pair.a_pid(), sibling),
+        b'Z',
+        "sibling stays live"
+    );
     assert_eq!(a.nonleader_tid(), Some(sibling));
     a.advance(&label("s05-leader-exited")).unwrap();
-    a.advance(&label("s06-missing")).expect("failed exec from sibling");
+    a.advance(&label("s06-missing"))
+        .expect("failed exec from sibling");
     assert_eq!(task_state(pair.a_pid(), pair.a_pid()), b'Z');
     assert_ne!(task_state(pair.a_pid(), sibling), b'Z');
     a.advance(&label("s07-still-sibling")).unwrap();
     let sha_before = exe_sha256_as(pair.a_pid(), a.nonleader_tid());
-    a.advance(&label("s08-exec-sibling")).expect("real nonleader exec");
+    a.advance(&label("s08-exec-sibling"))
+        .expect("real nonleader exec");
     assert_ne!(exe_sha256(pair.a_pid()), sha_before, "new image after exec");
-    assert_eq!(task_tids(pair.a_pid()), vec![pair.a_pid()], "single thread again");
+    assert_eq!(
+        task_tids(pair.a_pid()),
+        vec![pair.a_pid()],
+        "single thread again"
+    );
     assert_eq!(a.nonleader_tid(), None, "barrier invalidated by exec");
     a.advance(&label("s09-new-image")).unwrap();
     a.advance(&label("s10-close")).unwrap();
@@ -1035,8 +1036,12 @@ fn thread_lifecycle_sibling_phases() {
 fn descriptor_inventory_canary() {
     let (pair, dir) = live_pair(Scenario::DescriptorInventory, 25);
     let a = pair.a_process();
-    pair.upload_blobs(b"alpha-content-001", b"beta--content-002", b"ALPHA-CONTENT-001")
-        .unwrap();
+    pair.upload_blobs(
+        b"alpha-content-001",
+        b"beta--content-002",
+        b"ALPHA-CONTENT-001",
+    )
+    .unwrap();
     a.advance(&label("s01-ready")).unwrap();
     a.advance(&label("s02-create-files")).unwrap();
     a.advance(&label("s03-offer-files")).unwrap();
@@ -1048,13 +1053,19 @@ fn descriptor_inventory_canary() {
         .find(|r| r.kind == "fd" && r.step_id == "s04-inventory" && r.actor == "parent-positive")
         .expect("positive inventory record");
     let body: serde_json::Value = serde_json::from_slice(&positive.bytes).unwrap();
-    assert_eq!(body["values"]["canary_hex"], "53424649585455524543414e41525931");
+    assert_eq!(
+        body["values"]["canary_hex"],
+        "53424649585455524543414e41525931"
+    );
     let negative = raw
         .iter()
         .find(|r| r.kind == "fd" && r.step_id == "s04-inventory" && r.actor == "parent-negative")
         .expect("negative inventory record");
     let negative_body: serde_json::Value = serde_json::from_slice(&negative.bytes).unwrap();
-    assert_eq!(negative_body["values"]["canary_hex"], serde_json::Value::Null);
+    assert_eq!(
+        negative_body["values"]["canary_hex"],
+        serde_json::Value::Null
+    );
     a.advance(&label("s05-responding-ab")).unwrap();
     pair.b_heartbeat(&label("s05-responding-ab")).unwrap();
     a.advance(&label("s06-close")).unwrap();
@@ -1076,9 +1087,11 @@ fn deadline_hold_parametric() {
     assert_eq!(report.extra_worker_datagrams, 0);
     assert_eq!(pair.a_exited_unreaped().unwrap(), None);
     a.advance(&label("s02-a")).unwrap();
-    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    a.advance(&label("s03-exec-b"))
+        .expect("real exec to image B");
     a.advance(&label("s04-b")).unwrap();
-    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    a.advance(&label("s05-exec-a"))
+        .expect("real exec back to image A");
     a.advance(&label("s06-a2")).unwrap();
     a.advance(&label("s07-close")).unwrap();
     pair.shutdown();
@@ -1092,9 +1105,11 @@ fn reached_deadline_30s_schedule() {
     let a = pair.a_process();
     a.advance(&label("s01-ready")).unwrap();
     a.advance(&label("s02-a")).unwrap();
-    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    a.advance(&label("s03-exec-b"))
+        .expect("real exec to image B");
     a.advance(&label("s04-b")).unwrap();
-    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    a.advance(&label("s05-exec-a"))
+        .expect("real exec back to image A");
     a.advance(&label("s06-a2")).unwrap();
     let report = pair.deadline_hold("s06-a2", 30_000, 31_000).unwrap();
     assert!(
@@ -1342,7 +1357,10 @@ fn parent_failure_after_case_root_register() {
     assert!(matches!(err.kind(), DriverErrorKind::SetupFailure));
     assert_eq!(err.step_id(), Some("s01-ready"));
     let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
-    assert!(diagnostic.contains("after_case_root_register"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("after_case_root_register"),
+        "{diagnostic}"
+    );
     assert!(diagnostic.contains("case-root"), "{diagnostic}");
     assert!(!err.cleanup_proof().spawned, "no child ever spawns");
     assert!(!case_path(&dir, 36).exists(), "case dir is retired");
@@ -1411,7 +1429,11 @@ fn outage_control_pairing_refused_before_effects() {
         root,
         Scenario::LeaderLifecycle,
         39,
-        Some(outage_control("partial_file_write", "s01-ready", "before_ack")),
+        Some(outage_control(
+            "partial_file_write",
+            "s01-ready",
+            "before_ack",
+        )),
     );
     let err = launch_pair(&cfg).unwrap_err();
     assert!(matches!(err.kind(), DriverErrorKind::Refused));

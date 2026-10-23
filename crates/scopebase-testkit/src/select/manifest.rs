@@ -89,11 +89,7 @@ impl Change {
             id: id.to_owned(),
         }
     }
-    pub fn registration_role(
-        case_id: CaseId,
-        case_version: u32,
-        role: RegistrationRole,
-    ) -> Self {
+    pub fn registration_role(case_id: CaseId, case_version: u32, role: RegistrationRole) -> Self {
         Self::RegistrationRole {
             case_id,
             case_version,

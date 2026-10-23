@@ -18,10 +18,14 @@
 //! per-thread syscall state, and `PTRACE_O_TRACEEXEC` reports execs
 //! so threads an exec silently killed can be pruned. A newborn
 //! thread's birth SIGSTOP is suppressed, never forwarded (forwarding
-//! it would re-stop forever). The audit runs until every traced
+//! it would re-stop forever). S47: the same holds for any SIGSTOP
+//! stop on a tracked tid — SIGSTOP is uncatchable, so the stop is
+//! always a group stop, never a deliverable signal, and resuming
+//! clean lets a subject that stops itself proceed. Other stop
+//! signals keep default forwarding; full SIGCONT job control of the
+//! subject is NOT supported. The audit runs until every traced
 //! thread and child has exited; the config deadline backstops every
 //! wait, so a deaf or hung subject fails loud instead of hanging.
-//! Real SIGSTOP/SIGCONT job control of the subject is NOT supported.
 //!
 //! NEW per the frozen FS10 design; no donor implements a syscall
 //! tracer. The Yama-scope read in [`preflight`] ADAPTs the KryProbe
@@ -183,7 +187,8 @@ impl AuditReport {
 }
 
 /// The preflight child: attempt TRACEME, report the errno byte,
-/// exit. Syscalls and atomics only; diverges.
+/// stop once for the register probe when traced, exit. Syscalls and
+/// atomics only; diverges.
 fn preflight_child() -> ! {
     let (w, _, _) = super::fork::slots();
     // SAFETY: raw ptrace on self; always permitted to attempt.
@@ -195,9 +200,15 @@ fn preflight_child() -> ! {
         let errno = unsafe { libc::__errno_location().read() };
         errno.clamp(1, 127) as u8
     };
-    // SAFETY: one byte to the inherited pipe, then exit.
+    // SAFETY: one byte to the inherited pipe, then (when traced) one
+    // SIGSTOP for the parent's register probe, then exit. The stop
+    // is skipped when TRACEME failed: an untraced stop is invisible
+    // to the parent's flag-0 wait and would hang it.
     unsafe {
         libc::write(w, &code as *const u8 as *const _, 1);
+        if traced == 0 {
+            libc::raise(libc::SIGSTOP);
+        }
         libc::_exit(0);
     }
 }
@@ -226,9 +237,7 @@ pub fn preflight() -> Result<String, AuditError> {
     // SAFETY: the child runs only ptrace/write/_exit (syscalls plus
     // one atomic load), never allocating, locking, or returning.
     let pid = unsafe {
-        super::fork::fork_guarded((pipe[1], -1, -1), |child| child, || {
-            preflight_child()
-        })
+        super::fork::fork_guarded((pipe[1], -1, -1), |child| child, || preflight_child())
     };
     if pid < 0 {
         // SAFETY: ends owned by this scope.
@@ -245,6 +254,10 @@ pub fn preflight() -> Result<String, AuditError> {
     let got = unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
     // SAFETY: read end owned by this scope.
     unsafe { libc::close(pipe[0]) };
+    // S05: the traced child stops once for the register probe. An
+    // environment that permits TRACEME but denies GETREGS cannot
+    // observe anything, so it refuses here instead of mid-audit.
+    let mut regs_ok = false;
     // Reap the child through any ptrace stop it raised on exit.
     loop {
         let mut status = 0;
@@ -260,6 +273,18 @@ pub fn preflight() -> Result<String, AuditError> {
         if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
             break;
         }
+        if libc::WIFSTOPPED(status) && code[0] == 0 {
+            let mut regs = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
+            // SAFETY: valid regs out-pointer for a stopped owned child.
+            regs_ok = unsafe {
+                libc::ptrace(
+                    libc::PTRACE_GETREGS,
+                    pid,
+                    0,
+                    regs.as_mut_ptr() as *mut libc::c_void,
+                ) == 0
+            };
+        }
         // SAFETY: continue an owned ptrace-stopped child.
         unsafe { libc::ptrace(libc::PTRACE_CONT, pid, 0, 0) };
     }
@@ -273,6 +298,12 @@ pub fn preflight() -> Result<String, AuditError> {
         return Err(AuditError::new(format!(
             "PTRACE_TRACEME refused with errno {} ({})",
             code[0],
+            yama_note()
+        )));
+    }
+    if !regs_ok {
+        return Err(AuditError::new(format!(
+            "PTRACE_GETREGS refused ({})",
             yama_note()
         )));
     }
@@ -435,7 +466,32 @@ fn fd_identity(pid: libc::pid_t, fd: i32) -> (Option<u64>, Option<u64>, Option<S
 /// or a failed stat attributes nothing.
 #[cfg(target_arch = "x86_64")]
 fn mapped_object(pid: libc::pid_t, addr: u64) -> Option<(u64, u64, Option<String>)> {
-    let text = std::fs::read_to_string(format!("/proc/{pid}/maps")).ok()?;
+    match mapping_class(pid, addr) {
+        MappingClass::File(dev, ino, path) => Some((dev, ino, path)),
+        _ => None,
+    }
+}
+
+/// S30: what the mapping containing `addr` is. Anonymous rows (no
+/// absolute live pathname) are a KNOWN classification, not
+/// unattributed: an mremap of anonymous memory preserves it. Only a
+/// missing row or an unreadable table (Absent), or a file-shaped
+/// row whose identity cannot be read (Unidentified), attributes
+/// nothing.
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug, PartialEq, Eq)]
+enum MappingClass {
+    Anonymous,
+    File(u64, u64, Option<String>),
+    Unidentified,
+    Absent,
+}
+
+#[cfg(target_arch = "x86_64")]
+fn mapping_class(pid: libc::pid_t, addr: u64) -> MappingClass {
+    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/maps")) else {
+        return MappingClass::Absent;
+    };
     for line in text.lines() {
         let mut fields = line.split_whitespace();
         let Some(range) = fields.next() else {
@@ -464,16 +520,19 @@ fn mapped_object(pid: libc::pid_t, addr: u64) -> Option<(u64, u64, Option<String
         }
         // Only an absolute live pathname identifies the object: a
         // deleted name no longer does, and anything else (special
-        // rows, memfd) must never resolve against our CWD.
+        // rows, memfd) must never resolve against our CWD. Rows
+        // without one are anonymous by definition here.
         let path = match path {
             Some(path) if path.starts_with('/') && !path.ends_with(" (deleted)") => path,
-            _ => return None,
+            _ => return MappingClass::Anonymous,
         };
-        let stated = std::fs::metadata(&path).ok()?;
+        let Ok(stated) = std::fs::metadata(&path) else {
+            return MappingClass::Unidentified;
+        };
         use std::os::unix::fs::MetadataExt as _;
-        return Some((stated.dev(), stated.ino(), Some(path)));
+        return MappingClass::File(stated.dev(), stated.ino(), Some(path));
     }
-    None
+    MappingClass::Absent
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -485,6 +544,14 @@ struct TidState {
     /// be suppressed (forwarding it would re-stop forever). Cleared
     /// by that stop, or by any other first stop.
     newborn_sigstop: bool,
+    /// S06: set by the EXEC event. The next syscall stop is either
+    /// the execve's own exit (success: rax=0 — consumed silently,
+    /// the entry half died with the old image) or the next call's
+    /// entry (rax=-ENOSYS — classified normally). Peeking rax
+    /// self-synchronizes on kernels that report the exit stop, the
+    /// event, or both: without it the exit stop re-inverts the
+    /// reset phase and every later entry/exit pair lags by one.
+    exec_armed: bool,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -516,8 +583,10 @@ fn trace_loop(
         // the outer cleanup never signals the stale PID (R26), and
         // drain for uniformity (R31).
         *main_reaped = true;
-        drain_tracked(&mut tids, pid, main_reaped);
-        return Err(AuditError::new("subject died before its exec-stop"));
+        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+        return Err(AuditError::new(format!(
+            "subject died before its exec-stop{unknowns}"
+        )));
     }
     // F15: follow threads and fork/vfork children (options inherit
     // across clone/fork, the strace -f recipe) and learn about execs.
@@ -531,15 +600,17 @@ fn trace_loop(
                 | libc::PTRACE_O_TRACECLONE
                 | libc::PTRACE_O_TRACEFORK
                 | libc::PTRACE_O_TRACEVFORK
-                | libc::PTRACE_O_TRACEEXEC)
-                as *mut libc::c_void,
+                | libc::PTRACE_O_TRACEEXEC) as *mut libc::c_void,
         )
     } != 0
     {
         // R31: the stopped main keeps its custody through this
         // error; survivors are named, never silently kept.
-        drain_tracked(&mut tids, pid, main_reaped);
-        return Err(drained_err("PTRACE_SETOPTIONS refused", &tids));
+        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+        return Err(drained_err(
+            format!("PTRACE_SETOPTIONS refused{unknowns}"),
+            &tids,
+        ));
     }
     // The tid whose consumed stop still needs a resume (each tid is
     // resumed exactly once per consumed stop; running tids are never
@@ -572,8 +643,11 @@ fn trace_loop(
                         // R31: a resume failure retires every
                         // tracked tracee before reporting; R26: the
                         // drain flags the main when it reaps it.
-                        drain_tracked(&mut tids, pid, main_reaped);
-                        return Err(drained_err(format!("PTRACE_SYSCALL: {error}"), &tids));
+                        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+                        return Err(drained_err(
+                            format!("PTRACE_SYSCALL: {error}{unknowns}"),
+                            &tids,
+                        ));
                     }
                 }
                 if tids.is_empty() {
@@ -616,14 +690,71 @@ fn trace_loop(
         }
         let sig = libc::WSTOPSIG(status);
         if sig == libc::SIGTRAP | 0x80 {
-            if let Some(state) = tids.get_mut(&tid) {
-                state.in_syscall = !state.in_syscall;
-                if state.in_syscall {
-                    state.pending = syscall_enter(tid);
-                } else if let Some(call) = state.pending.take() {
-                    syscall_exit(tid, call, config, report);
+            // S06: self-synchronize after an exec. The execve
+            // succeeded (a failed one reports no event), so rax=0
+            // is its own exit stop and rax=-ENOSYS is the next
+            // call's entry; any other value is impossible here and
+            // consumes like the exit (nothing is attributed either
+            // way until the next entry).
+            if tids.get(&tid).is_some_and(|state| state.exec_armed) {
+                let regs = match read_regs(tid) {
+                    Ok(regs) => regs,
+                    Err(error) => {
+                        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+                        return Err(drained_err(
+                            format!("PTRACE_GETREGS exec-sync: {error}{unknowns}"),
+                            &tids,
+                        ));
+                    }
+                };
+                let is_entry = regs.rax as i64 == -libc::ENOSYS as i64;
+                if let Some(state) = tids.get_mut(&tid) {
+                    state.exec_armed = false;
+                    state.newborn_sigstop = false;
+                    if !is_entry {
+                        resume = Some(tid);
+                        continue;
+                    }
                 }
-                state.newborn_sigstop = false;
+            }
+            // S05: observe before mutating. A register failure drains
+            // (which needs `tids`) and reports an incomplete audit
+            // instead of an absent call or a fabricated result.
+            let entering = tids.get(&tid).map(|state| !state.in_syscall);
+            match entering {
+                Some(true) => match syscall_enter(tid) {
+                    Ok(pending) => {
+                        if let Some(state) = tids.get_mut(&tid) {
+                            state.in_syscall = true;
+                            state.pending = pending;
+                            state.newborn_sigstop = false;
+                        }
+                    }
+                    Err(error) => {
+                        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+                        return Err(drained_err(
+                            format!("PTRACE_GETREGS enter: {error}{unknowns}"),
+                            &tids,
+                        ));
+                    }
+                },
+                Some(false) => {
+                    let call = tids.get_mut(&tid).and_then(|state| state.pending.take());
+                    if let Some(call) = call {
+                        if let Err(error) = syscall_exit(tid, call, config, report) {
+                            let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+                            return Err(drained_err(
+                                format!("PTRACE_GETREGS exit: {error}{unknowns}"),
+                                &tids,
+                            ));
+                        }
+                    }
+                    if let Some(state) = tids.get_mut(&tid) {
+                        state.in_syscall = false;
+                        state.newborn_sigstop = false;
+                    }
+                }
+                None => {}
             }
             resume = Some(tid);
             continue;
@@ -637,12 +768,24 @@ fn trace_loop(
                 // Pre-register the birth; its own first stop (or an
                 // already-queued one) reconciles below. Never
                 // overwrite a state the newborn already reported.
-                if let Some(new) = event_msg(tid) {
-                    let new = new as libc::pid_t;
-                    if !tids.contains_key(&new) {
-                        tids.insert(new, TidState::newborn());
-                        report.threads_seen += 1;
+                // S31: an unreadable birth message is an explicit
+                // custody failure, never a skipped registration: the
+                // drain below retires the tracked set, and the
+                // unknown-tracee sweep retires the child this message
+                // would have named.
+                let new = match event_msg(tid) {
+                    Ok(new) => new as libc::pid_t,
+                    Err(error) => {
+                        let unknowns = drain_tracked(&mut tids, pid, main_reaped);
+                        return Err(drained_err(
+                            format!("PTRACE_GETEVENTMSG birth: {error}{unknowns}"),
+                            &tids,
+                        ));
                     }
+                };
+                if !tids.contains_key(&new) {
+                    tids.insert(new, TidState::newborn());
+                    report.threads_seen += 1;
                 }
                 // Event stops resume without delivery.
                 if let Some(state) = tids.get_mut(&tid) {
@@ -655,9 +798,23 @@ fn trace_loop(
                 // An exec silently kills its sibling threads: prune
                 // tracked tids that are no longer traced by us.
                 prune_exec_siblings(tid, &mut tids);
-                if let Some(state) = tids.get_mut(&tid) {
-                    state.newborn_sigstop = false;
-                }
+                // S06: the survivor's pre-exec phase is meaningless
+                // (its entry half died with the old image), so the
+                // phase resets and arms for self-synchronization. A
+                // worker that execs is renumbered to the leader
+                // before this event (the old number frees with
+                // ECHILD and drops as stale), so this same entry now
+                // describes the execing thread; keeping the old
+                // leader's phase would invert every later entry/exit
+                // classification and hide successful mappings behind
+                // a following entry's -ENOSYS.
+                tids.insert(
+                    tid,
+                    TidState {
+                        exec_armed: true,
+                        ..TidState::default()
+                    },
+                );
                 resume = Some(tid);
                 continue;
             }
@@ -677,13 +834,17 @@ fn trace_loop(
             // the handler run or the fatal termination.
         }
         // A real signal: forward it so the subject, not the tracer,
-        // decides its fate — except a newborn's birth SIGSTOP, which
-        // is suppressed (delivering it would re-stop forever). The
-        // following stop is held for the same classification instead
-        // of being dropped. The deadline backstops this wait like
-        // every other, so a signal that re-traps fails loud.
-        let suppress =
-            sig == libc::SIGSTOP && tids.get(&tid).is_some_and(|s| s.newborn_sigstop);
+        // decides its fate — except a SIGSTOP stop on a tracked tid,
+        // which is suppressed. SIGSTOP is uncatchable, so the stop is
+        // always a group stop (or the newborn birth stop), never a
+        // deliverable signal, and forwarding it would re-stop
+        // forever; resuming clean lets a subject that stops itself
+        // proceed. Unknown tids keep the old forward path; the sweep
+        // retires them. The following stop is held for the same
+        // classification instead of being dropped. The deadline
+        // backstops this wait like every other, so a signal that
+        // re-traps fails loud.
+        let suppress = sig == libc::SIGSTOP && tids.contains_key(&tid);
         if let Some(state) = tids.get_mut(&tid) {
             state.newborn_sigstop = false;
         }
@@ -712,8 +873,10 @@ fn trace_loop(
 /// exchange events (a waitpid(-1) here would steal them). On
 /// deadline: SIGKILLs every tracked tid — group leaders die with
 /// their threads, ESRCH on plain members is harmless — drains every
-/// exit, and reports the timeout. ECHILD for a tracked tid means
-/// this tracer lost it, which is a loud error, never silence.
+/// exit, and reports the timeout. ECHILD for the main means this
+/// tracer lost it, which is a loud error, never silence; ECHILD
+/// for any other tracked tid is a stale exec-renumber (see
+/// [`waitpid_one`]) and drops the number.
 #[cfg(target_arch = "x86_64")]
 fn wait_for_event(
     target: Option<libc::pid_t>,
@@ -722,10 +885,14 @@ fn wait_for_event(
     tids: &mut HashMap<libc::pid_t, TidState>,
     main_reaped: &mut bool,
 ) -> Result<(libc::pid_t, i32), AuditError> {
+    // A targeted wait whose number went stale (exec renumber)
+    // degrades to broadcast: the affinity was promptness, not
+    // correctness — every stop still classifies.
+    let mut target = target;
     loop {
         if Instant::now() >= deadline {
-            drain_tracked(tids, main, main_reaped);
-            return Err(drained_err("audit timed out", tids));
+            let unknowns = drain_tracked(tids, main, main_reaped);
+            return Err(drained_err(format!("audit timed out{unknowns}"), tids));
         }
         // Snapshot: births register through parent fork events the
         // caller decodes, so the set only grows between polls and a
@@ -736,13 +903,25 @@ fn wait_for_event(
         };
         for t in watch {
             match waitpid_one(t) {
-                Ok(Some(status)) => return Ok((t, status)),
-                Ok(None) => {}
+                Ok(WaitOne::Status(status)) => return Ok((t, status)),
+                Ok(WaitOne::None) => {}
+                Ok(WaitOne::StaleNumber) => {
+                    // The leader never renumbers, so its ECHILD is
+                    // a genuinely lost tracer link: loud, as before.
+                    if t == main {
+                        let unknowns = drain_tracked(tids, main, main_reaped);
+                        return Err(drained_err(format!("tracer lost tid {t}{unknowns}"), tids));
+                    }
+                    tids.remove(&t);
+                    if Some(t) == target {
+                        target = None;
+                    }
+                }
                 // R31: wait failures retire the remaining tracees
                 // before reporting; survivors are named.
                 Err(error) => {
-                    drain_tracked(tids, main, main_reaped);
-                    return Err(drained_err(error.detail, tids));
+                    let unknowns = drain_tracked(tids, main, main_reaped);
+                    return Err(drained_err(format!("{}{unknowns}", error.detail), tids));
                 }
             }
         }
@@ -765,24 +944,39 @@ fn drained_err(detail: impl Into<String>, tids: &HashMap<libc::pid_t, TidState>)
 
 /// One nonblocking reap-check for exactly one tracee.
 #[cfg(target_arch = "x86_64")]
-fn waitpid_one(tid: libc::pid_t) -> Result<Option<i32>, AuditError> {
+enum WaitOne {
+    Status(i32),
+    None,
+    /// ECHILD: the number is freed. Every registration here is
+    /// wait-observed and no wait-stealer exists (all waits are
+    /// tid-specific; the only other waiter reaps just the main
+    /// after the loop), so a freed non-leader number is an
+    /// exec-renumber — the task lives on under the leader number
+    /// and the pending EXEC event reconciles it — never a silent
+    /// death (traced deaths always report). The caller drops the
+    /// number, or fails loud for the leader itself.
+    StaleNumber,
+}
+
+#[cfg(target_arch = "x86_64")]
+fn waitpid_one(tid: libc::pid_t) -> Result<WaitOne, AuditError> {
     let mut status = 0;
     // SAFETY: valid status out-pointer for an owned tracee.
     let result = unsafe { libc::waitpid(tid, &mut status, libc::WNOHANG) };
     if result < 0 {
         let error = std::io::Error::last_os_error();
         if error.kind() == std::io::ErrorKind::Interrupted {
-            return Ok(None);
+            return Ok(WaitOne::None);
         }
         if error.raw_os_error() == Some(libc::ECHILD) {
-            return Err(AuditError::new(format!("tracer lost tid {tid}")));
+            return Ok(WaitOne::StaleNumber);
         }
         return Err(AuditError::new(format!("audit wait: {error}")));
     }
     if result == 0 {
-        return Ok(None);
+        return Ok(WaitOne::None);
     }
-    Ok(Some(status))
+    Ok(WaitOne::Status(status))
 }
 
 /// Reap-check one tid after a failed resume: true when it had exited.
@@ -820,20 +1014,58 @@ fn try_reap(
 /// (only death matters in the drain). The grace bound caps D-state
 /// hangs; survivors stay in the set for [`drained_err`] to name.
 /// R26: flags the main when it reaps it (or when waitpid proves it
-/// gone), so no stale PID is signalled.
+/// gone), so no stale PID is signalled. S31: finishes with the
+/// unknown-tracee sweep and returns its error-text suffix (empty
+/// when nothing was unknown).
 #[cfg(target_arch = "x86_64")]
 fn drain_tracked(
     tids: &mut HashMap<libc::pid_t, TidState>,
     main: libc::pid_t,
     main_reaped: &mut bool,
-) {
+) -> String {
     // R31: retirement starts here, not at the call sites: running
     // tids get the same fatal signal stopped ones do.
-    // SAFETY: signal owned tracees.
     for tid in tids.keys() {
+        // SAFETY: signal an owned tracee.
         unsafe { libc::kill(*tid, libc::SIGKILL) };
+        // S31: resume a consumed stop with fatal delivery. A
+        // ptrace-stopped tracee holds SIGKILL pending until resumed,
+        // and its already-consumed stop reports no new status, so
+        // the signal alone would spin the grace out and strand it.
+        // SAFETY: resume an owned tracee with a fatal signal; the
+        // error on a running tid is harmless and ignored.
+        unsafe {
+            libc::ptrace(
+                libc::PTRACE_CONT,
+                *tid,
+                0,
+                libc::SIGKILL as *mut libc::c_void,
+            );
+        }
     }
-    let end = Instant::now() + Duration::from_secs(10);
+    // S31: unknowns retire BEFORE the first reap pass: a dead
+    // leader reports nothing while an unknown sibling thread lives
+    // (waitpid on the group waits for the last thread), so reaping
+    // first would burn the whole grace. A second sweep/reap round
+    // catches births racing the first pass.
+    let first = reconcile_unknown_tracees(tids);
+    reap_tracked(tids, main, main_reaped, Duration::from_secs(10));
+    let second = reconcile_unknown_tracees(tids);
+    reap_tracked(tids, main, main_reaped, Duration::from_secs(2));
+    format!("{first}{second}")
+}
+
+/// Bounded reap pass over the tracked set (split from
+/// [`drain_tracked`] so the unknown sweep can unblock leaders
+/// between passes).
+#[cfg(target_arch = "x86_64")]
+fn reap_tracked(
+    tids: &mut HashMap<libc::pid_t, TidState>,
+    main: libc::pid_t,
+    main_reaped: &mut bool,
+    grace: Duration,
+) {
+    let end = Instant::now() + grace;
     while !tids.is_empty() && Instant::now() < end {
         let live: Vec<libc::pid_t> = tids.keys().copied().collect();
         let mut progress = false;
@@ -846,8 +1078,15 @@ fn drain_tracked(
                 if error.kind() == std::io::ErrorKind::Interrupted {
                     continue;
                 }
-                // Gone from our wait (ECHILD): no signal may ever
-                // target this number again.
+                // S32: only ECHILD proves the number freed (no signal
+                // may ever target it again). Any other failure — EPERM
+                // from a caller seccomp denial, EIO — is an
+                // observation failure, not a death: the tid stays in
+                // unresolved custody (no progress, so the grace bound
+                // below caps the retry) and `drained_err` names it.
+                if error.raw_os_error() != Some(libc::ECHILD) {
+                    continue;
+                }
                 tids.remove(&t);
                 if t == main {
                     *main_reaped = true;
@@ -872,7 +1111,10 @@ fn drain_tracked(
                     || event == libc::PTRACE_EVENT_FORK as i64
                     || event == libc::PTRACE_EVENT_VFORK as i64
                 {
-                    if let Some(new) = event_msg(t) {
+                    // Best-effort: a denied message here leaves the
+                    // newborn unknown, and the sweep below retires it
+                    // by tracer ownership instead of by number.
+                    if let Ok(new) = event_msg(t) {
                         let new = new as libc::pid_t;
                         tids.entry(new).or_default();
                         // SAFETY: signal an owned tracee.
@@ -881,12 +1123,7 @@ fn drain_tracked(
                 }
                 // SAFETY: a stopped owned tracee takes a fatal resume.
                 unsafe {
-                    libc::ptrace(
-                        libc::PTRACE_CONT,
-                        t,
-                        0,
-                        libc::SIGKILL as *mut libc::c_void,
-                    );
+                    libc::ptrace(libc::PTRACE_CONT, t, 0, libc::SIGKILL as *mut libc::c_void);
                     libc::kill(t, libc::SIGKILL);
                 }
             }
@@ -897,9 +1134,142 @@ fn drain_tracked(
     }
 }
 
-/// Read a ptrace event message (the newborn tid for clone/fork/vfork).
+/// S31: retire tracees this tracer owns but never registered (a
+/// denied GETEVENTMSG hides the newborn tid from the birth arm, and
+/// drain-time births race the kill). Selection is by tracer
+/// ownership (`TracerPid` equals this thread), never by a guessed
+/// number; DETACH-with-SIGKILL only acts on owned tracees, so a
+/// recycled pid belonging to a stranger gets ESRCH, not a signal.
+/// A re-read ownership proof precedes the plain-kill fallback for a
+/// tracee DETACH could not retire. Waits are specific-pid only:
+/// `waitpid(-1)` would steal other tests' children (F16). Tracked
+/// tids are excluded: drain survivors keep their own reporting, and
+/// only true unknowns retire here. Returns the error-text suffix
+/// (empty when nothing was unknown).
 #[cfg(target_arch = "x86_64")]
-fn event_msg(tid: libc::pid_t) -> Option<libc::c_ulong> {
+fn reconcile_unknown_tracees(tids: &HashMap<libc::pid_t, TidState>) -> String {
+    // SAFETY: pure TID query, no state touched.
+    let me = unsafe { libc::gettid() };
+    let owned = |status_path: &str| -> bool {
+        std::fs::read_to_string(status_path)
+            .ok()
+            .is_some_and(|text| {
+                text.lines().any(|line| {
+                    line.strip_prefix("TracerPid:")
+                        .is_some_and(|value| value.trim() == me.to_string())
+                })
+            })
+    };
+    // Both process entries and per-task entries: a missed CLONE
+    // birth strands a thread, whose TracerPid lives only under
+    // `/proc/<pid>/task/<tid>/status`.
+    let mut candidates: Vec<(libc::pid_t, String)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .and_then(|text| text.parse::<libc::pid_t>().ok())
+            else {
+                continue;
+            };
+            candidates.push((pid, format!("/proc/{pid}/status")));
+            if let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) {
+                for task in tasks.flatten() {
+                    if let Some(tid) = task
+                        .file_name()
+                        .to_str()
+                        .and_then(|text| text.parse::<libc::pid_t>().ok())
+                    {
+                        candidates.push((tid, format!("/proc/{pid}/task/{tid}/status")));
+                    }
+                }
+            }
+        }
+    }
+    let mut unknown: Vec<(libc::pid_t, String)> = Vec::new();
+    for (pid, status_path) in &candidates {
+        if *pid == me || tids.contains_key(pid) || unknown.iter().any(|(known, _)| known == pid) {
+            continue;
+        }
+        if owned(status_path) {
+            unknown.push((*pid, status_path.clone()));
+        }
+    }
+    if unknown.is_empty() {
+        return String::new();
+    }
+    for (pid, status_path) in &unknown {
+        // SAFETY: detach an owned tracee with a fatal delivery; a
+        // stranger's recycled number fails here without effect, as
+        // does an already-dead task (group SIGKILL beats the sweep
+        // to sibling threads).
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_DETACH,
+                *pid,
+                0,
+                libc::SIGKILL as *mut libc::c_void,
+            )
+        } == 0
+        {
+            continue;
+        }
+        if !owned(status_path) {
+            continue;
+        }
+        // Still ours and DETACH refused: resume any consumed stop
+        // with fatal delivery (a stopped tracee holds SIGKILL
+        // pending until resumed), then insist.
+        // SAFETY: resume/signal a re-proven owned tracee; the CONT
+        // error on a running task is harmless.
+        unsafe {
+            libc::ptrace(
+                libc::PTRACE_CONT,
+                *pid,
+                0,
+                libc::SIGKILL as *mut libc::c_void,
+            );
+            libc::kill(*pid, libc::SIGKILL);
+        }
+    }
+    let end = Instant::now() + Duration::from_secs(2);
+    let found = unknown.len();
+    let mut unreaped: Vec<(libc::pid_t, String)> = unknown;
+    while !unreaped.is_empty() && Instant::now() < end {
+        unreaped.retain(|(pid, status_path)| {
+            let mut status = 0;
+            // SAFETY: valid out-pointer; the pid is ours or gone.
+            let got = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
+            if got == *pid {
+                return false;
+            }
+            if got == 0 {
+                return true;
+            }
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                return true;
+            }
+            // A wait refusal settles only when the task is actually
+            // gone: ECHILD for a lingering `/proc` entry keeps
+            // waiting, and the bound names it honestly below.
+            std::fs::read_to_string(status_path).is_ok()
+        });
+        if !unreaped.is_empty() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    let mut unreaped: Vec<libc::pid_t> = unreaped.into_iter().map(|(pid, _)| pid).collect();
+    unreaped.sort_unstable();
+    format!("; unknown tracees: {found} found, unreaped: {unreaped:?}")
+}
+
+/// Read a ptrace event message (the newborn tid for clone/fork/vfork).
+/// S31: the failure propagates. Without the newborn tid the child is
+/// auto-attached yet untracked, and the known-tid poll can never see
+/// it; swallowing the error would strand it stopped and invisible.
+#[cfg(target_arch = "x86_64")]
+fn event_msg(tid: libc::pid_t) -> Result<libc::c_ulong, std::io::Error> {
     let mut msg: libc::c_ulong = 0;
     // SAFETY: valid message out-pointer for a stopped owned tracee.
     let result = unsafe {
@@ -911,9 +1281,9 @@ fn event_msg(tid: libc::pid_t) -> Option<libc::c_ulong> {
         )
     };
     if result == 0 {
-        Some(msg)
+        Ok(msg)
     } else {
-        None
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -947,8 +1317,13 @@ fn prune_exec_siblings(exec_tid: libc::pid_t, tids: &mut HashMap<libc::pid_t, Ti
     });
 }
 
+/// S05: register observation is fallible, and the failure must
+/// propagate: without the entry sample the exit stop cannot be
+/// attributed, and without the exit sample no result exists. `None`
+/// (via [`decode_enter`]) remains reserved for syscalls the ledger
+/// does not track.
 #[cfg(target_arch = "x86_64")]
-fn read_regs(pid: libc::pid_t) -> Option<libc::user_regs_struct> {
+fn read_regs(pid: libc::pid_t) -> Result<libc::user_regs_struct, std::io::Error> {
     let mut regs = std::mem::MaybeUninit::<libc::user_regs_struct>::zeroed();
     // SAFETY: valid regs out-pointer for a stopped owned child.
     let result = unsafe {
@@ -960,16 +1335,16 @@ fn read_regs(pid: libc::pid_t) -> Option<libc::user_regs_struct> {
         )
     };
     if result != 0 {
-        return None;
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: filled by successful GETREGS.
-    Some(unsafe { regs.assume_init() })
+    Ok(unsafe { regs.assume_init() })
 }
 
 #[cfg(target_arch = "x86_64")]
-fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
+fn syscall_enter(pid: libc::pid_t) -> Result<Option<Pending>, std::io::Error> {
     let regs = read_regs(pid)?;
-    decode_enter(pid, &regs)
+    Ok(decode_enter(pid, &regs))
 }
 
 /// Pure register decode behind [`syscall_enter`], split out so
@@ -998,20 +1373,25 @@ fn decode_enter(pid: libc::pid_t, regs: &libc::user_regs_struct) -> Option<Pendi
     }
     if nr == libc::SYS_mremap {
         // An mremap carries no fd: its object is whatever the old
-        // address maps, resolved authoritatively from maps. An
-        // unresolvable old address is unattributed (R28), exactly
-        // like an unreadable mmap fd.
-        let (dev, ino, path) = mapped_object(pid, regs.rdi)
-            .map(|(dev, ino, path)| (Some(dev), Some(ino), path))
-            .unwrap_or((None, None, None));
+        // address maps, resolved authoritatively from maps. S30: an
+        // anonymous old address preserves that classification (an
+        // anonymous remap is ordinary allocator activity, not an
+        // unattributable file mapping); only an unresolvable old
+        // address is unattributed (R28), exactly like an unreadable
+        // mmap fd.
+        let (anonymous, unattributed, dev, ino, path) = match mapping_class(pid, regs.rdi) {
+            MappingClass::Anonymous => (true, false, None, None, None),
+            MappingClass::File(dev, ino, path) => (false, false, Some(dev), Some(ino), path),
+            MappingClass::Unidentified | MappingClass::Absent => (false, true, None, None, None),
+        };
         // R46: x86-64 mremap is (old_addr=rdi, old_size=rsi,
         // new_size=rdx, flags=r10, new_addr=r8). Flags come from
         // r10; the new size rides separately, never as flag bits.
         return Some(Pending {
             nr,
             fd: -2,
-            anonymous: false,
-            unattributed: dev.is_none(),
+            anonymous,
+            unattributed,
             dev,
             ino,
             path,
@@ -1051,19 +1431,27 @@ fn decode_enter(pid: libc::pid_t, regs: &libc::user_regs_struct) -> Option<Pendi
 }
 
 #[cfg(target_arch = "x86_64")]
-fn syscall_exit(pid: libc::pid_t, call: Pending, config: &AuditConfig, report: &mut AuditReport) {
+fn syscall_exit(
+    pid: libc::pid_t,
+    call: Pending,
+    config: &AuditConfig,
+    report: &mut AuditReport,
+) -> Result<(), std::io::Error> {
     if report.mmaps.len() + report.munmaps.len() >= config.max_entries {
         report.truncated = true;
-        return;
+        return Ok(());
     }
-    let result = read_regs(pid).map(|regs| regs.rax as i64).unwrap_or(-1);
+    // S05: a denied exit sample is an incomplete audit, never a
+    // fabricated `result=-1` (which would record a successful mapping
+    // as failed).
+    let result = read_regs(pid).map(|regs| regs.rax as i64)?;
     if call.nr == libc::SYS_munmap {
         report.munmaps.push(MunmapEvent {
             addr: call.addr,
             len: call.len,
             result,
         });
-        return;
+        return Ok(());
     }
     // R29: a successful file-backed map attributes only when the
     // enter sample and the authoritative maps row at exit agree. A
@@ -1083,6 +1471,15 @@ fn syscall_exit(pid: libc::pid_t, call: Pending, config: &AuditConfig, report: &
             unattributed = true;
         }
     }
+    // S30: the R29 binding for an anonymous remap: a successful
+    // mremap of anonymous memory lands anonymous (the kernel unmaps
+    // any FIXED destination first). A missing or file-backed new
+    // address is incoherent and marks the success unattributed.
+    if call.anonymous && call.nr == libc::SYS_mremap && !(-4095..=-1).contains(&result) {
+        if mapping_class(pid, result as u64) != MappingClass::Anonymous {
+            unattributed = true;
+        }
+    }
     report.mmaps.push(MmapEvent {
         nr: call.nr,
         fd: call.fd,
@@ -1098,6 +1495,7 @@ fn syscall_exit(pid: libc::pid_t, call: Pending, config: &AuditConfig, report: &
         result,
         unattributed,
     });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1390,7 +1788,11 @@ mod tests {
         tids.insert(main, TidState::default());
         tids.insert(other, TidState::default());
         let mut main_reaped = false;
-        drain_tracked(&mut tids, main, &mut main_reaped);
+        let unknowns = drain_tracked(&mut tids, main, &mut main_reaped);
+        assert!(
+            unknowns.is_empty(),
+            "drain swept unexpected unknowns: {unknowns}"
+        );
         assert!(
             tids.is_empty(),
             "drain left {:?}",

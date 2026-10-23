@@ -9,6 +9,10 @@
 //!   scopebase-tt04-audit-subject fork-exec-survivor --signal PATH
 //!   scopebase-tt04-audit-subject nondumpable-map --target PATH --report PATH
 //!   scopebase-tt04-audit-subject trap-ack --report PATH
+//!   scopebase-tt04-audit-subject mremap-anon --report PATH
+//!   scopebase-tt04-audit-subject mremap-file --target PATH --report PATH
+//!   scopebase-tt04-audit-subject nonleader-exec --target PATH --report PATH
+//!   (self-execs post-exec-map --target PATH --report PATH on a worker)
 //!
 //! Exit 0 after writing `verdict=...` to the report for every completed
 //! observation (any production outcome, including MappingFailure,
@@ -33,6 +37,20 @@
 //! R30: `trap-ack` installs a SIGTRAP handler that writes `trapped`
 //! to the report, raises SIGTRAP once, and exits 0: a tracer that
 //! swallows genuine traps leaves the report empty.
+//!
+//! S30: `mremap-anon` grows one anonymous page to two with
+//! MREMAP_MAYMOVE (ordinary allocator activity the audit must
+//! classify anonymous, never unattributed); `mremap-file` grows one
+//! target-backed page to two (the file identity must survive the
+//! remap). Both write `mremapped=ok` and exit 0.
+//!
+//! S06: `nonleader-exec` spawns a worker that execs this same binary
+//! as `post-exec-map`, which maps one target page transiently and
+//! writes `mapped=ok`. The main thread is killed by the exec, so a
+//! tracer that keeps the old leader's syscall phase inverts every
+//! post-exec classification. `leader-exec` is the same map after a
+//! plain leader exec (no renumber): the self-synchronization must
+//! hold on both paths.
 use scopebase_linux::{
     control::OperationControl,
     file::{HeldFile, ProcFdResolver, SymlinkPolicy},
@@ -55,9 +73,15 @@ fn usage() -> ! {
         "usage: scopebase-tt04-audit-subject observe --target PATH --pid PID \
          --range START-END [--plant-violation] --report PATH | \
          thread-plant --target PATH --report PATH | \
-         fork-exec-survivor --signal PATH | \
+         fork-exec-survivor --signal PATH --marker PATH | \
+         exec-marker --file PATH | \
          nondumpable-map --target PATH --report PATH | \
-         trap-ack --report PATH",
+         trap-ack --report PATH | \
+         mremap-anon --report PATH | \
+         mremap-file --target PATH --report PATH | \
+         nonleader-exec --target PATH --report PATH | \
+         leader-exec --target PATH --report PATH | \
+         post-exec-map --target PATH --report PATH",
     );
     std::process::exit(2);
 }
@@ -121,15 +145,60 @@ fn thread_plant(target: &str) -> i32 {
     worker.join().unwrap_or(13)
 }
 
-/// R25: fork a signalling child, then exec `true` in the parent.
-/// The child (syscalls only after fork) naps 200ms, writes `hi` to
-/// the signal file, and exits 0. Diverges: the parent image is
-/// replaced, the child `_exit`s; exit 2 on setup failure.
-fn fork_exec_survivor(signal: &str) -> ! {
+/// S47: the post-exec leg of the survivor rendezvous. Create the
+/// marker file and exit 0. The marker proves the tracer processed
+/// the parent's exec event: a ptraced exec stops the tracee, so no
+/// post-exec byte runs before the tracer resumes it. Codes mirror
+/// `thread_plant` (14 NUL, 10 open, 11 write, 12 close).
+fn exec_marker(file: &str) -> i32 {
+    let path = match std::ffi::CString::new(file) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    // SAFETY: NUL-terminated admitted path; all results checked.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+            0o644,
+        );
+        if fd < 0 {
+            return 10;
+        }
+        let msg = b"exec\n";
+        if libc::write(fd, msg.as_ptr() as *const _, msg.len()) < 0 {
+            libc::close(fd);
+            return 11;
+        }
+        if libc::close(fd) != 0 {
+            return 12;
+        }
+    }
+    0
+}
+
+/// R25/S47: fork a signalling child, then exec the marker leg in the
+/// parent. The child (syscalls only after fork) polls for the
+/// marker — which exists only after the tracer processed the
+/// parent's exec — then stops itself, writes `hi` to the signal
+/// file once resumed, and exits 0. The stop is the discrimination:
+/// a tracer that pruned the child at exec never resumes it, so the
+/// signal never lands; a tracer that tracks it resumes the
+/// group-stop and the write follows. Bounded: 5ms polls for at most
+/// 30s, then `_exit(2)`. Diverges: the parent image is replaced,
+/// the child `_exit`s; exit 2 on setup failure.
+fn fork_exec_survivor(signal: &str, marker: &str) -> ! {
     let path = match std::ffi::CString::new(signal) {
         Ok(path) => path,
         Err(_) => std::process::exit(2),
     };
+    let gate = match std::ffi::CString::new(marker) {
+        Ok(path) => path,
+        Err(_) => std::process::exit(2),
+    };
+    // S47: re-exec through the kernel's own link, so no argv or
+    // current-dir lookup can divert the post-exec leg.
+    let exe = c"/proc/self/exe";
     // SAFETY: single-threaded here; the child runs syscalls only.
     let forked = unsafe { libc::fork() };
     if forked < 0 {
@@ -137,13 +206,30 @@ fn fork_exec_survivor(signal: &str) -> ! {
         std::process::exit(2);
     }
     if forked == 0 {
-        // SAFETY: raw syscalls on stack memory only, then _exit.
+        // SAFETY: raw syscalls on stack memory only, then _exit. No
+        // allocation, no locks: every path below is open, nanosleep,
+        // raise (getpid + kill), write, close, _exit.
         unsafe {
-            let nap = libc::timespec {
+            let tick = libc::timespec {
                 tv_sec: 0,
-                tv_nsec: 200_000_000,
+                tv_nsec: 5_000_000,
             };
-            libc::nanosleep(&nap, std::ptr::null_mut());
+            let mut waited = 0;
+            loop {
+                let probe = libc::open(gate.as_ptr(), libc::O_RDONLY);
+                if probe >= 0 {
+                    libc::close(probe);
+                    break;
+                }
+                waited += 1;
+                if waited >= 6_000 {
+                    libc::_exit(2);
+                }
+                libc::nanosleep(&tick, std::ptr::null_mut());
+            }
+            // The marker proves the tracer processed the exec (and
+            // any pruning ran): stop until the tracer resumes us.
+            libc::raise(libc::SIGSTOP);
             let fd = libc::open(
                 path.as_ptr(),
                 libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
@@ -157,11 +243,17 @@ fn fork_exec_survivor(signal: &str) -> ! {
             libc::_exit(0);
         }
     }
-    // Parent: replace the image at once; the child is mid-nap.
-    let argv0 = c"true".as_ptr();
+    // Parent: replace the image with the marker leg at once; the
+    // child is polling for the file this image writes.
+    let argv0 = exe.as_ptr();
+    let mode = c"exec-marker".as_ptr();
+    let flag = c"--file".as_ptr();
     // SAFETY: NUL-terminated argv; returns only on failure.
     unsafe {
-        libc::execvp(c"true".as_ptr(), [argv0, std::ptr::null()].as_ptr());
+        libc::execv(
+            exe.as_ptr(),
+            [argv0, mode, flag, gate.as_ptr(), std::ptr::null()].as_ptr(),
+        );
     }
     cli::err_line("audit subject setup failed at exec");
     std::process::exit(2);
@@ -256,6 +348,194 @@ fn trap_ack(report: &str) -> i32 {
     0
 }
 
+/// S30: grow one anonymous page to two. Exit codes mirror
+/// `thread_plant` (10 mmap, 11 mremap, 12 munmap, 13 content lost).
+fn mremap_anon() -> i32 {
+    // SAFETY: raw syscalls with checked results.
+    unsafe {
+        let addr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if addr == libc::MAP_FAILED {
+            return 10;
+        }
+        (addr as *mut u8).write_volatile(0xA5);
+        let grown = libc::mremap(addr, 4096, 8192, libc::MREMAP_MAYMOVE);
+        if grown == libc::MAP_FAILED {
+            libc::munmap(addr, 4096);
+            return 11;
+        }
+        if (grown as *const u8).read_volatile() != 0xA5 {
+            libc::munmap(grown, 8192);
+            return 13;
+        }
+        if libc::munmap(grown, 8192) != 0 {
+            return 12;
+        }
+    }
+    0
+}
+
+/// S30: grow one target-backed page to two (the target must hold at
+/// least two pages). Exit codes: 14 NUL, 10 open, 11 mmap, 12
+/// mremap, 13 munmap.
+fn mremap_file(target: &str) -> i32 {
+    let path = match std::ffi::CString::new(target) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    // SAFETY: NUL-terminated admitted path; all results checked.
+    unsafe {
+        let fd = libc::open(path.as_ptr(), libc::O_RDONLY);
+        if fd < 0 {
+            return 10;
+        }
+        let addr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if addr == libc::MAP_FAILED {
+            libc::close(fd);
+            return 11;
+        }
+        let _ = (addr as *const u8).read_volatile();
+        let grown = libc::mremap(addr, 4096, 8192, libc::MREMAP_MAYMOVE);
+        if grown == libc::MAP_FAILED {
+            libc::munmap(addr, 4096);
+            libc::close(fd);
+            return 12;
+        }
+        let _ = (grown as *const u8).add(4096).read_volatile();
+        if libc::munmap(grown, 8192) != 0 {
+            libc::close(fd);
+            return 13;
+        }
+        libc::close(fd);
+    }
+    0
+}
+
+/// S06: map one target page transiently after a non-leader exec.
+/// Exit codes mirror `thread_plant` (14 NUL, 10/11/12 map stages).
+fn post_exec_map(target: &str) -> i32 {
+    let path = match std::ffi::CString::new(target) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    // SAFETY: NUL-terminated admitted path; all results checked.
+    unsafe {
+        let fd = libc::open(path.as_ptr(), libc::O_RDONLY);
+        if fd < 0 {
+            return 10;
+        }
+        let addr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if addr == libc::MAP_FAILED {
+            libc::close(fd);
+            return 11;
+        }
+        let _ = (addr as *const u8).read_volatile();
+        if libc::munmap(addr, 4096) != 0 {
+            libc::close(fd);
+            return 12;
+        }
+        libc::close(fd);
+    }
+    0
+}
+
+/// S06: spawn a worker that execs this binary as `post-exec-map`.
+/// Diverges: the exec kills the calling thread, so returning means
+/// setup failure (exit 2). Exit codes: 14 NUL, 15 spawn refused,
+/// 18 exec refused, 19 self-exe resolution.
+fn nonleader_exec(target: &str, report: &str) -> ! {
+    use std::os::unix::ffi::OsStrExt as _;
+    let target = target.to_owned();
+    let report = report.to_owned();
+    let exe = match std::env::current_exe()
+        .ok()
+        .and_then(|path| std::ffi::CString::new(path.as_os_str().as_bytes()).ok())
+    {
+        Some(exe) => exe,
+        None => std::process::exit(2),
+    };
+    let (failed_tx, failed_rx) = std::sync::mpsc::channel::<()>();
+    let spawned = std::thread::Builder::new()
+        .name("exec-worker".to_string())
+        .spawn(move || {
+            let target = std::ffi::CString::new(target).unwrap_or_else(|_| std::process::exit(2));
+            let report = std::ffi::CString::new(report).unwrap_or_else(|_| std::process::exit(2));
+            let argv = [
+                exe.as_ptr(),
+                c"post-exec-map".as_ptr(),
+                c"--target".as_ptr(),
+                target.as_ptr(),
+                c"--report".as_ptr(),
+                report.as_ptr(),
+                std::ptr::null(),
+            ];
+            // SAFETY: NUL-terminated argv; returns only on failure.
+            unsafe {
+                libc::execvp(exe.as_ptr(), argv.as_ptr());
+            }
+            let _ = failed_tx.send(());
+        });
+    if spawned.is_err() {
+        std::process::exit(2);
+    }
+    // The exec kills this thread; waking means the worker reported
+    // failure (or never exec'd at all).
+    let _ = failed_rx.recv_timeout(std::time::Duration::from_secs(10));
+    cli::err_line("audit subject setup failed at nonleader exec");
+    std::process::exit(2);
+}
+
+/// S06: exec this binary as `post-exec-map` on the leader.
+/// Diverges on success; exit 2 when the self-exe path or the exec
+/// itself refuses.
+fn leader_exec(target: &str, report: &str) -> ! {
+    use std::os::unix::ffi::OsStrExt as _;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|path| std::ffi::CString::new(path.as_os_str().as_bytes()).ok());
+    let target = std::ffi::CString::new(target).ok();
+    let report = std::ffi::CString::new(report).ok();
+    let (Some(exe), Some(target), Some(report)) = (exe, target, report) else {
+        cli::err_line("audit subject setup failed at leader exec argv");
+        std::process::exit(2);
+    };
+    let argv = [
+        exe.as_ptr(),
+        c"post-exec-map".as_ptr(),
+        c"--target".as_ptr(),
+        target.as_ptr(),
+        c"--report".as_ptr(),
+        report.as_ptr(),
+        std::ptr::null(),
+    ];
+    // SAFETY: NUL-terminated argv; returns only on failure.
+    unsafe {
+        libc::execvp(exe.as_ptr(), argv.as_ptr());
+    }
+    cli::err_line("audit subject setup failed at leader exec");
+    std::process::exit(2);
+}
+
 fn main() {
     // R03: non-UTF-8 argv refuses with usage, never panics in args().
     let argv = match cli::argv_strings() {
@@ -280,7 +560,13 @@ fn main() {
     }
     if argv[1] == "fork-exec-survivor" {
         let signal = flag_value(&argv, "--signal").unwrap_or_else(|| usage());
-        fork_exec_survivor(&signal);
+        let marker = flag_value(&argv, "--marker").unwrap_or_else(|| usage());
+        fork_exec_survivor(&signal, &marker);
+    }
+    if argv[1] == "exec-marker" {
+        let file = flag_value(&argv, "--file").unwrap_or_else(|| usage());
+        let code = exec_marker(&file);
+        std::process::exit(if code == 0 { 0 } else { 2 });
     }
     if argv[1] == "nondumpable-map" {
         let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
@@ -295,6 +581,45 @@ fn main() {
     if argv[1] == "trap-ack" {
         let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
         let code = trap_ack(&report);
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] == "mremap-anon" {
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = mremap_anon();
+        std::fs::write(&report, format!("mremapped={code}\n")).unwrap_or_else(|_| {
+            cli::err_line("audit subject setup failed at report");
+            std::process::exit(2);
+        });
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] == "mremap-file" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = mremap_file(&target);
+        std::fs::write(&report, format!("mremapped={code}\n")).unwrap_or_else(|_| {
+            cli::err_line("audit subject setup failed at report");
+            std::process::exit(2);
+        });
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] == "nonleader-exec" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        nonleader_exec(&target, &report);
+    }
+    if argv[1] == "leader-exec" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        leader_exec(&target, &report);
+    }
+    if argv[1] == "post-exec-map" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = post_exec_map(&target);
+        std::fs::write(&report, format!("mapped={code}\n")).unwrap_or_else(|_| {
+            cli::err_line("audit subject setup failed at report");
+            std::process::exit(2);
+        });
         std::process::exit(if code == 0 { 0 } else { 2 });
     }
     if argv[1] != "observe" {

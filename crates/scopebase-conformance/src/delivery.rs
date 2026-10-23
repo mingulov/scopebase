@@ -15,14 +15,14 @@ use crate::receipt;
 use scopebase_testkit::{
     ArtifactMeasurer, ArtifactRole, AssertionCheck, AssertionCheckValues, AssertionVerdict,
     AssertionVerdictValues, BindingProvenance, CapabilityEvidence, CapabilityEvidenceValues,
-    CapabilityState, CaseCatalog, CaseError, CaseErrorCategory, CaseErrorValues,
-    CaseInvocation, CaseOracle, CaseOutcome, CaseSpec, CatalogLimits, CheckStatus, ConformanceAdapter,
+    CapabilityState, CaseCatalog, CaseError, CaseErrorCategory, CaseErrorValues, CaseInvocation,
+    CaseOracle, CaseOutcome, CaseSpec, CatalogLimits, CheckStatus, ConformanceAdapter,
     ConsumerBinding, ConsumerBindingValues, Digest256, EffectBatch, EvidenceTier, ExpectedEvidence,
-    FixtureAccess, HarnessValidity, Label, Observation, ObservationValues,
-    OpenedVector, OracleBinding, OracleBindingValues, ProfileId, ProfilePlan, Qualification,
-    RefusalCause, RefusalEvidence, RefusalEvidenceValues, RetireRequest, RetirementReport,
-    RetirementReportValues, RunContract, RunLimits, SubjectBinding,
-    SubjectBindingValues, VectorBundle, VectorFixtureSession, VectorManifest,
+    FixtureAccess, HarnessValidity, Label, Observation, ObservationValues, OpenedVector,
+    OracleBinding, OracleBindingValues, ProfileId, ProfilePlan, Qualification, RefusalCause,
+    RefusalEvidence, RefusalEvidenceValues, RetireRequest, RetirementReport,
+    RetirementReportValues, RunContract, RunLimits, SubjectBinding, SubjectBindingValues,
+    VectorBundle, VectorFixtureSession, VectorManifest,
 };
 use std::ffi::CString;
 use std::os::fd::{AsFd, OwnedFd};
@@ -105,8 +105,9 @@ impl DeliveryAdapter {
     pub fn new() -> Result<Self, OperatorError> {
         let limits = RunLimits::default();
         let source = Digest256::of_bytes(ADAPTER_SPEC.as_bytes());
-        let build_inputs =
-            Digest256::of_bytes(format!("tt07-delivery-build-inputs-v1:{}", source.as_str()).as_bytes());
+        let build_inputs = Digest256::of_bytes(
+            format!("tt07-delivery-build-inputs-v1:{}", source.as_str()).as_bytes(),
+        );
         let exe = std::env::current_exe().map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::MissingInput,
@@ -414,6 +415,33 @@ impl DeliveryOracle {
             _ => false,
         }
     }
+
+    /// S40: a step list is valid only as a NON-EMPTY array of exact
+    /// `{"step_id": <non-empty string>, "value": <string>}` records —
+    /// the shape `DeliveryAdapter::execute` produces. Missing, null,
+    /// scalar, empty, or malformed step fields fail on EITHER side,
+    /// so malformed shapes can never pass by mutual equality
+    /// (`None == None`, equal scalars, identical malformed arrays),
+    /// and a pass always proves positive coverage: at least one
+    /// valid step compared equal.
+    fn valid_steps(steps: Option<&serde_json::Value>) -> Option<&Vec<serde_json::Value>> {
+        let steps = steps?.as_array()?;
+        if steps.is_empty() {
+            return None;
+        }
+        for step in steps {
+            let record = step.as_object()?;
+            if record.len() != 2 {
+                return None;
+            }
+            match record.get("step_id").and_then(|id| id.as_str()) {
+                Some(id) if !id.is_empty() => {}
+                _ => return None,
+            }
+            record.get("value").and_then(|v| v.as_str())?;
+        }
+        Some(steps)
+    }
 }
 
 impl DeliveryOracle {
@@ -474,7 +502,9 @@ impl CaseOracle for DeliveryOracle {
         let pass = actual.as_ref().is_some_and(|a| {
             a.get("schema_version") == Some(&serde_json::Value::from(1u64))
                 && expected.get("schema_version") == Some(&serde_json::Value::from(1u64))
-                && a.get("steps") == expected.get("steps")
+                && Self::valid_steps(expected.get("steps")).is_some_and(|want| {
+                    Self::valid_steps(a.get("steps")).is_some_and(|got| got == want)
+                })
                 && Self::kinds_pair(
                     expected.get("kind").and_then(|k| k.as_str()),
                     a.get("kind").and_then(|k| k.as_str()),
@@ -556,12 +586,190 @@ pub struct RunOutcome {
     pub receipt_path: PathBuf,
 }
 
+/// S42: artifacts of the pre-effect run-input preflight.
+///
+/// Everything pure — ledger-template admission and rendering,
+/// contract assembly and bound-contract loading, bundle-manifest
+/// assembly and loading — is validated BEFORE the output dir is
+/// acquired, so malformed template/contract inputs fail with no
+/// run directory at all. Post-acquire failures (staging I/O, the
+/// engine, the oracle) are covered by the creating-run manifest
+/// written first thing after acquisition, which cleanup already
+/// accepts (schema + run id): every failed run is either absent
+/// or cleanable, never stranded.
+struct PreflightArtifacts {
+    /// Validated (file id, staged name, run-bound bytes) per ledger file.
+    rendered: Vec<(String, CString, Vec<u8>)>,
+    /// Assembled contract bytes (staged post-acquire).
+    contract_bytes: Vec<u8>,
+    /// Loaded bound contract.
+    bound: RunContract,
+    /// Assembled bundle-manifest bytes (staged post-acquire).
+    manifest_bytes: Vec<u8>,
+    /// Loaded vector manifest.
+    bundle_manifest: VectorManifest,
+}
+
+/// Validate and render every pure run input before output acquisition.
+///
+/// No filesystem effect: reads go through the verified closure and
+/// the in-memory template only. Any error here returns before the
+/// output dir exists, so there is nothing to clean up.
+#[allow(clippy::too_many_arguments)]
+fn preflight_run_inputs(
+    catalog: &CaseCatalog,
+    plan: &ProfilePlan,
+    closure: &closure::VerifiedClosure,
+    template: &serde_json::Value,
+    adapter: &dyn ConformanceAdapter,
+    oracle: &dyn CaseOracle,
+    run_id: &str,
+) -> Result<PreflightArtifacts, OperatorError> {
+    // Regenerate run-bound ledger vectors (rendered in memory; the
+    // fixture root itself is never written and staging happens later).
+    let layout = template.get("vector_layout").cloned().unwrap_or_default();
+    let ledger_templates = template
+        .get("ledger_templates")
+        .cloned()
+        .unwrap_or_default();
+    let mut generated: std::collections::BTreeMap<String, (u64, String)> =
+        std::collections::BTreeMap::new();
+    let mut rendered: Vec<(String, CString, Vec<u8>)> = Vec::new();
+    for (file_id, path_value) in ledger_templates.as_object().cloned().unwrap_or_default() {
+        admit_ledger_file_id(&file_id)?;
+        let rel = path_value.as_str().ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger template path is not a string: {file_id}"),
+            )
+        })?;
+        let raw = closure.read(rel)?;
+        let text = std::str::from_utf8(&raw).map_err(|_| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger template is not UTF-8: {rel}"),
+            )
+        })?;
+        if !text.contains("@RUN_ID@") {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger template lacks a run-id slot: {rel}"),
+            ));
+        }
+        let bytes = text.replace("@RUN_ID@", run_id).into_bytes();
+        let staged_name = CString::new(format!("{file_id}.json")).map_err(|_| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger file id is not a file name: {file_id:?}"),
+            )
+        })?;
+        generated.insert(
+            file_id.clone(),
+            (bytes.len() as u64, Digest256::of_bytes(&bytes).as_str()),
+        );
+        rendered.push((file_id, staged_name, bytes));
+    }
+
+    // Assemble the bound contract from the template plus measured values.
+    let mut contract = template.clone();
+    // RB4: the profile pin above already proves the template is an
+    // object, but the proof is implicit and far away; refuse loudly
+    // instead of unwrapping on template-file input.
+    let object = contract.as_object_mut().ok_or_else(|| {
+        OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            "contract template is not an object",
+        )
+    })?;
+    for key in [
+        "profile",
+        "expected_coordinates",
+        "vector_layout",
+        "ledger_templates",
+    ] {
+        object.remove(key);
+    }
+    contract["run_id"] = run_id.to_string().into();
+    contract["catalog_sha256"] = catalog.source_sha256().as_str().into();
+    contract["catalog_revision"] = catalog.revision().into();
+    contract["selection"] = selection_value(plan);
+    contract["expected_subject"] = serde_json::to_value(adapter.subject()).unwrap();
+    contract["expected_oracle"] = serde_json::to_value(oracle.identity()).unwrap();
+    for artifact in contract
+        .get_mut("artifacts")
+        .and_then(|a| a.as_array_mut())
+        .ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                "contract template lacks artifacts",
+            )
+        })?
+    {
+        let id = artifact.get("id").and_then(|i| i.as_str()).unwrap_or("");
+        if let Some((length, sha)) = generated.get(id) {
+            artifact["length"] = length.to_string().into();
+            artifact["sha256"] = sha.clone().into();
+        }
+    }
+    let contract_bytes = serde_json::to_vec(&contract).unwrap();
+    let bound = RunContract::load(catalog, plan, &contract_bytes, RunLimits::default())
+        .map_err(|e| engine_error(format!("bound contract rejected: {e}")))?;
+
+    // Assemble the vector manifest from the bound contract plus the layout.
+    let manifest_value = bundle_manifest(&bound, &layout)?;
+    let manifest_bytes = serde_json::to_vec(&manifest_value).unwrap();
+    let bundle_manifest = VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
+        .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
+
+    Ok(PreflightArtifacts {
+        rendered,
+        contract_bytes,
+        bound,
+        manifest_bytes,
+        bundle_manifest,
+    })
+}
+
 /// Execute one profile through the real engine with a verified closure.
 ///
 /// Refusals (missing input, broken package, subject mismatch, unbound
 /// profile) return before any output is written.
-#[allow(clippy::too_many_lines)]
 pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError> {
+    run_delivery_inner(request, None)
+}
+
+/// S36: phases of the test-only substitution hook.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryHookPhase {
+    /// After one staged ledger write, before its descriptor is
+    /// retained — the exact write-to-hold window.
+    AfterStageWrite,
+    /// After all staging writes, before any staged or closure
+    /// vector is opened.
+    AfterStaging,
+}
+
+/// S36: test-only entry point with a substitution hook.
+///
+/// The hook fires per staged write ([`DeliveryHookPhase::AfterStageWrite`])
+/// and once after all staging ([`DeliveryHookPhase::AfterStaging`]) —
+/// exactly the windows the FIFO-substitution controls plant in.
+/// Production callers use [`run_delivery`]; the hook exists so the
+/// interleaving is forced, not raced.
+#[doc(hidden)]
+pub fn run_delivery_with_hook(
+    request: RunRequest<'_>,
+    hook: Option<&dyn Fn(DeliveryHookPhase)>,
+) -> Result<RunOutcome, OperatorError> {
+    run_delivery_inner(request, hook)
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_delivery_inner(
+    request: RunRequest<'_>,
+    hook: Option<&dyn Fn(DeliveryHookPhase)>,
+) -> Result<RunOutcome, OperatorError> {
     check_mapping_policy(&request.mapping_policy)?;
     // R35: an empty output path previously fell through the old
     // `read_dir` check (`NotFound` admitted) and wrote
@@ -574,15 +782,19 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
             "output dir must name a directory",
         ));
     }
-    let catalog_bytes = std::fs::read(&request.catalog_path).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!(
-                "cannot read catalog {}: {e}",
-                request.catalog_path.display()
-            ),
-        )
-    })?;
+    // S39: the catalog admits through the bounded reader: an
+    // oversized or non-regular catalog refuses here instead of
+    // inflating or hanging the run before parser admission.
+    let catalog_bytes = closure::read_bounded(&request.catalog_path, closure::MAX_CATALOG_BYTES)
+        .map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::MissingInput,
+                format!(
+                    "cannot read catalog {}: {e}",
+                    request.catalog_path.display()
+                ),
+            )
+        })?;
     let catalog = CaseCatalog::load(&catalog_bytes, CatalogLimits::default()).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
@@ -619,12 +831,15 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     // contract (hashed into the receipt) is derived from them.
     let template_bytes = match &request.template_path {
         None => closure.read(TEMPLATE_FILE)?,
-        Some(path) => std::fs::read(path).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!("cannot read contract template {}: {e}", path.display()),
-            )
-        })?,
+        // S39: an explicit override admits through the bounded reader.
+        // (Full path: `closure` here names the verified closure value.)
+        Some(path) => crate::closure::read_bounded(path, crate::closure::MAX_TEMPLATE_BYTES)
+            .map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!("cannot read contract template {}: {e}", path.display()),
+                )
+            })?,
     };
     let template: serde_json::Value = serde_json::from_slice(&template_bytes).map_err(|e| {
         OperatorError::new(
@@ -666,6 +881,18 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     .as_str()[..32]
         .to_string();
 
+    // S42: pre-effect preflight — every pure validation above the
+    // acquisition, so malformed inputs fail with no run directory.
+    let pre = preflight_run_inputs(
+        &catalog,
+        &plan,
+        &closure,
+        &template,
+        &*request.adapter,
+        request.oracle,
+        &run_id,
+    )?;
+
     // R36: acquire fresh run ownership exclusively (exactly one of
     // two concurrent runs wins) and hold it: every write below is
     // descriptor-relative to the acquired dir, never path-resolved.
@@ -699,149 +926,97 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
         })
     })?;
 
-    // Regenerate run-bound ledger vectors under the writable output dir; the
-    // fixture root itself is never written.
-    let layout = template.get("vector_layout").cloned().unwrap_or_default();
-    let ledger_templates = template
-        .get("ledger_templates")
-        .cloned()
-        .unwrap_or_default();
-    let mut generated: std::collections::BTreeMap<String, (u64, String)> =
-        std::collections::BTreeMap::new();
-    // R36: staged ledger files are held open from creation: the
-    // bundle read below consumes these descriptors, never a path.
+    // S42: the creating-run manifest is the first post-acquire
+    // effect, before any fallible staging write: a run that fails
+    // later still owns a directory cleanup accepts (schema + run
+    // id), so the failure is always retriable after cleanup. The
+    // final manifest below overwrites it on success.
+    let creating = serde_json::json!({
+        "schema": "operator-run-manifest-v1",
+        "run_id": run_id,
+        "profile": request.profile,
+        "operator": format!("{} {}", ADAPTER_PACKAGE, env!("CARGO_PKG_VERSION")),
+        "mapping_policy": request.mapping_policy,
+        "state": "creating",
+    });
+    write_sealed(
+        acquired.fd.as_fd(),
+        c"run-manifest.json",
+        &serde_json::to_vec_pretty(&creating).unwrap(),
+    )
+    .map_err(|e| engine_error(format!("cannot write creating manifest: {e}")))?;
+
+    // Stage the preflighted ledger vectors: validated and rendered
+    // before acquisition, only the writes happen here.
+    // S36: staged ledger files are held open from creation — the
+    // creation descriptor itself is retained and rewound, never
+    // reopened by name — so a post-write substitution at the staged
+    // name (including a writer-less FIFO) cannot block or divert
+    // the bundle read below.
     let mut staged: std::collections::BTreeMap<String, std::fs::File> =
         std::collections::BTreeMap::new();
-    for (file_id, path_value) in ledger_templates.as_object().cloned().unwrap_or_default() {
-        admit_ledger_file_id(&file_id)?;
-        let rel = path_value.as_str().ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("ledger template path is not a string: {file_id}"),
-            )
-        })?;
-        let raw = closure.read(rel)?;
-        let text = std::str::from_utf8(&raw).map_err(|_| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("ledger template is not UTF-8: {rel}"),
-            )
-        })?;
-        if !text.contains("@RUN_ID@") {
-            return Err(OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("ledger template lacks a run-id slot: {rel}"),
-            ));
+    for (file_id, staged_name, bytes) in pre.rendered {
+        let created = write_excl_readable(staging_fd.as_fd(), staged_name.as_c_str(), &bytes)
+            .map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("cannot stage ledger {file_id}: {e}"),
+                )
+            })?;
+        // S36: substitution-hook window — the bytes are written,
+        // the descriptor not yet retained.
+        if let Some(hook) = hook {
+            hook(DeliveryHookPhase::AfterStageWrite);
         }
-        let bytes = text.replace("@RUN_ID@", &run_id).into_bytes();
-        let staged_name = CString::new(format!("{file_id}.json")).map_err(|_| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("ledger file id is not a file name: {file_id:?}"),
-            )
-        })?;
-        write_excl(staging_fd.as_fd(), staged_name.as_c_str(), &bytes).map_err(|e| {
+        let mut held_file = std::fs::File::from(created);
+        std::io::Seek::seek(&mut held_file, std::io::SeekFrom::Start(0)).map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::Engine,
-                format!("cannot stage ledger {file_id}: {e}"),
+                format!("cannot rewind staged ledger {file_id}: {e}"),
             )
         })?;
-        let staged_fd = rustix::fs::openat(
-            &staging_fd,
-            staged_name.as_c_str(),
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::Engine,
-                format!("cannot hold staged ledger {file_id}: {e}"),
-            )
-        })?;
-        staged.insert(file_id.clone(), std::fs::File::from(staged_fd));
-        generated.insert(
-            file_id,
-            (bytes.len() as u64, Digest256::of_bytes(&bytes).as_str()),
-        );
+        staged.insert(file_id, held_file);
     }
 
-    // Assemble the bound contract from the template plus measured values.
-    let mut contract = template.clone();
-    // RB4: the profile pin above already proves the template is an
-    // object, but the proof is implicit and far away; refuse loudly
-    // instead of unwrapping on template-file input.
-    let object = contract.as_object_mut().ok_or_else(|| {
-        OperatorError::new(
-            OperatorErrorKind::BrokenPackage,
-            "contract template is not an object",
-        )
-    })?;
-    for key in [
-        "profile",
-        "expected_coordinates",
-        "vector_layout",
-        "ledger_templates",
-    ] {
-        object.remove(key);
-    }
-    contract["run_id"] = run_id.clone().into();
-    contract["catalog_sha256"] = catalog.source_sha256().as_str().into();
-    contract["catalog_revision"] = catalog.revision().into();
-    contract["selection"] = selection_value(&plan);
-    contract["expected_subject"] = serde_json::to_value(request.adapter.subject()).unwrap();
-    contract["expected_oracle"] = serde_json::to_value(request.oracle.identity()).unwrap();
-    for artifact in contract
-        .get_mut("artifacts")
-        .and_then(|a| a.as_array_mut())
-        .ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                "contract template lacks artifacts",
-            )
-        })?
-    {
-        let id = artifact.get("id").and_then(|i| i.as_str()).unwrap_or("");
-        if let Some((length, sha)) = generated.get(id) {
-            artifact["length"] = length.to_string().into();
-            artifact["sha256"] = sha.clone().into();
-        }
-    }
-    let contract_bytes = serde_json::to_vec(&contract).unwrap();
-    write_excl(staging_fd.as_fd(), c"contract.json", &contract_bytes).map_err(|e| {
+    // Stage the preflighted contract (bound before acquisition).
+    write_excl(staging_fd.as_fd(), c"contract.json", &pre.contract_bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::Engine,
             format!("cannot stage contract: {e}"),
         )
     })?;
-    let bound = RunContract::load(&catalog, &plan, &contract_bytes, RunLimits::default())
-        .map_err(|e| engine_error(format!("bound contract rejected: {e}")))?;
+    let bound = pre.bound;
 
-    // Assemble the vector manifest from the bound contract plus the layout.
-    let manifest_value = bundle_manifest(&bound, &layout)?;
-    let manifest_bytes = serde_json::to_vec(&manifest_value).unwrap();
-    write_excl(staging_fd.as_fd(), c"bundle.json", &manifest_bytes).map_err(|e| {
+    // Stage the preflighted bundle manifest (loaded before acquisition).
+    write_excl(staging_fd.as_fd(), c"bundle.json", &pre.manifest_bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::Engine,
             format!("cannot stage bundle manifest: {e}"),
         )
     })?;
-    let bundle_manifest = VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
-        .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
+    let bundle_manifest = pre.bundle_manifest;
 
+    // S36: substitution-hook window — every staging write is done,
+    // no staged or closure vector is opened yet.
+    if let Some(hook) = hook {
+        hook(DeliveryHookPhase::AfterStaging);
+    }
     let vector_paths: std::collections::BTreeMap<String, PathBuf> =
         closure.vector_paths().into_iter().collect();
     let mut held: Vec<(Label, std::fs::File)> = Vec::new();
     for file in bundle_manifest.files() {
         let id = file.file_id().as_str().to_string();
-        // R36: staged vectors come from the held descriptors minted
-        // at creation. Closure vectors open by path, but their
-        // bytes are hash-pinned at read: substituted content fails
-        // the bundle measurement, so a swap only fails the run.
+        // S36: staged vectors come from the descriptors retained at
+        // creation, never a reopened name. Closure vectors admit
+        // through a nonblocking same-descriptor open: a
+        // post-verification FIFO substitution refuses on the type
+        // check instead of blocking, and substituted regular
+        // content still fails the bundle measurement below, so a
+        // swap fails the run without hanging it.
         let handle = if let Some(staged_file) = staged.remove(&id) {
             staged_file
         } else if let Some(path) = vector_paths.get(&id) {
-            std::fs::File::open(path)
-                .map_err(|e| engine_error(format!("cannot open vector {id}: {e}")))?
+            open_vector(path, &id)?
         } else {
             return Err(engine_error(format!(
                 "vector file has no closure path: {id}"
@@ -948,7 +1123,8 @@ impl AcquiredDir {
                 format!("output dir lost during run: {e}"),
             )
         })?;
-        let live_id = rustix::fs::fstat(&live).map(|st| (st.st_dev, st.st_ino))
+        let live_id = rustix::fs::fstat(&live)
+            .map(|st| (st.st_dev, st.st_ino))
             .map_err(|e| {
                 OperatorError::new(
                     OperatorErrorKind::Engine,
@@ -1095,6 +1271,54 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
 /// R36: create one file exclusively under a held directory and write
 /// its full bytes. `EXCL` refuses a second writer; `NOFOLLOW`
 /// refuses links. Returns the open file for an optional fsync.
+/// S36: nonblocking same-descriptor admission for one closure
+/// vector. The open never blocks on a FIFO substituted after
+/// verification, and the type check binds the regular-file
+/// assumption to the descriptor read — not to a name that could be
+/// swapped between a stat and an open. Bytes stay hash-pinned at
+/// the bundle read, as before.
+fn open_vector(path: &Path, id: &str) -> Result<std::fs::File, OperatorError> {
+    let fd = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| engine_error(format!("cannot open vector {id}: {e}")))?;
+    let meta = rustix::fs::fstat(&fd)
+        .map_err(|e| engine_error(format!("cannot stat vector {id}: {e}")))?;
+    if rustix::fs::FileType::from_raw_mode(meta.st_mode) != rustix::fs::FileType::RegularFile {
+        return Err(engine_error(format!("vector {id} is not a regular file")));
+    }
+    Ok(std::fs::File::from(fd))
+}
+
+/// S36: exclusive create-and-write whose descriptor stays readable,
+/// for staged files the run itself reads back. `write_excl` stays
+/// write-only for publish paths; only the staging loop retains.
+fn write_excl_readable(
+    dir: std::os::fd::BorrowedFd<'_>,
+    name: &std::ffi::CStr,
+    bytes: &[u8],
+) -> Result<OwnedFd, std::io::Error> {
+    let fd = rustix::fs::openat(
+        dir,
+        name,
+        rustix::fs::OFlags::RDWR
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )?;
+    let mut written = 0;
+    while written < bytes.len() {
+        // `rustix::io::write` retries `EINTR`; loop for partial writes.
+        let n = rustix::io::write(&fd, &bytes[written..])?;
+        written += n;
+    }
+    Ok(fd)
+}
+
 fn write_excl(
     dir: std::os::fd::BorrowedFd<'_>,
     name: &std::ffi::CStr,
@@ -1176,7 +1400,13 @@ fn check_oracle_pins(
             },
         },
     });
-    for field in ["id", "revision", "schema_id", "source_sha256", "artifact_id"] {
+    for field in [
+        "id",
+        "revision",
+        "schema_id",
+        "source_sha256",
+        "artifact_id",
+    ] {
         if pinned.get(field) != actual.get(field) {
             return Err(OperatorError::new(
                 OperatorErrorKind::SubjectMismatch,
@@ -1293,12 +1523,15 @@ fn bundle_manifest(
             .iter()
             .find(|r| r.case_key() == key.case_key())
             .ok_or_else(|| engine_error(format!("schedule key has no rule: {case_id}")))?;
-        let inputs_map = row.get("inputs").and_then(|i| i.as_object()).ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("vector layout lacks inputs for {case_id}"),
-            )
-        })?;
+        let inputs_map = row
+            .get("inputs")
+            .and_then(|i| i.as_object())
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("vector layout lacks inputs for {case_id}"),
+                )
+            })?;
         let mut inputs = Vec::new();
         for step in rule.script().steps() {
             for slot in step.inputs() {

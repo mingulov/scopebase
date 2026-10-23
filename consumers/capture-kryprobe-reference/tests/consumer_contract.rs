@@ -14,8 +14,14 @@ use scopebase_testkit::{
 };
 
 fn script_json(op: &str) -> Vec<u8> {
+    script_json_with_id(op, "kryprobe-script")
+}
+
+/// S34 (R33): same script envelope under an explicit dialect id, so
+/// alien-script negatives stay otherwise valid.
+fn script_json_with_id(op: &str, schema_id: &str) -> Vec<u8> {
     format!(
-        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"kryprobe-script\",\
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"{schema_id}\",\
          \"steps\":[{{\"step_id\":\"only-step\",\"operation\":\"{op}\",\
          \"inputs\":[\"script\"],\"parameters\":[]}}]}}"
     )
@@ -26,7 +32,9 @@ fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
     invocation_full(
         limits,
         "kryprobe-reference-v1",
+        1,
         "kryprobe-fixture-v1",
+        1,
         &script_json(op),
     )
 }
@@ -34,7 +42,9 @@ fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
 fn invocation_full(
     limits: &RunLimits,
     obs_schema: &str,
+    obs_rev: u32,
     fix_schema: &str,
+    fix_rev: u32,
     script_json: &[u8],
 ) -> CaseInvocation {
     let script = OperationScript::load(script_json, limits).expect("test script loads");
@@ -62,7 +72,7 @@ fn invocation_full(
             observation_schema: SchemaBinding::new(
                 SchemaBindingValues {
                     id: Label::parse(obs_schema).expect("schema"),
-                    revision: 1,
+                    revision: obs_rev,
                 },
                 limits,
             )
@@ -70,7 +80,7 @@ fn invocation_full(
             fixture_schema: SchemaBinding::new(
                 SchemaBindingValues {
                     id: Label::parse(fix_schema).expect("schema"),
-                    revision: 1,
+                    revision: fix_rev,
                 },
                 limits,
             )
@@ -198,16 +208,21 @@ fn dropped_correction_holder_is_detected() {
 }
 
 #[test]
-fn unknown_op_and_bad_script_refuse() {
-    let err = run("no-such-op", b"case=ok;").expect_err("unknown op refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
-    assert_eq!(err.stage().as_str(), "dispatch");
-    let err = run("fold", b"not-a-script").expect_err("bad script refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+fn unknown_op_unsupported_bad_script_invalid_output() {
+    // S44: missing/malformed operation data after dialect admission
+    // is InvalidOutput with the attempted step, never Refused.
+    let err = run("no-such-op", b"case=ok;").expect_err("unknown op unsupported");
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapter-schema");
+    assert!(err.step_id().is_none(), "dialect rejection names no step");
+    let err = run("fold", b"not-a-script").expect_err("bad script invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
-    let err = run("fold", b"case=nope;").expect_err("unknown case refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    let err = run("fold", b"case=nope;").expect_err("unknown case invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
     let limits = RunLimits::default();
     let inv = invocation(&limits, "fold");
     let fix =
@@ -215,9 +230,10 @@ fn unknown_op_and_bad_script_refuse() {
     let err = KryprobeReferenceAdapter::new()
         .expect("adapter builds")
         .execute(&inv, &fix)
-        .expect_err("missing slot refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+        .expect_err("missing slot invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
 }
 
 // RB4 (R07): the observation honors the invocation's own byte ceiling
@@ -232,14 +248,28 @@ fn lowered_observation_ceiling_refuses_at_collect() {
     assert_eq!(err.stage().as_str(), "collect");
 }
 
-// RB4 (R07): exact-fit twin. A ceiling of exactly 18 delivers the whole
-// body; the refusal above is about the ceiling, not the case.
+// RB4 (R07): exact-fit twin. A ceiling of exactly 17 — the body byte
+// length — delivers the whole body; the refusal above is about the
+// ceiling, not the case. (S49: the old 18 was one over, not exact.)
 #[test]
 fn exact_observation_ceiling_completes_whole() {
-    let limits = lowered(|v| v.observation_bytes = 18);
+    let body = "total=10;owner=7;";
+    assert_eq!(body.len(), 17, "pin the boundary under test");
+    let limits = lowered(|v| v.observation_bytes = 17);
     let inv = invocation(&limits, "fold");
     let obs = run_with(&limits, &inv, b"case=ok;").expect("exact fit completes");
-    assert_eq!(text(&obs), "total=10;owner=7;");
+    assert_eq!(text(&obs), body);
+}
+
+// S49: one byte under the exact boundary refuses at collect with the
+// full diagnostic.
+#[test]
+fn one_under_observation_ceiling_refuses_at_collect() {
+    let limits = lowered(|v| v.observation_bytes = 16);
+    let inv = invocation(&limits, "fold");
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("one-under refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.stage().as_str(), "collect");
 }
 
 // RB4 (R02): a tight-but-legal label ceiling still delivers the refusal
@@ -247,7 +277,7 @@ fn exact_observation_ceiling_completes_whole() {
 // while the category and cause stay exact. Six bytes admits the
 // "script" slot but neither "dispatch" nor "execute".
 #[test]
-fn tight_label_ceiling_fits_refusal_tags() {
+fn tight_label_ceiling_fits_unsupported_tags() {
     let limits = lowered(|v| v.label_bytes = 6);
     let json = format!(
         "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"s\",\
@@ -255,10 +285,10 @@ fn tight_label_ceiling_fits_refusal_tags() {
          \"inputs\":[\"script\"],\"parameters\":[]}}]}}",
     )
     .into_bytes();
-    let inv = invocation_full(&limits, "k-v1", "k-f1", &json);
-    let err = run_with(&limits, &inv, b"case=ok;").expect_err("unknown op refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
-    assert_eq!(err.stage().as_str(), "dispat");
+    let inv = invocation_full(&limits, "k-v1", 1, "k-f1", 1, &json);
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("alien dialect unsupported");
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapte");
     assert_eq!(err.cause().method().as_str(), "execut");
 }
 
@@ -275,4 +305,189 @@ fn subject_names_resolved_consumer() {
         &format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
     );
     assert_eq!(subject.target(), subject.host());
+}
+
+fn step_json(step_id: &str, op: &str, inputs: &str, parameters: &str) -> String {
+    format!(
+        "{{\"step_id\":\"{step_id}\",\"operation\":\"{op}\",\
+         \"inputs\":{inputs},\"parameters\":{parameters}}}"
+    )
+}
+
+fn script_steps_json(schema_id: &str, steps: &[String]) -> Vec<u8> {
+    format!(
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"{schema_id}\",\
+         \"steps\":[{steps}]}}",
+        steps = steps.join(",")
+    )
+    .into_bytes()
+}
+
+fn check_unsupported(err: &CaseError) {
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapter-schema");
+    assert!(err.step_id().is_none(), "dialect rejection names no step");
+    assert!(err.completed_steps().is_empty());
+}
+
+/// S34 (R33): an otherwise-valid invocation under an alien script
+/// dialect is pre-read UnsupportedSchema — even with an empty
+/// fixture, which proves the dialect admits before any slot is
+/// touched (a slot check would refuse missing-slot instead).
+#[test]
+fn alien_script_dialect_unsupported_before_reads() {
+    let limits = RunLimits::default();
+    let script = script_json_with_id("fold", "alien-script");
+    let inv = invocation_full(
+        &limits,
+        "kryprobe-reference-v1",
+        1,
+        "kryprobe-fixture-v1",
+        1,
+        &script,
+    );
+    let fix =
+        FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).expect("empty fixture");
+    for (name, fix) in [
+        ("empty", &fix),
+        (
+            "full",
+            &FixtureAccess::new(
+                &[FixtureInput::new(
+                    Label::parse("script").expect("slot"),
+                    b"case=ok;",
+                )],
+                &[],
+                EffectBatch::empty(&limits),
+                &limits,
+            )
+            .expect("full fixture"),
+        ),
+    ] {
+        let err = KryprobeReferenceAdapter::new()
+            .expect("adapter builds")
+            .execute(&inv, fix)
+            .expect_err(&format!("alien script unsupported ({name})"));
+        check_unsupported(&err);
+    }
+    // Unknown opcodes admit the same way: pre-read, before slots.
+    let inv = invocation(&limits, "no-such-op");
+    let err = KryprobeReferenceAdapter::new()
+        .expect("adapter builds")
+        .execute(&inv, &fix)
+        .expect_err("unknown op unsupported before reads");
+    check_unsupported(&err);
+}
+
+// S34: an alien observation schema rejects before effects. The case
+// data below is valid and would succeed without the preflight.
+#[test]
+fn alien_observation_schema_rejects_before_effects() {
+    let limits = RunLimits::default();
+    let inv = invocation_full(
+        &limits,
+        "alien-schema-v9",
+        1,
+        "kryprobe-fixture-v1",
+        1,
+        &script_json("fold"),
+    );
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("alien schema rejects");
+    check_unsupported(&err);
+}
+
+// S34: alien fixture schema and revision mismatches reject too.
+#[test]
+fn alien_fixture_schema_or_revision_rejects() {
+    let limits = RunLimits::default();
+    for (obs, obs_rev, fix, fix_rev) in [
+        ("kryprobe-reference-v1", 1, "alien-fixture-v9", 1),
+        ("kryprobe-reference-v1", 2, "kryprobe-fixture-v1", 1),
+        ("kryprobe-reference-v1", 1, "kryprobe-fixture-v1", 2),
+    ] {
+        let inv = invocation_full(&limits, obs, obs_rev, fix, fix_rev, &script_json("fold"));
+        let err = run_with(&limits, &inv, b"case=ok;").expect_err("alien envelope rejects");
+        check_unsupported(&err);
+    }
+}
+
+// S34: multi-step scripts reject — including a valid first step with
+// an unsupported later step, which the old first-step dispatch
+// silently ignored while executing the leader.
+#[test]
+fn multi_step_script_rejects() {
+    let limits = RunLimits::default();
+    for (name, steps) in [
+        (
+            "valid-valid",
+            vec![
+                step_json("first", "fold", "[\"script\"]", "[]"),
+                step_json("second", "fold", "[\"script\"]", "[]"),
+            ],
+        ),
+        (
+            "valid-unsupported",
+            vec![
+                step_json("first", "fold", "[\"script\"]", "[]"),
+                step_json("second", "no-such-op", "[\"script\"]", "[]"),
+            ],
+        ),
+    ] {
+        let inv = invocation_full(
+            &limits,
+            "kryprobe-reference-v1",
+            1,
+            "kryprobe-fixture-v1",
+            1,
+            &script_steps_json("kryprobe-script", &steps),
+        );
+        let err = run_with(&limits, &inv, b"case=ok;")
+            .expect_err(&format!("multi-step rejects ({name})"));
+        check_unsupported(&err);
+    }
+    // An empty step list is unconstructible: OperationScript::load
+    // rejects it ("empty script"), so the adapter's zero-step arm is
+    // defensive only and has no loader-built test.
+}
+
+// S34: step parameters and wrong declared-input sets reject.
+#[test]
+fn parameters_and_input_shape_reject() {
+    let limits = RunLimits::default();
+    let with_params = script_steps_json(
+        "kryprobe-script",
+        &[step_json(
+            "only-step",
+            "fold",
+            "[\"script\"]",
+            "[{\"kind\":\"u64\",\"value\":\"7\"}]",
+        )],
+    );
+    let inv = invocation_full(
+        &limits,
+        "kryprobe-reference-v1",
+        1,
+        "kryprobe-fixture-v1",
+        1,
+        &with_params,
+    );
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("parameters reject");
+    check_unsupported(&err);
+
+    for inputs in ["[]", "[\"script\",\"body\"]", "[\"body\"]"] {
+        let json = script_steps_json(
+            "kryprobe-script",
+            &[step_json("only-step", "fold", inputs, "[]")],
+        );
+        let inv = invocation_full(
+            &limits,
+            "kryprobe-reference-v1",
+            1,
+            "kryprobe-fixture-v1",
+            1,
+            &json,
+        );
+        let err = run_with(&limits, &inv, b"case=ok;").expect_err("shape rejects");
+        check_unsupported(&err);
+    }
 }

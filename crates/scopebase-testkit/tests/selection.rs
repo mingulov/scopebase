@@ -6,9 +6,9 @@
 //! CI-platform decision Q-TT08-1); this suite covers the pure core only.
 
 use scopebase_testkit::select::{
-    AttemptOutcome, AttemptRecord, Change, ChangeManifest, EnvironmentAttribute,
-    GateVerdict, RegistrationRole, ResolutionRecord, RunAccounting, SelectionLimits,
-    SelectionErrorKind, qualification_gate,
+    qualification_gate, AttemptOutcome, AttemptRecord, Change, ChangeManifest,
+    EnvironmentAttribute, GateVerdict, RegistrationRole, ResolutionRecord, RunAccounting,
+    SelectionErrorKind, SelectionLimits,
 };
 use scopebase_testkit::{CaseCatalog, CaseId, ProfileId};
 use serde_json::json;
@@ -63,9 +63,7 @@ fn diamond_catalog() -> CaseCatalog {
             "open_owners": ["TT08"],
         })
     };
-    let req = |case_id: &str, case_version: u32, when: &[&str]| {
-        json!({"case_id": case_id, "case_version": case_version, "when_extensions": when})
-    };
+    let req = |case_id: &str, case_version: u32, when: &[&str]| json!({"case_id": case_id, "case_version": case_version, "when_extensions": when});
     let doc = json!({
         "schema_version": 1u32,
         "catalog_revision": 1u32,
@@ -121,7 +119,11 @@ fn manifest(changes: Vec<Change>) -> ChangeManifest {
 }
 
 fn cells_of(plan: &scopebase_testkit::select::SelectionPlan) -> Vec<String> {
-    let mut out: Vec<String> = plan.selected().iter().map(|c| c.key().cell_id().to_owned()).collect();
+    let mut out: Vec<String> = plan
+        .selected()
+        .iter()
+        .map(|c| c.key().cell_id().to_owned())
+        .collect();
     out.sort();
     out
 }
@@ -289,7 +291,10 @@ fn unknown_impact_broadens_boundary_and_cannot_be_empty() {
     // Whole-catalog unknown impact over a narrowed request selects the full
     // requested denominator; it cannot return empty success. The selection
     // still never reports Full: unresolved impact cannot attest coverage.
-    let m = manifest(vec![Change::unknown(None, "dependency tree changed opaquely")]);
+    let m = manifest(vec![Change::unknown(
+        None,
+        "dependency tree changed opaquely",
+    )]);
     let plan = scopebase_testkit::select::select_affected(
         &catalog,
         &m,
@@ -445,16 +450,18 @@ fn oracle_agrees_with_selector_on_change_battery() {
             "opaque source edit",
         )]),
         manifest(vec![Change::unknown(None, "opaque world")]),
-        manifest(vec![Change::environment(EnvironmentAttribute::Features, None)]),
+        manifest(vec![Change::environment(
+            EnvironmentAttribute::Features,
+            None,
+        )]),
         manifest(vec![
             Change::case(cid("H08.midb"), 1),
             Change::cell("cell-d"),
         ]),
     ];
     for m in &manifests {
-        let plan =
-            scopebase_testkit::select::select_affected(&catalog, m, &top_request(), &limits)
-                .unwrap();
+        let plan = scopebase_testkit::select::select_affected(&catalog, m, &top_request(), &limits)
+            .unwrap();
         let expected = expected_selection(&catalog, m, &top_request(), &limits).unwrap();
         check_agreement(&plan, &expected).expect("oracle must agree with selector");
     }
@@ -467,8 +474,7 @@ fn mutant_dropped_dependent_fails_oracle() {
     let limits = SelectionLimits::default();
     let m = manifest(vec![Change::case(cid("H08.base"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits).unwrap();
     let full_expected = expected_selection(&catalog, &m, &top_request(), &limits).unwrap();
     assert_eq!(plan.selected().len(), 4);
     // Mutant selector output: only the midb branch, as if the selector had
@@ -481,11 +487,7 @@ fn mutant_dropped_dependent_fails_oracle() {
     )
     .unwrap();
     let disagreement = check_agreement(&mutant, &full_expected).unwrap_err();
-    let missing: Vec<&str> = disagreement
-        .missing()
-        .iter()
-        .map(|k| k.cell_id())
-        .collect();
+    let missing: Vec<&str> = disagreement.missing().iter().map(|k| k.cell_id()).collect();
     assert_eq!(missing, ["cell-a", "cell-c"]);
     assert!(disagreement.extra().is_empty());
     // Mutant in the other direction: a plan reporting the full base-change
@@ -537,22 +539,22 @@ fn accounting_completes_only_when_denominator_executes() {
     // Full selection, fully executed: complete.
     let m = manifest(vec![Change::case(cid("H08.base"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits).unwrap();
     let accounting = RunAccounting::account(&plan, &selected_keys(&plan), &evidence_for(&plan));
     assert_eq!(accounting.status(), AccountingStatus::Complete);
     assert_eq!(accounting.scope(), AccountingScope::Full);
     assert!(accounting.full_matrix_complete());
     assert!(accounting.missing_selected().is_empty());
     assert!(accounting.unchanged_missing_evidence().is_empty());
-    accounting.attest_complete().expect("full execution attests");
+    accounting
+        .attest_complete()
+        .expect("full execution attests");
 
     // Narrowed selection, fully executed: selected work is complete but the
     // matrix is not; status and scope are separate assertions.
     let m = manifest(vec![Change::case(cid("H08.midb"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits).unwrap();
     let accounting = RunAccounting::account(&plan, &selected_keys(&plan), &evidence_for(&plan));
     assert_eq!(accounting.status(), AccountingStatus::Complete);
     assert_eq!(accounting.scope(), AccountingScope::Narrowed);
@@ -580,8 +582,7 @@ fn mutant_falsely_claimed_full_result_fails() {
     let limits = SelectionLimits::default();
     let m = manifest(vec![Change::case(cid("H08.midb"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits).unwrap();
     let accounting = RunAccounting::account(&plan, &selected_keys(&plan), &evidence_for(&plan));
     assert!(!accounting.full_matrix_complete());
     assert!(accounting.attest_complete().is_err());
@@ -604,8 +605,7 @@ fn accounting_names_missing_rows_and_missing_inherited_evidence() {
     let limits = SelectionLimits::default();
     let m = manifest(vec![Change::case(cid("H08.midb"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &top_request(), &limits).unwrap();
     // Execute only cell-b; cell-d is a missing required row.
     let mut executed = BTreeSet::new();
     for cell in plan.selected() {
@@ -659,9 +659,11 @@ fn retry_after_semantic_failure_stays_unresolved_until_recorded() {
         GateVerdict::Unresolved { failed_attempts } => assert_eq!(failed_attempts, [2]),
         GateVerdict::Resolved { .. } => panic!("retry must not erase semantic failure"),
     }
-    let resolutions = vec![
-        ResolutionRecord::new(2, "oracle literal stale", "refresh literal", "candidate-b").unwrap(),
-    ];
+    let resolutions =
+        vec![
+            ResolutionRecord::new(2, "oracle literal stale", "refresh literal", "candidate-b")
+                .unwrap(),
+        ];
     match qualification_gate(&attempts, &resolutions).unwrap() {
         GateVerdict::Resolved { attempts: n } => assert_eq!(n, 3),
         GateVerdict::Unresolved { .. } => panic!("explicit resolution must resolve"),
@@ -716,9 +718,7 @@ fn cross_extension_catalog() -> CaseCatalog {
             "open_owners": ["TT08"],
         })
     };
-    let req = |case_id: &str, case_version: u32, when: &[&str]| {
-        json!({"case_id": case_id, "case_version": case_version, "when_extensions": when})
-    };
+    let req = |case_id: &str, case_version: u32, when: &[&str]| json!({"case_id": case_id, "case_version": case_version, "when_extensions": when});
     let doc = json!({
         "schema_version": 1u32,
         "catalog_revision": 1u32,
@@ -768,8 +768,7 @@ fn conditional_activation_is_per_profile_not_union() {
     // plan (p1-v1 never declares it; p2-v1 lacks featx-v1).
     let m = manifest(vec![Change::case(cid("H09.base"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits).unwrap();
     assert_eq!(cells_of(&plan), ["cell-1", "cell-a"]);
     // Selected cells must stay inside the declaring profiles' denominator.
     let declared: BTreeSet<String> = plan
@@ -792,8 +791,7 @@ fn conditional_activation_is_per_profile_not_union() {
     // profile requires the inactive case.
     let m = manifest(vec![Change::case(cid("H09.cond"), 1)]);
     let plan =
-        scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits)
-            .unwrap();
+        scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits).unwrap();
     assert!(plan.selected().is_empty());
     assert!(!plan.is_full_selection());
     // The oracle follows the same per-profile rule, so agreement holds.
@@ -803,8 +801,7 @@ fn conditional_activation_is_per_profile_not_union() {
         manifest(vec![Change::case(cid("H09.one"), 1)]),
     ] {
         let plan =
-            scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits)
-                .unwrap();
+            scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits).unwrap();
         let expected = expected_selection(&catalog, &m, &requested, &limits).unwrap();
         check_agreement(&plan, &expected).expect("oracle must agree with selector");
     }
@@ -813,9 +810,8 @@ fn conditional_activation_is_per_profile_not_union() {
 #[test]
 fn retry_gate_requires_qualifying_pass_for_resolution() {
     // A lone infrastructure failure with zero passes stays unresolved.
-    let infra_only = vec![
-        AttemptRecord::new(1, AttemptOutcome::InfrastructureFailure, "lease denied").unwrap(),
-    ];
+    let infra_only =
+        vec![AttemptRecord::new(1, AttemptOutcome::InfrastructureFailure, "lease denied").unwrap()];
     match qualification_gate(&infra_only, &[]).unwrap() {
         GateVerdict::Unresolved { failed_attempts } => assert_eq!(failed_attempts, [1]),
         GateVerdict::Resolved { .. } => panic!("zero-pass history must not resolve"),
@@ -824,9 +820,8 @@ fn retry_gate_requires_qualifying_pass_for_resolution() {
     // unresolved: the resolution string alone evidences no passing candidate.
     let failing =
         vec![AttemptRecord::new(1, AttemptOutcome::SemanticFailure, "wrong value").unwrap()];
-    let resolutions = vec![
-        ResolutionRecord::new(1, "stale literal", "refresh literal", "candidate-b").unwrap(),
-    ];
+    let resolutions =
+        vec![ResolutionRecord::new(1, "stale literal", "refresh literal", "candidate-b").unwrap()];
     match qualification_gate(&failing, &resolutions).unwrap() {
         GateVerdict::Unresolved { failed_attempts } => assert_eq!(failed_attempts, [1]),
         GateVerdict::Resolved { .. } => {
@@ -840,8 +835,7 @@ fn retry_gate_requires_qualifying_pass_for_resolution() {
         AttemptRecord::new(1, AttemptOutcome::Pass, "green before").unwrap(),
         AttemptRecord::new(2, AttemptOutcome::SemanticFailure, "regressed").unwrap(),
     ];
-    let resolutions =
-        vec![ResolutionRecord::new(2, "cause", "fix", "candidate-c").unwrap()];
+    let resolutions = vec![ResolutionRecord::new(2, "cause", "fix", "candidate-c").unwrap()];
     match qualification_gate(&attempts, &resolutions).unwrap() {
         GateVerdict::Unresolved { failed_attempts } => assert_eq!(failed_attempts, [2]),
         GateVerdict::Resolved { .. } => panic!("pre-failure pass must not qualify the fix"),
@@ -905,9 +899,11 @@ fn empty_denominator_never_reports_full_or_attests() {
         // vacuous coverage must not report Full or attest complete.
         let m = manifest(vec![Change::profile(pid(root))]);
         let plan =
-            scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits)
-                .unwrap();
-        assert!(plan.declared().is_empty(), "{root}: denominator must be empty");
+            scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits).unwrap();
+        assert!(
+            plan.declared().is_empty(),
+            "{root}: denominator must be empty"
+        );
         assert!(plan.selected().is_empty());
         assert!(
             !plan.is_full_selection(),
@@ -931,13 +927,8 @@ fn unresolved_selection_never_reports_full_or_attests() {
     // Whole-request broadening selects the full requested denominator, but
     // the impact is unresolved: never Full, never complete-attested.
     let m = manifest(vec![Change::unknown(None, "opaque world")]);
-    let plan = scopebase_testkit::select::select_affected(
-        &catalog,
-        &m,
-        &[pid("midb-v1")],
-        &limits,
-    )
-    .unwrap();
+    let plan = scopebase_testkit::select::select_affected(&catalog, &m, &[pid("midb-v1")], &limits)
+        .unwrap();
     assert_eq!(cells_of(&plan), ["cell-a", "cell-b"]);
     assert!(plan.has_unresolved());
     assert!(!plan.is_full_selection());

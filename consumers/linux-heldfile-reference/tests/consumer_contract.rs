@@ -114,8 +114,34 @@ fn invocation_full(
 }
 
 fn owned_root(test: &str) -> FixtureRoot {
+    // S14: roots stage under one process-wide private parent
+    // (0700, ours) instead of shared temp. Root names stay unique
+    // per test, so parallel tests share the parent safely; the
+    // staging dir itself is one empty dir per test-binary run.
+    static STAGING: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let staging = STAGING.get_or_init(|| {
+        // Exclusive create, skipping stale names from crashed
+        // runs (same pid reused) — never removing anything.
+        for n in 0..1024u32 {
+            let dir = std::env::temp_dir().join(format!(
+                "scopebase-staging-heldfile-{}-{n}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                        .expect("staging mode");
+                    return dir;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("staging: {error}"),
+            }
+        }
+        panic!("staging names exhausted");
+    });
     let name = format!("lx11-heldfile-{}-{test}", std::process::id());
-    FixtureRoot::create(&std::env::temp_dir(), &name).expect("fixture root")
+    FixtureRoot::create(staging, &name).expect("fixture root")
 }
 
 fn run(op: &str, script: &[u8], body: Option<&[u8]>) -> Result<Observation, CaseError> {
@@ -267,24 +293,30 @@ fn walk_tight_and_missing_refuse() {
 }
 
 #[test]
-fn unknown_op_unsupported_bad_script_refuses() {
+fn unknown_op_unsupported_bad_script_invalid_output() {
     // R33: an unknown opcode is a dialect this adapter does not
     // speak: pre-read UnsupportedSchema, not a dispatch refusal.
     let err = run("no-such-op", b"case=ok;", None).expect_err("unknown op unsupported");
     assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
     assert_eq!(err.stage().as_str(), "adapter-schema");
-    let err = run("open", b"not-a-script", None).expect_err("bad script refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    // S44: missing/malformed operation data after dialect admission
+    // is InvalidOutput with the attempted step, never Refused.
+    let err = run("open", b"not-a-script", None).expect_err("bad script invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
-    let err = run("open", b"case=nope;", None).expect_err("unknown case refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    let err = run("open", b"case=nope;", None).expect_err("unknown case invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
-    let err = run("open", b"case=ok;", None).expect_err("missing path refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    let err = run("open", b"case=ok;", None).expect_err("missing path invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
-    let err = run("parse-maps", b"case=ok;", None).expect_err("missing body refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    let err = run("parse-maps", b"case=ok;", None).expect_err("missing body invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
     let limits = RunLimits::default();
     let inv = invocation(&limits, "open");
     let fix =
@@ -292,9 +324,10 @@ fn unknown_op_unsupported_bad_script_refuses() {
     let err = HeldfileReferenceAdapter::new()
         .expect("adapter builds")
         .execute(&inv, &fix)
-        .expect_err("missing slot refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+        .expect_err("missing slot invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.stage().as_str(), "admission");
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
 }
 
 /// R33: an otherwise-valid invocation under an alien script
@@ -411,8 +444,7 @@ fn alien_fixture_schema_or_revision_rejects() {
         ("heldfile-reference-v1", 1, "heldfile-fixture-v1", 2),
     ] {
         let inv = invocation_full(&limits, obs, obs_rev, fix, fix_rev, &script_json("open"));
-        let err =
-            run_with(&limits, &inv, b"case=ok;", None).expect_err("alien envelope rejects");
+        let err = run_with(&limits, &inv, b"case=ok;", None).expect_err("alien envelope rejects");
         check_unsupported(&err);
     }
 }
@@ -517,13 +549,13 @@ fn exact_observation_ceiling_completes_whole() {
     root.close().expect("cleanup");
 }
 
-// F26: refusal diagnostics honor the invocation's own byte ceiling.
+// F26: error diagnostics honor the invocation's own byte ceiling.
 #[test]
-fn lowered_diagnostic_ceiling_truncates_refusal() {
+fn lowered_diagnostic_ceiling_truncates_invalid_output() {
     let limits = lowered(|v| v.diagnostic_bytes = 8);
     let inv = invocation(&limits, "open");
-    let err = run_with(&limits, &inv, b"case=nope;", None).expect_err("unknown case refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    let err = run_with(&limits, &inv, b"case=nope;", None).expect_err("unknown case invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
     assert_eq!(err.diagnostic_bytes().len(), 8);
     assert_eq!(err.diagnostic_bytes(), b"LX11:unk");
 }
@@ -692,5 +724,27 @@ fn clean_smoke_succeeds_and_cleans_up() {
     assert!(stdout.contains("open: stat=len:11;"), "{stdout:?}");
     let leftovers: Vec<_> = std::fs::read_dir(&owned).unwrap().collect();
     assert!(leftovers.is_empty(), "smoke left residue: {leftovers:?}");
+    let _ = std::fs::remove_dir_all(&owned);
+}
+
+/// S35: a non-UTF-8 TMPDIR refuses with the Unicode message before
+/// creating anything: the owned parent gains no entries, and no
+/// lossy doppelganger name is ever interpolated.
+#[test]
+fn non_utf8_tmpdir_refuses_and_strands_nothing() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let owned = scratch("tmpdir-utf8");
+    let hostile =
+        std::ffi::OsString::from_vec([owned.as_os_str().as_bytes(), b"/sub-\xff-dir"].concat());
+    std::fs::create_dir(&hostile).unwrap();
+    let out = std::process::Command::new(bin())
+        .env("TMPDIR", &hostile)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(1), "smoke refuses hostile paths");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not valid Unicode"), "{stderr:?}");
+    let leftovers: Vec<_> = std::fs::read_dir(&hostile).unwrap().collect();
+    assert!(leftovers.is_empty(), "stranded fixtures: {leftovers:?}");
     let _ = std::fs::remove_dir_all(&owned);
 }
