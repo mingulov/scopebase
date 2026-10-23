@@ -27,12 +27,36 @@ const PACKAGE: &str = "linux-heldfile-reference";
 const CONSUMER: &str = "heldfile-adapter";
 const SCHEMA_ID: &str = "heldfile-reference-v1";
 const SCHEMA_REVISION: u32 = 1;
+const FIXTURE_SCHEMA_ID: &str = "heldfile-fixture-v1";
+const FIXTURE_SCHEMA_REVISION: u32 = 1;
+
+/// F26: truncate a byte payload to an invocation byte ceiling.
+fn fit_bytes(bytes: &[u8], ceiling: u64) -> Vec<u8> {
+    let max = ceiling.min(usize::MAX as u64) as usize;
+    bytes.iter().take(max).copied().collect()
+}
+
+/// F26: truncate a completed-step list to the invocation step ceiling.
+fn fit_steps(steps: Vec<Label>, limits: &RunLimits) -> Vec<Label> {
+    let max = limits
+        .steps_per_invocation()
+        .min(usize::MAX as u64) as usize;
+    steps.into_iter().take(max).collect()
+}
 
 /// Held-file inspector reference adapter: real open/stat, bounded reads,
 /// strict maps/mountinfo parses and bounded walks over explicit paths.
 pub struct HeldfileReferenceAdapter {
     limits: RunLimits,
     subject: SubjectBinding,
+    schema: Label,
+    method_execute: Label,
+    stage_dispatch: Label,
+    stage_admission: Label,
+    stage_collect: Label,
+    stage_schema: Label,
+    slot_script: Label,
+    slot_body: Label,
 }
 
 impl HeldfileReferenceAdapter {
@@ -67,61 +91,107 @@ impl HeldfileReferenceAdapter {
             },
             &limits,
         )?;
-        Ok(Self { limits, subject })
+        // F26: fixed dialect labels parse once at construction, so the
+        // per-invocation path carries no Label::parse expect. These expects
+        // can only fire on a mistyped constant (a programming error every
+        // construction test exercises); Label::parse has no HarnessError
+        // conversion, so a fallible parse here is inexpressible.
+        Ok(Self {
+            limits,
+            subject,
+            schema: Label::parse(SCHEMA_ID).expect("LX11:fixed schema parses"),
+            method_execute: Label::parse("execute").expect("LX11:fixed label parses"),
+            stage_dispatch: Label::parse("dispatch").expect("LX11:fixed stage parses"),
+            stage_admission: Label::parse("admission").expect("LX11:fixed stage parses"),
+            stage_collect: Label::parse("collect").expect("LX11:fixed stage parses"),
+            stage_schema: Label::parse("adapter-schema").expect("LX11:fixed stage parses"),
+            slot_script: Label::parse("script").expect("LX11:fixed slot parses"),
+            slot_body: Label::parse("body").expect("LX11:fixed slot parses"),
+        })
     }
 
+    // F26: every response is built under the invocation's own limits with
+    // pre-fitted payloads, never under the adapter's default limits.
     fn observed(
         &self,
         invocation: &CaseInvocation,
         step: &Label,
         body: &str,
     ) -> Result<Observation, HarnessError> {
+        let l = invocation.limits();
         Observation::new(
             ObservationValues {
                 key: invocation.key().clone(),
-                schema_id: Label::parse(SCHEMA_ID).expect("LX11:fixed schema parses"),
+                schema_id: self.schema.clone(),
                 schema_revision: SCHEMA_REVISION,
-                completed_steps: vec![step.clone()],
-                bytes: body.as_bytes().to_vec(),
-                effects: EffectBatch::empty(&self.limits),
+                completed_steps: fit_steps(vec![step.clone()], l),
+                bytes: fit_bytes(body.as_bytes(), l.observation_bytes()),
+                effects: EffectBatch::empty(l),
             },
-            &self.limits,
+            l,
         )
+    }
+
+    fn cause(&self, l: &RunLimits) -> RefusalEvidence {
+        RefusalEvidence::new(
+            RefusalEvidenceValues {
+                cause: RefusalCause::Unknown,
+                method: self.method_execute.clone(),
+                evidence_ids: Vec::new(),
+                tier: EvidenceTier::T0,
+            },
+            l,
+        )
+        .expect("LX11:empty refusal cause fits admitted limits")
     }
 
     fn refusal(
         &self,
         invocation: &CaseInvocation,
         step: Option<Label>,
-        stage: &str,
+        stage: &Label,
         diagnostic: &str,
     ) -> CaseError {
-        let cause = RefusalEvidence::new(
-            RefusalEvidenceValues {
-                cause: RefusalCause::Unknown,
-                method: Label::parse("execute").expect("LX11:fixed label parses"),
-                evidence_ids: Vec::new(),
-                tier: EvidenceTier::T0,
-            },
-            &self.limits,
-        )
-        .expect("LX11:bounded refusal cause");
+        let l = invocation.limits();
         CaseError::new(
             CaseErrorValues {
                 key: invocation.key().clone(),
                 step_id: step,
-                stage: Label::parse(stage).expect("LX11:fixed stage parses"),
+                stage: stage.clone(),
                 category: CaseErrorCategory::Refused,
                 errno: None,
-                diagnostic_bytes: diagnostic.as_bytes().to_vec(),
-                cause,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
                 completed_steps: Vec::new(),
                 partial_observation: None,
-                effects: EffectBatch::empty(&self.limits),
+                effects: EffectBatch::empty(l),
             },
-            &self.limits,
+            l,
         )
-        .expect("LX11:bounded case error")
+        .expect("LX11:pre-fitted refusal fits invocation limits")
+    }
+
+    // F27: envelope-shape rejection. The UnsupportedSchema validator
+    // requires step None, no completed steps, no partial observation,
+    // no errno and an Unknown cause; this constructor holds that shape.
+    fn unsupported(&self, invocation: &CaseInvocation, diagnostic: &str) -> CaseError {
+        let l = invocation.limits();
+        CaseError::new(
+            CaseErrorValues {
+                key: invocation.key().clone(),
+                step_id: None,
+                stage: self.stage_schema.clone(),
+                category: CaseErrorCategory::UnsupportedSchema,
+                errno: None,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
+                completed_steps: Vec::new(),
+                partial_observation: None,
+                effects: EffectBatch::empty(l),
+            },
+            l,
+        )
+        .expect("LX11:pre-fitted dialect rejection fits invocation limits")
     }
 }
 
@@ -135,26 +205,58 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
         invocation: &CaseInvocation,
         fixture: &FixtureAccess<'_>,
     ) -> Result<Observation, CaseError> {
-        let Some(step) = invocation.script().steps().first() else {
-            return Err(self.refusal(invocation, None, "dispatch", "LX11:script has no steps"));
+        // F27: envelope preflight before any slot read or effect. Schema,
+        // step count, parameters and declared inputs are validated here;
+        // unknown operations and malformed scripts stay Refused below.
+        if invocation.observation_schema().id().as_str() != SCHEMA_ID
+            || *invocation.observation_schema().revision() != SCHEMA_REVISION
+        {
+            return Err(self.unsupported(invocation, "LX11:unsupported observation schema"));
+        }
+        if invocation.fixture_schema().id().as_str() != FIXTURE_SCHEMA_ID
+            || *invocation.fixture_schema().revision() != FIXTURE_SCHEMA_REVISION
+        {
+            return Err(self.unsupported(invocation, "LX11:unsupported fixture schema"));
+        }
+        let [step] = invocation.script().steps() else {
+            return Err(self.unsupported(invocation, "LX11:exactly one step"));
         };
+        if !step.parameters().is_empty() {
+            return Err(self.unsupported(invocation, "LX11:step takes no parameters"));
+        }
         let op = step.operation().as_str();
-        let slot = Label::parse("script").expect("LX11:fixed slot parses");
-        let Some(raw) = fixture.input(&slot) else {
+        let mut declared: Vec<&str> = step.inputs().iter().map(|i| i.as_str()).collect();
+        declared.sort_unstable();
+        let mut required = vec!["script"];
+        if op == "parse-maps" || op == "parse-mountinfo" {
+            required.push("body");
+        }
+        required.sort_unstable();
+        if !is_known_op(op) {
             return Err(self.refusal(
                 invocation,
                 Some(step.step_id().clone()),
-                "admission",
+                &self.stage_dispatch,
+                "LX11:unknown operation",
+            ));
+        }
+        if declared != required {
+            return Err(self.unsupported(invocation, "LX11:unsupported step shape"));
+        }
+        let Some(raw) = fixture.input(&self.slot_script) else {
+            return Err(self.refusal(
+                invocation,
+                Some(step.step_id().clone()),
+                &self.stage_admission,
                 "LX11:missing script slot",
             ));
         };
         let body = if op == "parse-maps" || op == "parse-mountinfo" {
-            let slot = Label::parse("body").expect("LX11:fixed slot parses");
-            let Some(body) = fixture.input(&slot) else {
+            let Some(body) = fixture.input(&self.slot_body) else {
                 return Err(self.refusal(
                     invocation,
                     Some(step.step_id().clone()),
-                    "admission",
+                    &self.stage_admission,
                     "LX11:missing body slot",
                 ));
             };
@@ -163,20 +265,19 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
             None
         };
         let Some(text) = run_scenario(op, raw, body) else {
-            let known = is_known_op(op);
-            let (stage, message) = if known {
-                ("admission", "LX11:unknown case or parameter")
-            } else {
-                ("dispatch", "LX11:unknown operation")
-            };
-            return Err(self.refusal(invocation, Some(step.step_id().clone()), stage, message));
+            return Err(self.refusal(
+                invocation,
+                Some(step.step_id().clone()),
+                &self.stage_admission,
+                "LX11:unknown case or parameter",
+            ));
         };
         self.observed(invocation, step.step_id(), &text)
             .map_err(|_| {
                 self.refusal(
                     invocation,
                     Some(step.step_id().clone()),
-                    "collect",
+                    &self.stage_collect,
                     "LX11:observation bounds",
                 )
             })
@@ -250,6 +351,17 @@ fn param<'a>(script: &'a Script<'_>, key: &str) -> Option<&'a str> {
 /// Run one operation/case scenario over explicit caller paths. `None` names
 /// an unknown operation or case, a malformed script or a missing parameter;
 /// every executed Linux contract refusal is a `Some(refuse=...;)` body.
+/// F28: script values cannot carry the `;` frame delimiter. Callers pass
+/// interpolated values through here and refuse them on `None` instead of
+/// building a corrupted script that silently reselects another file.
+pub fn script_value(value: &str) -> Option<&str> {
+    if value.bytes().any(|b| b == b';') {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 pub fn run_scenario(op: &str, script: &[u8], body: Option<&[u8]>) -> Option<String> {
     let script = parse_script(script)?;
     match (op, script.case) {

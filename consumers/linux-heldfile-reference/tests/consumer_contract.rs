@@ -27,16 +27,41 @@ const MOUNTS_BAD: &[u8] = b"17 1 0:42 / /mnt rw - fuse.demo source rw\n\
                               broken\n";
 
 fn script_json(op: &str) -> Vec<u8> {
+    // F27: declared inputs must cover exactly the slots the adapter
+    // consumes; parse operations additionally consume the body slot.
+    let inputs = if op == "parse-maps" || op == "parse-mountinfo" {
+        "[\"script\",\"body\"]"
+    } else {
+        "[\"script\"]"
+    };
     format!(
         "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"heldfile-script\",\
          \"steps\":[{{\"step_id\":\"only-step\",\"operation\":\"{op}\",\
-         \"inputs\":[\"script\"],\"parameters\":[]}}]}}"
+         \"inputs\":{inputs},\"parameters\":[]}}]}}"
     )
     .into_bytes()
 }
 
 fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
-    let script = OperationScript::load(&script_json(op), limits).expect("test script loads");
+    invocation_full(
+        limits,
+        "heldfile-reference-v1",
+        1,
+        "heldfile-fixture-v1",
+        1,
+        &script_json(op),
+    )
+}
+
+fn invocation_full(
+    limits: &RunLimits,
+    obs_schema: &str,
+    obs_rev: u32,
+    fix_schema: &str,
+    fix_rev: u32,
+    script_json: &[u8],
+) -> CaseInvocation {
+    let script = OperationScript::load(script_json, limits).expect("test script loads");
     let key = InvocationKey::new(
         InvocationKeyValues {
             run_id: RunId::parse("0123456789abcdef0123456789abcdef").expect("run id"),
@@ -60,16 +85,16 @@ fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
             key,
             observation_schema: SchemaBinding::new(
                 SchemaBindingValues {
-                    id: Label::parse("heldfile-reference-v1").expect("schema"),
-                    revision: 1,
+                    id: Label::parse(obs_schema).expect("schema"),
+                    revision: obs_rev,
                 },
                 limits,
             )
             .expect("observation schema"),
             fixture_schema: SchemaBinding::new(
                 SchemaBindingValues {
-                    id: Label::parse("heldfile-fixture-v1").expect("schema"),
-                    revision: 1,
+                    id: Label::parse(fix_schema).expect("schema"),
+                    revision: fix_rev,
                 },
                 limits,
             )
@@ -90,6 +115,15 @@ fn owned_root(test: &str) -> FixtureRoot {
 fn run(op: &str, script: &[u8], body: Option<&[u8]>) -> Result<Observation, CaseError> {
     let limits = RunLimits::default();
     let inv = invocation(&limits, op);
+    run_with(&limits, &inv, script, body)
+}
+
+fn run_with(
+    limits: &RunLimits,
+    inv: &CaseInvocation,
+    script: &[u8],
+    body: Option<&[u8]>,
+) -> Result<Observation, CaseError> {
     let script_input = FixtureInput::new(Label::parse("script").expect("slot"), script);
     let body_input;
     let inputs: &[_] = match body {
@@ -99,10 +133,10 @@ fn run(op: &str, script: &[u8], body: Option<&[u8]>) -> Result<Observation, Case
         }
         None => std::slice::from_ref(&script_input),
     };
-    let fix = FixtureAccess::new(inputs, &[], EffectBatch::empty(&limits), &limits).expect("fix");
+    let fix = FixtureAccess::new(inputs, &[], EffectBatch::empty(limits), limits).expect("fix");
     HeldfileReferenceAdapter::new()
         .expect("adapter builds")
-        .execute(&inv, &fix)
+        .execute(inv, &fix)
 }
 
 fn text(obs: &Observation) -> &str {
@@ -253,6 +287,169 @@ fn unknown_op_case_and_bad_script_refuse() {
         .expect_err("missing slot refuses");
     assert_eq!(*err.category(), CaseErrorCategory::Refused);
     assert_eq!(err.stage().as_str(), "admission");
+}
+
+fn lowered(mut apply: impl FnMut(&mut scopebase_testkit::RunLimitValues)) -> RunLimits {
+    let base = RunLimits::default();
+    let mut values = base.values();
+    apply(&mut values);
+    base.lowered(values).expect("lowered limits admit")
+}
+
+fn step_json(step_id: &str, op: &str, inputs: &str, parameters: &str) -> String {
+    format!(
+        "{{\"step_id\":\"{step_id}\",\"operation\":\"{op}\",\
+         \"inputs\":{inputs},\"parameters\":{parameters}}}"
+    )
+}
+
+fn script_steps_json(steps: &[String]) -> Vec<u8> {
+    format!(
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"heldfile-script\",\
+         \"steps\":[{}]}}",
+        steps.join(",")
+    )
+    .into_bytes()
+}
+
+fn check_unsupported(err: &CaseError) {
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapter-schema");
+    assert!(err.step_id().is_none(), "dialect rejection names no step");
+    assert!(err.completed_steps().is_empty());
+}
+
+// F27: an alien observation schema rejects before effects. The script
+// below names a real file and would succeed without the preflight.
+#[test]
+fn alien_observation_schema_rejects_before_effects() {
+    let root = owned_root("alien-obs");
+    root.write_file("real.txt", b"eleven bytes").expect("file");
+    let path = root.path().join("real.txt");
+    let path = path.to_string_lossy().into_owned();
+    let limits = RunLimits::default();
+    let inv = invocation_full(
+        &limits,
+        "alien-schema-v9",
+        1,
+        "heldfile-fixture-v1",
+        1,
+        &script_json("open"),
+    );
+    let script = format!("case=ok;path={path};");
+    let err = run_with(&limits, &inv, script.as_bytes(), None).expect_err("alien schema rejects");
+    check_unsupported(&err);
+    root.close().expect("cleanup");
+}
+
+// F27: alien fixture schema and revision mismatches reject too.
+#[test]
+fn alien_fixture_schema_or_revision_rejects() {
+    let limits = RunLimits::default();
+    for (obs, obs_rev, fix, fix_rev) in [
+        ("heldfile-reference-v1", 1, "alien-fixture-v9", 1),
+        ("heldfile-reference-v1", 2, "heldfile-fixture-v1", 1),
+        ("heldfile-reference-v1", 1, "heldfile-fixture-v1", 2),
+    ] {
+        let inv = invocation_full(&limits, obs, obs_rev, fix, fix_rev, &script_json("open"));
+        let err =
+            run_with(&limits, &inv, b"case=ok;", None).expect_err("alien envelope rejects");
+        check_unsupported(&err);
+    }
+}
+
+// F27: multi-step scripts reject; the old first-step dispatch would
+// have executed the leading valid step instead.
+#[test]
+fn multi_step_script_rejects() {
+    let limits = RunLimits::default();
+    let steps = vec![
+        step_json("first", "open", "[\"script\"]", "[]"),
+        step_json("second", "open", "[\"script\"]", "[]"),
+    ];
+    let inv = invocation_full(
+        &limits,
+        "heldfile-reference-v1",
+        1,
+        "heldfile-fixture-v1",
+        1,
+        &script_steps_json(&steps),
+    );
+    let err = run_with(&limits, &inv, b"case=ok;", None).expect_err("multi-step rejects");
+    check_unsupported(&err);
+    // An empty step list is unconstructible: OperationScript::load
+    // rejects it ("empty script"), so the adapter's zero-step arm is
+    // defensive only and has no loader-built test.
+}
+
+// F27: step parameters and wrong declared-input sets reject. The
+// parse-maps row carries a body slot, so only the declaration is wrong.
+#[test]
+fn parameters_and_input_shape_reject() {
+    let limits = RunLimits::default();
+    let with_params = script_steps_json(&[step_json(
+        "only-step",
+        "open",
+        "[\"script\"]",
+        "[{\"kind\":\"u64\",\"value\":\"7\"}]",
+    )]);
+    let inv = invocation_full(
+        &limits,
+        "heldfile-reference-v1",
+        1,
+        "heldfile-fixture-v1",
+        1,
+        &with_params,
+    );
+    let err = run_with(&limits, &inv, b"case=ok;", None).expect_err("parameters reject");
+    check_unsupported(&err);
+
+    for (op, inputs, body) in [
+        ("open", "[]", None),
+        ("open", "[\"script\",\"body\"]", None),
+        ("open", "[\"body\"]", None),
+        ("parse-maps", "[\"script\"]", Some(MAPS_TWO)),
+    ] {
+        let json = script_steps_json(&[step_json("only-step", op, inputs, "[]")]);
+        let inv = invocation_full(
+            &limits,
+            "heldfile-reference-v1",
+            1,
+            "heldfile-fixture-v1",
+            1,
+            &json,
+        );
+        let err = run_with(&limits, &inv, b"case=ok;", body).expect_err("shape rejects");
+        check_unsupported(&err);
+    }
+}
+
+// F26: the observation honors the invocation's own byte ceiling. The
+// open/stat body is 12 bytes; a ceiling of 4 truncates it. The old
+// code built under adapter defaults and returned the full body.
+#[test]
+fn lowered_observation_ceiling_truncates() {
+    let root = owned_root("low-obs");
+    root.write_file("real.txt", b"eleven bytes").expect("file");
+    let path = root.path().join("real.txt");
+    let path = path.to_string_lossy().into_owned();
+    let limits = lowered(|v| v.observation_bytes = 4);
+    let inv = invocation(&limits, "open");
+    let script = format!("case=ok;path={path};");
+    let obs = run_with(&limits, &inv, script.as_bytes(), None).expect("executes");
+    assert_eq!(obs.bytes(), b"stat");
+    root.close().expect("cleanup");
+}
+
+// F26: refusal diagnostics honor the invocation's own byte ceiling.
+#[test]
+fn lowered_diagnostic_ceiling_truncates_refusal() {
+    let limits = lowered(|v| v.diagnostic_bytes = 8);
+    let inv = invocation(&limits, "open");
+    let err = run_with(&limits, &inv, b"case=nope;", None).expect_err("unknown case refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.diagnostic_bytes().len(), 8);
+    assert_eq!(err.diagnostic_bytes(), b"LX11:unk");
 }
 
 #[test]
