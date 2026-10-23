@@ -14,12 +14,15 @@
 //! Snapshot full-schema conformance, F rows, the strict materializer and
 //! final-index joint compatibility are documented follow-ups, not claimed
 //! here.
+pub mod audit;
 mod creator;
 mod driver;
+pub(crate) mod fork;
 mod manifest;
 mod oracle;
 mod phase;
 mod session;
+pub mod target;
 pub mod wire;
 
 pub use driver::{

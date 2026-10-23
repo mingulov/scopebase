@@ -1,0 +1,20 @@
+{
+  "schema": "tt04-mmap-ledger-schema-v1",
+  "about": "Field contract for FS10 audit ledgers and the golden format vectors in this directory.",
+  "entry": {
+    "syscall": "mmap | munmap | mremap",
+    "fd": "descriptor argument (-1 anonymous, -2 inapplicable)",
+    "anonymous": "bool; anonymous entries carry no dev/ino",
+    "dev": "u64 device of the fd at syscall enter, or null",
+    "ino": "u64 inode of the fd at syscall enter, or null",
+    "path": "readlink of /proc/PID/fd/N at enter, or null",
+    "addr": "u64 requested address (mmap/mremap old address, munmap start)",
+    "len": "u64 requested length",
+    "result": "i64 raw return: address or -errno; mmap failure is exactly -1"
+  },
+  "verdict_rules": [
+    "target-backed = syscall mmap, anonymous false, succeeded (result != -1), dev/ino equal the audited target",
+    "transient = a target-backed mmap whose result address is later covered by a munmap entry",
+    "anonymous successes prove the tracer observes syscalls; they are never attributed"
+  ]
+}

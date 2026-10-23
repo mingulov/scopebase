@@ -1,0 +1,9 @@
+{
+  "schema": "tt04-mmap-ledger-v1",
+  "about": "Golden format vector: anonymous-only workload with a failed mmap (-1) that must not count.",
+  "target": {"dev": 37, "ino": 101216118, "path": "/run/tt04/target.bin"},
+  "events": [
+    {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 4096, "result": 139975124469760},
+    {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 18446744073709551615, "result": -1}
+  ]
+}
