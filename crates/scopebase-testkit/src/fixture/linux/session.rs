@@ -6,10 +6,12 @@
 //! admitted roster and one 1MiB terminal slot, and creates no child, thread,
 //! directory, mount, filter or handler. TT02 prepare/collect run the native
 //! developer driver (real pair launch, prefix advance, drained-raw evidence);
-//! effect-transition retirement stays a documented follow-up.
+//! retire models full Pending → Retired transitions with exactly-once
+//! discoveries and sticky unknown inventory over prepared and failed attempts.
 use super::creator::CreatorContext;
 use super::driver::{
-    launch_pair, DriverError, DriverErrorKind, LaunchConfig, LivePair, Scenario,
+    launch_pair, CleanupProof, DriverError, DriverErrorKind, LaunchConfig, LivePair, Scenario,
+    ShutdownReport,
 };
 use super::manifest::{admit_manifest, AdmittedManifest};
 use super::phase::LinuxProcessFixture;
@@ -113,6 +115,34 @@ struct PreparedEntry {
     excluded: LinuxProcessFixture,
     files: Vec<std::fs::File>,
     scenario: Scenario,
+    origin: InvocationKey,
+    file_identities: Vec<(String, Vec<u8>)>,
+}
+
+/// A failed prepare attempt that still owns retire-relevant evidence.
+/// No native owners remain: the pair was shut down (or never launched)
+/// on the error path. The shutdown report, registered PIDs, settled
+/// flags and sampled-file labels drive retire discoveries, transitions
+/// and the sticky unknown inventory.
+struct FailedEntry {
+    origin: InvocationKey,
+    scenario: Scenario,
+    control: Option<String>,
+    a_pid: Option<u32>,
+    b_pid: Option<u32>,
+    a_settled: bool,
+    b_settled: bool,
+    case_root_removed: bool,
+    file_sampled: Vec<String>,
+    file_identities: Vec<(String, Vec<u8>)>,
+}
+
+/// The sealed per-operation retirement outcome. Repeats emit nothing new
+/// and re-report the stored unknown inventory, never clearing it.
+struct RetiredOp {
+    transitioned: Vec<Label>,
+    unknown: Vec<Label>,
+    complete: bool,
 }
 
 pub struct LinuxFixtureSession {
@@ -124,6 +154,9 @@ pub struct LinuxFixtureSession {
     cancellation: Arc<AtomicBool>,
     slots: Mutex<BTreeMap<u64, SlotSet>>,
     prepared: BTreeMap<u64, PreparedEntry>,
+    failed: BTreeMap<u64, FailedEntry>,
+    retired: BTreeMap<u64, RetiredOp>,
+    run_retired: bool,
     sealed: Option<LinuxOuterCleanupReport>,
     retained_fds: Vec<(&'static str, rustix::fd::OwnedFd)>,
     retained_creator: Option<CreatorContext>,
@@ -370,6 +403,9 @@ impl LinuxFixtureSession {
             cancellation,
             slots: Mutex::new(slots),
             prepared: BTreeMap::new(),
+            failed: BTreeMap::new(),
+            retired: BTreeMap::new(),
+            run_retired: false,
             sealed: None,
             retained_fds: Vec::new(),
             retained_creator: None,
@@ -553,6 +589,8 @@ impl LinuxFixtureSession {
                 excluded: _excluded,
                 files: _files,
                 scenario: _scenario,
+                origin: _origin,
+                file_identities: _file_identities,
             } = entry;
             let report = pair.shutdown();
             effects += 5;
@@ -723,6 +761,87 @@ fn file_scenario(scenario: Scenario) -> bool {
     matches!(scenario, Scenario::FileReplacement | Scenario::DescriptorInventory)
 }
 
+fn file_identity_bytes(file: &std::fs::File) -> Option<Vec<u8>> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata().ok()?;
+    let mut identity = Vec::new();
+    identity.extend_from_slice(&metadata.dev().to_le_bytes());
+    identity.extend_from_slice(&metadata.ino().to_le_bytes());
+    Some(identity)
+}
+
+impl FailedEntry {
+    /// Capture retire-relevant evidence from a live pair before it is shut
+    /// down on a prepare error path. Settled flags stay false until
+    /// [`FailedEntry::apply_shutdown`] observes the actual shutdown report.
+    fn capture_pair(
+        key: &InvocationKey,
+        scenario: Scenario,
+        control: Option<String>,
+        pair: &LivePair,
+        files: &[std::fs::File],
+    ) -> Self {
+        let mut file_sampled = Vec::new();
+        for record in pair.drained_raw() {
+            if record.kind == "mutation" && !file_sampled.contains(&"linux.file-a".to_string()) {
+                file_sampled.push("linux.file-a".to_string());
+            }
+        }
+        let mut file_identities = Vec::new();
+        for (index, file) in files.iter().enumerate() {
+            if let Some(identity) = file_identity_bytes(file) {
+                file_identities.push((
+                    if index == 0 {
+                        "linux.file-a"
+                    } else {
+                        "linux.file-b"
+                    }
+                    .to_string(),
+                    identity,
+                ));
+            }
+        }
+        Self {
+            origin: key.clone(),
+            scenario,
+            control,
+            a_pid: Some(pair.a_pid()),
+            b_pid: Some(pair.b_pid()),
+            a_settled: false,
+            b_settled: false,
+            case_root_removed: false,
+            file_sampled,
+            file_identities,
+        }
+    }
+
+    fn apply_shutdown(&mut self, shutdown: &ShutdownReport) {
+        self.a_settled = shutdown.a_exit.is_some();
+        self.b_settled = shutdown.b_exit.is_some();
+        self.case_root_removed = shutdown.case_root_removed;
+    }
+
+    fn from_launch_proof(
+        key: &InvocationKey,
+        scenario: Scenario,
+        control: Option<String>,
+        proof: &CleanupProof,
+    ) -> Self {
+        Self {
+            origin: key.clone(),
+            scenario,
+            control,
+            a_pid: proof.a_pid,
+            b_pid: proof.b_pid,
+            a_settled: proof.a_exit.is_some(),
+            b_settled: proof.b_exit.is_some(),
+            case_root_removed: proof.case_root_removed,
+            file_sampled: Vec::new(),
+            file_identities: Vec::new(),
+        }
+    }
+}
+
 impl LinuxFixtureSession {
     fn prepare_effects(
         &self,
@@ -730,9 +849,10 @@ impl LinuxFixtureSession {
         operation_id: u64,
         pair: &LivePair,
         files: &[std::fs::File],
-    ) -> Result<EffectBatch, FixtureError> {
+    ) -> Result<(EffectBatch, Vec<(String, Vec<u8>)>), FixtureError> {
         let limits = self.contract.limits();
         let mut registrations = Vec::new();
+        let mut file_identities = Vec::new();
         let mut push = |id: &str, kind: &str, identity: &[u8]| -> Result<(), FixtureError> {
             let registration = EffectRegistration::new(
                 EffectRegistrationValues {
@@ -766,20 +886,23 @@ impl LinuxFixtureSession {
             let mut identity = Vec::new();
             identity.extend_from_slice(&metadata.dev().to_le_bytes());
             identity.extend_from_slice(&metadata.ino().to_le_bytes());
-            push(
-                if index == 0 { "linux.file-a" } else { "linux.file-b" },
-                "linux-file",
-                &identity,
-            )?;
+            let id = if index == 0 {
+                "linux.file-a"
+            } else {
+                "linux.file-b"
+            };
+            push(id, "linux-file", &identity)?;
+            file_identities.push((id.to_string(), identity));
         }
-        EffectBatch::new(
+        let batch = EffectBatch::new(
             EffectBatchValues {
                 registrations,
                 complete: true,
             },
             limits,
         )
-        .map_err(|e| FixtureError::harness(e, Some(key.clone()), FixtureStage::Prepare))
+        .map_err(|e| FixtureError::harness(e, Some(key.clone()), FixtureStage::Prepare))?;
+        Ok((batch, file_identities))
     }
 
     fn prepare_native(
@@ -821,6 +944,24 @@ impl LinuxFixtureSession {
                 "operation is already prepared",
             ));
         }
+        if self.run_retired {
+            return Err(typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Prepare,
+                FixtureErrorCategory::InvalidProtocol,
+                "session run is retired; admission stopped",
+            ));
+        }
+        if self.failed.contains_key(&operation_id) || self.retired.contains_key(&operation_id) {
+            return Err(typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Prepare,
+                FixtureErrorCategory::InvalidProtocol,
+                "operation was already attempted",
+            ));
+        }
         let scenario = admitted.scenario;
         let blobs = (
             admitted.expected_file_a_hex.clone(),
@@ -858,6 +999,9 @@ impl LinuxFixtureSession {
             }
             _ => None,
         };
+        let control_context = control
+            .as_ref()
+            .map(|armed| format!("{}/{}", armed.kind, armed.point));
         let config = LaunchConfig {
             worker: assets.image_a_path.clone(),
             image_a: assets.image_a_path.clone(),
@@ -871,13 +1015,51 @@ impl LinuxFixtureSession {
             cancel: Arc::clone(&self.cancellation),
             control,
         };
-        let pair = launch_pair(&config)
-            .map_err(|e| driver_to_fixture(&limits, &key, FixtureStage::Prepare, &e))?;
+        let pair = match launch_pair(&config) {
+            Ok(pair) => pair,
+            Err(error) => {
+                let proof = error.cleanup_proof();
+                let outage = matches!(
+                    error.kind(),
+                    DriverErrorKind::WorkerDeath | DriverErrorKind::SetupFailure
+                );
+                if outage
+                    || proof.spawned
+                    || proof.case_root_removed
+                    || proof.a_pid.is_some()
+                    || proof.b_pid.is_some()
+                {
+                    self.failed.insert(
+                        operation_id,
+                        FailedEntry::from_launch_proof(
+                            &key,
+                            scenario,
+                            control_context.clone(),
+                            proof,
+                        ),
+                    );
+                }
+                return Err(driver_to_fixture(
+                    &limits,
+                    &key,
+                    FixtureStage::Prepare,
+                    &error,
+                ));
+            }
+        };
         if file_scenario(scenario) {
             let (a, b, mutation) = match blobs {
                 (Some(a), Some(b), Some(mutation)) => (a, b, mutation),
                 _ => {
-                    pair.shutdown();
+                    let failed = FailedEntry::capture_pair(
+                        &key,
+                        scenario,
+                        control_context.clone(),
+                        &pair,
+                        &[],
+                    );
+                    let shutdown = pair.shutdown();
+                    self.fail_pair(operation_id, failed, shutdown);
                     return Err(typed_error(
                         &limits,
                         Some(key.clone()),
@@ -888,7 +1070,10 @@ impl LinuxFixtureSession {
                 }
             };
             if let Err(e) = pair.upload_blobs(&a, &b, &mutation) {
-                pair.shutdown();
+                let failed =
+                    FailedEntry::capture_pair(&key, scenario, control_context.clone(), &pair, &[]);
+                let shutdown = pair.shutdown();
+                self.fail_pair(operation_id, failed, shutdown);
                 return Err(driver_to_fixture(&limits, &key, FixtureStage::Prepare, &e));
             }
         }
@@ -897,7 +1082,10 @@ impl LinuxFixtureSession {
         for step in scenario.steps().iter().take(prefix) {
             let label = Label::parse(step.id).expect("static scenario step");
             if let Err(e) = process.advance(&label) {
-                pair.shutdown();
+                let failed =
+                    FailedEntry::capture_pair(&key, scenario, control_context.clone(), &pair, &[]);
+                let shutdown = pair.shutdown();
+                self.fail_pair(operation_id, failed, shutdown);
                 return Err(phase_to_fixture(&limits, &key, FixtureStage::Prepare, &e));
             }
         }
@@ -912,7 +1100,15 @@ impl LinuxFixtureSession {
                 match pulled {
                     Ok(file) => files.push(file),
                     Err(e) => {
-                        pair.shutdown();
+                        let failed = FailedEntry::capture_pair(
+                            &key,
+                            scenario,
+                            control_context.clone(),
+                            &pair,
+                            &files,
+                        );
+                        let shutdown = pair.shutdown();
+                        self.fail_pair(operation_id, failed, shutdown);
                         return Err(typed_error(
                             &limits,
                             Some(key.clone()),
@@ -924,7 +1120,22 @@ impl LinuxFixtureSession {
                 }
             }
         }
-        let effects = self.prepare_effects(&key, operation_id, &pair, &files)?;
+        let (effects, file_identities) =
+            match self.prepare_effects(&key, operation_id, &pair, &files) {
+                Ok(ok) => ok,
+                Err(error) => {
+                    let failed = FailedEntry::capture_pair(
+                        &key,
+                        scenario,
+                        control_context.clone(),
+                        &pair,
+                        &files,
+                    );
+                    let shutdown = pair.shutdown();
+                    self.fail_pair(operation_id, failed, shutdown);
+                    return Err(error);
+                }
+            };
         let excluded = pair.b_process();
         self.prepared.insert(
             operation_id,
@@ -934,9 +1145,337 @@ impl LinuxFixtureSession {
                 excluded,
                 files,
                 scenario,
+                origin: key.clone(),
+                file_identities,
             },
         );
         Ok((operation_id, effects))
+    }
+}
+
+/// Fixed per-operation seal reserve charged against the request's
+/// retained-byte allowance before any native work. Actual seals are ~1KiB.
+const SEAL_RESERVE_PER_OP: u64 = 2048;
+
+/// First-emission outcome for one operation: discoveries, exact
+/// Pending → Retired transitions, registrations that stay pending, the
+/// sticky unknown inventory and the slot-seal bytes.
+struct OpOutcome {
+    scenario: Scenario,
+    discovered: Vec<EffectRegistration>,
+    transitions: Vec<EffectTransition>,
+    pending_keep: Vec<Label>,
+    unknown: Vec<Label>,
+    complete: bool,
+    note: String,
+}
+
+struct OutcomeBuilder<'a> {
+    limits: &'a RunLimits,
+    op: u64,
+    origin: &'a InvocationKey,
+    discovered: Vec<EffectRegistration>,
+    transitions: Vec<EffectTransition>,
+    pending_keep: Vec<Label>,
+    unknown: Vec<Label>,
+}
+
+impl<'a> OutcomeBuilder<'a> {
+    fn new(limits: &'a RunLimits, op: u64, origin: &'a InvocationKey) -> Self {
+        Self {
+            limits,
+            op,
+            origin,
+            discovered: Vec::new(),
+            transitions: Vec::new(),
+            pending_keep: Vec::new(),
+            unknown: Vec::new(),
+        }
+    }
+
+    fn transition_for(&self, resource_id: &str, identity: &[u8]) -> EffectTransition {
+        let short = resource_id.strip_prefix("linux.").unwrap_or(resource_id);
+        EffectTransition::new(
+            EffectTransitionValues {
+                transition_id: Label::parse(&format!("linux.retire.{}.{short}", self.op))
+                    .expect("bounded transition id"),
+                effect: PendingEffectRef::new(
+                    PendingEffectRefValues {
+                        resource_id: Label::parse(resource_id).expect("static resource label"),
+                        owner: Owner::Fixture,
+                        origin: self.origin.clone(),
+                        identity_sha256: Digest256::of_bytes(identity),
+                    },
+                    self.limits,
+                )
+                .expect("bounded pending ref"),
+                to: TransitionTo::Retired,
+                evidence_ids: vec![Label::parse(&format!("linux.proof.{}.{short}", self.op))
+                    .expect("bounded evidence id")],
+            },
+            self.limits,
+        )
+        .expect("bounded linux transition")
+    }
+
+    /// A prepare-registered resource: transition it when actually settled,
+    /// else keep it pending and mark it sticky-unknown.
+    fn known(&mut self, resource_id: &str, identity: &[u8], settled: bool) {
+        if settled {
+            self.transitions
+                .push(self.transition_for(resource_id, identity));
+        } else {
+            let label = Label::parse(resource_id).expect("static resource label");
+            self.pending_keep.push(label.clone());
+            self.unknown.push(label);
+        }
+    }
+
+    /// A retire-discovered resource: register it exactly once here, then
+    /// transition it when actually settled.
+    fn found(&mut self, resource_id: &str, kind: &str, identity: &[u8], settled: bool) {
+        self.discovered.push(
+            EffectRegistration::new(
+                EffectRegistrationValues {
+                    resource_id: Label::parse(resource_id).expect("static resource label"),
+                    owner: Owner::Fixture,
+                    origin: self.origin.clone(),
+                    kind: Label::parse(kind).expect("static effect kind"),
+                    identity_sha256: Digest256::of_bytes(identity),
+                    recovery_evidence_id: None,
+                },
+                self.limits,
+            )
+            .expect("bounded linux discovery"),
+        );
+        if settled {
+            self.transitions
+                .push(self.transition_for(resource_id, identity));
+        } else {
+            let label = Label::parse(resource_id).expect("static resource label");
+            self.pending_keep.push(label.clone());
+            self.unknown.push(label);
+        }
+    }
+
+    /// Existed but identity unrecoverable: sticky unknown without any
+    /// fabricated registration.
+    fn unprovable(&mut self, resource_id: &str) {
+        self.unknown
+            .push(Label::parse(resource_id).expect("static resource label"));
+    }
+
+    fn finish(mut self, scenario: Scenario) -> OpOutcome {
+        self.unknown.sort();
+        self.unknown.dedup();
+        self.pending_keep.sort();
+        self.pending_keep.dedup();
+        let complete = self.unknown.is_empty() && self.pending_keep.is_empty();
+        let note = format!(
+            "op {}: +{} discovered ~{} transitioned ?{} unknown !{} pending",
+            self.op,
+            self.discovered.len(),
+            self.transitions.len(),
+            self.unknown.len(),
+            self.pending_keep.len()
+        );
+        OpOutcome {
+            scenario,
+            discovered: self.discovered,
+            transitions: self.transitions,
+            pending_keep: self.pending_keep,
+            unknown: self.unknown,
+            complete,
+            note,
+        }
+    }
+}
+
+fn echo_retirement(
+    limits: &RunLimits,
+    request: &RetireRequest,
+    complete: bool,
+    diagnostic: Option<String>,
+) -> RetirementReport {
+    let mut snapshot = request.known_pending().to_vec();
+    snapshot.sort_by(|a, b| a.resource_id().cmp(b.resource_id()));
+    let mut complete = complete;
+    if snapshot.len() as u64 > limits.effects_total() {
+        snapshot.truncate(limits.effects_total() as usize);
+        complete = false;
+    }
+    let mut diagnostic = diagnostic;
+    if let Some(text) = diagnostic.as_mut() {
+        text.truncate(limits.diagnostic_bytes() as usize);
+    }
+    RetirementReport::new(
+        RetirementReportValues {
+            call_id: request.call_id(),
+            owner: request.owner(),
+            scope: request.scope().clone(),
+            discovered: vec![],
+            transitions: vec![],
+            pending_snapshot: snapshot,
+            complete,
+            diagnostic,
+        },
+        limits,
+    )
+    .expect("bounded linux retirement echo")
+}
+
+fn seal_bytes(
+    op: u64,
+    run_id: &str,
+    scenario: Scenario,
+    slot: &str,
+    outcome: &OpOutcome,
+) -> Vec<u8> {
+    let ids = |labels: &[Label]| {
+        labels
+            .iter()
+            .map(|l| format!("{:?}", l.as_str()))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let discovered = ids(&outcome
+        .discovered
+        .iter()
+        .map(|r| r.resource_id().clone())
+        .collect::<Vec<_>>());
+    let transitions = ids(&outcome
+        .transitions
+        .iter()
+        .map(|t| t.effect().resource_id().clone())
+        .collect::<Vec<_>>());
+    format!(
+        "{{\"schema\":\"tt03.linux.snapshot\",\"revision\":1,\"slot\":{slot:?},\
+         \"run_id\":{run_id:?},\"operation_id\":\"{op}\",\"scenario\":{:?},\
+         \"discovered\":[{discovered}],\"transitions\":[{transitions}],\
+         \"pending\":[{}],\"unknown\":[{}],\"complete\":{},\
+         \"conformance\":\"subset-retire\"}}",
+        scenario.as_str(),
+        ids(&outcome.pending_keep),
+        ids(&outcome.unknown),
+        outcome.complete,
+    )
+    .into_bytes()
+}
+
+impl LinuxFixtureSession {
+    fn fail_pair(&mut self, operation_id: u64, failed: FailedEntry, shutdown: ShutdownReport) {
+        let mut failed = failed;
+        failed.apply_shutdown(&shutdown);
+        self.failed.insert(operation_id, failed);
+    }
+
+    /// Retire a prepared pair: cooperative close, exact reaps, explicit
+    /// retained-File closes and FD-relative case-dir removal through the
+    /// single shutdown, then transitions only for actually settled
+    /// composites. Inventory children recorded during advance are
+    /// discovered here, exactly once.
+    fn retire_prepared(&self, op: u64, entry: PreparedEntry, limits: &RunLimits) -> OpOutcome {
+        let PreparedEntry {
+            pair,
+            process: _process,
+            excluded: _excluded,
+            files,
+            scenario,
+            origin,
+            file_identities,
+        } = entry;
+        let a_pid = pair.a_pid();
+        let b_pid = pair.b_pid();
+        let mut inventory: Vec<(String, Vec<u8>, bool)> = pair
+            .inventory_children()
+            .iter()
+            .map(|record| {
+                (
+                    if record.positive {
+                        "linux.inventory-positive"
+                    } else {
+                        "linux.inventory-negative"
+                    }
+                    .to_string(),
+                    record.pid.to_le_bytes().to_vec(),
+                    record.reaped,
+                )
+            })
+            .collect();
+        inventory.sort_by(|a, b| a.0.cmp(&b.0));
+        inventory.dedup_by(|a, b| a.0 == b.0);
+        let shutdown = pair.shutdown();
+        for file in files {
+            let owned: rustix::fd::OwnedFd = file.into();
+            super::creator::explicit_close_fd(owned);
+        }
+        let mut out = OutcomeBuilder::new(limits, op, &origin);
+        out.known(
+            "linux.case-root",
+            &op.to_le_bytes(),
+            shutdown.case_root_removed,
+        );
+        out.known(
+            "linux.child-a",
+            &a_pid.to_le_bytes(),
+            shutdown.a_exit.is_some(),
+        );
+        out.known(
+            "linux.child-b",
+            &b_pid.to_le_bytes(),
+            shutdown.b_exit.is_some(),
+        );
+        for (label, identity) in &file_identities {
+            out.known(label, identity, true);
+        }
+        for (label, identity, reaped) in &inventory {
+            out.found(label, "linux-inventory-child", identity, *reaped);
+        }
+        out.finish(scenario)
+    }
+
+    /// Retire a failed attempt: no native owners remain, so this only
+    /// models the recorded evidence. Registrations cover exactly the
+    /// proven prefix; sampled-but-unrecoverable files stay sticky-unknown.
+    fn retire_failed(&self, op: u64, entry: FailedEntry, limits: &RunLimits) -> OpOutcome {
+        let mut out = OutcomeBuilder::new(limits, op, &entry.origin);
+        out.found(
+            "linux.case-root",
+            "linux-case-root",
+            &op.to_le_bytes(),
+            entry.case_root_removed,
+        );
+        if let Some(pid) = entry.a_pid {
+            out.found(
+                "linux.child-a",
+                "linux-child",
+                &pid.to_le_bytes(),
+                entry.a_settled,
+            );
+        }
+        if let Some(pid) = entry.b_pid {
+            out.found(
+                "linux.child-b",
+                "linux-child",
+                &pid.to_le_bytes(),
+                entry.b_settled,
+            );
+        }
+        for (label, identity) in &entry.file_identities {
+            out.found(label, "linux-file", identity, true);
+        }
+        for label in &entry.file_sampled {
+            if !entry.file_identities.iter().any(|(l, _)| l == label) {
+                out.unprovable(label);
+            }
+        }
+        let control = entry.control.clone();
+        let scenario = entry.scenario;
+        let mut outcome = out.finish(scenario);
+        if let Some(control) = control {
+            outcome.note.push_str(&format!("; control {control}"));
+        }
+        outcome
     }
 }
 
@@ -1050,20 +1589,215 @@ impl FixtureSession for LinuxFixtureSession {
         .map_err(|e| FixtureError::harness(e, Some(key), FixtureStage::Collect))
     }
     fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        // Owner, deadline, record/byte allowances and ledger bounds gate
+        // the whole call before any native work: a withheld call emits
+        // nothing and leaves every entry untouched for the run-scope retry.
+        // Callers must have ended all FixtureAccess borrows first; the
+        // engine drops access before retiring.
+        let limits = self.contract.limits().clone();
+        if request.owner() != Owner::Fixture {
+            return echo_retirement(
+                &limits,
+                request,
+                false,
+                Some(format!(
+                    "fixture retire serves only Owner::Fixture, got {:?}",
+                    request.owner()
+                )),
+            );
+        }
+        if Instant::now() >= request.deadline() {
+            return echo_retirement(
+                &limits,
+                request,
+                false,
+                Some("retirement deadline expired; no work performed".to_string()),
+            );
+        }
+        let run_scope = matches!(request.scope(), CleanupScope::Run(_));
+        if run_scope {
+            self.run_retired = true;
+        }
+        let ops: Vec<u64> = match request.scope() {
+            CleanupScope::Case(key) => vec![*key.operation_id()],
+            CleanupScope::Run(_) => {
+                let mut ops: Vec<u64> = self
+                    .prepared
+                    .keys()
+                    .chain(self.failed.keys())
+                    .chain(self.retired.keys())
+                    .copied()
+                    .collect();
+                ops.sort_unstable();
+                ops.dedup();
+                ops
+            }
+        };
+        // Outstanding ops still need native work plus first emission.
+        let outstanding: Vec<u64> = ops
+            .iter()
+            .copied()
+            .filter(|op| !self.retired.contains_key(op))
+            .filter(|op| self.prepared.contains_key(op) || self.failed.contains_key(op))
+            .collect();
+        // Upper bound: at most seven registrations/transitions per op.
+        let bound = outstanding.len() as u64 * 7;
+        if bound > request.remaining_records() {
+            return echo_retirement(
+                &limits,
+                request,
+                false,
+                Some(format!(
+                    "retirement record allowance exhausted: need up to {bound} for {} op(s)",
+                    outstanding.len()
+                )),
+            );
+        }
+        if outstanding.len() as u64 * SEAL_RESERVE_PER_OP > request.remaining_retained_bytes() {
+            return echo_retirement(
+                &limits,
+                request,
+                false,
+                Some("retirement byte allowance exhausted; no work performed".to_string()),
+            );
+        }
+        let ledger_cap = limits.effects_total();
+        if bound * 2 + request.known_pending().len() as u64 > ledger_cap {
+            return echo_retirement(
+                &limits,
+                request,
+                false,
+                Some("retirement exceeds ledger bounds; no work performed".to_string()),
+            );
+        }
+        // Native work plus first emission for outstanding ops.
+        let mut outcomes: Vec<(u64, OpOutcome)> = Vec::new();
+        for op in &outstanding {
+            let op = *op;
+            if let Some(entry) = self.prepared.remove(&op) {
+                outcomes.push((op, self.retire_prepared(op, entry, &limits)));
+            } else if let Some(entry) = self.failed.remove(&op) {
+                outcomes.push((op, self.retire_failed(op, entry, &limits)));
+            }
+        }
+        // Aggregate: repeats contribute stored unknown/completeness only.
+        let mut discovered: Vec<EffectRegistration> = Vec::new();
+        let mut transitions: Vec<EffectTransition> = Vec::new();
+        let mut transitioned_ids: Vec<Label> = Vec::new();
+        let mut pending_ids: Vec<Label> = Vec::new();
+        let mut unknown_all: Vec<Label> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        let mut complete = true;
+        for op in &ops {
+            let op = *op;
+            if let Some(outcome) = outcomes.iter().find(|(o, _)| *o == op).map(|(_, o)| o) {
+                for registration in &outcome.discovered {
+                    if !discovered
+                        .iter()
+                        .any(|r: &EffectRegistration| r.resource_id() == registration.resource_id())
+                    {
+                        discovered.push(registration.clone());
+                    }
+                }
+                for transition in &outcome.transitions {
+                    transitioned_ids.push(transition.effect().resource_id().clone());
+                    transitions.push(transition.clone());
+                }
+                pending_ids.extend(outcome.pending_keep.iter().cloned());
+                unknown_all.extend(outcome.unknown.iter().cloned());
+                if !outcome.complete {
+                    complete = false;
+                }
+                notes.push(outcome.note.clone());
+                // Seal the scope slot; the first seal wins, repeats keep it.
+                let seal = seal_bytes(
+                    op,
+                    self.contract.run_id().as_str(),
+                    outcome.scenario,
+                    if run_scope {
+                        "run_retire"
+                    } else {
+                        "case_retire"
+                    },
+                    outcome,
+                );
+                if let Some(set) = self.slots.lock().expect("slot lock").get_mut(&op) {
+                    if seal.len() as u64 <= SEAL_RESERVE_PER_OP {
+                        if run_scope {
+                            let _ = set.run_retire.set(seal);
+                        } else {
+                            let _ = set.case_retire.set(seal);
+                        }
+                    } else {
+                        notes.push(format!("op {op}: seal exceeds reserve; transitions kept"));
+                    }
+                }
+                self.retired.insert(
+                    op,
+                    RetiredOp {
+                        transitioned: outcome
+                            .transitions
+                            .iter()
+                            .map(|t| t.effect().resource_id().clone())
+                            .collect(),
+                        unknown: outcome.unknown.clone(),
+                        complete: outcome.complete,
+                    },
+                );
+            } else if let Some(prior) = self.retired.get(&op) {
+                unknown_all.extend(prior.unknown.iter().cloned());
+                if !prior.complete {
+                    complete = false;
+                }
+                notes.push(format!(
+                    "op {op}: already retired ({} transitioned, {} unknown)",
+                    prior.transitioned.len(),
+                    prior.unknown.len()
+                ));
+            }
+        }
+        discovered.sort_by(|a, b| a.resource_id().cmp(b.resource_id()));
+        let mut snapshot: Vec<PendingEffectRef> = request
+            .known_pending()
+            .iter()
+            .filter(|p| !transitioned_ids.contains(p.resource_id()))
+            .cloned()
+            .collect();
+        for registration in &discovered {
+            let id = registration.resource_id();
+            if pending_ids.contains(id) && !transitioned_ids.contains(id) {
+                snapshot.push(PendingEffectRef::registration(registration));
+            }
+        }
+        snapshot.sort_by(|a, b| a.resource_id().cmp(b.resource_id()));
+        let mut diagnostic = if notes.is_empty() {
+            format!(
+                "{} retire: nothing outstanding",
+                if run_scope { "run" } else { "case" }
+            )
+        } else {
+            notes.join("; ")
+        };
+        if !unknown_all.is_empty() {
+            unknown_all.sort();
+            unknown_all.dedup();
+            let names: Vec<&str> = unknown_all.iter().map(Label::as_str).collect();
+            diagnostic.push_str(&format!("; sticky unknown: {}", names.join(",")));
+        }
+        let cap = limits.diagnostic_bytes() as usize;
+        diagnostic.truncate(cap);
         RetirementReport::new(
             RetirementReportValues {
                 call_id: request.call_id(),
                 owner: request.owner(),
                 scope: request.scope().clone(),
-                discovered: vec![],
-                transitions: vec![],
-                pending_snapshot: request.known_pending().to_vec(),
-                complete: true,
-                diagnostic: Some(
-                    "prepared linux pairs shut down at finalize; transitions unmodeled".to_string(),
-                ),
+                discovered,
+                transitions,
+                pending_snapshot: snapshot,
+                complete,
+                diagnostic: Some(diagnostic),
             },
-            self.contract.limits(),
+            &limits,
         )
         .expect("bounded linux retirement")
     }
@@ -1260,3 +1994,388 @@ impl std::fmt::Display for LinuxOuterCleanupAdmissionError {
     }
 }
 impl std::error::Error for LinuxOuterCleanupAdmissionError {}
+
+// Native retire tests live in-crate because RetireRequest has no public
+// constructor by design (only the runner builds one). These craft requests
+// directly; the worker binary is never needed here because the
+// after_case_root_register setup failure fires before any spawn.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        CaseCatalog, CaseInvocation, CatalogLimits, CleanupScope, Owner, ProfileId, ProfilePlan,
+        RetireRequest, RunContract,
+    };
+    use std::fs::File;
+    use std::time::Duration;
+
+    fn unit_contract() -> (ProfilePlan, RunContract) {
+        let dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/harness");
+        let catalog = CaseCatalog::load(
+            &std::fs::read(dir.join("catalog.json")).unwrap(),
+            CatalogLimits::default(),
+        )
+        .unwrap();
+        let plan =
+            ProfilePlan::select(&catalog, &ProfileId::parse("tt02-harness-v1").unwrap()).unwrap();
+        let contract = RunContract::load(
+            &catalog,
+            &plan,
+            &std::fs::read(dir.join("contract.json")).unwrap(),
+            crate::RunLimits::default(),
+        )
+        .unwrap();
+        (plan, contract)
+    }
+
+    fn unit_manifest(
+        run_hex: &str,
+        operation_id: u64,
+        control: Option<(&str, &str, &str)>,
+    ) -> Vec<u8> {
+        let steps: Vec<serde_json::Value> = Scenario::LeaderLifecycle
+            .steps()
+            .iter()
+            .map(|s| {
+                serde_json::json!({"id": s.id, "action": s.action.as_str(), "actor": s.actor.as_str()})
+            })
+            .collect();
+        let control_value = match control {
+            Some((kind, step_id, point)) => {
+                serde_json::json!({"kind": kind, "step_id": step_id, "point": point})
+            }
+            None => serde_json::Value::Null,
+        };
+        serde_json::json!({
+            "schema_version": 1,
+            "kind": "tt03-linux-fixture",
+            "run_id": run_hex,
+            "image_a_artifact": "tt03-worker-a",
+            "image_b_artifact": "tt03-worker-b",
+            "limits": {"datagrams": 568, "payload_bytes": 65536},
+            "invocations": [{
+                "key": {
+                    "run_id": run_hex,
+                    "case_key": {"case_id": "TT03.first", "case_version": 1, "cell_id": "host"},
+                    "attempt": 1,
+                    "operation_id": operation_id.to_string(),
+                },
+                "scenario": "leader-lifecycle",
+                "steps": steps,
+                "control": control_value,
+                "expected_file_a_hex": null,
+                "expected_file_b_hex": null,
+                "mutation_hex": null,
+                "driver_schedule": null,
+            }],
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn unit_dir(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!(
+            "tt03-unit-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("image-a"), b"fake-image-a").unwrap();
+        std::fs::write(base.join("image-b"), b"fake-image-b").unwrap();
+        base
+    }
+
+    fn unit_session(
+        dir: &std::path::Path,
+        contract: &RunContract,
+        control: Option<(&str, &str, &str)>,
+    ) -> (LinuxFixtureSession, CaseInvocation) {
+        let key = contract.schedule()[0].clone();
+        let rule = contract
+            .case_rules()
+            .iter()
+            .find(|r| r.case_key() == key.case_key())
+            .unwrap();
+        let invocation = CaseInvocation::new(
+            crate::CaseInvocationValues {
+                key: key.clone(),
+                observation_schema: rule.observation_schema().clone(),
+                fixture_schema: rule.fixture_schema().clone(),
+                script: rule.script().clone(),
+                limits: contract.limits().clone(),
+            },
+            contract.limits(),
+        )
+        .unwrap();
+        let op = *key.operation_id();
+        let files = LinuxFixtureFiles {
+            image_a: File::open(dir.join("image-a")).unwrap(),
+            image_a_path: dir.join("image-a"),
+            image_b: File::open(dir.join("image-b")).unwrap(),
+            image_b_path: dir.join("image-b"),
+            root: File::open(dir).unwrap(),
+        };
+        let manifest = unit_manifest(contract.run_id().as_str(), op, control);
+        let session = LinuxFixtureSession::new(
+            contract.clone(),
+            files,
+            &manifest,
+            Instant::now() + Duration::from_secs(60),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        (session, invocation)
+    }
+
+    fn retire_request(
+        call_id: u64,
+        owner: Owner,
+        scope: CleanupScope,
+        remaining_records: u64,
+        remaining_retained_bytes: u64,
+        deadline: Instant,
+    ) -> RetireRequest {
+        RetireRequest {
+            call_id,
+            owner,
+            scope,
+            deadline,
+            remaining: deadline.saturating_duration_since(Instant::now()),
+            known_pending: vec![],
+            uncertainty_ids: vec![],
+            remaining_records,
+            remaining_retained_bytes,
+        }
+    }
+
+    fn prepare_err(
+        session: &mut LinuxFixtureSession,
+        invocation: &CaseInvocation,
+    ) -> crate::FixtureError {
+        match session.prepare(invocation) {
+            Ok(_) => panic!("prepare must fail"),
+            Err(e) => e,
+        }
+    }
+
+    fn generous_request(call_id: u64, scope: CleanupScope) -> RetireRequest {
+        retire_request(
+            call_id,
+            Owner::Fixture,
+            scope,
+            4096,
+            1 << 20,
+            Instant::now() + Duration::from_secs(5),
+        )
+    }
+
+    #[test]
+    fn retire_rejects_foreign_owner_without_work() {
+        let dir = unit_dir("owner");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(&dir, &contract, None);
+        let request = retire_request(
+            2,
+            Owner::Adapter,
+            CleanupScope::Case(invocation.key().clone()),
+            4096,
+            1 << 20,
+            Instant::now() + Duration::from_secs(5),
+        );
+        let report = session.retire(&request);
+        assert_eq!(*report.call_id(), 2);
+        assert!(report.discovered().is_empty());
+        assert!(report.transitions().is_empty());
+        assert!(!*report.complete());
+        let diagnostic = report.diagnostic().as_ref().expect("retire diagnostic");
+        assert!(diagnostic.contains("Owner::Fixture"), "{diagnostic}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retire_unknown_operation_echoes_complete() {
+        let dir = unit_dir("unknown-op");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(&dir, &contract, None);
+        let request = generous_request(2, CleanupScope::Case(invocation.key().clone()));
+        let report = session.retire(&request);
+        assert!(*report.complete());
+        assert!(report.discovered().is_empty());
+        assert!(report.transitions().is_empty());
+        assert!(report.pending_snapshot().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retire_refuses_expired_deadline_without_work() {
+        let dir = unit_dir("deadline");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(&dir, &contract, None);
+        let request = retire_request(
+            2,
+            Owner::Fixture,
+            CleanupScope::Case(invocation.key().clone()),
+            4096,
+            1 << 20,
+            Instant::now() - Duration::from_secs(1),
+        );
+        let report = session.retire(&request);
+        assert!(!*report.complete());
+        assert!(report.transitions().is_empty());
+        let diagnostic = report.diagnostic().as_ref().expect("retire diagnostic");
+        assert!(diagnostic.contains("deadline"), "{diagnostic}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retire_discovers_setup_failure_case_root() {
+        let dir = unit_dir("setup-fail");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(
+            &dir,
+            &contract,
+            Some((
+                "parent_failure_after_register",
+                "s01-ready",
+                "after_case_root_register",
+            )),
+        );
+        let err = prepare_err(&mut session, &invocation);
+        assert_eq!(*err.category(), FixtureErrorCategory::Other);
+        let request = generous_request(2, CleanupScope::Case(invocation.key().clone()));
+        let report = session.retire(&request);
+        let discovered: Vec<&str> = report
+            .discovered()
+            .iter()
+            .map(|r| r.resource_id().as_str())
+            .collect();
+        assert_eq!(discovered, vec!["linux.case-root"]);
+        let transitioned: Vec<&str> = report
+            .transitions()
+            .iter()
+            .map(|t| t.effect().resource_id().as_str())
+            .collect();
+        assert_eq!(transitioned, vec!["linux.case-root"]);
+        assert!(*report.complete());
+        assert!(report.pending_snapshot().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retire_withholds_work_when_records_exhausted_then_retries() {
+        let dir = unit_dir("records");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(
+            &dir,
+            &contract,
+            Some((
+                "parent_failure_after_register",
+                "s01-ready",
+                "after_case_root_register",
+            )),
+        );
+        prepare_err(&mut session, &invocation);
+        let starved = retire_request(
+            2,
+            Owner::Fixture,
+            CleanupScope::Case(invocation.key().clone()),
+            0,
+            1 << 20,
+            Instant::now() + Duration::from_secs(5),
+        );
+        let report = session.retire(&starved);
+        assert!(!*report.complete());
+        assert!(
+            report.discovered().is_empty(),
+            "all-or-nothing: no partial emission"
+        );
+        assert!(report.transitions().is_empty());
+        let diagnostic = report.diagnostic().as_ref().expect("retire diagnostic");
+        assert!(diagnostic.contains("allowance"), "{diagnostic}");
+        // The run-scope retry is the second opportunity; it emits everything.
+        let retry = generous_request(4, CleanupScope::Run(contract.run_id().clone()));
+        let report = session.retire(&retry);
+        assert_eq!(report.discovered().len(), 1);
+        assert_eq!(report.transitions().len(), 1);
+        assert!(*report.complete());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retire_is_idempotent_for_failed_operation() {
+        let dir = unit_dir("idempotent");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(
+            &dir,
+            &contract,
+            Some((
+                "parent_failure_after_register",
+                "s01-ready",
+                "after_case_root_register",
+            )),
+        );
+        prepare_err(&mut session, &invocation);
+        let first = session.retire(&generous_request(
+            2,
+            CleanupScope::Case(invocation.key().clone()),
+        ));
+        assert!(*first.complete());
+        let second = session.retire(&generous_request(
+            4,
+            CleanupScope::Run(contract.run_id().clone()),
+        ));
+        assert!(second.discovered().is_empty(), "no rediscovery on retry");
+        assert!(
+            second.transitions().is_empty(),
+            "no double transition on retry"
+        );
+        assert!(*second.complete());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn prepare_refuses_already_attempted_operation() {
+        let dir = unit_dir("reattempt");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(
+            &dir,
+            &contract,
+            Some((
+                "parent_failure_after_register",
+                "s01-ready",
+                "after_case_root_register",
+            )),
+        );
+        prepare_err(&mut session, &invocation);
+        let err = prepare_err(&mut session, &invocation);
+        assert!(
+            String::from_utf8_lossy(err.diagnostic_bytes()).contains("already attempted"),
+            "admission stops after the attempt: {:?}",
+            String::from_utf8_lossy(err.diagnostic_bytes())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn run_retire_stops_admission() {
+        let dir = unit_dir("run-stop");
+        let (_, contract) = unit_contract();
+        let (mut session, invocation) = unit_session(&dir, &contract, None);
+        let report = session.retire(&generous_request(
+            4,
+            CleanupScope::Run(contract.run_id().clone()),
+        ));
+        assert!(*report.complete());
+        let err = prepare_err(&mut session, &invocation);
+        assert!(
+            String::from_utf8_lossy(err.diagnostic_bytes()).contains("run is retired"),
+            "run retire stops admission: {:?}",
+            String::from_utf8_lossy(err.diagnostic_bytes())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

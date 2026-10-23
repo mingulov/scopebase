@@ -1712,6 +1712,7 @@
         "tests/fixtures/harness/verdict-truth.json",
         "tests/fixtures/harness/verifier-expected.json",
         "tests/fixtures/harness/verifier-input.json",
+        "tests/fixtures/tt03/contract.json",
         "tests/harness_controls.rs",
         "tests/verdict.rs",
         "src/bpf/adapter.rs",
