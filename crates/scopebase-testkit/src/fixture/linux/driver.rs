@@ -9,8 +9,12 @@
 //! | TT03-SF-07 lifecycle order | P `src/process.rs:2381-2384,2388-2392,2396-2400,2404-2410` @ `2c2713e66292b0d2688508a25f79e813ae823d81` | ADAPT_LIFECYCLE_ONLY: original birth/pidfd capture, live WNOWAIT, kill+poll+WNOWAIT, exact reap then ECHILD; denial helper, ReapOnDrop and helper ACKs not copied |
 //! | TT03-SF-14 no-control | O `tests/target_lifecycle.rs:359-375` @ `4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a` | ADAPT_NO_CONTROL_FACET: borrow-only observation leaves independent A/B sentinels responsive; signals/waits stay in original-parent custody outside any subject window |
 //!
-//! Exec handover, sibling threads, descriptor inventory and Snapshot
-//! full-schema conformance are documented follow-ups.
+//! Resume handshake/regrant, sibling/task verification, third-slot canary
+//! inventory and the deadline hold are NEW narrow fixture composition over
+//! accepted TT02, as the TT03 contract authorizes.
+//!
+//! Snapshot full-schema conformance and worker-death outage injection are
+//! documented follow-ups.
 pub use super::manifest::{Scenario, ScenarioStep};
 use super::oracle::{exited_unreaped_owned, TRICKY_COMM};
 use super::wire::{
@@ -32,6 +36,8 @@ const IMAGE_BYTES_MAX: u64 = 33_554_432;
 const FILE_BYTES_MAX: usize = 65536;
 
 pub struct LaunchConfig {
+    /// Spawnable worker binary for auxiliary (inventory) children. The A/B
+    /// slots boot from their own images below.
     pub worker: std::path::PathBuf,
     pub image_a: std::path::PathBuf,
     pub image_b: std::path::PathBuf,
@@ -115,9 +121,6 @@ fn protocol(step: Option<&str>, detail: impl Into<String>) -> DriverError {
 }
 fn refused(step: Option<&str>, detail: impl Into<String>) -> DriverError {
     DriverError::new(DriverErrorKind::Refused, step, detail.into())
-}
-fn deferred(step: &str, detail: impl Into<String>) -> DriverError {
-    DriverError::new(DriverErrorKind::Deferred, Some(step), detail.into())
 }
 fn io_error(step: Option<&str>, error: rustix::io::Errno) -> DriverError {
     let mut e = DriverError::new(
@@ -447,6 +450,10 @@ pub(crate) struct PairInner {
     tid: Option<u32>,
     invocation: serde_json::Value,
     images: Vec<ImageExpectation>,
+    image_shas: [[u8; 32]; 2],
+    worker: std::path::PathBuf,
+    deadline_ns: u64,
+    manifest_sha_hex: String,
     root: OwnedFd,
     cancel: Arc<AtomicBool>,
 }
@@ -480,6 +487,11 @@ fn hello_exchange(
     marker: &'static str,
     deadline_ns: u64,
     manifest_sha_hex: &str,
+    mode: &str,
+    completed_steps: u32,
+    image_epoch: u32,
+    next_record: u32,
+    step: Option<&str>,
 ) -> Result<(), DriverError> {
     let steps: Vec<serde_json::Value> = scenario
         .steps()
@@ -489,7 +501,7 @@ fn hello_exchange(
     let request = serde_json::json!({
         "schema_version": 1,
         "invocation": invocation,
-        "mode": "boot",
+        "mode": mode,
         "slot": slot.as_str(),
         "scenario": scenario.as_str(),
         "manifest_sha256": manifest_sha_hex,
@@ -500,24 +512,94 @@ fn hello_exchange(
              "path_hex": images[1].path_hex, "sha256": images[1].sha_hex},
         ],
         "steps": steps,
-        "completed_steps": 0,
-        "image_epoch": 1,
-        "next_record_index": 1,
+        "completed_steps": completed_steps,
+        "image_epoch": image_epoch,
+        "next_record_index": next_record,
         "execution_deadline_ns": deadline_ns.to_string(),
         "limits": transport_limits(),
         "blobs": [],
         "control": null,
         "inherited_fds": [0, 1, 2],
     });
-    let body = canonical_json(&request).map_err(|e| wire_error(None, e))?;
-    channel.send(None, MessageKind::HelloRequest, 0, body.as_bytes(), None)?;
-    let (_, reply_bytes, _) = channel.recv(None, MessageKind::HelloReply, false)?;
-    let reply = parse_canonical(&reply_bytes, 4096).map_err(|e| wire_error(None, e))?;
-    validate_hello_reply(&reply, slot.as_str()).map_err(|e| wire_error(None, e))?;
-    if reply["pid"] != channel.child.pid || reply["image_marker"] != marker {
-        return Err(protocol(None, "hello reply identity mismatch"));
+    let body = canonical_json(&request).map_err(|e| wire_error(step, e))?;
+    channel.send(step, MessageKind::HelloRequest, 0, body.as_bytes(), None)?;
+    let (_, reply_bytes, _) = channel.recv(step, MessageKind::HelloReply, false)?;
+    let reply = parse_canonical(&reply_bytes, 4096).map_err(|e| wire_error(step, e))?;
+    validate_hello_reply(&reply, slot.as_str()).map_err(|e| wire_error(step, e))?;
+    if reply["pid"] != channel.child.pid
+        || reply["image_marker"] != marker
+        || reply["mode"] != mode
+        || reply["image_epoch"] != image_epoch
+    {
+        return Err(protocol(step, "hello reply identity mismatch"));
     }
     Ok(())
+}
+
+/// Post-exec resume: the worker already exec'd after its pre-exec reply, so
+/// the parent handshakes the new image, resets record continuity,
+/// re-authenticates the running executable and regrants the case root (all
+/// CLOEXEC worker state was dropped by the exec).
+fn resume_after_exec(
+    inner: &mut PairInner,
+    step_id: &str,
+    script_index: u32,
+    marker: &'static str,
+    target_index: usize,
+) -> Result<(), DriverError> {
+    let new_epoch = inner.a.image_epoch.checked_add(1).ok_or_else(|| {
+        protocol(Some(step_id), "image epoch overflow at resume")
+    })?;
+    let completed = inner.completed.len() as u32;
+    let deadline_ns = inner.deadline_ns;
+    let manifest_sha_hex = inner.manifest_sha_hex.clone();
+    let scenario = inner.scenario;
+    let invocation = inner.invocation.clone();
+    let images = inner.images.clone();
+    hello_exchange(
+        &mut inner.a,
+        scenario,
+        &invocation,
+        &images,
+        Actor::A,
+        marker,
+        deadline_ns,
+        &manifest_sha_hex,
+        "resume",
+        completed,
+        new_epoch,
+        1,
+        Some(step_id),
+    )?;
+    inner.a.image_epoch = new_epoch;
+    inner.a.next_record = 1;
+    let expected = inner.image_shas[target_index];
+    authenticate_executable(inner.a.child.pid, &expected, Some(step_id))?;
+    let root = inner.case_root.as_ref().expect("case root").as_fd().try_clone_to_owned();
+    match root {
+        Ok(owned) => {
+            let body = FdTransferBody {
+                direction: FdDirection::Push,
+                role: FdRole::CaseRoot,
+                image_epoch: new_epoch,
+                grant_id: new_epoch,
+            };
+            inner.a.send(
+                Some(step_id),
+                MessageKind::FdTransferRequest,
+                script_index,
+                &body.encode(),
+                Some(&owned),
+            )?;
+            let (_, reply, _) = inner.a.recv(Some(step_id), MessageKind::FdTransferReply, false)?;
+            let echo = FdTransferBody::decode(&reply).map_err(|e| wire_error(Some(step_id), e))?;
+            if echo != body {
+                return Err(protocol(Some(step_id), "post-exec root regrant not echoed"));
+            }
+            Ok(())
+        }
+        Err(e) => Err(std_io_error(Some(step_id), e)),
+    }
 }
 
 fn launch_channel(
@@ -659,8 +741,8 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     let invocation = hello_invocation(&config.run_hex, config.operation_id);
     let manifest_sha_hex = hex_bytes(&config.manifest_sha256);
     let mut inner = PairInner {
-        a: launch_channel(&config.worker, Actor::A, "a", run_id, config.operation_id, None)?,
-        b: launch_channel(&config.worker, Actor::B, "b", run_id, config.operation_id, None)?,
+        a: launch_channel(&config.image_a, Actor::A, "a", run_id, config.operation_id, None)?,
+        b: launch_channel(&config.image_b, Actor::B, "b", run_id, config.operation_id, None)?,
         scenario: config.scenario,
         completed: Vec::new(),
         cursor: 0,
@@ -685,6 +767,10 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                 sha_hex: hex_bytes(&sha_b),
             },
         ],
+        image_shas: [sha_a, sha_b],
+        worker: config.worker.clone(),
+        deadline_ns: config.deadline_ns,
+        manifest_sha_hex: manifest_sha_hex.clone(),
         root: root_owned,
         cancel: Arc::clone(&config.cancel),
     };
@@ -702,13 +788,33 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                 marker,
                 config.deadline_ns,
                 &manifest_sha_hex,
+                "boot",
+                0,
+                1,
+                1,
+                None,
             )?;
             authenticate_executable(channel.child.pid, &shas[index], None)?;
             channel.authenticated = true;
             Ok(())
         })();
         if let Err(error) = outcome {
-            failed = Some(error);
+            let channel = if index == 0 { &mut inner.a } else { &mut inner.b };
+            let gone = matches!(
+                channel.child.child.as_mut().map(|c| c.try_wait()),
+                Some(Ok(Some(_)))
+            );
+            failed = Some(if gone {
+                refused(
+                    None,
+                    format!(
+                        "boot image cannot serve the fixture protocol: {}",
+                        String::from_utf8_lossy(error.diagnostic_bytes())
+                    ),
+                )
+            } else {
+                error
+            });
             break;
         }
     }
@@ -875,13 +981,13 @@ fn advance_exchange(
     Ok(reply)
 }
 
-fn worker_advance(
+fn advance_a_with_reply(
     inner: &mut PairInner,
     action: Action,
     blob_mask: u32,
     script_index: u32,
     step_id: &str,
-) -> Result<(), DriverError> {
+) -> Result<AdvanceReply, DriverError> {
     if !inner.a.authenticated {
         return Err(protocol(Some(step_id), "channel not authenticated"));
     }
@@ -895,7 +1001,26 @@ fn worker_advance(
     }
     let first = reply.first_record;
     let count = reply.record_count;
-    drain_records(&mut inner.a, &inner.invocation, &mut inner.raw, step_id, first, count, "a")
+    if count == 0 {
+        match action {
+            Action::ExecB | Action::ExecA | Action::ExecFromSibling => {}
+            _ => return Err(protocol(Some(step_id), "only exec steps drain zero records")),
+        }
+    } else {
+        drain_records(&mut inner.a, &inner.invocation, &mut inner.raw, step_id, first, count, "a")?;
+    }
+    Ok(reply)
+}
+
+fn worker_advance(
+    inner: &mut PairInner,
+    action: Action,
+    blob_mask: u32,
+    script_index: u32,
+    step_id: &str,
+) -> Result<(), DriverError> {
+    advance_a_with_reply(inner, action, blob_mask, script_index, step_id)?;
+    Ok(())
 }
 
 fn verify_tricky_comm(pid: u32, step_id: &str) -> Result<(), DriverError> {
@@ -1010,6 +1135,279 @@ fn pidfd_ready(
             return Ok(false);
         }
     }
+}
+
+/// Executable digest via a known-live thread. `/proc/<tgid>/exe` follows
+/// the group leader's mm, which is gone (ENOENT) once the leader is a
+/// zombie, so thread phases address the live sibling's task path instead.
+fn exe_sha_of(pid: u32, live: Option<u32>, step_id: &str) -> Result<[u8; 32], DriverError> {
+    let exe = match live {
+        Some(tid) => std::path::PathBuf::from(format!("/proc/{pid}/task/{tid}/exe")),
+        None => std::path::PathBuf::from(format!("/proc/{pid}/exe")),
+    };
+    let bytes = read_bounded(&exe, IMAGE_BYTES_MAX).map_err(|e| std_io_error(Some(step_id), e))?;
+    Ok(sha256_of(&bytes))
+}
+
+fn task_tids_of(pid: u32, step_id: &str) -> Result<Vec<u32>, DriverError> {
+    let mut tids = Vec::new();
+    let dir = std::fs::read_dir(format!("/proc/{pid}/task")).map_err(|e| std_io_error(Some(step_id), e))?;
+    for entry in dir {
+        let entry = entry.map_err(|e| std_io_error(Some(step_id), e))?;
+        let tid = entry
+            .file_name()
+            .to_string_lossy()
+            .parse::<u32>()
+            .map_err(|_| protocol(Some(step_id), "non-numeric task entry"))?;
+        tids.push(tid);
+    }
+    tids.sort_unstable();
+    Ok(tids)
+}
+
+fn task_state_of(pid: u32, tid: u32, step_id: &str) -> Result<u8, DriverError> {
+    let stat = std::fs::read(format!("/proc/{pid}/task/{tid}/stat"))
+        .map_err(|e| std_io_error(Some(step_id), e))?;
+    super::oracle::parse_stat_comm_state_starttime(&stat)
+        .map(|(_, state, _)| state)
+        .map_err(|e| protocol(Some(step_id), format!("task stat parse: {}", e.detail())))
+}
+
+/// The exit-leader reply is already on the wire while the leader task may
+/// still be exiting, so poll boundedly for the zombie-leader/live-sibling
+/// task pair. The kernel keeps the dead group leader visible (state Z) with
+/// the tgid pinned to it until process exit; sibling service proves the
+/// process survives.
+fn poll_leader_zombie(pid: u32, sibling: u32, step_id: &str) -> Result<(), DriverError> {
+    let mut waited = 0;
+    loop {
+        let leader = task_state_of(pid, pid, step_id)?;
+        let sib = task_state_of(pid, sibling, step_id)?;
+        if leader == b'Z' && sib != b'Z' {
+            return Ok(());
+        }
+        if waited >= EXIT_WAIT_MS {
+            return Err(protocol(
+                Some(step_id),
+                format!(
+                    "leader-only exit left states leader={} sibling={}",
+                    leader as char, sib as char
+                ),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        waited += 20;
+    }
+}
+
+/// Third-slot descriptor inventory: after the file prefix ran (both parent
+/// and worker hold their original FileA/B owners), spawn the positive child
+/// with the inherited canary pipe and the negative child without it,
+/// sequentially in one slot. Each child is inspected live via its own
+/// /proc/PID/fd, then killed and exactly reaped before the next spawns.
+fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError> {
+    if inner.file_a.is_none() || inner.file_b.is_none() {
+        return Err(protocol(Some(step_id), "inventory needs offered FileA/B first"));
+    }
+    const CANARY_HEX: &str = "53424649585455524543414e41525931";
+    let token: Vec<u8> = (0..CANARY_HEX.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&CANARY_HEX[i..i + 2], 16).unwrap())
+        .collect();
+    // NOTE: plain pipe() is NOT cloexec; only the explicit stderr grant may
+    // cross exec, never the parent's own canary ends.
+    let (canary_read, canary_write) =
+        rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .map_err(|e| io_error(Some(step_id), e))?;
+    {
+        let mut writer: std::fs::File = canary_write
+            .try_clone()
+            .map_err(std::io::Error::from)
+            .map_err(|e| std_io_error(Some(step_id), e))?
+            .into();
+        use std::io::Write;
+        writer.write_all(&token).map_err(|e| std_io_error(Some(step_id), e))?;
+    }
+    let canary_ino = rustix::fs::fstat(&canary_read)
+        .map_err(|e| io_error(Some(step_id), e))?
+        .st_ino;
+    let want_link = format!("pipe:[{canary_ino}]");
+
+    let worker_path = inner.worker.clone();
+    let positive = spawn_inventory_child(&worker_path, Some(&canary_write), step_id)?;
+    wait_for_exec(positive.pid, &worker_path, step_id)?;
+    let positive_hit = scan_child_for_canary(positive.pid, &want_link, step_id)?;
+    kill_and_reap_inventory(positive.child, step_id)?;
+    let negative = spawn_inventory_child(&worker_path, None, step_id)?;
+    wait_for_exec(negative.pid, &worker_path, step_id)?;
+    let negative_hit = scan_child_for_canary(negative.pid, &want_link, step_id)?;
+    kill_and_reap_inventory(negative.child, step_id)?;
+
+    let Some((fd_no, dev, ino, fdinfo_hex)) = positive_hit else {
+        return Err(protocol(Some(step_id), "positive child lacks the canary FD"));
+    };
+    if fd_no != 2 {
+        return Err(protocol(Some(step_id), "canary must arrive only as the granted stderr"));
+    }
+    if negative_hit.is_some() {
+        return Err(protocol(Some(step_id), "negative child unexpectedly holds the canary"));
+    }
+    for (channel, what) in [(&mut inner.a.child, "A"), (&mut inner.b.child, "B")] {
+        match channel.child.as_mut().map(|c| c.try_wait()) {
+            Some(Ok(None)) => {}
+            _ => return Err(protocol(Some(step_id), format!("child {what} died during inventory"))),
+        }
+    }
+    let positive_values = serde_json::json!({
+        "slot": fd_no,
+        "device": dev.to_string(),
+        "inode": ino.to_string(),
+        "file_type": "fifo",
+        "size": "0",
+        "fdinfo_hex": fdinfo_hex,
+        "getfd": null,
+        "getfl": null,
+        "canary_hex": CANARY_HEX,
+    });
+    let negative_values = serde_json::json!({
+        "slot": null,
+        "device": null,
+        "inode": null,
+        "file_type": null,
+        "size": "0",
+        "fdinfo_hex": null,
+        "getfd": null,
+        "getfl": null,
+        "canary_hex": null,
+    });
+    for (actor, values) in [
+        ("parent-positive", positive_values),
+        ("parent-negative", negative_values),
+    ] {
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "invocation": inner.invocation.clone(),
+            "step_id": step_id,
+            "record_index": 0,
+            "sequence": null,
+            "actor_slot": actor,
+            "record_kind": "fd",
+            "source": "parent_proc",
+            "bytes_hex": null,
+            "values": values,
+            "call_result": "observed",
+            "errno": null,
+            "producer_charges": null,
+        });
+        let bytes = canonical_json(&body).map_err(|e| wire_error(Some(step_id), e))?.into_bytes();
+        inner.raw.push(DrainedRecord {
+            actor: actor.to_string(),
+            step_id: step_id.to_string(),
+            record_index: 0,
+            kind: "fd".to_string(),
+            bytes,
+        });
+    }
+    Ok(())
+}
+
+struct InventoryChild {
+    child: Child,
+    pid: u32,
+    _sock: OwnedFd,
+}
+
+fn spawn_inventory_child(
+    worker: &std::path::Path,
+    canary: Option<&OwnedFd>,
+    step_id: &str,
+) -> Result<InventoryChild, DriverError> {
+    let (parent_end, child_end) = rustix::net::socketpair(
+        rustix::net::AddressFamily::UNIX,
+        rustix::net::SocketType::SEQPACKET,
+        rustix::net::SocketFlags::CLOEXEC,
+        None,
+    )
+    .map_err(|e| io_error(Some(step_id), e))?;
+    let stderr = match canary {
+        Some(fd) => {
+            let owned: OwnedFd = fd.try_clone().map_err(std::io::Error::from).map_err(|e| std_io_error(Some(step_id), e))?;
+            Stdio::from(owned)
+        }
+        None => Stdio::null(),
+    };
+    let mut child = std::process::Command::new(worker)
+        .arg("--scopebase-fixture-v1")
+        .arg("--slot")
+        .arg("a")
+        .arg("--handover")
+        .arg("-")
+        .stdin(Stdio::from(child_end))
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .env_clear()
+        .spawn()
+        .map_err(|e| std_io_error(Some(step_id), e))?;
+    let pid = child.id();
+    match child.try_wait().map_err(|e| std_io_error(Some(step_id), e))? {
+        None => Ok(InventoryChild { child, pid, _sock: parent_end }),
+        Some(_) => Err(protocol(Some(step_id), "inventory child exited before inspection")),
+    }
+}
+
+fn scan_child_for_canary(
+    pid: u32,
+    want_link: &str,
+    step_id: &str,
+) -> Result<Option<(u32, u64, u64, String)>, DriverError> {
+    let dir = std::fs::read_dir(format!("/proc/{pid}/fd")).map_err(|e| std_io_error(Some(step_id), e))?;
+    for entry in dir {
+        let entry = entry.map_err(|e| std_io_error(Some(step_id), e))?;
+        let link = std::fs::read_link(entry.path()).map_err(|e| std_io_error(Some(step_id), e))?;
+        if link.to_string_lossy() == want_link {
+            let fd_no: u32 = entry
+                .file_name()
+                .to_string_lossy()
+                .parse()
+                .map_err(|_| protocol(Some(step_id), "non-numeric child fd"))?;
+            let stat = std::fs::metadata(entry.path()).map_err(|e| std_io_error(Some(step_id), e))?;
+            use std::os::unix::fs::MetadataExt;
+            let fdinfo = std::fs::read(format!("/proc/{pid}/fdinfo/{fd_no}"))
+                .map_err(|e| std_io_error(Some(step_id), e))?;
+            let capped = fdinfo.len().min(4096);
+            return Ok(Some((fd_no, stat.dev(), stat.ino(), hex_bytes(&fdinfo[..capped]))));
+        }
+    }
+    Ok(None)
+}
+
+/// Exec barrier: a spawned child still holds the full parent FD table in
+/// the fork/exec window, so never scan its descriptors until its own
+/// executable link proves the new image runs.
+fn wait_for_exec(pid: u32, worker: &std::path::Path, step_id: &str) -> Result<(), DriverError> {
+    let mut waited = 0;
+    loop {
+        match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(link) if link == worker => return Ok(()),
+            Ok(_) => {}
+            Err(e) => return Err(std_io_error(Some(step_id), e)),
+        }
+        if waited >= EXIT_WAIT_MS {
+            return Err(DriverError::new(
+                DriverErrorKind::Timeout,
+                Some(step_id),
+                "inventory child did not exec the worker image".to_string(),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        waited += 5;
+    }
+}
+
+fn kill_and_reap_inventory(mut child: Child, step_id: &str) -> Result<(), DriverError> {
+    child.kill().map_err(|e| std_io_error(Some(step_id), e))?;
+    exact_wait(&mut child, Some(step_id))?;
+    Ok(())
 }
 
 pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), DriverError> {
@@ -1131,14 +1529,82 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
         Action::Close => {
             return Err(protocol(Some(step_id), "close must run through both channels"));
         }
-        Action::ExecB
-        | Action::ExecA
-        | Action::ExecMissing
-        | Action::StartSibling
-        | Action::ExitLeader
-        | Action::ExecFromSibling
-        | Action::Inventory => {
-            return Err(deferred(step_id, "follow-up increment"));
+        Action::ExecB | Action::ExecA | Action::ExecFromSibling => {
+            let (marker, target): (&'static str, usize) = match action {
+                Action::ExecB => ("B", 1),
+                Action::ExecA => ("A", 0),
+                _ => ("B", 1),
+            };
+            let from_sibling = action == Action::ExecFromSibling;
+            let live_before = if from_sibling { inner.tid } else { None };
+            if from_sibling && live_before.is_none() {
+                return Err(protocol(Some(step_id), "nonleader exec without a live sibling"));
+            }
+            let sha_before = exe_sha_of(inner.a.child.pid, live_before, step_id)?;
+            worker_advance(&mut inner, action, 0, script_index, step_id)?;
+            resume_after_exec(&mut inner, step_id, script_index, marker, target)?;
+            if from_sibling {
+                inner.tid = None;
+            }
+            let sha_after = exe_sha_of(inner.a.child.pid, None, step_id)?;
+            if sha_before == sha_after && inner.image_shas[0] != inner.image_shas[1] {
+                return Err(protocol(Some(step_id), "exec left the running image unchanged"));
+            }
+            if from_sibling {
+                let tids = task_tids_of(inner.a.child.pid, step_id)?;
+                if tids != vec![inner.a.child.pid] {
+                    return Err(protocol(Some(step_id), "nonleader exec left sibling threads behind"));
+                }
+            }
+        }
+        Action::ExecMissing => {
+            let live = inner.tid;
+            let sha_before = exe_sha_of(inner.a.child.pid, live, step_id)?;
+            worker_advance(&mut inner, action, 0, script_index, step_id)?;
+            let sha_after = exe_sha_of(inner.a.child.pid, live, step_id)?;
+            if sha_before != sha_after {
+                return Err(protocol(Some(step_id), "failed exec changed the running image"));
+            }
+            let witnessed = inner.raw.iter().any(|r| {
+                if r.step_id != step_id || r.kind != "exec" {
+                    return false;
+                }
+                serde_json::from_slice::<serde_json::Value>(&r.bytes)
+                    .map(|v| {
+                        v["errno"] == rustix::io::Errno::NOENT.raw_os_error()
+                            && v["call_result"] == "failed"
+                    })
+                    .unwrap_or(false)
+            });
+            if !witnessed {
+                return Err(protocol(Some(step_id), "failed exec lacks ENOENT evidence"));
+            }
+        }
+        Action::StartSibling => {
+            let reply = advance_a_with_reply(&mut inner, action, 0, script_index, step_id)?;
+            let pid = inner.a.child.pid;
+            let tids = task_tids_of(pid, step_id)?;
+            if tids.len() != 2 || !tids.contains(&pid) {
+                return Err(protocol(Some(step_id), "sibling start lacks exactly two tasks"));
+            }
+            let sibling = *tids.iter().find(|t| **t != pid).unwrap();
+            if reply.tid != sibling {
+                return Err(protocol(
+                    Some(step_id),
+                    "worker-reported sibling TID disagrees with the /proc task scan",
+                ));
+            }
+            inner.tid = Some(sibling);
+        }
+        Action::ExitLeader => {
+            let sibling = inner
+                .tid
+                .ok_or_else(|| protocol(Some(step_id), "exit_leader without a live sibling"))?;
+            worker_advance(&mut inner, action, 0, script_index, step_id)?;
+            poll_leader_zombie(inner.a.child.pid, sibling, step_id)?;
+        }
+        Action::Inventory => {
+            run_inventory(&mut inner, step_id)?;
         }
     }
     if inner.cancel.load(Ordering::Relaxed) {
@@ -1312,6 +1778,9 @@ impl LivePair {
     pub fn a_process(&self) -> super::phase::LinuxProcessFixture {
         super::phase::LinuxProcessFixture::bind(Arc::clone(&self.inner), self.a_pid)
     }
+    pub fn b_process(&self) -> super::phase::LinuxProcessFixture {
+        super::phase::LinuxProcessFixture::bind_excluded(Arc::clone(&self.inner), self.b_pid)
+    }
     pub fn b_heartbeat(&self, step: &crate::Label) -> Result<(), DriverError> {
         heartbeat_b(&self.inner, step.as_str())
     }
@@ -1355,12 +1824,28 @@ impl LivePair {
     pub fn upload_blobs(&self, a: &[u8], b: &[u8], mutation: &[u8]) -> Result<(), DriverError> {
         upload_blobs_shared(&self.inner, a, b, mutation)
     }
+    pub fn deadline_hold(
+        &self,
+        completed_prefix: &str,
+        execution_ms: u64,
+        maximum_hold_ms: u64,
+    ) -> Result<DeadlineHoldReport, DriverError> {
+        deadline_hold_run(&self.inner, completed_prefix, execution_ms, maximum_hold_ms)
+    }
     pub fn pulled_file_a(&self) -> std::io::Result<std::fs::File> {
+        self.pulled_file(true)
+    }
+    pub fn pulled_file_b(&self) -> std::io::Result<std::fs::File> {
+        self.pulled_file(false)
+    }
+    fn pulled_file(&self, is_a: bool) -> std::io::Result<std::fs::File> {
         let inner = self.inner.lock().expect("pair lock");
-        let fd = inner
-            .file_a
-            .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "file A not pulled"))?;
+        let fd = if is_a { inner.file_a.as_ref() } else { inner.file_b.as_ref() }.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                if is_a { "file A not pulled" } else { "file B not pulled" },
+            )
+        })?;
         let owned: OwnedFd = fd.try_clone().map_err(std::io::Error::from)?;
         Ok(owned.into())
     }
@@ -1424,5 +1909,85 @@ impl LivePair {
 
 pub(crate) fn nonleader_tid_of(shared: &SharedPair) -> Option<u32> {
     shared.lock().expect("pair lock").tid
+}
+
+#[derive(Clone, Debug)]
+pub struct DeadlineHoldReport {
+    pub completed_prefix: String,
+    pub elapsed_ns: u64,
+    pub extra_worker_datagrams: u64,
+}
+
+/// Runner-deadline schedule hold: after a real ACK + drain at
+/// `completed_prefix`, wait the full `execution_ms` in bounded sleep chunks
+/// (<=500ms, <=64 clock checks), send zero worker datagrams, then witness
+/// both children still alive with non-blocking polls only.
+pub(crate) fn deadline_hold_run(
+    shared: &SharedPair,
+    completed_prefix: &str,
+    execution_ms: u64,
+    maximum_hold_ms: u64,
+) -> Result<DeadlineHoldReport, DriverError> {
+    if execution_ms == 0 || execution_ms > maximum_hold_ms || maximum_hold_ms > 31_000 {
+        return Err(protocol(
+            Some(completed_prefix),
+            "hold window must satisfy 1 <= execution <= maximum <= 31000 ms",
+        ));
+    }
+    {
+        let inner = shared.lock().expect("pair lock");
+        if !inner.completed.iter().any(|s| s == completed_prefix) {
+            return Err(protocol(
+                Some(completed_prefix),
+                "hold prefix is not a completed step",
+            ));
+        }
+    }
+    let target = std::time::Duration::from_millis(execution_ms);
+    let start = std::time::Instant::now();
+    let mut checks: u32 = 0;
+    while start.elapsed() < target {
+        if checks >= 64 {
+            break;
+        }
+        let remaining = target.saturating_sub(start.elapsed());
+        let chunk = remaining
+            .min(std::time::Duration::from_millis(500))
+            .max(std::time::Duration::from_millis(1));
+        std::thread::sleep(chunk);
+        checks += 1;
+    }
+    let elapsed = start.elapsed();
+    if elapsed < target {
+        return Err(DriverError::new(
+            DriverErrorKind::Timeout,
+            Some(completed_prefix),
+            "hold exhausted clock checks before the execution duration".to_string(),
+        ));
+    }
+    {
+        let mut inner = shared.lock().expect("pair lock");
+        for what in ["A", "B"] {
+            let child = if what == "A" {
+                &mut inner.a.child
+            } else {
+                &mut inner.b.child
+            };
+            match child.child.as_mut().map(|c| c.try_wait()) {
+                Some(Ok(None)) => {}
+                _ => {
+                    return Err(protocol(
+                        Some(completed_prefix),
+                        format!("child {what} died during the hold"),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(DeadlineHoldReport {
+        completed_prefix: completed_prefix.to_string(),
+        elapsed_ns: elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+        extra_worker_datagrams: 0,
+    })
 }
 

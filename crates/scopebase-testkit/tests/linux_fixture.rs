@@ -324,17 +324,14 @@ fn custody_finalize_close_only_and_one_shot() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-#[test]
-fn prepare_collect_return_typed_deferred() {
-    let (dir, _root) = temp_root("trait-honest");
-    let (mut session, contract, _) = valid_session(&dir, "leader-lifecycle");
+fn invocation_for(contract: &scopebase_testkit::RunContract) -> scopebase_testkit::CaseInvocation {
     let key = contract.schedule()[0].clone();
     let rule = contract
         .case_rules()
         .iter()
         .find(|r| r.case_key() == key.case_key())
         .unwrap();
-    let invocation = scopebase_testkit::CaseInvocation::new(
+    scopebase_testkit::CaseInvocation::new(
         CaseInvocationValues {
             key,
             observation_schema: rule.observation_schema().clone(),
@@ -344,30 +341,123 @@ fn prepare_collect_return_typed_deferred() {
         },
         contract.limits(),
     )
+    .unwrap()
+}
+
+fn native_session(
+    dir: &std::path::Path,
+    scenario: &str,
+) -> (
+    LinuxFixtureSession,
+    scopebase_testkit::RunContract,
+    scopebase_testkit::CaseInvocation,
+) {
+    let (_, _, contract) = support::load();
+    let invocation = invocation_for(&contract);
+    let op = *invocation.key().operation_id();
+    let root = File::open(dir).unwrap();
+    let files = make_files(dir, root);
+    let manifest = manifest_bytes(contract.run_id().as_str(), scenario, op);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let session = LinuxFixtureSession::new(
+        contract.clone(),
+        files,
+        &manifest,
+        Instant::now() + Duration::from_secs(60),
+        cancel,
+    )
     .unwrap();
-    let err = match session.prepare(&invocation) {
-        Ok(_) => panic!("first-increment prepare must stay deferred"),
-        Err(e) => e,
-    };
-    assert_eq!(*err.category(), FixtureErrorCategory::Other);
-    assert!(!err.diagnostic_bytes().is_empty());
-    let err = match session.collect(&invocation) {
-        Ok(_) => panic!("first-increment collect must stay deferred"),
-        Err(e) => e,
-    };
-    assert_eq!(*err.category(), FixtureErrorCategory::Other);
+    (session, contract, invocation)
+}
+
+#[test]
+fn prepare_collect_run_native_prefix() {
+    let (dir, _root) = temp_root("prepare-native");
+    let (mut session, _, invocation) = native_session(&dir, "leader-lifecycle");
+    let access = session
+        .prepare(&invocation)
+        .expect("native prepare runs the ready prefix");
+    let proc = access
+        .resource::<LinuxProcessFixture>(&Label::parse("linux.process").unwrap())
+        .expect("linux.process resource");
+    assert!(proc.pid() > 0);
+    let excluded = access
+        .resource::<LinuxProcessFixture>(&Label::parse("linux.excluded-process").unwrap())
+        .expect("linux.excluded-process resource");
+    assert!(excluded.pid() > 0 && excluded.pid() != proc.pid());
+    assert!(
+        access.effects().registrations().len() >= 3,
+        "prepare registers case-root and both children"
+    );
+    let evidence = session
+        .collect(&invocation)
+        .expect("native collect seals drained raw");
+    assert_eq!(evidence.key(), invocation.key());
+    assert!(!evidence.expected_bytes().is_empty());
+    assert!(!evidence.ledger_bytes().is_empty());
+    session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            max_native_attempts: 512,
+            max_records: 64,
+            max_retained_bytes: 262144,
+        })
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-fn live_pair(
+#[test]
+fn prepare_unknown_operation_refused() {
+    let (dir, _root) = temp_root("prepare-unknown-op");
+    let (_, _, contract) = support::load();
+    let invocation = invocation_for(&contract);
+    let wrong_op = *invocation.key().operation_id() + 1000;
+    let root = File::open(&dir).unwrap();
+    let files = make_files(&dir, root);
+    let manifest = manifest_bytes(contract.run_id().as_str(), "leader-lifecycle", wrong_op);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut session = LinuxFixtureSession::new(
+        contract.clone(),
+        files,
+        &manifest,
+        Instant::now() + Duration::from_secs(60),
+        cancel,
+    )
+    .unwrap();
+    let err = match session.prepare(&invocation) {
+        Ok(_) => panic!("unadmitted operation must not prepare"),
+        Err(e) => e,
+    };
+    assert_eq!(
+        *err.category(),
+        FixtureErrorCategory::InvalidProtocol,
+        "unadmitted operation must be a typed refusal, not a spawn"
+    );
+    session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            max_native_attempts: 512,
+            max_records: 64,
+            max_retained_bytes: 262144,
+        })
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn live_pair_with_images(
     scenario: Scenario,
     op: u64,
+    distinct: bool,
 ) -> (
     scopebase_testkit::fixture::linux::LivePair,
     PathBuf,
 ) {
     let (dir, root) = temp_root("live");
-    let (fa, pa, fb, pb) = stage_images(&dir);
+    let (fa, pa, fb, pb) = if distinct {
+        stage_distinct_images(&dir)
+    } else {
+        stage_images(&dir)
+    };
     drop((fa, fb));
     let cfg = LaunchConfig {
         worker: pa.clone(),
@@ -383,6 +473,63 @@ fn live_pair(
     };
     let pair = launch_pair(&cfg).unwrap();
     (pair, dir)
+}
+
+fn live_pair(
+    scenario: Scenario,
+    op: u64,
+) -> (
+    scopebase_testkit::fixture::linux::LivePair,
+    PathBuf,
+) {
+    live_pair_with_images(scenario, op, false)
+}
+
+fn stage_distinct_images(dir: &std::path::Path) -> (File, PathBuf, File, PathBuf) {
+    use std::io::Write;
+    let (fa, pa, fb, pb) = stage_images(dir);
+    drop((fa, fb));
+    for (path, marker) in [(&pa, b'A'), (&pb, b'B')] {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        let trailer = [marker; 64];
+        file.write_all(&trailer).unwrap();
+        file.sync_all().unwrap();
+    }
+    assert_ne!(
+        std::fs::read(&pa).unwrap(),
+        std::fs::read(&pb).unwrap(),
+        "distinct staged images must differ"
+    );
+    (File::open(&pa).unwrap(), pa, File::open(&pb).unwrap(), pb)
+}
+
+fn exe_sha256(pid: u32) -> [u8; 32] {
+    exe_sha256_as(pid, None)
+}
+
+fn exe_sha256_as(pid: u32, live_tid: Option<u32>) -> [u8; 32] {
+    let path = match live_tid {
+        Some(tid) => format!("/proc/{pid}/task/{tid}/exe"),
+        None => format!("/proc/{pid}/exe"),
+    };
+    let bytes = std::fs::read(path).unwrap();
+    scopebase_testkit::fixture::linux::wire::sha256_of(&bytes)
+}
+
+fn task_tids(pid: u32) -> Vec<u32> {
+    let mut tids: Vec<u32> = std::fs::read_dir(format!("/proc/{pid}/task"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().parse::<u32>().unwrap())
+        .collect();
+    tids.sort_unstable();
+    tids
+}
+
+fn task_state(pid: u32, tid: u32) -> u8 {
+    let stat = std::fs::read(format!("/proc/{pid}/task/{tid}/stat")).unwrap();
+    let (_, state, _) =
+        scopebase_testkit::fixture::linux::parse_stat_comm_state_starttime(&stat).unwrap();
+    state
 }
 
 fn label(id: &str) -> Label {
@@ -681,4 +828,190 @@ fn python_oracle_agrees_on_tricky_stat() {
     a.advance(&label("s08-close")).unwrap();
     pair.shutdown();
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn proc_starttime(pid: u32) -> u64 {
+    let stat = std::fs::read(format!("/proc/{pid}/stat")).unwrap();
+    let (_, _, start) =
+        scopebase_testkit::fixture::linux::parse_stat_comm_state_starttime(&stat).unwrap();
+    start
+}
+
+#[test]
+fn exec_failure_keeps_current_image() {
+    let (pair, dir) = live_pair(Scenario::ExecFailure, 22);
+    let a = pair.a_process();
+    let sha_before = exe_sha256(pair.a_pid());
+    let start_before = proc_starttime(pair.a_pid());
+    a.advance(&label("s01-ready")).unwrap();
+    a.advance(&label("s02-before")).unwrap();
+    a.advance(&label("s03-missing"))
+        .expect("real failed exec attempt with ENOENT evidence");
+    assert_eq!(exe_sha256(pair.a_pid()), sha_before, "image unchanged");
+    assert_eq!(proc_starttime(pair.a_pid()), start_before, "same birth");
+    let raw = pair.drained_raw();
+    let exec = raw.iter().find(|r| r.kind == "exec").expect("exec record");
+    let body: serde_json::Value = serde_json::from_slice(&exec.bytes).unwrap();
+    assert_eq!(body["errno"], libc::ENOENT);
+    assert_eq!(body["call_result"], "failed");
+    a.advance(&label("s04-after")).unwrap();
+    a.advance(&label("s05-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn exec_aba_preserves_birth_not_image() {
+    let (pair, dir) = live_pair_with_images(Scenario::ExecAba, 23, true);
+    let a = pair.a_process();
+    let sha_a = exe_sha256(pair.a_pid());
+    let start = proc_starttime(pair.a_pid());
+    a.advance(&label("s01-ready")).unwrap();
+    a.advance(&label("s02-a")).unwrap();
+    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    let sha_b = exe_sha256(pair.a_pid());
+    assert_ne!(sha_a, sha_b, "executable image changed at A->B");
+    assert_eq!(proc_starttime(pair.a_pid()), start, "birth preserved at A->B");
+    assert_eq!(a.pid(), pair.a_pid(), "same PID across exec");
+    a.advance(&label("s04-b")).unwrap();
+    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    assert_eq!(exe_sha256(pair.a_pid()), sha_a, "executable image restored");
+    assert_eq!(proc_starttime(pair.a_pid()), start, "birth preserved at B->A");
+    a.advance(&label("s06-a2")).unwrap();
+    a.advance(&label("s07-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn thread_lifecycle_sibling_phases() {
+    let (pair, dir) = live_pair_with_images(Scenario::ThreadLifecycle, 24, true);
+    let a = pair.a_process();
+    assert_eq!(a.nonleader_tid(), None, "no sibling before start");
+    a.advance(&label("s01-ready")).unwrap();
+    a.advance(&label("s02-start-sibling"))
+        .expect("real sibling thread spawn");
+    let sibling = a.nonleader_tid().expect("sibling TID while barrier held");
+    assert_ne!(sibling, pair.a_pid());
+    assert_eq!(task_tids(pair.a_pid()), {
+        let mut v = vec![pair.a_pid(), sibling];
+        v.sort_unstable();
+        v
+    });
+    a.advance(&label("s03-sibling")).unwrap();
+    a.advance(&label("s04-exit-leader")).expect("leader-only native exit");
+    assert_eq!(task_state(pair.a_pid(), pair.a_pid()), b'Z', "leader is a zombie");
+    assert_ne!(task_state(pair.a_pid(), sibling), b'Z', "sibling stays live");
+    assert_eq!(a.nonleader_tid(), Some(sibling));
+    a.advance(&label("s05-leader-exited")).unwrap();
+    a.advance(&label("s06-missing")).expect("failed exec from sibling");
+    assert_eq!(task_state(pair.a_pid(), pair.a_pid()), b'Z');
+    assert_ne!(task_state(pair.a_pid(), sibling), b'Z');
+    a.advance(&label("s07-still-sibling")).unwrap();
+    let sha_before = exe_sha256_as(pair.a_pid(), a.nonleader_tid());
+    a.advance(&label("s08-exec-sibling")).expect("real nonleader exec");
+    assert_ne!(exe_sha256(pair.a_pid()), sha_before, "new image after exec");
+    assert_eq!(task_tids(pair.a_pid()), vec![pair.a_pid()], "single thread again");
+    assert_eq!(a.nonleader_tid(), None, "barrier invalidated by exec");
+    a.advance(&label("s09-new-image")).unwrap();
+    a.advance(&label("s10-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn descriptor_inventory_canary() {
+    let (pair, dir) = live_pair(Scenario::DescriptorInventory, 25);
+    let a = pair.a_process();
+    pair.upload_blobs(b"alpha-content-001", b"beta--content-002", b"ALPHA-CONTENT-001")
+        .unwrap();
+    a.advance(&label("s01-ready")).unwrap();
+    a.advance(&label("s02-create-files")).unwrap();
+    a.advance(&label("s03-offer-files")).unwrap();
+    a.advance(&label("s04-inventory"))
+        .expect("real third-slot inventory children with canary");
+    let raw = pair.drained_raw();
+    let positive = raw
+        .iter()
+        .find(|r| r.kind == "fd" && r.step_id == "s04-inventory" && r.actor == "parent-positive")
+        .expect("positive inventory record");
+    let body: serde_json::Value = serde_json::from_slice(&positive.bytes).unwrap();
+    assert_eq!(body["values"]["canary_hex"], "53424649585455524543414e41525931");
+    let negative = raw
+        .iter()
+        .find(|r| r.kind == "fd" && r.step_id == "s04-inventory" && r.actor == "parent-negative")
+        .expect("negative inventory record");
+    let negative_body: serde_json::Value = serde_json::from_slice(&negative.bytes).unwrap();
+    assert_eq!(negative_body["values"]["canary_hex"], serde_json::Value::Null);
+    a.advance(&label("s05-responding-ab")).unwrap();
+    pair.b_heartbeat(&label("s05-responding-ab")).unwrap();
+    a.advance(&label("s06-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn deadline_hold_parametric() {
+    let (pair, dir) = live_pair(Scenario::ExecAba, 26);
+    let a = pair.a_process();
+    a.advance(&label("s01-ready")).unwrap();
+    let report = pair.deadline_hold("s01-ready", 200, 2000).unwrap();
+    assert!(
+        report.elapsed_ns >= 200_000_000,
+        "hold waits the full execution duration"
+    );
+    assert_eq!(report.completed_prefix, "s01-ready");
+    assert_eq!(report.extra_worker_datagrams, 0);
+    assert_eq!(pair.a_exited_unreaped().unwrap(), None);
+    a.advance(&label("s02-a")).unwrap();
+    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    a.advance(&label("s04-b")).unwrap();
+    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    a.advance(&label("s06-a2")).unwrap();
+    a.advance(&label("s07-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore]
+fn reached_deadline_30s_schedule() {
+    let (pair, dir) = live_pair_with_images(Scenario::ExecAba, 27, true);
+    let a = pair.a_process();
+    a.advance(&label("s01-ready")).unwrap();
+    a.advance(&label("s02-a")).unwrap();
+    a.advance(&label("s03-exec-b")).expect("real exec to image B");
+    a.advance(&label("s04-b")).unwrap();
+    a.advance(&label("s05-exec-a")).expect("real exec back to image A");
+    a.advance(&label("s06-a2")).unwrap();
+    let report = pair.deadline_hold("s06-a2", 30_000, 31_000).unwrap();
+    assert!(
+        report.elapsed_ns >= 30_000_000_000,
+        "reached schedule waits the full 30s after the s06-a2 ACK"
+    );
+    assert_eq!(report.completed_prefix, "s06-a2");
+    assert_eq!(report.extra_worker_datagrams, 0);
+    a.advance(&label("s07-close")).unwrap();
+    pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn dag_grammar_152_rows_not_run() {
+    let dag = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/superpowers/specs/tt03-linux/materializer-command-dag.json");
+    let bytes = std::fs::read(&dag).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["grammar_row_count"], 152);
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 152);
+    assert_eq!(v["packet_ready"], false);
+    for row in rows {
+        let status = row["status"].as_str().unwrap_or("");
+        assert!(
+            status.contains("NOT_RUN") || status.contains("NOT-RUN") || status.is_empty(),
+            "offline lane executes no delivery command row: {}",
+            row["id"].as_str().unwrap_or("?")
+        );
+    }
 }

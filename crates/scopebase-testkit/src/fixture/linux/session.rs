@@ -4,10 +4,16 @@
 //! The constructor validates and adopts the caller files plus the externally
 //! bound manifest, acquires the retained creator context, reserves the full
 //! admitted roster and one 1MiB terminal slot, and creates no child, thread,
-//! directory, mount, filter or handler. TT02 prepare/collect native wiring is
-//! a documented follow-up; those hooks return typed deferred errors.
+//! directory, mount, filter or handler. TT02 prepare/collect run the native
+//! developer driver (real pair launch, prefix advance, drained-raw evidence);
+//! effect-transition retirement stays a documented follow-up.
 use super::creator::CreatorContext;
+use super::driver::{
+    launch_pair, DriverError, DriverErrorKind, LaunchConfig, LivePair, Scenario,
+};
 use super::manifest::{admit_manifest, AdmittedManifest};
+use super::phase::LinuxProcessFixture;
+use super::wire::sha256_of;
 use crate::*;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,22 +98,32 @@ impl SlotSet {
 
 struct Assets {
     image_a: std::fs::File,
+    image_a_path: std::path::PathBuf,
     image_b: std::fs::File,
+    image_b_path: std::path::PathBuf,
     root: std::fs::File,
     creator: CreatorContext,
     constructor_ledger: Vec<u8>,
     terminal_reserve: Vec<u8>,
 }
 
+struct PreparedEntry {
+    pair: LivePair,
+    process: LinuxProcessFixture,
+    excluded: LinuxProcessFixture,
+    files: Vec<std::fs::File>,
+    scenario: Scenario,
+}
+
 pub struct LinuxFixtureSession {
     contract: RunContract,
     manifest: AdmittedManifest,
+    manifest_sha256: [u8; 32],
     assets: Option<Assets>,
-    /// Reserved for the TT02 prepare wiring follow-up.
-    #[allow(dead_code)]
     execution_deadline: Instant,
     cancellation: Arc<AtomicBool>,
     slots: Mutex<BTreeMap<u64, SlotSet>>,
+    prepared: BTreeMap<u64, PreparedEntry>,
     sealed: Option<LinuxOuterCleanupReport>,
     retained_fds: Vec<(&'static str, rustix::fd::OwnedFd)>,
     retained_creator: Option<CreatorContext>,
@@ -128,19 +144,72 @@ fn typed_error(
     category: FixtureErrorCategory,
     diagnostic: &str,
 ) -> FixtureError {
+    let cap = limits.diagnostic_bytes() as usize;
+    let mut bytes = diagnostic.as_bytes().to_vec();
+    bytes.truncate(cap);
     FixtureError::new(
         FixtureErrorValues {
             key,
             stage,
             category,
             errno: None,
-            diagnostic_bytes: diagnostic.as_bytes().to_vec(),
+            diagnostic_bytes: bytes,
             effects: EffectBatch::empty(limits),
             read_progress: None,
         },
         limits,
     )
     .expect("bounded typed fixture error")
+}
+
+fn driver_to_fixture(
+    limits: &RunLimits,
+    key: &InvocationKey,
+    stage: FixtureStage,
+    error: &DriverError,
+) -> FixtureError {
+    let category = match error.kind() {
+        DriverErrorKind::Protocol => FixtureErrorCategory::InvalidProtocol,
+        DriverErrorKind::Io => FixtureErrorCategory::Io,
+        DriverErrorKind::Timeout => FixtureErrorCategory::TimedOut,
+        DriverErrorKind::Refused => FixtureErrorCategory::Denied,
+        DriverErrorKind::Cancelled => FixtureErrorCategory::Cancelled,
+        DriverErrorKind::Deferred => FixtureErrorCategory::Other,
+    };
+    typed_error(
+        limits,
+        Some(key.clone()),
+        stage,
+        category,
+        &format!(
+            "native driver: {}",
+            String::from_utf8_lossy(error.diagnostic_bytes())
+        ),
+    )
+}
+
+fn phase_to_fixture(
+    limits: &RunLimits,
+    key: &InvocationKey,
+    stage: FixtureStage,
+    error: &super::phase::LinuxPhaseError,
+) -> FixtureError {
+    let cap = limits.diagnostic_bytes() as usize;
+    let mut bytes = error.diagnostic_bytes().to_vec();
+    bytes.truncate(cap);
+    FixtureError::new(
+        FixtureErrorValues {
+            key: Some(key.clone()),
+            stage,
+            category: error.category(),
+            errno: error.errno(),
+            diagnostic_bytes: bytes,
+            effects: EffectBatch::empty(limits),
+            read_progress: None,
+        },
+        limits,
+    )
+    .expect("bounded phase fixture error")
 }
 
 fn check_image_path(path: &std::path::Path, what: &str) -> Result<(), String> {
@@ -280,12 +349,16 @@ impl LinuxFixtureSession {
         for invocation in &admitted.invocations {
             slots.insert(invocation.operation_id, SlotSet::empty());
         }
+        let manifest_sha256 = sha256_of(manifest);
         Ok(Self {
             contract,
             manifest: admitted,
+            manifest_sha256,
             assets: Some(Assets {
                 image_a: files.image_a,
+                image_a_path: files.image_a_path,
                 image_b: files.image_b,
+                image_b_path: files.image_b_path,
                 root: files.root,
                 creator,
                 constructor_ledger: ledger,
@@ -294,6 +367,7 @@ impl LinuxFixtureSession {
             execution_deadline,
             cancellation,
             slots: Mutex::new(slots),
+            prepared: BTreeMap::new(),
             sealed: None,
             retained_fds: Vec::new(),
             retained_creator: None,
@@ -419,18 +493,20 @@ impl LinuxFixtureSession {
             Err(error) => error.attempts,
         };
         if guard_attempts > remaining_attempts {
+            let mut pending = vec![
+                "image_a".to_string(),
+                "image_b".to_string(),
+                "root".to_string(),
+                "creator_context".to_string(),
+            ];
+            pending.extend(self.prepared.keys().map(|op| format!("prepared-pair-{op}")));
             let report = self.seal_unresolved(
                 budget.max_retained_bytes,
                 "outer guard allowance exhausted before cleanup",
                 guard_attempts,
                 effects,
                 Vec::new(),
-                vec![
-                    "image_a".to_string(),
-                    "image_b".to_string(),
-                    "root".to_string(),
-                    "creator_context".to_string(),
-                ],
+                pending,
             );
             self.sealed = Some(report);
             return Ok(());
@@ -438,21 +514,49 @@ impl LinuxFixtureSession {
         remaining_attempts -= guard_attempts;
         let guard_ok = guard_outcome.is_ok();
         if !guard_ok {
+            let mut pending = vec![
+                "image_a".to_string(),
+                "image_b".to_string(),
+                "root".to_string(),
+                "creator_context".to_string(),
+            ];
+            pending.extend(self.prepared.keys().map(|op| format!("prepared-pair-{op}")));
             let report = self.seal_unresolved(
                 budget.max_retained_bytes,
                 "outer read-only guard refused; no cleanup effects",
                 guard_attempts,
                 0,
                 Vec::new(),
-                vec![
-                    "image_a".to_string(),
-                    "image_b".to_string(),
-                    "root".to_string(),
-                    "creator_context".to_string(),
-                ],
+                pending,
             );
             self.sealed = Some(report);
             return Ok(());
+        }
+        // Prepared native pairs shut down here, precharged 5 native attempts
+        // each (two close issues, two exact reaps, one case-dir removal). A
+        // pair without precharged allowance stays live in the session and is
+        // named unresolved; Drop retires leftovers best-effort.
+        let mut prepared_ops: Vec<u64> = self.prepared.keys().copied().collect();
+        prepared_ops.sort_unstable();
+        for op in prepared_ops {
+            if remaining_attempts < 5 {
+                unresolved.push(format!("prepared-pair-{op}"));
+                continue;
+            }
+            remaining_attempts -= 5;
+            let entry = self.prepared.remove(&op).expect("prepared op");
+            let PreparedEntry {
+                pair,
+                process: _process,
+                excluded: _excluded,
+                files: _files,
+                scenario: _scenario,
+            } = entry;
+            let report = pair.shutdown();
+            effects += 5;
+            if report.a_exit.is_none() || report.b_exit.is_none() || !report.case_root_removed {
+                unresolved.push(format!("prepared-pair-{op}"));
+            }
         }
         let assets = self.assets.take().expect("assets before seal");
         let ordered: Vec<(&str, rustix::fd::OwnedFd)> = vec![
@@ -583,6 +687,9 @@ impl LinuxFixtureSession {
 
 impl Drop for LinuxFixtureSession {
     fn drop(&mut self) {
+        for (_, entry) in std::mem::take(&mut self.prepared) {
+            let _ = entry.pair.shutdown();
+        }
         if let Some(assets) = self.assets.take() {
             for fd in [assets.image_a.into(), assets.image_b.into(), assets.root.into()] {
                 super::creator::explicit_close_fd(fd);
@@ -610,6 +717,213 @@ impl SessionProbe {
     }
 }
 
+fn file_scenario(scenario: Scenario) -> bool {
+    matches!(scenario, Scenario::FileReplacement | Scenario::DescriptorInventory)
+}
+
+impl LinuxFixtureSession {
+    fn prepare_effects(
+        &self,
+        key: &InvocationKey,
+        operation_id: u64,
+        pair: &LivePair,
+        files: &[std::fs::File],
+    ) -> Result<EffectBatch, FixtureError> {
+        let limits = self.contract.limits();
+        let mut registrations = Vec::new();
+        let mut push = |id: &str, kind: &str, identity: &[u8]| -> Result<(), FixtureError> {
+            let registration = EffectRegistration::new(
+                EffectRegistrationValues {
+                    resource_id: Label::parse(id).expect("static effect label"),
+                    owner: Owner::Fixture,
+                    origin: key.clone(),
+                    kind: Label::parse(kind).expect("static effect kind"),
+                    identity_sha256: Digest256::of_bytes(identity),
+                    recovery_evidence_id: None,
+                },
+                limits,
+            )
+            .map_err(|e| FixtureError::harness(e, Some(key.clone()), FixtureStage::Prepare))?;
+            registrations.push(registration);
+            Ok(())
+        };
+        push("linux.case-root", "linux-case-root", &operation_id.to_le_bytes())?;
+        push("linux.child-a", "linux-child", &pair.a_pid().to_le_bytes())?;
+        push("linux.child-b", "linux-child", &pair.b_pid().to_le_bytes())?;
+        for (index, file) in files.iter().enumerate() {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = file.metadata().map_err(|e| {
+                typed_error(
+                    limits,
+                    Some(key.clone()),
+                    FixtureStage::Prepare,
+                    FixtureErrorCategory::Io,
+                    &format!("retained file identity refused: {e}"),
+                )
+            })?;
+            let mut identity = Vec::new();
+            identity.extend_from_slice(&metadata.dev().to_le_bytes());
+            identity.extend_from_slice(&metadata.ino().to_le_bytes());
+            push(
+                if index == 0 { "linux.file-a" } else { "linux.file-b" },
+                "linux-file",
+                &identity,
+            )?;
+        }
+        EffectBatch::new(
+            EffectBatchValues {
+                registrations,
+                complete: true,
+            },
+            limits,
+        )
+        .map_err(|e| FixtureError::harness(e, Some(key.clone()), FixtureStage::Prepare))
+    }
+
+    fn prepare_native(
+        &mut self,
+        invocation: &CaseInvocation,
+    ) -> Result<(u64, EffectBatch), FixtureError> {
+        let limits = self.contract.limits().clone();
+        let key = invocation.key().clone();
+        let operation_id = *key.operation_id();
+        let admitted = self
+            .manifest
+            .invocations
+            .iter()
+            .find(|i| i.operation_id == operation_id)
+            .ok_or_else(|| {
+                typed_error(
+                    &limits,
+                    Some(key.clone()),
+                    FixtureStage::Prepare,
+                    FixtureErrorCategory::InvalidProtocol,
+                    "operation is not admitted by the fixture manifest",
+                )
+            })?;
+        if self.sealed.is_some() || self.assets.is_none() {
+            return Err(typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Prepare,
+                FixtureErrorCategory::InvalidProtocol,
+                "session is finalized",
+            ));
+        }
+        if self.prepared.contains_key(&operation_id) {
+            return Err(typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Prepare,
+                FixtureErrorCategory::InvalidProtocol,
+                "operation is already prepared",
+            ));
+        }
+        let scenario = admitted.scenario;
+        let blobs = (
+            admitted.expected_file_a_hex.clone(),
+            admitted.expected_file_b_hex.clone(),
+            admitted.mutation_hex.clone(),
+        );
+        let assets = self.assets.as_ref().expect("assets checked");
+        let root = assets.root.try_clone().map_err(|e| {
+            typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Prepare,
+                FixtureErrorCategory::Io,
+                &format!("admission root clone refused: {e}"),
+            )
+        })?;
+        let deadline_ns = {
+            let remaining = self.execution_deadline.saturating_duration_since(Instant::now());
+            std::time::SystemTime::now()
+                .checked_add(remaining)
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos().min(u128::from(u64::MAX)) as u64)
+                .unwrap_or(u64::MAX)
+        };
+        let config = LaunchConfig {
+            worker: assets.image_a_path.clone(),
+            image_a: assets.image_a_path.clone(),
+            image_b: assets.image_b_path.clone(),
+            root,
+            run_hex: self.contract.run_id().as_str().to_string(),
+            operation_id,
+            manifest_sha256: self.manifest_sha256,
+            scenario,
+            deadline_ns,
+            cancel: Arc::clone(&self.cancellation),
+        };
+        let pair = launch_pair(&config)
+            .map_err(|e| driver_to_fixture(&limits, &key, FixtureStage::Prepare, &e))?;
+        if file_scenario(scenario) {
+            let (a, b, mutation) = match blobs {
+                (Some(a), Some(b), Some(mutation)) => (a, b, mutation),
+                _ => {
+                    pair.shutdown();
+                    return Err(typed_error(
+                        &limits,
+                        Some(key.clone()),
+                        FixtureStage::Prepare,
+                        FixtureErrorCategory::InvalidProtocol,
+                        "file-scenario prepare needs manifest blob bytes",
+                    ));
+                }
+            };
+            if let Err(e) = pair.upload_blobs(&a, &b, &mutation) {
+                pair.shutdown();
+                return Err(driver_to_fixture(&limits, &key, FixtureStage::Prepare, &e));
+            }
+        }
+        let process = pair.a_process();
+        let prefix = scenario.prepare_prefix_len();
+        for step in scenario.steps().iter().take(prefix) {
+            let label = Label::parse(step.id).expect("static scenario step");
+            if let Err(e) = process.advance(&label) {
+                pair.shutdown();
+                return Err(phase_to_fixture(&limits, &key, FixtureStage::Prepare, &e));
+            }
+        }
+        let mut files = Vec::new();
+        if file_scenario(scenario) {
+            for pull_b in [false, true] {
+                let pulled = if pull_b {
+                    pair.pulled_file_b()
+                } else {
+                    pair.pulled_file_a()
+                };
+                match pulled {
+                    Ok(file) => files.push(file),
+                    Err(e) => {
+                        pair.shutdown();
+                        return Err(typed_error(
+                            &limits,
+                            Some(key.clone()),
+                            FixtureStage::Prepare,
+                            FixtureErrorCategory::Io,
+                            &format!("retained file pull refused: {e}"),
+                        ));
+                    }
+                }
+            }
+        }
+        let effects = self.prepare_effects(&key, operation_id, &pair, &files)?;
+        let excluded = pair.b_process();
+        self.prepared.insert(
+            operation_id,
+            PreparedEntry {
+                pair,
+                process,
+                excluded,
+                files,
+                scenario,
+            },
+        );
+        Ok((operation_id, effects))
+    }
+}
+
 impl FixtureSession for LinuxFixtureSession {
     fn contract(&self) -> &RunContract {
         &self.contract
@@ -618,22 +932,106 @@ impl FixtureSession for LinuxFixtureSession {
         Box::new(SessionProbe(Arc::clone(&self.cancellation)))
     }
     fn prepare(&mut self, invocation: &CaseInvocation) -> Result<FixtureAccess<'_>, FixtureError> {
-        Err(typed_error(
-            self.contract.limits(),
-            Some(invocation.key().clone()),
-            FixtureStage::Prepare,
-            FixtureErrorCategory::Other,
-            "first increment defers native TT02 prepare to the developer driver",
-        ))
+        let (operation_id, effects) = self.prepare_native(invocation)?;
+        let limits = self.contract.limits().clone();
+        let stored = self.prepared.get(&operation_id).expect("just prepared");
+        let inputs: Vec<FixtureInput<'_>> = Vec::new();
+        let mut resources = Vec::new();
+        resources.push(FixtureResource::new(
+            Label::parse("linux.process").expect("static resource label"),
+            &stored.process,
+        ));
+        resources.push(FixtureResource::new(
+            Label::parse("linux.excluded-process").expect("static resource label"),
+            &stored.excluded,
+        ));
+        if file_scenario(stored.scenario) {
+            resources.push(FixtureResource::new(
+                Label::parse("linux.file-a").expect("static resource label"),
+                &stored.files[0],
+            ));
+            resources.push(FixtureResource::new(
+                Label::parse("linux.file-b").expect("static resource label"),
+                &stored.files[1],
+            ));
+        }
+        FixtureAccess::new(&inputs, &resources, effects, &limits)
     }
     fn collect(&mut self, invocation: &CaseInvocation) -> Result<ExpectedEvidence, FixtureError> {
-        Err(typed_error(
-            self.contract.limits(),
-            Some(invocation.key().clone()),
-            FixtureStage::Collect,
-            FixtureErrorCategory::Other,
-            "first increment defers native TT02 collect to the developer driver",
-        ))
+        let limits = self.contract.limits().clone();
+        let key = invocation.key().clone();
+        let operation_id = *key.operation_id();
+        let entry = self.prepared.get(&operation_id).ok_or_else(|| {
+            typed_error(
+                &limits,
+                Some(key.clone()),
+                FixtureStage::Collect,
+                FixtureErrorCategory::InvalidProtocol,
+                "operation was not prepared",
+            )
+        })?;
+        let drained = entry.pair.drained_raw();
+        let scenario = entry.scenario;
+        let digests: Vec<String> = drained
+            .iter()
+            .map(|r| {
+                const H: &[u8; 16] = b"0123456789abcdef";
+                let sum = sha256_of(&r.bytes);
+                let mut s = String::with_capacity(64);
+                for b in sum {
+                    s.push(H[(b >> 4) as usize] as char);
+                    s.push(H[(b & 15) as usize] as char);
+                }
+                s
+            })
+            .collect();
+        let completed: Vec<&str> = scenario
+            .steps()
+            .iter()
+            .take(scenario.prepare_prefix_len())
+            .map(|s| s.id)
+            .collect();
+        let expected = serde_json::json!({
+            "schema": "tt03.linux.snapshot",
+            "revision": 1,
+            "slot": "shared_collect",
+            "run_id": key.run_id().as_str(),
+            "operation_id": operation_id.to_string(),
+            "scenario": scenario.as_str(),
+            "completed_steps": completed,
+            "prefix_records": drained.len(),
+            "record_digests": digests,
+            "conformance": "subset-second-increment",
+        });
+        let expected_bytes = serde_json::to_vec(&expected).map_err(|e| {
+            FixtureError::harness(
+                he(HarnessErrorKind::InvalidInput, &format!("snapshot encode: {e}")),
+                Some(key.clone()),
+                FixtureStage::Collect,
+            )
+        })?;
+        let mut ledger_bytes = Vec::new();
+        for record in &drained {
+            ledger_bytes.extend_from_slice(&(record.bytes.len() as u32).to_le_bytes());
+            ledger_bytes.extend_from_slice(&record.bytes);
+        }
+        if let Some(set) = self.slots.lock().expect("slot lock").get_mut(&operation_id) {
+            let _ = set.shared.set(expected_bytes.clone());
+        }
+        ExpectedEvidence::new(
+            ExpectedEvidenceValues {
+                key: key.clone(),
+                oracle: self.contract.expected_oracle().clone(),
+                fixture_schema: invocation.fixture_schema().clone(),
+                truth_kind: TruthKind::IndependentLedger,
+                expected_bytes,
+                ledger_bytes,
+                coverage: Vec::new(),
+                effects: EffectBatch::empty(&limits),
+            },
+            &limits,
+        )
+        .map_err(|e| FixtureError::harness(e, Some(key), FixtureStage::Collect))
     }
     fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
         RetirementReport::new(
@@ -645,11 +1043,13 @@ impl FixtureSession for LinuxFixtureSession {
                 transitions: vec![],
                 pending_snapshot: request.known_pending().to_vec(),
                 complete: true,
-                diagnostic: None,
+                diagnostic: Some(
+                    "prepared linux pairs shut down at finalize; transitions unmodeled".to_string(),
+                ),
             },
             self.contract.limits(),
         )
-        .expect("bounded empty linux retirement")
+        .expect("bounded linux retirement")
     }
 }
 
