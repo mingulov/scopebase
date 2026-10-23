@@ -1,0 +1,4 @@
+#!/bin/sh
+# TC02 fake tool: echo argv NUL-separated, exactly as received.
+# SPDX-License-Identifier: Apache-2.0
+printf '%s\0' "$@"

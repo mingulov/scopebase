@@ -1,0 +1,4 @@
+#!/bin/sh
+# TC02 fake tool: emit exactly $1 bytes on stdout.
+# SPDX-License-Identifier: Apache-2.0
+exec head -c "$1" /dev/zero

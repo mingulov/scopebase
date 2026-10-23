@@ -1,7 +1,7 @@
 # TC lane: compiler/object compatibility records
 
-TC01 state. This directory holds strict, offline, versioned records for the
-compiler/object workstream. Nothing here builds, probes or installs a
+TC01–TC02 state. This directory holds strict, offline, versioned records for
+the compiler/object workstream. Nothing here builds, probes or installs a
 toolchain. Records are data plus strict parsers; actual fixture payloads,
 executors and live cells belong to TC02–TC08.
 
@@ -12,6 +12,7 @@ executors and live cells belong to TC02–TC08.
 | `profiles.schema.json` | Shape contract for profile, patch-register and toolchain-inventory documents (`schema_version` 1). |
 | `patches.json` | Patch register: 4 individually scoped records (TC-R08/B05). |
 | `toolchains.json` | Pinned toolchain inventory: 11 exact version pins, hashes where recorded (TC-R01/C05). |
+| `compiler-closure.json` | Explicit compiler closure: the 5 recorded-hash TC01 pins, every tool pinned and offline-resolvable (TC02, TC-R01/C05). |
 | `issues/` | Issue lessons: H07/H29/H30/H31/H32 plus the H/C/B mapping. |
 
 Issue provenance per area lives in `fixtures/bpf/<area>/provenance.json`
@@ -44,6 +45,28 @@ The suite proves the register, inventory and all five provenance files load,
 pins resolve with no network reference, provenance cross-references resolve,
 and the LLVM RMW correction and the private linker repair are separate
 records with separate removal tests.
+
+## TC02 closure and bounded nested builds
+
+`compiler-closure.json` is the explicit compiler closure: exactly the 5 TC01
+pins with recorded hashes (LLVM 23.1.2 source archive, pristine and
+PR-210371 `llc` identities, unrepaired and repaired `bpf-linker` binaries).
+The 6 unrecorded system-observed installs stay out: a closure tool without
+an exact hash refuses admission. `scopebase_testkit::toolchain` (feature
+`toolchain`) admits the manifest and runs one pinned tool id at a
+caller-supplied offline path under byte/time/work bounds: argument array
+only (no shell), explicit environment plus forced `CARGO_NET_OFFLINE=true`,
+per-stream byte caps, wall-clock timeout, arg/env count caps. Bound
+overruns abort with `LimitExceeded` after killing the child; unknown ids,
+missing executables, malformed requests and network-bearing env refuse
+typed. Fake tools live in `fixtures/bpf/toolchain/fake-tools/` (no real
+compiler is invoked or required).
+
+Run:
+
+```sh
+cargo test -p scopebase-testkit --features toolchain --test toolchain_invoke --offline --locked
+```
 
 ## Attribution and license boundary
 

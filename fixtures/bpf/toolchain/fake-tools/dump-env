@@ -1,0 +1,4 @@
+#!/bin/sh
+# TC02 fake tool: dump the child environment, sorted, one KEY=value per line.
+# SPDX-License-Identifier: Apache-2.0
+env | sort
