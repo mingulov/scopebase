@@ -14,6 +14,17 @@ explicit independent caps; every representable configuration is structurally
 valid. Zero/MAX confer no native authority or exception to checked accounting.
 Existing BP01 behavior remains unchanged.
 
+The optional `btf` feature adds host-only bounded domain-aware BTF parsing
+(`scopebase_bpf::btf`) over the locked btf-rs 2.0.0 parser at revision
+`0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0` with default features off; only
+byte-slice constructors are used, never file or mmap inputs. A narrow
+preflight enforces caller byte/type/string/work caps and a 16 MiB
+initial-profile ceiling before the parser materializes anything, binds the
+admitted bytes into a SHA-256 domain id, and fails hostile images typed.
+Run its suite explicitly: `cargo test --offline --locked --features btf
+--test btf`. The feature keeps no native state and confers no loader,
+kernel or runtime authority.
+
 `CpuTopology::parse_possible` accepts bounded ASCII kernel CPU lists, preserving
 strictly ascending IDs and exact original bytes. It refuses overlap, malformed
 input, out-of-range IDs and expansion limits. `PerCpuGeometry::checked` rounds

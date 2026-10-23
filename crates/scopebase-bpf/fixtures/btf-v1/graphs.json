@@ -1,0 +1,440 @@
+{
+  "version": 1,
+  "images": {
+    "base-rivals": {
+      "str_bias": 0,
+      "strings_hex": "0064757000",
+      "types": [
+        {
+          "id": 1,
+          "kind": 1,
+          "name_off": 1,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "20000001"
+        },
+        {
+          "id": 2,
+          "kind": 1,
+          "name_off": 1,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "40000000"
+        },
+        {
+          "id": 3,
+          "kind": 2,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": ""
+        }
+      ]
+    },
+    "split-extra": {
+      "str_bias": 5,
+      "strings_hex": "0073706c697400",
+      "types": [
+        {
+          "id": 1,
+          "kind": 1,
+          "name_off": 6,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "40000000"
+        }
+      ]
+    },
+    "shapes": {
+      "str_bias": 0,
+      "strings_hex": "0075333200733634006d795f7533320078007900506f696e7400707400666c616773004f75746572006100620055004541004542004500646f5f776f726b00666d74006c6f675f6d7367006600670042697473007700486173416e6f6e00760074616731006e6172726f77006677645f7300663332004d004536340052697600506f696e74416c69617300",
+      "types": [
+        {
+          "id": 1,
+          "kind": 1,
+          "name_off": 1,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "20000000"
+        },
+        {
+          "id": 2,
+          "kind": 1,
+          "name_off": 5,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "40000001"
+        },
+        {
+          "id": 3,
+          "kind": 8,
+          "name_off": 9,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": ""
+        },
+        {
+          "id": 4,
+          "kind": 10,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 3,
+          "aux_hex": ""
+        },
+        {
+          "id": 5,
+          "kind": 2,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": ""
+        },
+        {
+          "id": 6,
+          "kind": 3,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 0,
+          "aux_hex": "010000000100000004000000"
+        },
+        {
+          "id": 7,
+          "kind": 4,
+          "name_off": 20,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 16,
+          "aux_hex": "100000000100000000000000120000000200000040000000"
+        },
+        {
+          "id": 8,
+          "kind": 4,
+          "name_off": 35,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 24,
+          "aux_hex": "1a00000007000000000000001d0000000100000080000000"
+        },
+        {
+          "id": 9,
+          "kind": 5,
+          "name_off": 45,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "2900000001000000000000002b0000000200000000000000"
+        },
+        {
+          "id": 10,
+          "kind": 6,
+          "name_off": 53,
+          "vlen": 2,
+          "kind_flag": 1,
+          "size_or_type": 4,
+          "aux_hex": "2f000000000000003200000001000000"
+        },
+        {
+          "id": 11,
+          "kind": 13,
+          "name_off": 0,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": "29000000010000002b00000002000000"
+        },
+        {
+          "id": 12,
+          "kind": 12,
+          "name_off": 55,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 11,
+          "aux_hex": ""
+        },
+        {
+          "id": 13,
+          "kind": 13,
+          "name_off": 0,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 0,
+          "aux_hex": "3f000000050000000000000000000000"
+        },
+        {
+          "id": 14,
+          "kind": 12,
+          "name_off": 67,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 13,
+          "aux_hex": ""
+        },
+        {
+          "id": 15,
+          "kind": 4,
+          "name_off": 79,
+          "vlen": 2,
+          "kind_flag": 1,
+          "size_or_type": 4,
+          "aux_hex": "4b00000001000000040000034d0000000100000008000008"
+        },
+        {
+          "id": 16,
+          "kind": 4,
+          "name_off": 86,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "000000001100000000000000540000000100000020000000"
+        },
+        {
+          "id": 17,
+          "kind": 4,
+          "name_off": 0,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "5e0000000100000000000000"
+        },
+        {
+          "id": 18,
+          "kind": 17,
+          "name_off": 96,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 7,
+          "aux_hex": "ffffffff"
+        },
+        {
+          "id": 19,
+          "kind": 1,
+          "name_off": 101,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "0c000400"
+        },
+        {
+          "id": 20,
+          "kind": 9,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": ""
+        },
+        {
+          "id": 21,
+          "kind": 7,
+          "name_off": 108,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 0,
+          "aux_hex": ""
+        },
+        {
+          "id": 22,
+          "kind": 16,
+          "name_off": 114,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": ""
+        },
+        {
+          "id": 23,
+          "kind": 19,
+          "name_off": 120,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "760000000200000001000000"
+        },
+        {
+          "id": 24,
+          "kind": 4,
+          "name_off": 124,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "100000000100000000000000"
+        },
+        {
+          "id": 25,
+          "kind": 4,
+          "name_off": 124,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "100000000200000000000000"
+        },
+        {
+          "id": 26,
+          "kind": 8,
+          "name_off": 128,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 7,
+          "aux_hex": ""
+        }
+      ]
+    },
+    "maps": {
+      "str_bias": 0,
+      "strings_hex": "00753332007536340074797065006b65790076616c7565006d61705f646566006d795f6d6170002e6d617073006f727068616e5f6d6170006e6f76616c75650062726f6b656e5f6d6170002e6d6170733200",
+      "types": [
+        {
+          "id": 1,
+          "kind": 1,
+          "name_off": 1,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 4,
+          "aux_hex": "20000000"
+        },
+        {
+          "id": 2,
+          "kind": 1,
+          "name_off": 5,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "40000000"
+        },
+        {
+          "id": 3,
+          "kind": 2,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": ""
+        },
+        {
+          "id": 4,
+          "kind": 2,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 2,
+          "aux_hex": ""
+        },
+        {
+          "id": 5,
+          "kind": 4,
+          "name_off": 24,
+          "vlen": 3,
+          "kind_flag": 0,
+          "size_or_type": 20,
+          "aux_hex": "0900000001000000000000000e0000000300000020000000120000000400000060000000"
+        },
+        {
+          "id": 6,
+          "kind": 14,
+          "name_off": 32,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 5,
+          "aux_hex": "01000000"
+        },
+        {
+          "id": 7,
+          "kind": 15,
+          "name_off": 39,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 20,
+          "aux_hex": "060000000000000014000000"
+        },
+        {
+          "id": 8,
+          "kind": 14,
+          "name_off": 45,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 5,
+          "aux_hex": "01000000"
+        },
+        {
+          "id": 9,
+          "kind": 4,
+          "name_off": 56,
+          "vlen": 2,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "0900000001000000000000000e0000000300000020000000"
+        },
+        {
+          "id": 10,
+          "kind": 14,
+          "name_off": 64,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 9,
+          "aux_hex": "01000000"
+        },
+        {
+          "id": 11,
+          "kind": 15,
+          "name_off": 75,
+          "vlen": 1,
+          "kind_flag": 0,
+          "size_or_type": 8,
+          "aux_hex": "0a0000000000000008000000"
+        }
+      ]
+    },
+    "cycle": {
+      "str_bias": 0,
+      "strings_hex": "00633100633200743000",
+      "types": [
+        {
+          "id": 1,
+          "kind": 8,
+          "name_off": 1,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 2,
+          "aux_hex": ""
+        },
+        {
+          "id": 2,
+          "kind": 8,
+          "name_off": 4,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 1,
+          "aux_hex": ""
+        },
+        {
+          "id": 3,
+          "kind": 2,
+          "name_off": 0,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 99,
+          "aux_hex": ""
+        },
+        {
+          "id": 4,
+          "kind": 8,
+          "name_off": 7,
+          "vlen": 0,
+          "kind_flag": 0,
+          "size_or_type": 0,
+          "aux_hex": ""
+        }
+      ]
+    }
+  }
+}
