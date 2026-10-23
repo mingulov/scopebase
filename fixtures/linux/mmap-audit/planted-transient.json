@@ -1,11 +1,12 @@
 {
   "schema": "tt04-mmap-ledger-v1",
-  "about": "Golden format vector: one transient target-backed mmap closed by munmap, amid allocator noise.",
+  "about": "Golden format vector: one transient target-backed mmap closed by munmap, amid allocator noise, plus one FAILED target mmap (raw -EBADF) that must not count.",
   "target": {"dev": 37, "ino": 101216118, "path": "/run/tt04/target.bin"},
   "events": [
     {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 135168, "result": 139975124910080},
     {"syscall": "mmap", "fd": 7, "anonymous": false, "dev": 37, "ino": 101216118, "path": "/run/tt04/target.bin", "addr": 0, "len": 4096, "result": 139975124473856},
     {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 4096, "result": 139975124469760},
+    {"syscall": "mmap", "fd": 7, "anonymous": false, "dev": 37, "ino": 101216118, "path": "/run/tt04/target.bin", "addr": 0, "len": 4096, "result": -9},
     {"syscall": "munmap", "fd": -2, "anonymous": false, "dev": null, "ino": null, "path": null, "addr": 139975124473856, "len": 4096, "result": 0}
   ]
 }

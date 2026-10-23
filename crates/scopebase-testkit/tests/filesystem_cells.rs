@@ -1116,6 +1116,121 @@ fn transient_target_mmap_detected() {
     );
 }
 
+/// F15: the audit follows worker threads. The subject maps the target
+/// only from a spawned worker (its main thread never touches it); the
+/// tracer must attribute that map. The old main-only tracer saw an
+/// empty target ledger here.
+#[test]
+fn audit_follows_worker_thread_maps() {
+    let yama = match audit::preflight() {
+        Ok(note) => note,
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let dir = temp_dir("audit-thread");
+    let target_file = dir.join("thread-target.bin");
+    std::fs::write(&target_file, pattern_bytes(77, 8192)).unwrap();
+    let st = std::fs::metadata(&target_file).unwrap();
+    let config = AuditConfig {
+        target_dev: st.dev() as u64,
+        target_ino: st.ino(),
+        max_entries: 4096,
+        timeout: Duration::from_secs(60),
+    };
+    let worker_report = dir.join("thread.report");
+    let traced = audit::audit_subject(
+        &audit_subject_bin(),
+        &[
+            "thread-plant".to_string(),
+            "--target".to_string(),
+            target_file.to_string_lossy().into_owned(),
+            "--report".to_string(),
+            worker_report.to_string_lossy().into_owned(),
+        ],
+        &config,
+    )
+    .expect("thread audit run");
+    assert_eq!(traced.exit_code, Some(0), "thread subject must exit 0");
+    assert_eq!(
+        std::fs::read_to_string(&worker_report)
+            .expect("worker wrote its report")
+            .trim(),
+        "worker=0",
+        "fixture unexercised: worker plant failed"
+    );
+    assert!(
+        traced.threads_seen >= 2,
+        "tracer saw {} threads, want main + worker",
+        traced.threads_seen
+    );
+    let hit = traced
+        .target_backed_mmaps()
+        .into_iter()
+        .find(|e| e.succeeded() && e.len >= 4096);
+    let Some(hit) = hit else {
+        panic!("audit missed the worker-thread target mmap");
+    };
+    let covered = traced
+        .munmaps()
+        .into_iter()
+        .any(|u| u.addr <= hit.result_addr() && hit.result_addr() < u.addr + u.len);
+    assert!(covered, "worker transient lacks its munmap close");
+    pass(
+        "FS10",
+        &format!(
+            "yama {yama}; worker mmap@{:#x} flagged+munmap-closed; threads_seen={}",
+            hit.result_addr(),
+            traced.threads_seen
+        ),
+    );
+}
+
+/// F16: the audit deadline bounds a hung subject. `sleep 300` never
+/// returns from its syscall; the tracer must kill it at the deadline
+/// instead of blocking in waitpid for the full sleep. The old
+/// blocking wait took the whole 300 seconds (then wrongly Ok).
+#[test]
+fn audit_deadline_kills_hung_subject() {
+    let yama = match audit::preflight() {
+        Ok(note) => note,
+        Err(e) => {
+            skip("FS10", &format!("ptrace preflight refused: {e}"));
+            return;
+        }
+    };
+    let config = AuditConfig {
+        target_dev: 0,
+        target_ino: 0,
+        max_entries: 4096,
+        timeout: Duration::from_secs(3),
+    };
+    let start = Instant::now();
+    let err = match audit::audit_subject(Path::new("sleep"), &["300".to_string()], &config) {
+        Ok(_) => panic!("sleep 300 must not complete inside a 3s audit"),
+        Err(err) => err,
+    };
+    let elapsed = start.elapsed();
+    let detail = err.to_string();
+    if detail.contains("spawn refused") {
+        skip("FS10", "no sleep binary for the hang control");
+        return;
+    }
+    assert!(
+        detail.contains("timed out"),
+        "hung subject must time out, got: {detail}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "deadline did not bound the hang: {elapsed:?}"
+    );
+    pass(
+        "FS10",
+        &format!("yama {yama}; sleep 300 killed after {elapsed:?}"),
+    );
+}
+
 /// FS01 ext4 control: hardlink alias identity, rename/delete path
 /// staleness without key confusion, and actually mapped ranges.
 #[test]

@@ -10,10 +10,10 @@
     "path": "readlink of /proc/PID/fd/N at enter, or null",
     "addr": "u64 requested address (mmap/mremap old address, munmap start)",
     "len": "u64 requested length",
-    "result": "i64 raw return: address or -errno; mmap failure is exactly -1"
+    "result": "i64 raw return: map address on success, -errno in -4095..=-1 on failure (F17: raw mmap failure is NOT exactly -1; that is libc's MAP_FAILED mapping one layer up)"
   },
   "verdict_rules": [
-    "target-backed = syscall mmap, anonymous false, succeeded (result != -1), dev/ino equal the audited target",
+    "target-backed = syscall mmap, anonymous false, succeeded (result outside -4095..=-1), dev/ino equal the audited target",
     "transient = a target-backed mmap whose result address is later covered by a munmap entry",
     "anonymous successes prove the tracer observes syscalls; they are never attributed"
   ]

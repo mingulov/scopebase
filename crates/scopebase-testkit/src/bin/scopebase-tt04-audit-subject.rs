@@ -5,12 +5,17 @@
 //!
 //! Usage: scopebase-tt04-audit-subject observe --target PATH --pid PID
 //!   --range START-END [--plant-violation] --report PATH
+//!   scopebase-tt04-audit-subject thread-plant --target PATH --report PATH
 //!
 //! Exit 0 after writing `verdict=...` to the report for every completed
 //! observation (any production outcome, including MappingFailure,
 //! counts as observed); exit 2 on usage/setup errors. NEW per the
 //! frozen FS10 design; the traced phase is the real production
 //! `observe_mapping`, never a model.
+//!
+//! F15: `thread-plant` maps one target page transiently from a worker
+//! thread (the main thread never touches the target), proving the
+//! tracer follows threads. Writes `worker=0` and exits 0.
 use scopebase_linux::{
     control::OperationControl,
     file::{HeldFile, ProcFdResolver, SymlinkPolicy},
@@ -27,7 +32,8 @@ use std::sync::Arc;
 fn usage() -> ! {
     eprintln!(
         "usage: scopebase-tt04-audit-subject observe --target PATH --pid PID \
-         --range START-END [--plant-violation] --report PATH"
+         --range START-END [--plant-violation] --report PATH | \
+         thread-plant --target PATH --report PATH"
     );
     std::process::exit(2);
 }
@@ -42,9 +48,62 @@ fn flag_value(argv: &[String], name: &str) -> Option<String> {
     })
 }
 
+/// F15: map one target page transiently on a worker thread.
+/// Returns the worker's exit status (0 clean).
+fn thread_plant(target: &str) -> i32 {
+    let path = std::ffi::CString::new(target).expect("target path encodes");
+    let worker = std::thread::Builder::new()
+        .name("plant-worker".to_string())
+        .spawn(move || {
+            // SAFETY: NUL-terminated admitted path; all results checked.
+            // The main thread never touches the target: every
+            // target-backed mmap below belongs to this worker.
+            unsafe {
+                let fd = libc::open(path.as_ptr(), libc::O_RDONLY);
+                if fd < 0 {
+                    return 10;
+                }
+                let addr = libc::mmap(
+                    std::ptr::null_mut(),
+                    4096,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                );
+                if addr == libc::MAP_FAILED {
+                    libc::close(fd);
+                    return 11;
+                }
+                let _ = (addr as *const u8).read_volatile();
+                if libc::munmap(addr, 4096) != 0 {
+                    libc::close(fd);
+                    return 12;
+                }
+                libc::close(fd);
+            }
+            0
+        })
+        .expect("worker spawns");
+    worker.join().unwrap_or(13)
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
-    if argv.len() < 2 || argv[1] != "observe" {
+    if argv.len() < 2 {
+        usage();
+    }
+    if argv[1] == "thread-plant" {
+        let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
+        let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
+        let code = thread_plant(&target);
+        std::fs::write(&report, format!("worker={code}\n")).unwrap_or_else(|_| {
+            eprintln!("audit subject setup failed at report");
+            std::process::exit(2);
+        });
+        std::process::exit(if code == 0 { 0 } else { 2 });
+    }
+    if argv[1] != "observe" {
         usage();
     }
     let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
