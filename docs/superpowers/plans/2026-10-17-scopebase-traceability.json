@@ -4438,6 +4438,11 @@
       "title": "Finite attachment planner and caller error policy"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-bp05-custody.md",
+        "reviewed_candidate_commit": "f1a34e46069cd617c8899d00165c7326d4e20cd3",
+        "subject_commit": "f1a34e46069cd617c8899d00165c7326d4e20cd3"
+      },
       "anchor": "bp05-held-file-attachment-custody-and-explicit-retirement",
       "depends_on": [
         "BP04",
@@ -4456,7 +4461,7 @@
         "BP-R04",
         "BP-R05"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Held-file attachment custody and explicit retirement"
     },
     {
@@ -5086,6 +5091,11 @@
       "title": "Closure evidence profiles and late-evidence countermodels"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-cp10-replay.md",
+        "reviewed_candidate_commit": "f9eefd03f9daae217f50d20ae3a3022235ffe844",
+        "subject_commit": "f9eefd03f9daae217f50d20ae3a3022235ffe844"
+      },
       "anchor": "task-cp10-canonical-neutral-validation-and-strict-replay-vectors",
       "depends_on": [
         "CP03",
@@ -5111,7 +5121,7 @@
         "CP-R16",
         "CP-R18"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Canonical neutral validation and strict replay vectors"
     },
     {
