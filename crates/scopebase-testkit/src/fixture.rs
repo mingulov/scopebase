@@ -13,6 +13,8 @@ use std::{
         Arc,
     },
 };
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+pub mod linux;
 /// Independently owned observer that may outlive a mutable fixture borrow.
 /// A reference captured from the fixture cannot satisfy the owned probe lifetime:
 /// ```compile_fail
