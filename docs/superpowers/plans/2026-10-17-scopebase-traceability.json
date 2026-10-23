@@ -4704,6 +4704,11 @@
       "title": "Recover issue fixtures, toolchain pins and patch register"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tc02-closure.md",
+        "reviewed_candidate_commit": "aca297200c67817c945993c3e90b238497b81103",
+        "subject_commit": "aca297200c67817c945993c3e90b238497b81103"
+      },
       "anchor": "tc02-explicit-compiler-closure-and-bounded-nested-build-helper",
       "depends_on": [
         "TC01"
@@ -4719,7 +4724,7 @@
         "SB-R08",
         "TC-R01"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Explicit compiler closure and bounded nested-build helper"
     },
     {
@@ -5125,6 +5130,11 @@
       "title": "Canonical neutral validation and strict replay vectors"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-cp11-consumers.md",
+        "reviewed_candidate_commit": "9552e961582f4cc42a81880a574e946f8ecc6499",
+        "subject_commit": "9552e961582f4cc42a81880a574e946f8ecc6499"
+      },
       "anchor": "task-cp11-independent-real-consumers-examples-and-correction-holders",
       "depends_on": [
         "CP10",
@@ -5149,7 +5159,7 @@
         "CP-R17",
         "CP-R18"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Independent real consumers, examples and correction holders"
     },
     {
@@ -5673,6 +5683,11 @@
       "title": "Bounded context, diagnostics and component bindings"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-sdk03-metadata.md",
+        "reviewed_candidate_commit": "c86ed4d71c179b8b44c9721f1b47460474b21cb5",
+        "subject_commit": "c86ed4d71c179b8b44c9721f1b47460474b21cb5"
+      },
       "anchor": "sdk03-capture-metadata-integration-and-consumer-linked-conformance",
       "depends_on": [
         "SDK02",
@@ -5691,7 +5706,7 @@
         "SDK-R07",
         "SDK-R08"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Capture metadata integration and consumer-linked conformance"
     },
     {
