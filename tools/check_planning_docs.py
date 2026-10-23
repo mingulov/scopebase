@@ -197,10 +197,6 @@ for task in tasks:
     if state in ('IN_PROGRESS','ACCEPTED'):
         unmet=[dep for dep in task['depends_on'] if task_map.get(dep,{}).get('status')!='ACCEPTED' and dep not in PREREQ_EXCEPTIONS.get(task['id'],{})]
         if unmet: fail(task['id']+': mandatory prerequisites not ACCEPTED: '+','.join(unmet))
-for task_id,deps in PREREQ_EXCEPTIONS.items():
-    if task_id not in task_map: fail('PREREQ_EXCEPTIONS unknown task '+task_id)
-    for dep in deps:
-        if dep not in task_map.get(task_id,{}).get('depends_on',[]): fail('PREREQ_EXCEPTIONS '+task_id+': not a declared edge: '+dep)
     if state=='ACCEPTED':
         acceptance=task.get('acceptance')
         if not isinstance(acceptance,dict) or not {'subject_commit','evidence_record'}<=acceptance.keys():
@@ -227,6 +223,10 @@ for task_id,deps in PREREQ_EXCEPTIONS.items():
     if any(x not in task_map for x in all_edges[task['id']]): fail(task['id']+': dangling dependency')
     if not task['id'].startswith('MG') and any(x.startswith('MG') for x in all_edges[task['id']]):
         fail(task['id']+': package work depends on later product migration')
+for task_id,deps in PREREQ_EXCEPTIONS.items():
+    if task_id not in task_map: fail('PREREQ_EXCEPTIONS unknown task '+task_id)
+    for dep in deps:
+        if dep not in task_map.get(task_id,{}).get('depends_on',[]): fail('PREREQ_EXCEPTIONS '+task_id+': not a declared edge: '+dep)
 pending={k:set(v) for k,v in all_edges.items()}
 order=[]
 while pending:
