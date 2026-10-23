@@ -48,3 +48,5 @@ extern crate self as scopebase_testkit;
 pub mod bpf;
 #[cfg(feature = "object")]
 pub mod object;
+#[cfg(feature = "toolchain")]
+pub mod toolchain;

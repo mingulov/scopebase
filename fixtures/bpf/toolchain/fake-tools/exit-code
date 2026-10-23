@@ -1,0 +1,4 @@
+#!/bin/sh
+# TC02 fake tool: exit with status $1 and no output.
+# SPDX-License-Identifier: Apache-2.0
+exit "$1"

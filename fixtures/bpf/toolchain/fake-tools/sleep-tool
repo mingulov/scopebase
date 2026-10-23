@@ -1,0 +1,5 @@
+#!/bin/sh
+# TC02 fake tool: sleep $1 seconds (timeout control). Single process via exec
+# so the bounded helper's kill lands on the sleeper itself.
+# SPDX-License-Identifier: Apache-2.0
+exec sleep "$1"

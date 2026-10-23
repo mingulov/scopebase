@@ -1,0 +1,4 @@
+#!/bin/sh
+# TC02 fake tool: silent success control (zero-byte bound twin).
+# SPDX-License-Identifier: Apache-2.0
+exit 0

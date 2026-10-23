@@ -22,7 +22,7 @@ use crate::ids::{CaseId, Label, ProfileId};
 pub const SCHEMA_VERSION: u32 = 1;
 const MAX_DEPTH: usize = 64;
 
-fn invalid(message: &'static str) -> OperationError {
+pub(crate) fn invalid(message: &'static str) -> OperationError {
     OperationError::new(
         ErrorKind::InvalidInput,
         Stage::Admission,
@@ -44,7 +44,7 @@ fn malformed() -> OperationError {
     OperationError::new(ErrorKind::Malformed, Stage::Admission, None, None)
 }
 
-fn limited() -> OperationError {
+pub(crate) fn limited() -> OperationError {
     OperationError::new(ErrorKind::LimitExceeded, Stage::Admission, None, None)
 }
 
@@ -59,7 +59,7 @@ impl std::fmt::Display for Simple {
 
 impl std::error::Error for Simple {}
 
-fn strict_value(bytes: &[u8], limits: &Limits) -> Result<Value, OperationError> {
+pub(crate) fn strict_value(bytes: &[u8], limits: &Limits) -> Result<Value, OperationError> {
     limits.validate()?;
     if bytes.len() > limits.input_bytes || bytes.len() > limits.retained_bytes {
         return Err(limited());
@@ -72,14 +72,14 @@ fn strict_value(bytes: &[u8], limits: &Limits) -> Result<Value, OperationError> 
     serde_json::from_str(text).map_err(|_| malformed())
 }
 
-fn check_version(root: &serde_json::Map<String, Value>) -> Result<(), OperationError> {
+pub(crate) fn check_version(root: &serde_json::Map<String, Value>) -> Result<(), OperationError> {
     match root.get("schema_version").and_then(Value::as_u64) {
         Some(version) if version == u64::from(SCHEMA_VERSION) => Ok(()),
         _ => Err(invalid("schema_version must be exactly 1")),
     }
 }
 
-fn check_no_unknown(
+pub(crate) fn check_no_unknown(
     root: &serde_json::Map<String, Value>,
     allowed: &[&str],
 ) -> Result<(), OperationError> {
@@ -89,7 +89,7 @@ fn check_no_unknown(
     Ok(())
 }
 
-fn get_str<'a>(
+pub(crate) fn get_str<'a>(
     root: &'a serde_json::Map<String, Value>,
     field: &'static str,
 ) -> Result<&'a str, OperationError> {
@@ -109,7 +109,7 @@ fn get_opt_str<'a>(
     }
 }
 
-fn parse_sha256(text: &str, field: &'static str) -> Result<[u8; 32], OperationError> {
+pub(crate) fn parse_sha256(text: &str, field: &'static str) -> Result<[u8; 32], OperationError> {
     if text.len() != 64
         || !text
             .bytes()
@@ -125,7 +125,7 @@ fn parse_sha256(text: &str, field: &'static str) -> Result<[u8; 32], OperationEr
     Ok(out)
 }
 
-fn parse_label(text: &str, field: &'static str) -> Result<(), OperationError> {
+pub(crate) fn parse_label(text: &str, field: &'static str) -> Result<(), OperationError> {
     Label::parse(text).map(|_| ()).map_err(|_| invalid(field))
 }
 
