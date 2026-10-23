@@ -1,0 +1,146 @@
+{
+  "cells": [
+    {
+      "description": "Unprivileged offline identity leg: re-hash staged bytes and re-check ELF/machine/type identity against the admission. Runs anywhere the toolchain runs.",
+      "excluded_targets": [],
+      "kind": "host-unprivileged",
+      "name": "host-object-identity",
+      "needs_reproducer": false,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired"
+      ],
+      "requirements": [],
+      "workload": {
+        "argv": [
+          "python3",
+          "{tool_root}/workloads/cell_probe.py",
+          "identity",
+          "--object",
+          "{stage}/admitted-object",
+          "--expect-sha256",
+          "{object_sha256}",
+          "--expect-kind",
+          "{object_kind}",
+          "--result",
+          "{result}"
+        ],
+        "result": "result.json",
+        "timeout_secs": 60
+      }
+    },
+    {
+      "description": "Unprivileged read-only capability survey: records kernel release, euid and bpffs/kvm/sysctl/tool probe evidence used for skip diagnosis. A measurement, never a gate.",
+      "excluded_targets": [],
+      "kind": "host-unprivileged",
+      "name": "host-capability-probe",
+      "needs_reproducer": false,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired"
+      ],
+      "requirements": [],
+      "workload": {
+        "argv": [
+          "python3",
+          "{tool_root}/workloads/cell_probe.py",
+          "capabilities",
+          "--result",
+          "{result}"
+        ],
+        "result": "result.json",
+        "timeout_secs": 60
+      }
+    },
+    {
+      "description": "Privileged live-load cell: loads the admitted object on the host kernel and runs BP semantic workloads. Blocked until a root/bpffs host plus bound BP workloads (TT05-full/TC07).",
+      "excluded_targets": [
+        "isa:bpfel-arm64"
+      ],
+      "kind": "host-privileged",
+      "name": "host-bpf-load",
+      "needs_reproducer": true,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired",
+        "bpffs-empty"
+      ],
+      "requirements": [
+        "root-euid",
+        "bpffs-writable"
+      ],
+      "workload": null
+    },
+    {
+      "description": "Owned QEMU guest cell (Debian 13 base): runs semantic reproducers isolated from the host kernel. Blocked until a guest image asset plus vng harness binding (TT05-full).",
+      "excluded_targets": [],
+      "kind": "owned-guest",
+      "name": "owned-guest-debian13",
+      "needs_reproducer": true,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired"
+      ],
+      "requirements": [
+        "kvm-rw",
+        "tool:vng",
+        "file:/var/lib/scopebase/guests/debian13.img"
+      ],
+      "workload": null
+    },
+    {
+      "description": "H33 valid-GPL helper-activity cell: a GPL-licensed object exercising helpers must load and show activity. Blocked until a privileged host plus GPL fixtures (TC07/TC08).",
+      "excluded_targets": [],
+      "kind": "host-privileged",
+      "name": "host-license-gpl-activity",
+      "needs_reproducer": true,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired",
+        "bpffs-empty"
+      ],
+      "requirements": [
+        "root-euid",
+        "bpffs-writable"
+      ],
+      "workload": null
+    },
+    {
+      "description": "H33 otherwise-valid non-GPL refusal cell: a non-GPL object must refuse at load with the license cause. Blocked until a privileged host plus non-GPL fixtures (TC07/TC08).",
+      "excluded_targets": [],
+      "kind": "host-privileged",
+      "name": "host-license-nongpl-refusal",
+      "needs_reproducer": true,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired",
+        "bpffs-empty"
+      ],
+      "requirements": [
+        "root-euid",
+        "bpffs-writable"
+      ],
+      "workload": null
+    },
+    {
+      "description": "H33 helper-free baseline cell: a helper-free object must load where permitted. Blocked until a privileged host plus baseline fixtures (TC07/TC08).",
+      "excluded_targets": [],
+      "kind": "host-privileged",
+      "name": "host-license-helperfree-baseline",
+      "needs_reproducer": true,
+      "release_probes": [
+        "no-owned-procs",
+        "run-root-retired",
+        "bpffs-empty"
+      ],
+      "requirements": [
+        "root-euid",
+        "bpffs-writable"
+      ],
+      "workload": null
+    }
+  ],
+  "doc": "docs/testing/kernel-cells.md",
+  "kind": "scopebase_kernel_cells_v1",
+  "schema_version": 1
+}
