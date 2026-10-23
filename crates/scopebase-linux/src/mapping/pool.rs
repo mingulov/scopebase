@@ -66,7 +66,13 @@ enum Phase {
 /// to munmap, the original held owner (charge retained) and its byte charge.
 /// `retiring` gives per-slot exclusive reconciliation: at most one retry or
 /// drain holds a record outside the lock.
+///
+/// R10: `id` is the record's identity for claim/commit/cancel. Address
+/// tokens do NOT identify records: after a successful unmap the kernel
+/// may hand the same range to a later mapping, so two queued records can
+/// share `(addr, len)` and a first-match removal can drop the live one.
 struct UnresolvedRecord {
+    id: u64,
     addr: *mut c_void,
     len: usize,
     // Retained owner: keeps the file authority and its charge alive with the
@@ -94,6 +100,9 @@ pub(crate) struct Inner {
     reserved_mappings: usize,
     reserved_bytes: usize,
     unresolved: Vec<UnresolvedRecord>,
+    /// R10: next queued-record id. Assigned under the state lock, starts
+    /// at 1 so 0 never names a record.
+    next_unresolved_id: u64,
 }
 
 impl Inner {
@@ -120,8 +129,82 @@ pub(crate) struct Shared {
     state: Mutex<Inner>,
     /// Terminal-retention self-anchor: set when a pool handle drops with
     /// occupied records, released after the last occupied record retires with
-    /// no active work. Never locked while `state` is held.
+    /// no active work.
+    ///
+    /// R44: lock order is state-then-anchor. Both install (`Drop`) and
+    /// release (`release_anchor_if_empty`) hold the state lock across the
+    /// anchor lock, so a retirement cannot erase an anchor installed for
+    /// newly acquired custody between the two steps. (An earlier revision
+    /// of this doc forbade nesting; the F07 order requires it.)
     anchor: Mutex<Option<Arc<Shared>>>,
+    /// R43: forced-interleaving hooks. Test-only; production builds carry
+    /// no hook state and no hook calls.
+    #[cfg(test)]
+    test_hooks: TestHooks,
+}
+
+/// R43: forced-interleaving hooks for drain/permit/anchor tests. Each
+/// hook runs OUTSIDE the state lock at a documented quiescent point. A
+/// hook must not call back into pool operations that take the state
+/// lock; blocking on test channels is the intended use. Hooks are
+/// reference-counted so concurrent drains can each hold one while
+/// blocked: firing clones the Arc under the slot lock and invokes it
+/// after release, never holding the slot across the call.
+#[cfg(test)]
+type ClaimHook = Arc<dyn Fn(u64) + Send + Sync>;
+#[cfg(test)]
+type UnitHook = Arc<dyn Fn() + Send + Sync>;
+
+#[cfg(test)]
+pub(crate) struct TestHooks {
+    /// After a drain claims a record (`retiring` set, claim recorded),
+    /// before the cancel checkpoint and unmap. Receives the record id.
+    pub(crate) after_claim: Mutex<Option<ClaimHook>>,
+    /// In `ActivePermit::retire` after the counters update, before the
+    /// anchor release check.
+    pub(crate) after_retire_counters: Mutex<Option<UnitHook>>,
+    /// In `release_anchor_if_empty` when the anchor is actually released.
+    pub(crate) anchor_releasing: Mutex<Option<UnitHook>>,
+}
+
+#[cfg(test)]
+impl TestHooks {
+    fn new() -> Self {
+        Self {
+            after_claim: Mutex::new(None),
+            after_retire_counters: Mutex::new(None),
+            anchor_releasing: Mutex::new(None),
+        }
+    }
+}
+
+#[cfg(test)]
+fn fire_after_claim(shared: &Shared, id: u64) {
+    let hook = shared.test_hooks.after_claim.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook(id);
+    }
+}
+
+#[cfg(test)]
+fn fire_after_retire_counters(shared: &Shared) {
+    let hook = shared
+        .test_hooks
+        .after_retire_counters
+        .lock()
+        .unwrap()
+        .clone();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn fire_anchor_releasing(shared: &Shared) {
+    let hook = shared.test_hooks.anchor_releasing.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 /// Caller-owned mapping accounting domain. Clones share one domain: charges
@@ -315,8 +398,11 @@ impl MappingPool {
                     reserved_mappings: 0,
                     reserved_bytes: 0,
                     unresolved: Vec::with_capacity(limits.max_mappings.min(PREALLOC_UNRESOLVED)),
+                    next_unresolved_id: 1,
                 }),
                 anchor: Mutex::new(None),
+                #[cfg(test)]
+                test_hooks: TestHooks::new(),
             }),
         })
     }
@@ -339,6 +425,19 @@ impl MappingPool {
     /// skipped, never double-driven.
     pub fn retry_unresolved(&self, control: &OperationControl) -> MappingDrainReport {
         drain_shared(&self.shared, control)
+    }
+
+    /// R10/R43: test-only queue introspection: `(id, addr, len, retiring)`
+    /// per queued record in queue order. Lets forced-interleaving tests
+    /// assert WHICH record a commit removed, not just the count.
+    #[cfg(test)]
+    pub(crate) fn queue_snapshot(&self) -> Vec<(u64, *mut c_void, usize, bool)> {
+        let state = lock_report(&self.shared);
+        state
+            .unresolved
+            .iter()
+            .map(|record| (record.id, record.addr, record.len, record.retiring))
+            .collect()
     }
 
     /// Admission-stop commit then reconciliation. Cancellation before the
@@ -497,6 +596,9 @@ pub(crate) fn release_anchor_if_empty(shared: &Shared) {
     let state = lock_report(shared);
     if !state.occupied() && state.active_ops == 0 {
         lock_anchor(shared).take();
+        drop(state);
+        #[cfg(test)]
+        fire_anchor_releasing(shared);
     }
 }
 
@@ -659,6 +761,8 @@ impl ActivePermit {
             state.active_mappings = state.active_mappings.saturating_sub(1);
             state.active_bytes = state.active_bytes.saturating_sub(self.bytes);
         }
+        #[cfg(test)]
+        fire_after_retire_counters(&shared);
         self.settled = true;
         drop(self);
         release_anchor_if_empty(&shared);
@@ -670,17 +774,24 @@ impl ActivePermit {
     /// memory pressure deliberately leaks the one record's charge instead of
     /// aborting from Drop.
     pub(crate) fn unresolved(mut self) {
-        let record = UnresolvedRecord {
-            addr: self.addr,
-            len: self.len,
-            held: Arc::clone(&self.held),
-            bytes: self.bytes,
-            retiring: false,
-        };
+        let (addr, len, bytes) = (self.addr, self.len, self.bytes);
         {
             let mut state = lock_report(&self.shared);
             state.active_mappings = state.active_mappings.saturating_sub(1);
             state.active_bytes = state.active_bytes.saturating_sub(self.bytes);
+            // R10: the id is assigned under the lock with the queue push,
+            // so queue order and id order agree. The counter skips 0, so 0
+            // never names a record.
+            let id = state.next_unresolved_id;
+            state.next_unresolved_id = state.next_unresolved_id.wrapping_add(1).max(1);
+            let record = UnresolvedRecord {
+                id,
+                addr,
+                len,
+                held: Arc::clone(&self.held),
+                bytes,
+                retiring: false,
+            };
             if state.unresolved.len() == state.unresolved.capacity()
                 && state.unresolved.try_reserve(1).is_err()
             {
@@ -748,39 +859,39 @@ fn drain_shared(shared: &Arc<Shared>, control: &OperationControl) -> MappingDrai
         };
     }
     let budget = lock_report(shared).unresolved.len();
-    let mut tried: Vec<(*mut c_void, usize)> = Vec::new();
+    // R10: claim/commit/cancel match by record id, never by (addr, len).
+    // Address ranges recycle across unmap/remap, so two queued records
+    // can share a token; the id names the claimed record exactly even
+    // when a concurrent drain reorders the queue under us.
+    let mut tried: Vec<u64> = Vec::new();
     for _ in 0..budget {
         let claim = {
             let mut state = lock_report(shared);
-            let index = state.unresolved.iter().position(|record| {
-                !record.retiring
-                    && !tried
-                        .iter()
-                        .any(|(addr, len)| *addr == record.addr && *len == record.len)
-            });
+            let index = state
+                .unresolved
+                .iter()
+                .position(|record| !record.retiring && !tried.contains(&record.id));
             match index {
                 None => None,
                 Some(index) => {
                     state.unresolved[index].retiring = true;
                     let record = &state.unresolved[index];
-                    Some((record.addr, record.len))
+                    Some((record.id, record.addr, record.len))
                 }
             }
         };
-        let Some((addr, len)) = claim else {
+        let Some((id, addr, len)) = claim else {
             break;
         };
-        tried.push((addr, len));
+        tried.push(id);
+        #[cfg(test)]
+        fire_after_claim(shared, id);
         // No pool lock is held across the unmap attempt.
         if let Err(stop) = control.checkpoint() {
             let mut state = lock_report(shared);
-            // F06: restore by identity, not by the claim-time index: a
+            // F06/R10: restore by id, not by the claim-time index: a
             // concurrent drain may have shifted the queue under us.
-            if let Some(record) = state
-                .unresolved
-                .iter_mut()
-                .find(|record| record.addr == addr && record.len == len)
-            {
+            if let Some(record) = state.unresolved.iter_mut().find(|record| record.id == id) {
                 record.retiring = false;
             }
             errors.push(pool_error(
@@ -794,24 +905,18 @@ fn drain_shared(shared: &Arc<Shared>, control: &OperationControl) -> MappingDrai
         match super::custody::unmap_raw(addr, len) {
             Ok(()) => {
                 let mut state = lock_report(shared);
-                // The queue may have shifted under a concurrent drain; remove
-                // by identity (address tokens are unique per live mapping).
-                if let Some(position) = state
-                    .unresolved
-                    .iter()
-                    .position(|record| record.addr == addr && record.len == len)
-                {
+                // The queue may have shifted under a concurrent drain, and
+                // the range may have been recycled into a second queued
+                // record; remove the claimed id, never the first token
+                // match (which could be the live record).
+                if let Some(position) = state.unresolved.iter().position(|record| record.id == id) {
                     state.unresolved.swap_remove(position);
                 }
                 retired += 1;
             }
             Err(error) => {
                 let mut state = lock_report(shared);
-                if let Some(record) = state
-                    .unresolved
-                    .iter_mut()
-                    .find(|record| record.addr == addr && record.len == len)
-                {
+                if let Some(record) = state.unresolved.iter_mut().find(|record| record.id == id) {
                     record.retiring = false;
                 }
                 errors.push(error);
@@ -841,7 +946,6 @@ mod tests {
     use crate::control::{CancelToken, OperationControl};
     use crate::file::{ProcFdResolver, SymlinkPolicy};
     use std::os::fd::AsFd;
-    use std::sync::Barrier;
 
     fn test_pool(max_mappings: usize, max_bytes: usize) -> MappingPool {
         MappingPool::new(MappingPoolLimits {
@@ -872,6 +976,25 @@ mod tests {
             )
         }
         .unwrap()
+    }
+
+    /// R10: remap `len` bytes at the exact address `addr` (which must be
+    /// currently unmapped). Deterministic address reuse for the recycle
+    /// regression; a floating mmap would only usually reuse the range.
+    fn test_mmap_fixed(held: &HeldFile, addr: *mut c_void, len: usize) -> *mut c_void {
+        let placed = unsafe {
+            rustix::mm::mmap(
+                addr,
+                len,
+                rustix::mm::ProtFlags::READ,
+                rustix::mm::MapFlags::PRIVATE | rustix::mm::MapFlags::FIXED,
+                held.as_fd(),
+                0,
+            )
+        }
+        .unwrap();
+        assert_eq!(placed, addr, "fixed remap must reuse the range");
+        placed
     }
 
     fn page() -> usize {
@@ -1012,69 +1135,270 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_drain_unwinds_by_identity_under_racing_retire() {
-        // F06: a cancelled drain must restore its claim by record identity
-        // even when a concurrent drain shifts the queue with swap_remove.
-        // A stale-index unwind strands a record Retiring forever, and the
-        // final clean retry then cannot reach unresolved 0.
-        //
-        // Shape: two queued records, one unlimited sibling drain, one
-        // victim drain cancelled at release. When the victim holds the
-        // second record while the sibling retires the first, the stale
-        // index misses and the record strands; identity restore always
-        // lands. Thousands of rounds make the collision certain (this
-        // test was verified to fail against the old index unwind).
+    fn cancelled_drain_unwinds_by_id_under_forced_shift() {
+        // F06/R43: forced replacement for the old 3000-round racy unwind
+        // test (which never forced the schedule it needed). X claims R0
+        // and pauses in the after-claim hook; the victim claims R1 (index
+        // 1) and pauses; X commits R0, shifting R1 to index 0; the victim
+        // cancels and must unwind R1 by id. An index unwind would address
+        // index 1 of a 1-record queue; the id unwind always lands, and a
+        // final clean retry reaches unresolved 0.
         let _table = crate::FD_TABLE.lock().unwrap();
         super::super::custody::inject_unmap_failures(0);
         let pool = test_pool(2, 2 * page());
-        let (path, held) = test_held("f06-unwind");
-        for _ in 0..3000 {
-            let (permit_a, addr_a) = activate_one(&pool, &held);
-            let (permit_b, addr_b) = activate_one(&pool, &held);
-            let mut guard_a =
-                super::super::custody::TestCleanupGuard::new(addr_a, page());
-            let mut guard_b =
-                super::super::custody::TestCleanupGuard::new(addr_b, page());
-            super::super::custody::inject_unmap_failures(2);
-            drop(super::super::MappingCustody::new(permit_a));
-            drop(super::super::MappingCustody::new(permit_b));
-            super::super::custody::inject_unmap_failures(0);
-            assert!(
-                pool.status().unresolved_mappings() >= 1,
-                "round queued nothing"
-            );
-            let token = CancelToken::new();
-            let control = OperationControl::new(None, token.clone());
-            let barrier = Barrier::new(3);
-            std::thread::scope(|scope| {
-                scope.spawn(|| {
-                    barrier.wait();
-                    pool.retry_unresolved(&OperationControl::unlimited())
-                });
-                scope.spawn(|| {
-                    barrier.wait();
-                    pool.retry_unresolved(&control)
-                });
-                barrier.wait();
-                token.cancel();
-            });
-            // Quiesce: stray injected failures elsewhere only delay this.
-            super::super::custody::inject_unmap_failures(0);
-            for _ in 0..200 {
-                if pool.status().unresolved_mappings() == 0 {
-                    break;
-                }
-                pool.retry_unresolved(&OperationControl::unlimited());
+        let (path, held) = test_held("f06-forced");
+        let (permit0, addr0) = activate_one(&pool, &held);
+        let (permit1, addr1) = activate_one(&pool, &held);
+        let mut guard0 = super::super::custody::TestCleanupGuard::new(addr0, page());
+        let mut guard1 = super::super::custody::TestCleanupGuard::new(addr1, page());
+        super::super::custody::inject_unmap_failures(2);
+        drop(super::super::MappingCustody::new(permit0));
+        drop(super::super::MappingCustody::new(permit1));
+        super::super::custody::inject_unmap_failures(0);
+        assert_eq!(
+            pool.queue_snapshot()
+                .iter()
+                .map(|(id, _, _, _)| *id)
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "queue holds R0 then R1"
+        );
+        let (x_claimed_tx, x_claimed_rx) = std::sync::mpsc::channel();
+        let (x_release_tx, x_release_rx) = std::sync::mpsc::channel::<()>();
+        let (v_claimed_tx, v_claimed_rx) = std::sync::mpsc::channel();
+        let (v_release_tx, v_release_rx) = std::sync::mpsc::channel::<()>();
+        // Receivers ride a mutex: only one drain waits on each by design,
+        // but the closure type must be Sync.
+        let x_release_rx = Mutex::new(x_release_rx);
+        let v_release_rx = Mutex::new(v_release_rx);
+        *pool.shared.test_hooks.after_claim.lock().unwrap() = Some(Arc::new(move |id| {
+            if id == 1 {
+                x_claimed_tx.send(()).unwrap();
+                x_release_rx.lock().unwrap().recv().unwrap();
+            } else if id == 2 {
+                v_claimed_tx.send(()).unwrap();
+                v_release_rx.lock().unwrap().recv().unwrap();
+            } else {
+                panic!("unexpected claim of record {id}");
             }
+        }));
+        let token = CancelToken::new();
+        let control = OperationControl::new(None, token.clone());
+        std::thread::scope(|scope| {
+            let x = scope.spawn(|| pool.retry_unresolved(&OperationControl::unlimited()));
+            x_claimed_rx.recv().unwrap();
+            let victim = scope.spawn(|| pool.retry_unresolved(&control));
+            v_claimed_rx.recv().unwrap();
+            // X commits R0 while the victim holds R1: the commit shifts
+            // R1 from index 1 to index 0 under the victim's claim.
+            x_release_tx.send(()).unwrap();
+            let x_report = x.join().unwrap();
+            assert_eq!((x_report.attempted(), x_report.retired()), (1, 1));
             assert_eq!(
-                pool.status().unresolved_mappings(),
-                0,
-                "no record may strand Retiring"
+                pool.queue_snapshot(),
+                vec![(2, addr1, page(), true)],
+                "R1 shifted to index 0, still retiring"
             );
-            guard_a.disarm();
-            guard_b.disarm();
-        }
+            token.cancel();
+            v_release_tx.send(()).unwrap();
+            let victim_report = victim.join().unwrap();
+            assert_eq!(victim_report.attempted(), 0, "cancel precedes the unmap");
+            assert_eq!(victim_report.errors().len(), 1);
+        });
+        assert_eq!(
+            pool.queue_snapshot(),
+            vec![(2, addr1, page(), false)],
+            "cancel unwinds the shifted claim by id"
+        );
+        // The rendezvous is over: uninstall the hook so the cleanup drain
+        // cannot block in it.
+        *pool.shared.test_hooks.after_claim.lock().unwrap() = None;
+        let report = pool.retry_unresolved(&OperationControl::unlimited());
+        assert_eq!(
+            (report.attempted(), report.retired(), report.unresolved()),
+            (1, 1, 0),
+            "no record strands Retiring"
+        );
+        guard0.disarm();
+        guard1.disarm();
         pool.close(&OperationControl::unlimited()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn commit_removes_claimed_id_after_recycle_reorder() {
+        // R10: post-unmap address reuse plus a reorder. A claims R1 (range
+        // X) and pauses; X is really unmapped, remapped at the same
+        // address, and queued as R2 (same token, new id); a decoy commit
+        // then moves R2 ahead of R1. A's commit must remove R1 (its
+        // claim), not the first token match (the live R2). First-match
+        // code strands R1 Retiring and drops R2 instead.
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(4, 4 * page());
+        let (path, held) = test_held("r10-recycle");
+        let (permit_d, addr_d) = activate_one(&pool, &held);
+        let (permit1, addr_x) = activate_one(&pool, &held);
+        let mut guard_d = super::super::custody::TestCleanupGuard::new(addr_d, page());
+        let mut guard1 = super::super::custody::TestCleanupGuard::new(addr_x, page());
+        super::super::custody::inject_unmap_failures(2);
+        drop(super::super::MappingCustody::new(permit_d));
+        drop(super::super::MappingCustody::new(permit1));
+        super::super::custody::inject_unmap_failures(0);
+        assert_eq!(pool.queue_snapshot().len(), 2, "D1 then R1 queued");
+        let (x_claimed_tx, x_claimed_rx) = std::sync::mpsc::channel();
+        let (x_release_tx, x_release_rx) = std::sync::mpsc::channel::<()>();
+        let (a_claimed_tx, a_claimed_rx) = std::sync::mpsc::channel();
+        let (a_release_tx, a_release_rx) = std::sync::mpsc::channel::<()>();
+        let (x2_claimed_tx, x2_claimed_rx) = std::sync::mpsc::channel();
+        let (x2_release_tx, x2_release_rx) = std::sync::mpsc::channel::<()>();
+        // Receivers ride a mutex: only one drain waits on each by design,
+        // but the closure type must be Sync.
+        let x_release_rx = Mutex::new(x_release_rx);
+        let a_release_rx = Mutex::new(a_release_rx);
+        let x2_release_rx = Mutex::new(x2_release_rx);
+        *pool.shared.test_hooks.after_claim.lock().unwrap() = Some(Arc::new(move |id| {
+            if id == 1 {
+                x_claimed_tx.send(()).unwrap();
+                x_release_rx.lock().unwrap().recv().unwrap();
+            } else if id == 2 {
+                a_claimed_tx.send(()).unwrap();
+                a_release_rx.lock().unwrap().recv().unwrap();
+            } else if id == 3 {
+                // X's second claim (A skips R2 while X holds it): pause so
+                // the reorder is asserted before either drain proceeds.
+                x2_claimed_tx.send(()).unwrap();
+                x2_release_rx.lock().unwrap().recv().unwrap();
+            } else {
+                panic!("unexpected claim of record {id}");
+            }
+        }));
+        // X runs under a cancellable control: after A commits, X is
+        // cancelled out of its second claim (a real second unmap would
+        // succeed even on the gone range — Linux munmap never fails for
+        // unmapped pages — and retire R2 out from under the assertion).
+        let x_token = CancelToken::new();
+        let x_control = OperationControl::new(None, x_token.clone());
+        std::thread::scope(|scope| {
+            // X holds the decoy so A is forced to claim R1 at index 1.
+            let x = scope.spawn(|| pool.retry_unresolved(&x_control));
+            x_claimed_rx.recv().unwrap();
+            let a = scope.spawn(|| pool.retry_unresolved(&OperationControl::unlimited()));
+            a_claimed_rx.recv().unwrap();
+            // Recycle X: M1's range is still live (the injected failure
+            // never touched the kernel), so unmap it for real, remap the
+            // identical range, and queue the second record for it.
+            unsafe { rustix::mm::munmap(addr_x, page()) }.unwrap();
+            let reservation = Reservation::reserve(&pool.shared, page()).unwrap();
+            let addr_m2 = test_mmap_fixed(&held, addr_x, page());
+            let permit2 = reservation.activate(addr_m2, page(), Arc::clone(&held));
+            let mut guard2 = super::super::custody::TestCleanupGuard::new(addr_m2, page());
+            super::super::custody::inject_unmap_failures(1);
+            drop(super::super::MappingCustody::new(permit2));
+            super::super::custody::inject_unmap_failures(0);
+            assert_eq!(
+                pool.queue_snapshot(),
+                vec![
+                    (1, addr_d, page(), true),
+                    (2, addr_x, page(), true),
+                    (3, addr_x, page(), false),
+                ],
+                "R2 shares R1's token with a new id"
+            );
+            // X commits the decoy: swap_remove moves R2 (last) to index 0,
+            // ahead of A's still-held R1. X's pass then claims R2 and
+            // pauses, so the reorder is asserted before A commits.
+            x_release_tx.send(()).unwrap();
+            x2_claimed_rx.recv().unwrap();
+            assert_eq!(
+                pool.queue_snapshot(),
+                vec![(3, addr_x, page(), true), (2, addr_x, page(), true)],
+                "reorder puts the live same-token record first"
+            );
+            // A unmaps X (M2's range: the token is stale the moment the
+            // kernel reuses it, which is exactly why the commit must use
+            // the id) and commits R1 by id; A then finds R2 held by X and
+            // ends its pass. X is cancelled out of its R2 claim and
+            // unwinds it by id, leaving R2 queued and unretiring.
+            a_release_tx.send(()).unwrap();
+            let a_report = a.join().unwrap();
+            assert_eq!((a_report.attempted(), a_report.retired()), (1, 1));
+            x_token.cancel();
+            x2_release_tx.send(()).unwrap();
+            let x_report = x.join().unwrap();
+            assert_eq!((x_report.attempted(), x_report.retired()), (1, 1));
+            assert_eq!(x_report.errors().len(), 1);
+            assert_eq!(
+                pool.queue_snapshot(),
+                vec![(3, addr_x, page(), false)],
+                "commit removed the claimed R1, not the live R2"
+            );
+            guard2.disarm();
+        });
+        // The rendezvous is over: uninstall the hook so the cleanup drain
+        // cannot block in it.
+        *pool.shared.test_hooks.after_claim.lock().unwrap() = None;
+        // Retire the surviving R2 against a fresh live range: M3 holds X
+        // mapped while the drain unmaps it through R2's token, then M3's
+        // permit retires against the now-gone range and the pool closes.
+        let reservation = Reservation::reserve(&pool.shared, page()).unwrap();
+        let addr_m3 = test_mmap_fixed(&held, addr_x, page());
+        let permit3 = reservation.activate(addr_m3, page(), Arc::clone(&held));
+        let mut guard3 = super::super::custody::TestCleanupGuard::new(addr_m3, page());
+        let report = pool.retry_unresolved(&OperationControl::unlimited());
+        assert_eq!(
+            (report.attempted(), report.retired(), report.unresolved()),
+            (1, 1, 0)
+        );
+        permit3.retire();
+        guard_d.disarm();
+        guard1.disarm();
+        guard3.disarm();
+        pool.close(&OperationControl::unlimited()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn retire_counters_precede_anchor_release() {
+        // R43: forced order assertion for the F07 terminal-retention
+        // release. The pool drops with one live mapping (anchor
+        // installs); retiring the permit must update the counters BEFORE
+        // the anchor release check, or the release would still see the
+        // mapping occupied and skip, leaking the anchor. The hooks log
+        // the order; any future reorder flips the log and fails.
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(1, page());
+        let (path, held) = test_held("retire-order");
+        let (permit, addr) = activate_one(&pool, &held);
+        let mut guard = super::super::custody::TestCleanupGuard::new(addr, page());
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let log_counters = Arc::clone(&log);
+        let log_release = Arc::clone(&log);
+        *pool.shared.test_hooks.after_retire_counters.lock().unwrap() = Some(Arc::new(move || {
+            log_counters.lock().unwrap().push("counters")
+        }));
+        *pool.shared.test_hooks.anchor_releasing.lock().unwrap() = Some(Arc::new(move || {
+            log_release.lock().unwrap().push("release")
+        }));
+        let weak = Arc::downgrade(&pool.shared);
+        drop(pool);
+        assert!(
+            weak.upgrade().is_some(),
+            "occupied drop installs the anchor"
+        );
+        unsafe { rustix::mm::munmap(addr, page()) }.unwrap();
+        guard.disarm();
+        permit.retire();
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["counters", "release"],
+            "counters update before the anchor release check"
+        );
+        assert!(weak.upgrade().is_none(), "empty domain releases its anchor");
+        assert_eq!(Arc::strong_count(&held), 1);
         std::fs::remove_file(path).unwrap();
         super::super::custody::inject_unmap_failures(0);
     }
