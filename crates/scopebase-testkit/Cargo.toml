@@ -43,7 +43,15 @@ name = "linux_fixture"
 path = "tests/linux_fixture.rs"
 required-features = ["linux-fixtures"]
 
+[[test]]
+name = "select_cli"
+path = "tests/select_cli.rs"
+
 [[bin]]
 name = "scopebase-tt03-worker"
 path = "src/bin/scopebase-tt03-worker.rs"
 required-features = ["linux-fixtures"]
+
+[[bin]]
+name = "scopebase-select"
+path = "src/bin/scopebase-select.rs"

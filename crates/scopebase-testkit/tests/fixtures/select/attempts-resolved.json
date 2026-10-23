@@ -1,0 +1,8 @@
+{"attempts": [
+   {"attempt": 1, "outcome": "semantic_failure", "detail": "wrong value: expected 7 got 9"},
+   {"attempt": 2, "outcome": "pass", "detail": "retry green on fixed candidate"}
+ ],
+ "resolutions": [
+   {"failed_attempt": 1, "cause": "off-by-two in oracle literal",
+    "fix": "corrected literal to independent value", "new_candidate": "oracle r2"}
+ ]}

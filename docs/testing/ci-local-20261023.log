@@ -1,0 +1,74 @@
+TT08 tail local execution: root=/home/user/src/m/bpfscope/.worktrees/w22-tt08tail run_root=/home/user/src/m/bpfscope/.worktrees/w22-tt08tail/target/tt08-local lock_root=/tmp/scopebase-tt08tail-lock
+warning: unused import: `internal_record`
+   --> crates/scopebase-testkit/src/result.rs:123:16
+    |
+123 | pub(crate) use internal_record;
+    |                ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `scopebase-testkit` (lib) generated 1 warning (run `cargo fix --lib -p scopebase-testkit` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+changed paths: 21
+manifest changes=19
+select_affected agreement: ok selected=4 declared=4 full=false
+resolve: 0 runnable cells, 4 unavailable, 8 profile gates, 11 unbound profiles
+unavailable cell H33.final-object-license v1 h33-final-object-license: LOGICAL_ONLY: H33.final-object-license is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)
+unavailable cell H33.installed-notices v1 h33-installed-notices: LOGICAL_ONLY: H33.installed-notices is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)
+unavailable cell H33.license-admission v1 h33-license-admission: LOGICAL_ONLY: H33.license-admission is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)
+unavailable cell H33.source-closure v1 h33-source-closure: LOGICAL_ONLY: H33.source-closure is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)
+unbound profile aggregate-writer-x86-v1: affected profile aggregate-writer-x86-v1 has no executable gate binding
+unbound profile bpf-aya-uprobe-v1: affected profile bpf-aya-uprobe-v1 has no executable gate binding
+unbound profile bpf-libbpf-uprobe-v1: affected profile bpf-libbpf-uprobe-v1 has no executable gate binding
+unbound profile btf-shape-le-v1: affected profile btf-shape-le-v1 has no executable gate binding
+unbound profile compiler-object-v1: affected profile compiler-object-v1 has no executable gate binding
+unbound profile compiler-runtime-x86-v1: affected profile compiler-runtime-x86-v1 has no executable gate binding
+unbound profile mapped-image-v1: affected profile mapped-image-v1 has no executable gate binding
+unbound profile mojo-elf-v1: affected profile mojo-elf-v1 has no executable gate binding
+unbound profile native-v1: affected profile native-v1 has no executable gate binding
+unbound profile producer-task-exec-v1: affected profile producer-task-exec-v1 has no executable gate binding
+unbound profile sdk-live-aya-v1: affected profile sdk-live-aya-v1 has no executable gate binding
+--- gate fast/build-workspace: cargo build --offline --workspace
+gate fast/build-workspace: PASS
+--- gate fast/test-testkit: cargo test --offline -p scopebase-testkit
+gate fast/test-testkit: PASS
+--- gate fast/qual-tests: python3 -m unittest discover -s tools/qualification/tests
+gate fast/qual-tests: PASS
+--- gate fast/planning-docs: python3 tools/check_planning_docs.py
+gate fast/planning-docs: PASS
+--- gate profile/bounded-walk-v1: cargo test --offline -p scopebase-linux
+gate profile/bounded-walk-v1: PASS
+--- gate profile/bpf-host-v1: cargo test --offline -p scopebase-bpf
+gate profile/bpf-host-v1: PASS
+--- gate profile/capture-core-v1: cargo test --offline -p scopebase-capture
+gate profile/capture-core-v1: PASS
+--- gate profile/capture-json-v1: cargo test --offline -p scopebase-capture
+gate profile/capture-json-v1: PASS
+--- gate profile/held-file-v1: cargo test --offline -p scopebase-linux
+gate profile/held-file-v1: PASS
+--- gate profile/owned-child-v1: cargo test --offline -p scopebase-linux
+gate profile/owned-child-v1: PASS
+--- gate profile/process-observation-v1: cargo test --offline -p scopebase-linux
+gate profile/process-observation-v1: PASS
+--- gate profile/sdk-host-v1: cargo test --offline -p scopebase-sdk
+gate profile/sdk-host-v1: PASS
+fast gates: 4/4 passed
+executed cells: 0
+accounting status=incomplete scope=narrowed full_matrix_complete=false missing_selected=4
+accounting summary: incomplete narrowed false 4
+gate verdict=resolved attempts=1
+verdict=INCOMPLETE gate_exit=0 (no gate failures; required checks unavailable or unexecuted)
+=== synthetic-outcome exercise (recorded fixtures, TT08 plan item: selection/aggregation logic) ===
+$ BIN=target/tt08-local/target/debug/scopebase-select (built by this run)
+--- target/tt08-local/target/debug/scopebase-select gate --attempts crates/scopebase-testkit/tests/fixtures/select/attempts-unresolved.json --out /tmp/verdict-attempts-unresolved.json
+gate verdict=unresolved failed_attempts=[1]
+exit=2 verdict={'failed_attempts': [1], 'verdict': 'unresolved'}
+--- target/tt08-local/target/debug/scopebase-select gate --attempts crates/scopebase-testkit/tests/fixtures/select/attempts-resolved.json --out /tmp/verdict-attempts-resolved.json
+gate verdict=resolved attempts=2
+exit=0 verdict={'attempts': 2, 'verdict': 'resolved'}
+--- target/tt08-local/target/debug/scopebase-select gate --attempts crates/scopebase-testkit/tests/fixtures/select/attempts-infra.json --out /tmp/verdict-attempts-infra.json
+gate verdict=resolved attempts=2
+exit=0 verdict={'attempts': 2, 'verdict': 'resolved'}
+Note: prior semantic failure + retry stays unresolved (exit 2) until cause/fix/new-candidate is recorded;
+with the resolution and a later pass it resolves (exit 0); infrastructure retries keep history (attempts=2).
+The 11 scopebase-testkit select_cli tests exercise select/account/resolve over the same fixtures.

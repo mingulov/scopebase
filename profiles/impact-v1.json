@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "requested_profiles": [
+    "held-file-v1",
+    "mapped-image-v1",
+    "process-observation-v1",
+    "owned-child-v1",
+    "bounded-walk-v1",
+    "bpf-host-v1",
+    "bpf-aya-uprobe-v1",
+    "bpf-libbpf-uprobe-v1",
+    "btf-shape-le-v1",
+    "producer-task-exec-v1",
+    "aggregate-writer-x86-v1",
+    "compiler-object-v1",
+    "compiler-runtime-x86-v1",
+    "capture-core-v1",
+    "capture-json-v1",
+    "sdk-host-v1",
+    "sdk-live-aya-v1",
+    "native-v1",
+    "mojo-elf-v1"
+  ],
+  "path_rules": [
+    {"path": "README.md", "none": "top-level docs cannot affect catalog nodes"},
+    {"path": "TODO.md", "none": "top-level docs cannot affect catalog nodes"},
+    {"path": "handoff.md", "none": "top-level docs cannot affect catalog nodes"},
+    {"path": "DEVELOPMENT.md", "none": "top-level docs cannot affect catalog nodes"},
+    {"path": "AGENTS.md", "none": "top-level docs cannot affect catalog nodes"},
+    {"prefix": "docs/", "none": "documentation cannot affect catalog nodes"},
+    {"prefix": "crates/scopebase-testkit/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "testkit hosts the catalog loader, registry, and selector core: revalidate the whole request"}},
+    {"prefix": "crates/scopebase-linux/",
+     "change": {"type": "profile", "profile": "held-file-v1"}},
+    {"prefix": "crates/scopebase-capture/",
+     "change": {"type": "profile", "profile": "capture-core-v1"}},
+    {"prefix": "crates/scopebase-bpf/",
+     "change": {"type": "profile", "profile": "bpf-host-v1"}},
+    {"prefix": "crates/scopebase-sdk/",
+     "change": {"type": "profile", "profile": "sdk-host-v1"}},
+    {"prefix": "crates/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "unmapped crate path: broaden to the whole request"}},
+    {"prefix": "profiles/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "catalog or impact inputs changed: revalidate the whole request"}},
+    {"prefix": "tools/qualification/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "qualification tooling changed: revalidate the whole request"}},
+    {"prefix": "tools/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "unmapped tooling path: broaden to the whole request"}},
+    {"prefix": "tests/",
+     "none": "dev-tool and model test sources carry no case registration; breakage surfaces in fast gates"},
+    {"prefix": "fixtures/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "shared fixture bytes may feed case fixtures: broaden to the whole request"}},
+    {"prefix": "fuzz/",
+     "none": "fuzz harness sources are dev-only and carry no case registration"},
+    {"prefix": "bin/",
+     "none": "build wrappers cannot affect catalog nodes; breakage surfaces in fast-gate builds"},
+    {"prefix": "orchestration/",
+     "none": "controller coordination helper cannot affect catalog nodes"},
+    {"prefix": ".github/",
+     "change": {"type": "unknown", "boundary": null,
+                "reason": "CI definition changed: revalidate the whole request"}}
+  ],
+  "default_change": {"type": "unknown", "boundary": null,
+    "reason": "path matches no impact rule: broaden to the whole request"},
+  "fast_gates": [
+    {"id": "build-workspace",
+     "argv": ["cargo", "build", "--offline", "--workspace"]},
+    {"id": "test-testkit",
+     "argv": ["cargo", "test", "--offline", "-p", "scopebase-testkit"]},
+    {"id": "qual-tests",
+     "argv": ["python3", "-m", "unittest", "discover", "-s", "tools/qualification/tests"]},
+    {"id": "planning-docs",
+     "argv": ["python3", "tools/check_planning_docs.py"]}
+  ],
+  "profile_gates": {
+    "held-file-v1":
+      {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
+    "bounded-walk-v1":
+      {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
+    "process-observation-v1":
+      {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
+    "owned-child-v1":
+      {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
+    "capture-core-v1":
+      {"id": "test-capture", "argv": ["cargo", "test", "--offline", "-p", "scopebase-capture"]},
+    "capture-json-v1":
+      {"id": "test-capture", "argv": ["cargo", "test", "--offline", "-p", "scopebase-capture"]},
+    "bpf-host-v1":
+      {"id": "test-bpf", "argv": ["cargo", "test", "--offline", "-p", "scopebase-bpf"]},
+    "sdk-host-v1":
+      {"id": "test-sdk", "argv": ["cargo", "test", "--offline", "-p", "scopebase-sdk"]}
+  },
+  "cell_bindings": {
+    "h33-source-closure":
+      {"unavailable": "LOGICAL_ONLY: H33.source-closure is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+    "h33-final-object-license":
+      {"unavailable": "LOGICAL_ONLY: H33.final-object-license is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+    "h33-license-admission":
+      {"unavailable": "LOGICAL_ONLY: H33.license-admission is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+    "h33-installed-notices":
+      {"unavailable": "LOGICAL_ONLY: H33.installed-notices is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"}
+  }
+}

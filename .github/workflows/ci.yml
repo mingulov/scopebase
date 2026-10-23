@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# TT08 causal CI (GitHub Actions): one coordinator job runs
+# tools/qualification/ci_local.sh, the same script that runs locally, so CI
+# and local runs share selection, gates and verdicts by construction. Offline
+# cargo builds reuse a lockfile-keyed registry cache; a cache miss fails
+# honestly instead of reaching the network. Hosted runners only, and the
+# workflow authenticates to nothing. See docs/testing/ci.md.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 5 * * 1"
+
+concurrency:
+  group: tt08-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  causal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: changed paths
+        if: github.event_name == 'pull_request'
+        run: git diff --name-only ${{ github.event.pull_request.base.sha }}...HEAD > ${{ runner.temp }}/changed.txt
+      - name: causal selection and gates (pull request)
+        if: github.event_name == 'pull_request'
+        run: >
+          tools/qualification/ci_local.sh
+          --changed-file ${{ runner.temp }}/changed.txt
+          --run-root ${{ runner.temp }}/tt08-ci
+          --lock-root ${{ runner.temp }}/scopebase-ci-lock
+      - name: causal selection and gates (full revalidation)
+        if: github.event_name != 'pull_request'
+        run: >
+          tools/qualification/ci_local.sh
+          --full
+          --run-root ${{ runner.temp }}/tt08-ci
+          --lock-root ${{ runner.temp }}/scopebase-ci-lock
+      - name: upload run records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tt08-run-records
+          path: ${{ runner.temp }}/tt08-ci/*.json

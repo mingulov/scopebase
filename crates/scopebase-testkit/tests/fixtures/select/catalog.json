@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "catalog_revision": 1,
+  "tasks": ["TT08"],
+  "obligations": [{"kind": "regression_family", "id": "H08",
+    "description": "TT08 tail CLI fixtures", "owners": ["TT08"]}],
+  "families": [{"id": "H08", "short_contract": "TT08 tail CLI fixtures",
+    "obligations": [{"kind": "regression_family", "id": "H08"}]}],
+  "cells": [
+    {"id": "cell-a", "tier": "T0", "description": "a", "binding": "LOGICAL_ONLY"},
+    {"id": "cell-b", "tier": "T0", "description": "b", "binding": "LOGICAL_ONLY"}
+  ],
+  "cases": [
+    {"id": "H08.base", "family": "H08", "version": 1,
+     "implementation_status": "UNIMPLEMENTED", "owners": ["TT08"],
+     "obligations": [{"kind": "regression_family", "id": "H08"}],
+     "required_cells": ["cell-a"], "registration": null},
+    {"id": "H08.mid", "family": "H08", "version": 1,
+     "implementation_status": "UNIMPLEMENTED", "owners": ["TT08"],
+     "obligations": [{"kind": "regression_family", "id": "H08"}],
+     "required_cells": ["cell-b"], "registration": null}
+  ],
+  "profiles": [
+    {"id": "base-v1", "definition_state": "DRAFT",
+     "requires_profiles": [], "requires_extensions": [],
+     "required_cases": [
+       {"case_id": "H08.base", "case_version": 1, "when_extensions": []}
+     ],
+     "open_owners": ["TT08"]},
+    {"id": "mid-v1", "definition_state": "DRAFT",
+     "requires_profiles": ["base-v1"], "requires_extensions": [],
+     "required_cases": [
+       {"case_id": "H08.mid", "case_version": 1, "when_extensions": []}
+     ],
+     "open_owners": ["TT08"]}
+  ],
+  "extensions": []
+}
