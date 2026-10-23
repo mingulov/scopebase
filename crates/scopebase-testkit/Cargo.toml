@@ -64,6 +64,11 @@ required-features = ["linux-fixtures"]
 name = "select_cli"
 path = "tests/select_cli.rs"
 
+[[bench]]
+name = "contract_costs"
+path = "benches/contract_costs.rs"
+harness = false
+
 [[bin]]
 name = "scopebase-tt03-worker"
 path = "src/bin/scopebase-tt03-worker.rs"
