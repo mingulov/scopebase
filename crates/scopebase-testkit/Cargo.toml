@@ -86,6 +86,11 @@ path = "tests/filesystem_cells.rs"
 required-features = ["linux-fixtures"]
 
 [[test]]
+name = "tt03_f_rows"
+path = "tests/tt03_f_rows.rs"
+required-features = ["linux-fixtures"]
+
+[[test]]
 name = "select_cli"
 path = "tests/select_cli.rs"
 
@@ -102,6 +107,11 @@ required-features = ["linux-fixtures"]
 [[bin]]
 name = "scopebase-tt04-audit-subject"
 path = "src/bin/scopebase-tt04-audit-subject.rs"
+required-features = ["linux-fixtures"]
+
+[[bin]]
+name = "scopebase-tt03-seccomp-probe"
+path = "src/bin/scopebase-tt03-seccomp-probe.rs"
 required-features = ["linux-fixtures"]
 
 [[bin]]
