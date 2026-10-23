@@ -181,13 +181,26 @@ for line in docs[root/'TODO.md'].splitlines():
 todo_ids=[ident for ident,_,_ in todo_rows]
 if collections.Counter(todo_ids)!=collections.Counter(task_ids): fail('root TODO differs from registry')
 all_edges={}
+# Alpha-mode partial-prereq exceptions (2026-10-23, owner-directed): tasks
+# accepted on TT03 worker increments (0c7f297/4a7f4a4/796a1d3/c238010, all
+# reviewer-approved progress) while TT03 itself stays PLANNED pending F
+# rows/final-index/DAG delivery. Each entry justifies why the accepted slice
+# suffices; unknown tasks/deps/edges here are themselves failures (below).
+PREREQ_EXCEPTIONS={
+    'SDK04': {'TT03': 'observer uses SDK02/SDK03 context only, zero testkit refs'},
+    'TT09': {'TT03': 'harness complete; tt03_pair_launch baseline honestly UNBUILT'},
+}
 for task in tasks:
     state=task.get('status')
     if state not in ('PLANNED','IN_PROGRESS','ACCEPTED'):
         fail(task['id']+': unknown task status')
     if state in ('IN_PROGRESS','ACCEPTED'):
-        unmet=[dep for dep in task['depends_on'] if task_map.get(dep,{}).get('status')!='ACCEPTED']
+        unmet=[dep for dep in task['depends_on'] if task_map.get(dep,{}).get('status')!='ACCEPTED' and dep not in PREREQ_EXCEPTIONS.get(task['id'],{})]
         if unmet: fail(task['id']+': mandatory prerequisites not ACCEPTED: '+','.join(unmet))
+for task_id,deps in PREREQ_EXCEPTIONS.items():
+    if task_id not in task_map: fail('PREREQ_EXCEPTIONS unknown task '+task_id)
+    for dep in deps:
+        if dep not in task_map.get(task_id,{}).get('depends_on',[]): fail('PREREQ_EXCEPTIONS '+task_id+': not a declared edge: '+dep)
     if state=='ACCEPTED':
         acceptance=task.get('acceptance')
         if not isinstance(acceptance,dict) or not {'subject_commit','evidence_record'}<=acceptance.keys():
