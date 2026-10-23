@@ -26,14 +26,17 @@ use scopebase_linux::{
     process::{ObserverEpoch, Pid, ProcLimits, ProcessObservation},
     procfs::ParseLimits,
 };
+use scopebase_testkit::cli;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 fn usage() -> ! {
-    eprintln!(
+    // R04: usage goes through the fallible writer; a dead stderr
+    // still exits 2 without a second panic.
+    cli::err_line(
         "usage: scopebase-tt04-audit-subject observe --target PATH --pid PID \
          --range START-END [--plant-violation] --report PATH | \
-         thread-plant --target PATH --report PATH"
+         thread-plant --target PATH --report PATH",
     );
     std::process::exit(2);
 }
@@ -98,7 +101,14 @@ fn thread_plant(target: &str) -> i32 {
 }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().collect();
+    // R03: non-UTF-8 argv refuses with usage, never panics in args().
+    let argv = match cli::argv_strings() {
+        Some(argv) => argv,
+        None => {
+            cli::err_line("argv is not valid Unicode");
+            usage();
+        }
+    };
     if argv.len() < 2 {
         usage();
     }
@@ -107,7 +117,7 @@ fn main() {
         let report = flag_value(&argv, "--report").unwrap_or_else(|| usage());
         let code = thread_plant(&target);
         std::fs::write(&report, format!("worker={code}\n")).unwrap_or_else(|_| {
-            eprintln!("audit subject setup failed at report");
+            cli::err_line("audit subject setup failed at report");
             std::process::exit(2);
         });
         std::process::exit(if code == 0 { 0 } else { 2 });
@@ -136,7 +146,7 @@ fn main() {
         max_metadata_bytes: 1 << 20,
     };
     let setup_fail = |stage: &str| -> ! {
-        eprintln!("audit subject setup failed at {stage}");
+        cli::err_line(&format!("audit subject setup failed at {stage}"));
         std::process::exit(2);
     };
     let resolver = ProcFdResolver::open_self().unwrap_or_else(|_| setup_fail("resolver"));

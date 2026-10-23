@@ -16,11 +16,14 @@
 //! NEW for the TT03 F seccomp populations; the install idiom is adapted
 //! from user-owned p11scope research (see the `seccomp` module docs).
 //! Grant: OWNER-2026-10-23.
+use scopebase_testkit::cli;
 use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, pidfd_open_raw, DenyAction};
 use std::os::fd::{FromRawFd as _, RawFd};
 
 fn usage() -> ! {
-    eprintln!("usage: scopebase-tt03-seccomp-probe (eperm|enosys) <target-pid>");
+    // R04: usage goes through the fallible writer; a dead stderr
+    // still exits 2 without a second panic.
+    cli::err_line("usage: scopebase-tt03-seccomp-probe (eperm|enosys) <target-pid>");
     std::process::exit(2);
 }
 
@@ -39,7 +42,14 @@ fn fstat_ok(fd: RawFd) -> String {
 }
 
 fn main() {
-    let argv: Vec<String> = std::env::args().collect();
+    // R03: non-UTF-8 argv refuses with usage, never panics in args().
+    let argv = match cli::argv_strings() {
+        Some(argv) => argv,
+        None => {
+            cli::err_line("argv is not valid Unicode");
+            usage();
+        }
+    };
     if argv.len() != 3 {
         usage();
     }
@@ -65,13 +75,13 @@ fn main() {
         // seccomp filter mode: capability absent, never a denial result.
         if e.stage() == "install_filter" && (e.errno() == libc::EINVAL || e.errno() == libc::ENOSYS)
         {
-            eprintln!(
+            cli::err_line(&format!(
                 "TT03-F-INSTALL-UNAVAILABLE: {} errno {}",
                 e.stage(),
                 e.errno()
-            );
+            ));
         } else {
-            eprintln!("TT03-F-INSTALL-FAILED: {e}");
+            cli::err_line(&format!("TT03-F-INSTALL-FAILED: {e}"));
         }
         std::process::exit(1);
     }
@@ -102,9 +112,13 @@ fn main() {
         // post-filter usability was witnessed.
         unsafe { std::fs::File::from_raw_fd(pre_fd as RawFd) };
     }
-    println!(
+    // R04: an unreportable observation is exit 1 (observation
+    // impossible), never a `println!` panic on a dead stdout.
+    if !cli::put_line(&format!(
         "mode={mode} pre_fd={pre_fd} pre_errno={pre_errno} prefix_fstat={prefix_fstat} \
          install=ok nnp={nnp} post_errno={post_errno} retained_fstat={retained_fstat} \
          stat_ok={stat_ok}"
-    );
+    )) {
+        std::process::exit(1);
+    }
 }

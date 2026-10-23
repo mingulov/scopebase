@@ -1227,7 +1227,11 @@ fn serve_forever(worker: &mut Worker) -> ! {
 
 fn main() {
     assert_worker_send();
-    let argv: Vec<String> = std::env::args().collect();
+    // R03: non-UTF-8 argv refuses with usage, never panics in args().
+    let argv = match scopebase_testkit::cli::argv_strings() {
+        Some(argv) => argv,
+        None => fail("argv is not valid Unicode"),
+    };
     if argv.len() != 6
         || argv[1] != "--scopebase-fixture-v1"
         || argv[2] != "--slot"

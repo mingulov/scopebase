@@ -8,8 +8,16 @@ use scopebase_linux::{
     process::{ObserverEpoch, Pid, ProcLimits, ProcessObservation},
     procfs::ParseLimits,
 };
+use scopebase_testkit::cli;
 
 fn main() {
+    // R04: every ledger/refusal line is fallible; a dead stdout
+    // exits 1 instead of panicking in `println!`.
+    let emit = |line: &str| {
+        if !cli::put_line(line) {
+            std::process::exit(1);
+        }
+    };
     let limits = ProcLimits {
         parse: ParseLimits {
             max_bytes: 1 << 20,
@@ -21,23 +29,23 @@ fn main() {
     };
     let control = OperationControl::unlimited();
     let epoch = ObserverEpoch::new(limits, &control).unwrap_or_else(|error| {
-        println!("{}", refusal_of(&error));
+        emit(&refusal_of(&error));
         std::process::exit(1);
     });
     let pid = Pid::new(std::process::id() as i32).expect("own pid is valid");
     let observation =
         ProcessObservation::acquire(pid, &epoch, limits, &control).unwrap_or_else(|error| {
-            println!("{}", refusal_of(&error));
+            emit(&refusal_of(&error));
             std::process::exit(1);
         });
     let birth = observation.verify_birth(&control).unwrap_or_else(|error| {
-        println!("{}", refusal_of(&error));
+        emit(&refusal_of(&error));
         std::process::exit(1);
     });
     let maps = observation
         .read_maps(limits, &control)
         .unwrap_or_else(|error| {
-            println!("{}", refusal_of(&error));
+            emit(&refusal_of(&error));
             std::process::exit(1);
         });
     let probe = 0u8;
@@ -52,5 +60,5 @@ fn main() {
         "self_containing",
         &maps.snapshot().containing(addr).is_some().to_string(),
     );
-    println!("{}", ledger.render());
+    emit(&ledger.render());
 }

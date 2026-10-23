@@ -844,3 +844,84 @@ fn tiny_limits_still_deliver_schema_refusal() {
         "diagnostic must fit the caller ceiling"
     );
 }
+
+// R03/R04: executable boundary tests over the installed operator
+// binary. Dispatch unit tests cannot exercise argv decoding or dead
+// stdio; these drive the real binary.
+
+fn operator_bin() -> PathBuf {
+    // Compile-time lookup (cargo sets this when the binary target is in
+    // the build plan); a filtered run that excludes the binary fails
+    // loudly here instead of skipping vacuously.
+    PathBuf::from(env!("CARGO_BIN_EXE_scopebase-conformance"))
+}
+
+/// R04: output failure is exit 1 (`OutputFailed`), and the kind maps
+/// there (in-process mapping check; the dead stream needs a process).
+#[test]
+fn output_failed_maps_to_exit_1() {
+    assert_eq!(
+        commands::exit_for_kind(OperatorErrorKind::OutputFailed),
+        EXIT_FAILURE
+    );
+}
+
+/// R03: non-UTF-8 argv refuses with the reason plus usage (exit 2),
+/// never panics in `env::args()` (old code exited 101).
+#[test]
+fn non_utf8_argv_refuses_with_usage() {
+    use std::os::unix::ffi::OsStringExt;
+    let out = std::process::Command::new(operator_bin())
+        .arg(std::ffi::OsString::from_vec(b"describe\xff".to_vec()))
+        .output()
+        .expect("spawn operator");
+    assert_eq!(out.status.code(), Some(EXIT_USAGE));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not valid Unicode"), "{stderr:?}");
+    assert!(stderr.contains("usage:"), "{stderr:?}");
+}
+
+/// R04: `--help` with a dead stdout exits 1 with an `OutputFailed`
+/// report on stderr, never panics (old `println!` exited 101).
+#[test]
+fn dead_stdout_help_exits_1_without_panic() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(operator_bin())
+        .arg("--help")
+        .stdout(full)
+        .output()
+        .expect("spawn operator");
+    assert_eq!(out.status.code(), Some(EXIT_FAILURE));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot write report to stdout"),
+        "{stderr:?}"
+    );
+}
+
+/// R04: a dead stderr does not disturb a success: `--help` still
+/// exits 0 with the usage on stdout.
+#[test]
+fn dead_stderr_keeps_help_success() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(operator_bin())
+        .arg("--help")
+        .stderr(full)
+        .output()
+        .expect("spawn operator");
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("usage:"), "{stdout:?}");
+}
+
+/// R04: a dead stderr keeps the already-determined usage code (bare
+/// argv is a usage error, exit 2), never panics.
+#[test]
+fn dead_stderr_keeps_usage_code() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(operator_bin())
+        .stderr(full)
+        .output()
+        .expect("spawn operator");
+    assert_eq!(out.status.code(), Some(EXIT_USAGE));
+}

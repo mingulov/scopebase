@@ -26,6 +26,7 @@ pub use profile::*;
 
 pub mod adapter;
 pub mod artifact;
+pub mod cli;
 pub mod fixture;
 pub mod observation;
 pub mod prepared;

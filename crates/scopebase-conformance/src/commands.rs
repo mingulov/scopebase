@@ -8,6 +8,7 @@
 
 use crate::error::{OperatorError, OperatorErrorKind, EXIT_OK};
 pub use crate::error::exit_for_kind;
+use scopebase_testkit::cli;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage:
@@ -23,21 +24,45 @@ pub fn run_argv(argv: &[String]) -> i32 {
     match dispatch(argv) {
         Ok(()) => EXIT_OK,
         Err(error) => {
-            eprintln!("scopebase-conformance: {error}");
+            // R04: the code is already determined; a dead stderr
+            // cannot change it and must not panic for a second report.
+            cli::err_line(&format!("scopebase-conformance: {error}"));
             error.exit_code()
         }
+    }
+}
+
+/// R04: serialize one report (serialization failure is an engine
+/// error, never an unwrap) and emit it (stream failure is
+/// `OutputFailed`, never a `println!` panic).
+fn render<T: serde::Serialize>(value: &T) -> Result<String, OperatorError> {
+    serde_json::to_string_pretty(value).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::Engine,
+            format!("report serialization failed: {e}"),
+        )
+    })
+}
+
+fn emit(report: &str) -> Result<(), OperatorError> {
+    if cli::put_line(report) {
+        Ok(())
+    } else {
+        Err(OperatorError::new(
+            OperatorErrorKind::OutputFailed,
+            "cannot write report to stdout",
+        ))
     }
 }
 
 fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
     let usage = || OperatorError::new(OperatorErrorKind::Usage, USAGE);
     if argv.len() < 2 {
-        eprintln!("{USAGE}");
+        cli::err_line(USAGE);
         return Err(usage());
     }
     if argv[1] == "--help" || argv[1] == "-h" || argv[1] == "help" {
-        println!("{USAGE}");
-        return Ok(());
+        return emit(USAGE);
     }
     match argv[1].as_str() {
         "describe" => {
@@ -54,8 +79,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 )
             })?;
             let description = crate::describe::describe(&bytes)?;
-            println!("{}", serde_json::to_string_pretty(&description).unwrap());
-            Ok(())
+            emit(&render(&description)?)
         }
         "plan" => {
             let catalog = required(&argv[2..], "--catalog")?;
@@ -74,8 +98,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 )
             })?;
             let doc = crate::plan::plan(&bytes, profile, PathBuf::from(fixture_root).as_path(), policy)?;
-            println!("{}", serde_json::to_string_pretty(&doc).unwrap());
-            Ok(())
+            emit(&render(&doc)?)
         }
         "run" => {
             let catalog = required(&argv[2..], "--catalog")?;
@@ -111,15 +134,11 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 adapter: &mut adapter,
                 oracle: &oracle,
             })?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "qualification": format!("{:?}", outcome.qualification).to_lowercase(),
-                    "run_id": outcome.run_id,
-                    "receipt": outcome.receipt_path.to_string_lossy(),
-                }))
-                .unwrap()
-            );
+            emit(&render(&serde_json::json!({
+                "qualification": format!("{:?}", outcome.qualification).to_lowercase(),
+                "run_id": outcome.run_id,
+                "receipt": outcome.receipt_path.to_string_lossy(),
+            }))?)?;
             let code = crate::delivery::exit_for_qualification(outcome.qualification);
             if code == EXIT_OK {
                 Ok(())
@@ -157,18 +176,13 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 }
                 None => crate::receipt::verify_receipt(PathBuf::from(target).as_path())?,
             };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "schema": report.schema,
-                    "run_id": report.run_id,
-                    "profile": report.profile,
-                    "qualification": format!("{:?}", report.qualification).to_lowercase(),
-                    "runtime_authority": report.runtime_authority,
-                }))
-                .unwrap()
-            );
-            Ok(())
+            emit(&render(&serde_json::json!({
+                "schema": report.schema,
+                "run_id": report.run_id,
+                "profile": report.profile,
+                "qualification": format!("{:?}", report.qualification).to_lowercase(),
+                "runtime_authority": report.runtime_authority,
+            }))?)
         }
         "cleanup" => {
             let run = required(&argv[2..], "--run")?;
@@ -178,18 +192,13 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 PathBuf::from(run).as_path(),
                 expected.map(str::to_string).as_deref(),
             )?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "removed_run_id": report.run_id,
-                    "profile": report.profile,
-                }))
-                .unwrap()
-            );
-            Ok(())
+            emit(&render(&serde_json::json!({
+                "removed_run_id": report.run_id,
+                "profile": report.profile,
+            }))?)
         }
         _ => {
-            eprintln!("{USAGE}");
+            cli::err_line(USAGE);
             Err(usage())
         }
     }

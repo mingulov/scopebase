@@ -13,6 +13,7 @@
 //! usage/IO/parse/selection error, 2 unresolved retry gate or refused full
 //! attestation.
 
+use scopebase_testkit::cli;
 use scopebase_testkit::select::{
     check_agreement, expected_selection, qualification_gate, select_affected, AccountingScope,
     AccountingStatus, AttemptOutcome, AttemptRecord, CellKey, Change, ChangeManifest,
@@ -25,7 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 fn usage() -> ! {
-    eprintln!(
+    // R04: usage goes through the fallible writer; a dead stderr
+    // still exits 1 without a second panic.
+    cli::err_line(
         "usage:\n\
          \tscopebase-select manifest --impact <impact.json> --changed <paths.txt> --out <manifest.json>\n\
          \tscopebase-select select --catalog <catalog.json> --manifest <manifest.json> --requested <csv> --out <plan.json>\n\
@@ -37,8 +40,18 @@ fn usage() -> ! {
 }
 
 fn fail(message: &str) -> ! {
-    eprintln!("scopebase-select: {message}");
+    // R04: every failure in this binary funnels through here; the
+    // fallible write keeps a dead stderr at exit 1 with no panic.
+    cli::err_line(&format!("scopebase-select: {message}"));
     std::process::exit(1);
+}
+
+/// R04: progress summaries are fallible; a dead stdout fails the
+/// command (exit 1) instead of panicking in `println!`.
+fn progress(line: String) {
+    if !cli::put_line(&line) {
+        fail("cannot write progress summary to stdout");
+    }
 }
 
 fn flag(args: &[String], name: &str) -> bool {
@@ -276,7 +289,7 @@ fn cmd_manifest(args: &[String]) {
             Value::Array(rendered.clone()),
         )])),
     );
-    println!("manifest changes={}", rendered.len());
+    progress(format!("manifest changes={}", rendered.len()));
 }
 
 fn cmd_select(args: &[String]) {
@@ -370,12 +383,12 @@ fn cmd_select(args: &[String]) {
     object.insert("excluded_out_of_scope".to_owned(), Value::Array(excluded));
     object.insert("is_full".to_owned(), Value::Bool(plan.is_full_selection()));
     write_json(opt(args, "--out"), &Value::Object(object));
-    println!(
+    progress(format!(
         "select_affected agreement: ok selected={} declared={} full={}",
         plan.selected().len(),
         plan.declared().len(),
         plan.is_full_selection()
-    );
+    ));
 }
 
 fn cmd_resolve(args: &[String]) {
@@ -570,13 +583,13 @@ fn cmd_resolve(args: &[String]) {
     let out_path = opt(args, "--out").to_owned();
     write_json(&out_path, &Value::Object(object));
     let written = read_json(&out_path);
-    println!(
+    progress(format!(
         "resolve: {} runnable cells, {} unavailable, {} profile gates, {} unbound profiles",
         written["runnable"].as_array().unwrap().len(),
         written["unavailable"].as_array().unwrap().len(),
         written["profile_gates"].as_array().unwrap().len(),
         written["unbound_profiles"].as_array().unwrap().len(),
-    );
+    ));
 }
 
 fn cmd_account(args: &[String]) {
@@ -677,7 +690,7 @@ fn cmd_account(args: &[String]) {
         Value::Bool(accounting.full_matrix_complete()),
     );
     write_json(opt(args, "--out"), &Value::Object(object));
-    println!(
+    progress(format!(
         "accounting status={} scope={} full_matrix_complete={} missing_selected={}",
         match accounting.status() {
             AccountingStatus::Complete => "complete",
@@ -689,9 +702,9 @@ fn cmd_account(args: &[String]) {
         },
         accounting.full_matrix_complete(),
         accounting.missing_selected().len()
-    );
+    ));
     if flag(args, "--attest-full") && accounting.attest_complete().is_err() {
-        eprintln!("scopebase-select: full attestation refused: incomplete denominator");
+        cli::err_line("scopebase-select: full attestation refused: incomplete denominator");
         std::process::exit(2);
     }
 }
@@ -738,7 +751,7 @@ fn cmd_gate(args: &[String]) {
         GateVerdict::Resolved { attempts } => {
             object.insert("verdict".to_owned(), Value::String("resolved".to_owned()));
             object.insert("attempts".to_owned(), Value::from(*attempts as u64));
-            println!("gate verdict=resolved attempts={attempts}");
+            progress(format!("gate verdict=resolved attempts={attempts}"));
         }
         GateVerdict::Unresolved { failed_attempts } => {
             object.insert("verdict".to_owned(), Value::String("unresolved".to_owned()));
@@ -746,7 +759,9 @@ fn cmd_gate(args: &[String]) {
                 "failed_attempts".to_owned(),
                 Value::Array(failed_attempts.iter().map(|a| Value::from(*a)).collect()),
             );
-            println!("gate verdict=unresolved failed_attempts={failed_attempts:?}");
+            progress(format!(
+                "gate verdict=unresolved failed_attempts={failed_attempts:?}"
+            ));
         }
     }
     write_json(opt(args, "--out"), &Value::Object(object));
@@ -756,7 +771,14 @@ fn cmd_gate(args: &[String]) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    // R03: non-UTF-8 argv refuses with usage, never panics in args().
+    let args = match cli::argv_strings() {
+        Some(args) => args,
+        None => {
+            cli::err_line("argv is not valid Unicode");
+            usage();
+        }
+    };
     if args.len() < 2 {
         usage();
     }

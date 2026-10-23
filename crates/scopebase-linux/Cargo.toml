@@ -21,6 +21,11 @@ walk = []
 [dependencies]
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "pipe"] }
 
+[dev-dependencies]
+# R03/R04: examples share the tested argv/output boundary with the
+# shipped binaries (examples link dev-dependencies; no prod edge).
+scopebase-testkit = { version = "=0.1.0", path = "../scopebase-testkit" }
+
 [[example]]
 name = "fd_probe"
 path = "tests/support/fd_probe.rs"

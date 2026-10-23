@@ -386,3 +386,128 @@ fn subject_names_resolved_consumer() {
     );
     assert_eq!(subject.target(), subject.host());
 }
+
+// R03/R04/R34: executable boundary tests. `run()` unit tests cannot
+// exercise argv decoding or dead stdio; these drive the real binary.
+
+fn bin() -> std::path::PathBuf {
+    // Compile-time lookup (cargo sets this when the binary target is in
+    // the build plan); a filtered run that excludes the binary fails
+    // loudly here instead of skipping vacuously.
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_linux-observe-reference"))
+}
+
+fn scratch(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "lx11-cli-{}-{}-{}",
+        tag,
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// R03: non-UTF-8 argv refuses with usage (exit 2), never panics in
+/// `env::args()` (old code exited 101).
+#[test]
+fn non_utf8_argv_refuses_with_usage() {
+    use std::os::unix::ffi::OsStringExt;
+    let out = std::process::Command::new(bin())
+        .arg(std::ffi::OsString::from_vec(b"observe\xff".to_vec()))
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(2), "usage refusal, not a panic");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not valid Unicode"), "{stderr:?}");
+    assert!(stderr.contains("usage:"), "{stderr:?}");
+}
+
+/// R04: a dead stdout exits 1 with a stderr report, never panics
+/// (old `println!` exited 101). Smoke prints its subject line before
+/// any scenario, so the failure is scenario-independent.
+#[test]
+fn dead_stdout_exits_1_without_panic() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(bin())
+        .stdout(full)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(1), "IO failure, not a panic");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("output write failed"), "{stderr:?}");
+}
+
+/// R04: a dead stderr keeps the already-determined usage code (exit
+/// 2); the unreportable report is not a second failure.
+#[test]
+fn dead_stderr_keeps_usage_code() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(bin())
+        .arg("observe")
+        .stderr(full)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "usage code survives dead stderr"
+    );
+}
+
+/// R04: both streams dead still exits 1 (the subject line cannot
+/// land), never panics.
+#[test]
+fn both_streams_dead_exits_1() {
+    let out = std::process::Command::new(bin())
+        .stdout(std::fs::File::create("/dev/full").expect("/dev/full opens"))
+        .stderr(std::fs::File::create("/dev/full").expect("/dev/full opens"))
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(1));
+}
+
+/// R34: a hostile TMPDIR (delimiter-bearing) refuses before creating
+/// anything: the owned parent gains no entries.
+#[test]
+fn hostile_tmpdir_strands_nothing() {
+    let owned = scratch("tmpdir");
+    let hostile = owned.join("sub;dir");
+    std::fs::create_dir(&hostile).unwrap();
+    let out = std::process::Command::new(bin())
+        .env("TMPDIR", &hostile)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(1), "smoke refuses hostile paths");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("';'"), "{stderr:?}");
+    let leftovers: Vec<_> = std::fs::read_dir(&hostile).unwrap().collect();
+    assert!(leftovers.is_empty(), "stranded fixtures: {leftovers:?}");
+    let _ = std::fs::remove_dir_all(&owned);
+}
+
+/// R34 control: a clean smoke succeeds and retires its own tree
+/// (guards the print-after-close reorder).
+#[test]
+fn clean_smoke_succeeds_and_cleans_up() {
+    let owned = scratch("smoke");
+    let out = std::process::Command::new(bin())
+        .env("TMPDIR", &owned)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("subject: "), "{stdout:?}");
+    assert!(stdout.contains("acquire-self: "), "{stdout:?}");
+    let leftovers: Vec<_> = std::fs::read_dir(&owned).unwrap().collect();
+    assert!(leftovers.is_empty(), "smoke left residue: {leftovers:?}");
+    let _ = std::fs::remove_dir_all(&owned);
+}

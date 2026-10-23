@@ -313,6 +313,7 @@ name = "scopebase-linux"
 version = "0.1.0"
 dependencies = [
  "rustix",
+ "scopebase-testkit",
 ]
 
 [[package]]

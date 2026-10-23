@@ -6,12 +6,55 @@
 //!
 //! F04: every failure below is a message plus an exit code, never a panic:
 //! missing/invalid operands are usage errors (exit 2), setup/IO failures exit 1.
+//! R03: argv enters via [`scopebase_testkit::cli::argv_strings`]: non-UTF-8
+//! bytes refuse with usage, never panic in `env::args()`. R04: all output
+//! is fallible (`put_line`/`err_line`); a dead stdout exits 1, a dead
+//! stderr keeps the already-determined code. R34: smoke validates its
+//! predicted paths before creating anything and always retires its root.
 use linux_observe_reference::adapter::{run_scenario, script_value, ObserveReferenceAdapter};
 use scopebase_linux::conformance::FixtureRoot;
+use scopebase_testkit::cli;
 use scopebase_testkit::ConformanceAdapter;
 
+const USAGE: &str = "usage: linux-observe-reference [observe PID | child SECS]";
+
+/// Report a failed stdout write; always exits 1 however stderr fares.
+fn output_failed() -> i32 {
+    cli::err_line("output write failed");
+    1
+}
+
+fn smoke_name() -> String {
+    format!("lx11-observe-smoke-{}", std::process::id())
+}
+
+/// R34: every string smoke interpolates, resolved and validated BEFORE
+/// anything is created. The own-binary lookup also happens here so a
+/// `;` refusal (or a current_exe failure) strands nothing.
+fn smoke_paths() -> Option<(String, String)> {
+    let exe = std::env::current_exe().ok()?;
+    let empty = std::env::temp_dir()
+        .join(smoke_name())
+        .join("empty.bin")
+        .to_string_lossy()
+        .into_owned();
+    let exe = exe.to_string_lossy().into_owned();
+    let (Some(exe), Some(empty)) = (script_value(&exe), script_value(&empty)) else {
+        return None;
+    };
+    Some((exe.to_owned(), empty.to_owned()))
+}
+
 fn main() {
-    std::process::exit(run(&std::env::args().collect::<Vec<_>>()));
+    let code = match cli::argv_strings() {
+        Some(argv) => run(&argv),
+        None => {
+            cli::err_line("argv is not valid Unicode");
+            cli::err_line(USAGE);
+            2
+        }
+    };
+    std::process::exit(code);
 }
 
 fn run(args: &[String]) -> i32 {
@@ -19,13 +62,13 @@ fn run(args: &[String]) -> i32 {
         None => smoke(),
         Some("child") => {
             let Some(raw) = args.get(2) else {
-                eprintln!("usage: child SECS");
+                cli::err_line("usage: child SECS");
                 return 2;
             };
             let secs: u64 = match raw.parse() {
                 Ok(secs) => secs,
                 Err(_) => {
-                    eprintln!("usage: child SECS (unsigned seconds)");
+                    cli::err_line("usage: child SECS (unsigned seconds)");
                     return 2;
                 }
             };
@@ -34,27 +77,29 @@ fn run(args: &[String]) -> i32 {
         }
         Some("observe") => {
             let Some(pid) = args.get(2) else {
-                eprintln!("usage: observe PID");
+                cli::err_line("usage: observe PID");
                 return 2;
             };
             let Some(pid) = script_value(pid) else {
-                eprintln!("observe refuses PIDs containing ';'");
+                cli::err_line("observe refuses PIDs containing ';'");
                 return 2;
             };
             let script = format!("case=pid;pid={pid};");
             match run_scenario("acquire", script.as_bytes(), None) {
                 Some(body) => {
-                    println!("{body}");
+                    if !cli::put_line(&body) {
+                        return output_failed();
+                    }
                     0
                 }
                 None => {
-                    eprintln!("observe refused");
+                    cli::err_line("observe refused");
                     1
                 }
             }
         }
         Some(other) => {
-            eprintln!("unknown mode {other}");
+            cli::err_line(&format!("unknown mode {other}"));
             1
         }
     }
@@ -64,44 +109,40 @@ fn smoke() -> i32 {
     let adapter = match ObserveReferenceAdapter::new() {
         Ok(adapter) => adapter,
         Err(error) => {
-            eprintln!("adapter builds: {error}");
+            cli::err_line(&format!("adapter builds: {error}"));
             return 1;
         }
     };
     let subject = adapter.subject();
-    println!(
+    if !cli::put_line(&format!(
         "subject: {} {} consumer={}",
         subject.package_name(),
         subject.package_version(),
         subject.consumer().name()
-    );
-    let name = format!("lx11-observe-smoke-{}", std::process::id());
-    let root = match FixtureRoot::create(&std::env::temp_dir(), &name) {
-        Ok(root) => root,
-        Err(error) => {
-            eprintln!("smoke root: {error}");
-            return 1;
-        }
-    };
-    let empty = match root.write_file("empty.bin", b"") {
-        Ok(path) => path.to_string_lossy().into_owned(),
-        Err(error) => {
-            eprintln!("smoke file: {error}");
-            return 1;
-        }
-    };
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe.to_string_lossy().into_owned(),
-        Err(error) => {
-            eprintln!("own binary: {error}");
-            return 1;
-        }
-    };
-    let (Some(exe), Some(empty)) = (script_value(&exe), script_value(&empty)) else {
-        eprintln!("smoke paths contain ';'");
+    )) {
+        return output_failed();
+    }
+    // R34: validate-then-create. Nothing exists yet, so a refusal
+    // here strands nothing by construction.
+    let Some((exe, empty)) = smoke_paths() else {
+        cli::err_line("smoke paths contain ';'");
         return 1;
     };
+    let root = match FixtureRoot::create(&std::env::temp_dir(), &smoke_name()) {
+        Ok(root) => root,
+        Err(error) => {
+            cli::err_line(&format!("smoke root: {error}"));
+            return 1;
+        }
+    };
+    // R34: the single setup write retires the root on failure.
+    if let Err(error) = root.write_file("empty.bin", b"") {
+        let _ = root.close();
+        cli::err_line(&format!("smoke file: {error}"));
+        return 1;
+    }
     let mut failed = false;
+    let mut lines = Vec::new();
     for (op, script, expected) in [
         (
             "acquire-self",
@@ -121,20 +162,27 @@ fn smoke() -> i32 {
     ] {
         match run_scenario(op, script.as_bytes(), None) {
             Some(got) => {
-                println!("{op}: {got}");
                 if got != expected {
                     failed = true;
                 }
+                lines.push(format!("{op}: {got}"));
             }
             None => {
-                println!("{op}: refused");
                 failed = true;
+                lines.push(format!("{op}: refused"));
             }
         }
     }
+    // R34: the root retires before any scenario output, so a dead
+    // stdout cannot strand the tree (print-after-close).
     if let Err(error) = root.close() {
-        eprintln!("smoke cleanup: {error}");
+        cli::err_line(&format!("smoke cleanup: {error}"));
         return 1;
+    }
+    for line in &lines {
+        if !cli::put_line(line) {
+            return output_failed();
+        }
     }
     i32::from(failed)
 }
@@ -162,5 +210,26 @@ mod tests {
         assert_eq!(run(&argv(&["observe-bin", "observe", "1;2"])), 2);
         assert_eq!(script_value("fine"), Some("fine"));
         assert_eq!(script_value("a;b"), None);
+    }
+
+    // R34: smoke-path prediction resolves the real binary and the
+    // predicted tree without creating anything (pure prediction:
+    // nothing to strand). Hostile-TMPDIR refusal is covered by the
+    // subprocess leftover test, which owns TMPDIR safely.
+    #[test]
+    fn smoke_paths_predict_without_creating() {
+        let (exe, empty) = smoke_paths().expect("clean layout predicts");
+        // In unit tests this resolves the test executable, in production
+        // the product binary; both carry the crate name either way.
+        assert!(exe.contains("observe"), "own binary: {exe}");
+        assert!(
+            std::path::Path::new(&exe).exists(),
+            "resolved binary is real"
+        );
+        assert!(empty.ends_with("empty.bin"), "predicted file: {empty}");
+        assert!(
+            !std::path::Path::new(&empty).exists(),
+            "prediction created nothing"
+        );
     }
 }

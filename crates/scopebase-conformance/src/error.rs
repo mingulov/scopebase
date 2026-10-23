@@ -50,6 +50,8 @@ pub enum OperatorErrorKind {
     ReceiptInvalid,
     /// A cleanup target is not an identity-checked run directory.
     CleanupRefused,
+    /// R04: a report or usage line could not be written to its stream.
+    OutputFailed,
 }
 
 /// A typed operator refusal with a human-readable detail.
@@ -104,6 +106,8 @@ pub fn exit_for_kind(kind: OperatorErrorKind) -> i32 {
         OperatorErrorKind::BrokenPackage | OperatorErrorKind::SubjectMismatch => {
             EXIT_BROKEN_PACKAGE
         }
-        OperatorErrorKind::Engine | OperatorErrorKind::ReceiptInvalid => EXIT_FAILURE,
+        OperatorErrorKind::Engine
+        | OperatorErrorKind::ReceiptInvalid
+        | OperatorErrorKind::OutputFailed => EXIT_FAILURE,
     }
 }
