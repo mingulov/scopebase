@@ -39,6 +39,7 @@
 //! library-destination grant; original donor files/terms untouched.
 use scopebase_bpf::btf::{BtfImages, BtfLimits, BtfView, ByteOrder};
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
+use scopebase_testkit::object::graph::{extract_call_graph, CallTarget};
 use scopebase_testkit::object::inspect::RuleViolation;
 use scopebase_testkit::object::{
     check_verifier_rules, inspect_final_object, prune_dead_code, prune_dead_code_with_report,
@@ -1099,6 +1100,85 @@ fn section_symbol_call_resolves_loader_slots() {
 }
 
 #[test]
+fn shifted_section_call_dest_refuses_repair() {
+    // R01: an intra-text section-symbol call whose callee shifts must
+    // refuse. `live`@0 calls `memset`@16 through `.text` (imm 1 ->
+    // byte 16); dead `memcpy`@8 strips, moving `memset` to 8 while the
+    // immediate still says 16 (the new EOF). Neither rewrite pass
+    // touches call immediates, so success would retarget the call
+    // into stripped slack. Old code succeeded here.
+    let endian = Endian::Little;
+    let mut text = Vec::new();
+    text.extend_from_slice(&call_sub(endian, 1));
+    text.extend_from_slice(&exit(endian));
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+    let live = obj.func("live", true, text_idx, 0, 8);
+    obj.func("memcpy", true, text_idx, 8, 8);
+    obj.func("memset", true, text_idx, 16, 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, live, R_BPF_64_32)]);
+    obj.reloc_section(".rel.text", text_idx, &[(0, text_sym, R_BPF_64_32)]);
+    let bytes = obj.build();
+    let error = prune_error(&bytes, &load_allowlist(), &limits());
+    assert_refusal(&error, ErrorKind::InvalidInput, Stage::Inspect, "shifted");
+}
+
+#[test]
+fn stationary_section_call_dest_survives_repair() {
+    // R01 guard twin: the same intra-text section-symbol call with a
+    // STATIONARY callee prunes fine (dead code strips from the end, no
+    // shift), and the transformed call graph keeps the live->memset
+    // edge: no over-refusal, no silent retarget.
+    let endian = Endian::Little;
+    let mut text = Vec::new();
+    text.extend_from_slice(&call_sub(endian, 0));
+    text.extend_from_slice(&exit(endian));
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+    let live = obj.func("live", true, text_idx, 0, 8);
+    obj.func("memset", true, text_idx, 8, 8);
+    obj.func("memcpy", true, text_idx, 16, 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, live, R_BPF_64_32)]);
+    obj.reloc_section(".rel.text", text_idx, &[(0, text_sym, R_BPF_64_32)]);
+    let bytes = obj.build();
+    let (out, report) =
+        prune_dead_code_with_report(&bytes, &contract(), &load_allowlist(), &limits())
+            .expect("stationary section call prunes");
+    assert_eq!(report.removed(), &["memcpy".to_owned()]);
+    assert_eq!((report.text_before(), report.text_after()), (24, 16));
+    let graph = extract_call_graph(&out, &contract(), &limits()).expect("graph extracts");
+    let names: Vec<&str> = graph.functions().iter().map(|f| f.name()).collect();
+    assert!(
+        names.contains(&"live") && names.contains(&"memset"),
+        "both ends survive: {names:?}"
+    );
+    let live_idx = names.iter().position(|n| *n == "live").unwrap();
+    let memset_idx = names.iter().position(|n| *n == "memset").unwrap();
+    assert!(
+        graph.edges().iter().any(|e| {
+            e.caller() == live_idx
+                && matches!(e.target(), CallTarget::Local { function } if function == memset_idx)
+        }),
+        "live->memset edge survives the strip: {:?}",
+        graph.edges()
+    );
+}
+
+#[test]
 fn call_into_stripped_code_refuses_repair() {
     // Dead `memset` calls dead `memcpy`: resolving the strip would orphan
     // the dead-to-dead edge, so the repair refuses instead of guessing.
@@ -1585,34 +1665,62 @@ fn global_linkage_requires_symbol_and_btf() {
     let linkage = load_manifest("linkage");
     // GLOBAL symbol plus unique FUNC with a valid prototype: clean.
     let btf = parse_btf(&linkage_btf("clean"));
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert!(violations.is_empty(), "unexpected: {violations:?}");
     // LOCAL binding mutant: the exact rule id names the failure.
     let btf = parse_btf(&linkage_btf("clean"));
-    let violations = check_rules(&linkage_carrier(false), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(false),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.global-required"]);
     assert_eq!(violations[0].kind, ErrorKind::Incompatible);
     assert_eq!(violations[0].section.as_deref(), Some(".text"));
     // Same-name rival FUNC: ambiguous despite matching size.
     let btf = parse_btf(&linkage_btf("rival"));
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.btf-ambiguous"]);
     // FUNC without a prototype, and a non-function same-name type.
     let btf = parse_btf(&linkage_btf("bad-proto"));
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.btf-bad-prototype"]);
     let btf = parse_btf(&linkage_btf("not-function"));
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.btf-not-function"]);
     // F21 STATIC twin: GLOBAL ELF symbol but STATIC BTF FUNC fails.
     let btf = parse_btf(&linkage_btf("static"));
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.btf-not-global"]);
     // Absent BTF type and absent BTF image are distinct findings.
     let mut bare = BtfBuilder::new();
     bare.add_int("unsigned int", 4, 32, 0);
     let btf = parse_btf(&bare.build());
-    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    let violations = check_rules(
+        &linkage_carrier(true),
+        std::slice::from_ref(&linkage),
+        Some(&btf),
+    );
     assert_eq!(rule_ids(&violations), ["linkage.btf-missing"]);
     let violations = check_rules(&linkage_carrier(true), &[linkage], None);
     assert_eq!(rule_ids(&violations), ["linkage.btf-missing"]);
@@ -1852,6 +1960,182 @@ fn guard_fixture(style: GuardCall) -> Vec<u8> {
     }
     obj.reloc_section(".rel.text", text_idx, &calls);
     obj.build()
+}
+
+/// How `helper` reaches `memset` in the nested guard fixture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NestedEdge {
+    /// Relocated call against the `memset` function symbol.
+    Direct,
+    /// Section-symbol call: imm 1 resolves to byte 16 (`memset`).
+    Section,
+    /// Linked-style immediate call with no covering relocation.
+    Linked,
+}
+
+/// `.text` with `emit` -> `helper` -> `memset`, plus an `unrelated`
+/// twin calling `memset` directly (permitted: unreachable from the
+/// root, so a scoped traversal reports nothing for it). `emit` always
+/// calls `helper` through its function symbol; the helper edge
+/// follows `style`.
+fn nested_guard_fixture(style: NestedEdge) -> Vec<u8> {
+    let endian = Endian::Little;
+    let mut text = Vec::new();
+    text.extend_from_slice(&call_sub(endian, -1)); // emit@0 -> helper
+    match style {
+        NestedEdge::Direct => text.extend_from_slice(&call_sub(endian, -1)),
+        NestedEdge::Section => text.extend_from_slice(&call_sub(endian, 1)),
+        NestedEdge::Linked => text.extend_from_slice(&call_sub(endian, 1)),
+    }
+    text.extend_from_slice(&exit(endian)); // memset@16
+    text.extend_from_slice(&call_sub(endian, -1)); // unrelated@24 -> memset
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let emit = obj.func("emit", true, text_idx, 0, 8);
+    let helper = obj.func("helper", true, text_idx, 8, 8);
+    let memset = obj.func("memset", true, text_idx, 16, 8);
+    let unrelated = obj.func("unrelated", true, text_idx, 24, 8);
+    obj.func("entry", true, uprobe_idx, 0, 24);
+    obj.reloc_section(
+        ".reluprobe",
+        uprobe_idx,
+        &[(0, emit, R_BPF_64_32), (8, unrelated, R_BPF_64_32)],
+    );
+    let mut calls = vec![(0, helper, R_BPF_64_32), (24, memset, R_BPF_64_32)];
+    match style {
+        NestedEdge::Direct => calls.push((8, memset, R_BPF_64_32)),
+        NestedEdge::Section => {
+            let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+            calls.push((8, text_sym, R_BPF_64_32));
+        }
+        NestedEdge::Linked => {}
+    }
+    obj.reloc_section(".rel.text", text_idx, &calls);
+    obj.build()
+}
+
+/// `emit` <-> `helper` cycle with an isolated `memset`: the traversal
+/// must terminate (visited set) and report nothing.
+fn cyclic_guard_fixture() -> Vec<u8> {
+    let endian = Endian::Little;
+    let mut text = Vec::new();
+    text.extend_from_slice(&call_sub(endian, -1)); // emit@0 -> helper
+    text.extend_from_slice(&call_sub(endian, -1)); // helper@8 -> emit
+    text.extend_from_slice(&exit(endian)); // memset@16 (unreachable)
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let emit = obj.func("emit", true, text_idx, 0, 8);
+    let helper = obj.func("helper", true, text_idx, 8, 8);
+    obj.func("memset", true, text_idx, 16, 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    obj.reloc_section(
+        ".rel.text",
+        text_idx,
+        &[(0, helper, R_BPF_64_32), (8, emit, R_BPF_64_32)],
+    );
+    obj.build()
+}
+
+#[test]
+fn init_guard_follows_nested_helper_calls() {
+    // R09: emit -> helper -> memset. The guard traverses the reachable
+    // graph from the root, so the nested forbidden edge is a finding
+    // at the helper's call site. The unrelated twin's direct edge is
+    // unreachable from the root and stays silent (scoping). Old
+    // root-only code reported nothing.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Direct);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.path-guard"]);
+    assert_eq!(violations[0].offset, Some(8));
+}
+
+#[test]
+fn init_guard_follows_nested_section_calls() {
+    // R09 + F23: the nested edge through a section symbol is the same
+    // guarded edge as a direct nested call.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Section);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.path-guard"]);
+    assert_eq!(violations[0].offset, Some(8));
+}
+
+#[test]
+fn init_guard_reports_nested_unresolved_calls() {
+    // R09: a linked-style call inside the REACHABLE helper is a
+    // finding, never a silent pass: the traversal scans helper
+    // bodies, not just the root. Old code reported nothing.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = nested_guard_fixture(NestedEdge::Linked);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-call"]);
+    assert_eq!(violations[0].offset, Some(8));
+}
+
+#[test]
+fn init_guard_terminates_on_call_cycles() {
+    // R09: a reachable call cycle terminates (visited set) and an
+    // unreachable forbidden callee stays silent.
+    let guard = single_rule_manifest("stack", 3);
+    let bytes = cyclic_guard_fixture();
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+}
+
+#[test]
+fn findings_charge_retained_names_against_the_ceiling() {
+    // R08: a 200KB section name times 1000 forbidden edges must trip
+    // the 1MB retained ceiling instead of returning a 200MB
+    // violation vector. Each finding accounts its record plus the
+    // cloned name BEFORE allocating. Old code returned Ok with all
+    // 1000 uncharged clones.
+    let endian = Endian::Little;
+    let calls = 1000u64;
+    let mut text = Vec::new();
+    for _ in 0..calls {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let long_name: String = "s".repeat(200_000);
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(&long_name, SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let emit = obj.func("emit", true, text_idx, 0, calls * 8);
+    let memset = obj.func("memset", true, text_idx, calls * 8, 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let edges: Vec<(u64, u32, u32)> = (0..calls)
+        .map(|i| (i * 8, memset as u32, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    let bytes = obj.build();
+    assert!(bytes.len() < 1 << 20, "input fits its own ceiling");
+    let guard = single_rule_manifest("stack", 3);
+    let error = check_verifier_rules(
+        &bytes,
+        &contract(),
+        std::slice::from_ref(&guard),
+        None,
+        &limits(),
+    )
+    .expect_err("1000 long-name findings must exhaust retained_bytes");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+    assert_eq!(error.stage(), Stage::Inspect);
 }
 
 /// One uprobe/uretprobe program for the private-stack rule.

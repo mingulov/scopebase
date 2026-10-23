@@ -5,9 +5,11 @@
 //! unreachable `.text` functions, and only functions named by the caller
 //! allowlist drawn from the frozen dead-builtins inventory
 //! ([`FROZEN_DEAD_BUILTINS`]). Dead code outside the allowlist, shifted
-//! entry targets, interior calls, unrelocated call sites, unsupported
-//! relocations, truncation, misalignment and BTF-affecting strips all
-//! refuse typed; the repair never rewrites speculatively and never treats
+//! entry targets, shifted section-symbol call destinations (R01: no pass
+//! rewrites call immediates), interior calls, unrelocated call sites,
+//! unsupported relocations, truncation, misalignment and BTF-affecting
+//! strips all refuse typed; the repair never rewrites speculatively and
+//! never treats
 //! a compiler flag as proof that roots disappeared. The transformed bytes
 //! are a new final artifact: the caller re-admits and reruns the rules on
 //! them ([`PruneReport`] carries both hashes).
@@ -17,10 +19,13 @@
 //! optional BP09 [`BtfView`]. Structural truncation, target contradiction
 //! and budget exhaustion refuse typed; every semantic finding returns as a
 //! [`RuleViolation`] with a stable rule id. Covered families: named
-//! initialized padding (H08), exact GLOBAL symbol/BTF linkage (H10),
-//! per-frame stack accounting with call-arity and pointer-bundled shapes
-//! (H08/H10), path-scoped initializer guards (H10) and the required
-//! private-stack tail-call prologue with program-array attribution (H09).
+//! padding SHAPE only (H08 extent rule; the byte-initialization check
+//! stays open per the rule docs and the TODO.md H08 row), exact GLOBAL
+//! symbol/BTF linkage (H10), per-frame stack accounting with call-arity
+//! and pointer-bundled shapes (H08/H10), path-scoped initializer guards
+//! (H10) and the required private-stack tail-call prologue with
+//! program-array attribution (H09). R45: the summary previously
+//! overclaimed initialized-padding coverage the shape rule cannot prove.
 //!
 //! Standalone-seam decision (explicit): the plan's Interfaces text wanted
 //! `inspect_final_object`/`ObjectInspection` extension, but TC05 shipped a
@@ -143,6 +148,55 @@ fn finding(rule_id: &'static str, section: Option<String>, offset: Option<u64>) 
         offset,
         kind: ErrorKind::Incompatible,
     }
+}
+
+/// R08: charge a result record BEFORE allocating it. Every rule
+/// finding accounts its record plus retained strings against the
+/// same cumulative `retained_bytes` ceiling as decoding, so a long
+/// section name times many findings cannot amplify past the budget.
+/// All rule paths push through here; direct `finding` pushes are gone.
+fn push_finding(
+    violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
+    rule_id: &'static str,
+    section: Option<&str>,
+    offset: Option<u64>,
+) -> Result<(), OperationError> {
+    let mut bytes = size_of::<RuleViolation>().saturating_add(rule_id.len());
+    if let Some(name) = section {
+        bytes = bytes.saturating_add(name.len());
+    }
+    retain(retained, limits, bytes)?;
+    violations.push(finding(rule_id, section.map(str::to_owned), offset));
+    Ok(())
+}
+
+/// R08: section-attributed finding without cloning the name before
+/// its charge. The fallback label length is computed arithmetically
+/// (`"section#{}"`: 8 fixed bytes plus decimal digits, no allocation).
+fn push_section_finding(
+    violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
+    rule_id: &'static str,
+    section: &Section,
+    offset: Option<u64>,
+) -> Result<(), OperationError> {
+    let len = section
+        .name
+        .as_deref()
+        .map(str::len)
+        .unwrap_or_else(|| 8 + section.index.checked_ilog10().unwrap_or(0) as usize + 1);
+    retain(
+        retained,
+        limits,
+        size_of::<RuleViolation>()
+            .saturating_add(rule_id.len())
+            .saturating_add(len),
+    )?;
+    violations.push(finding(rule_id, Some(section.label()), offset));
+    Ok(())
 }
 
 fn charge(work: &mut u64, steps: u64) -> Result<(), OperationError> {
@@ -1577,8 +1631,11 @@ fn remap(kept: &[(u64, u64, u64)], old: u64) -> Option<u64> {
 
 /// Entry calls carry a raw byte addend against the `.text` section
 /// symbol, so a shifted root would silently retarget: refuse loudly.
-/// Intra-text calls resolve through function symbols, whose values are
-/// rewritten below, and therefore survive any shift.
+/// Intra-text calls through function symbols resolve via values
+/// rewritten below and therefore survive any shift; intra-text calls
+/// through a SECTION symbol carry the same raw immediate, which no
+/// rewrite pass touches (R01), so a shifted section destination
+/// refuses wherever its site lives.
 fn check_entry_calls(
     image: &Image<'_>,
     text_idx: usize,
@@ -1612,10 +1669,24 @@ fn check_entry_calls(
                 }
             }
         };
-        if reloc.target_sect != text_idx && new != dest {
+        // R01: a shifted destination is only safe when a rewritten
+        // function-symbol value carries it. Entry sites refuse on any
+        // shift (F01, unchanged); intra-text sites refuse when the call
+        // resolves through a section symbol, whose raw immediate no
+        // rewrite pass updates.
+        let section_call = image
+            .symbols
+            .get(reloc.sym_idx)
+            .is_some_and(|sym| sym.kind() == STT_SECTION);
+        if new != dest && (reloc.target_sect != text_idx || section_call) {
+            let edge = if reloc.target_sect != text_idx {
+                "entry call"
+            } else {
+                "section-symbol call"
+            };
             return Err(refuse(
                 ErrorKind::InvalidInput,
-                format!("entry call target {dest:#x} shifted to {new:#x}"),
+                format!("{edge} target {dest:#x} shifted to {new:#x}"),
             ));
         }
     }
@@ -1957,6 +2028,8 @@ pub fn check_verifier_rules(
                     struct_size,
                 } => check_pad(
                     &mut violations,
+                    &mut retained,
+                    limits,
                     btf,
                     ty,
                     member,
@@ -1965,7 +2038,15 @@ pub fn check_verifier_rules(
                     *struct_size,
                 )?,
                 Rule::LinkageGlobal { symbol, section } => {
-                    check_linkage(&image, &mut violations, btf, symbol, section)?;
+                    check_linkage(
+                        &image,
+                        &mut violations,
+                        &mut retained,
+                        limits,
+                        btf,
+                        symbol,
+                        section,
+                    )?;
                 }
                 Rule::FrameMinimum {
                     min_frame_bytes,
@@ -1973,6 +2054,8 @@ pub fn check_verifier_rules(
                 } => check_frames(
                     &image,
                     &mut violations,
+                    &mut retained,
+                    limits,
                     *min_frame_bytes,
                     *max_total_bytes,
                     &mut work,
@@ -1981,13 +2064,36 @@ pub fn check_verifier_rules(
                     function,
                     max_params,
                 } => {
-                    check_arity(&mut violations, btf, function, *max_params)?;
+                    check_arity(
+                        &mut violations,
+                        &mut retained,
+                        limits,
+                        btf,
+                        function,
+                        *max_params,
+                    )?;
                 }
                 Rule::Bundled { function, pointers } => {
-                    check_bundled(&mut violations, btf, function, pointers)?;
+                    check_bundled(
+                        &mut violations,
+                        &mut retained,
+                        limits,
+                        btf,
+                        function,
+                        pointers,
+                    )?;
                 }
                 Rule::PathGuard { path, forbidden } => {
-                    check_path_guard(&image, &relocs, &mut violations, path, forbidden, &mut work)?;
+                    check_path_guard(
+                        &image,
+                        &relocs,
+                        &mut violations,
+                        &mut retained,
+                        limits,
+                        path,
+                        forbidden,
+                        &mut work,
+                    )?;
                 }
                 Rule::OptOut {
                     sections,
@@ -2003,6 +2109,8 @@ pub fn check_verifier_rules(
                     &image,
                     &relocs,
                     &mut violations,
+                    &mut retained,
+                    limits,
                     sections,
                     arrays,
                     *opt_out_index,
@@ -2022,18 +2130,23 @@ pub fn check_verifier_rules(
 
 fn btf_or_missing(
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     btf: Option<&BtfView>,
     rule: &'static str,
-) -> Option<()> {
+) -> Result<Option<()>, OperationError> {
     if btf.is_none() {
-        violations.push(finding(rule, None, None));
-        return None;
+        push_finding(violations, retained, limits, rule, None, None)?;
+        return Ok(None);
     }
-    Some(())
+    Ok(Some(()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_pad(
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     btf: Option<&BtfView>,
     ty: &str,
     member: &str,
@@ -2041,7 +2154,7 @@ fn check_pad(
     size: u64,
     struct_size: u64,
 ) -> Result<(), OperationError> {
-    let Some(()) = btf_or_missing(violations, btf, "padding.btf-missing") else {
+    let Some(()) = btf_or_missing(violations, retained, limits, btf, "padding.btf-missing")? else {
         return Ok(());
     };
     let view = btf.expect("checked present");
@@ -2080,15 +2193,36 @@ fn check_pad(
         }
     }
     if ambiguous {
-        violations.push(finding("padding.type-ambiguous", None, None));
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "padding.type-ambiguous",
+            None,
+            None,
+        )?;
         return Ok(());
     }
     let Some((parent, actual_size)) = composite else {
-        violations.push(finding("padding.type-missing", None, None));
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "padding.type-missing",
+            None,
+            None,
+        )?;
         return Ok(());
     };
     if actual_size != Some(struct_size) {
-        violations.push(finding("padding.named-pad-required", None, None));
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "padding.named-pad-required",
+            None,
+            None,
+        )?;
         return Ok(());
     }
     match view.member(parent, &[member]) {
@@ -2098,11 +2232,27 @@ fn check_pad(
                 || extent.bit_width.is_some()
                 || extent.size_bytes != size
             {
-                violations.push(finding("padding.named-pad-required", None, None));
+                push_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "padding.named-pad-required",
+                    None,
+                    None,
+                )?;
             }
         }
         Err(error) if error.kind() == ErrorKind::LimitExceeded => return Err(error),
-        Err(_) => violations.push(finding("padding.named-pad-required", None, None)),
+        Err(_) => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "padding.named-pad-required",
+                None,
+                None,
+            )?;
+        }
     }
     Ok(())
 }
@@ -2159,6 +2309,8 @@ fn resolve_function(btf: &BtfView, name: &str) -> Result<FuncResolution, Operati
 fn check_linkage(
     image: &Image<'_>,
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     btf: Option<&BtfView>,
     symbol: &str,
     section: &str,
@@ -2181,14 +2333,17 @@ fn check_linkage(
         }
     }
     if matches != 1 || !exact {
-        violations.push(finding(
+        push_finding(
+            violations,
+            retained,
+            limits,
             "linkage.global-required",
-            Some(section.to_owned()),
+            Some(section),
             None,
-        ));
+        )?;
         return Ok(());
     }
-    let Some(()) = btf_or_missing(violations, btf, "linkage.btf-missing") else {
+    let Some(()) = btf_or_missing(violations, retained, limits, btf, "linkage.btf-missing")? else {
         return Ok(());
     };
     match resolve_function(btf.expect("checked present"), symbol)? {
@@ -2196,16 +2351,55 @@ fn check_linkage(
             // F21: GLOBAL is required in BTF as well as in the symbol
             // table; a STATIC or EXTERN twin must fail this rule.
             if shape.linkage != Some(scopebase_bpf::btf::FuncLinkage::Global) {
-                violations.push(finding("linkage.btf-not-global", None, None));
+                push_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "linkage.btf-not-global",
+                    None,
+                    None,
+                )?;
             }
         }
-        FuncResolution::Missing => violations.push(finding("linkage.btf-missing", None, None)),
-        FuncResolution::Ambiguous => violations.push(finding("linkage.btf-ambiguous", None, None)),
+        FuncResolution::Missing => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "linkage.btf-missing",
+                None,
+                None,
+            )?;
+        }
+        FuncResolution::Ambiguous => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "linkage.btf-ambiguous",
+                None,
+                None,
+            )?;
+        }
         FuncResolution::BadProto => {
-            violations.push(finding("linkage.btf-bad-prototype", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "linkage.btf-bad-prototype",
+                None,
+                None,
+            )?;
         }
         FuncResolution::NotFunction => {
-            violations.push(finding("linkage.btf-not-function", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "linkage.btf-not-function",
+                None,
+                None,
+            )?;
         }
     }
     Ok(())
@@ -2214,6 +2408,8 @@ fn check_linkage(
 fn check_frames(
     image: &Image<'_>,
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     min_frame_bytes: u64,
     max_total_bytes: u64,
     work: &mut u64,
@@ -2235,65 +2431,154 @@ fn check_frames(
         .checked_mul(min_frame_bytes)
         .ok_or_else(|| refuse(ErrorKind::Overflow, "frame budget overflows"))?;
     if total > max_total_bytes {
-        violations.push(finding("stack.per-frame-minimum", None, None));
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "stack.per-frame-minimum",
+            None,
+            None,
+        )?;
     }
     Ok(())
 }
 
 fn check_arity(
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     btf: Option<&BtfView>,
     function: &str,
     max_params: u64,
 ) -> Result<(), OperationError> {
-    let Some(()) = btf_or_missing(violations, btf, "call.btf-missing") else {
+    let Some(()) = btf_or_missing(violations, retained, limits, btf, "call.btf-missing")? else {
         return Ok(());
     };
     match resolve_function(btf.expect("checked present"), function)? {
         FuncResolution::Resolved(shape) => {
             if shape.parameters.len() as u64 > max_params || shape.variadic {
-                violations.push(finding("call.arity-exceeded", None, None));
+                push_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "call.arity-exceeded",
+                    None,
+                    None,
+                )?;
             }
         }
-        FuncResolution::Missing => violations.push(finding("call.function-missing", None, None)),
-        FuncResolution::Ambiguous => violations.push(finding("call.func-ambiguous", None, None)),
-        FuncResolution::BadProto => violations.push(finding("call.bad-prototype", None, None)),
-        FuncResolution::NotFunction => violations.push(finding("call.not-function", None, None)),
+        FuncResolution::Missing => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.function-missing",
+                None,
+                None,
+            )?;
+        }
+        FuncResolution::Ambiguous => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.func-ambiguous",
+                None,
+                None,
+            )?;
+        }
+        FuncResolution::BadProto => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.bad-prototype",
+                None,
+                None,
+            )?;
+        }
+        FuncResolution::NotFunction => {
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.not-function",
+                None,
+                None,
+            )?;
+        }
     }
     Ok(())
 }
 
 fn check_bundled(
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     btf: Option<&BtfView>,
     function: &str,
     pointers: &[bool],
 ) -> Result<(), OperationError> {
-    let Some(()) = btf_or_missing(violations, btf, "call.btf-missing") else {
+    let Some(()) = btf_or_missing(violations, retained, limits, btf, "call.btf-missing")? else {
         return Ok(());
     };
     let view = btf.expect("checked present");
     let shape = match resolve_function(view, function)? {
         FuncResolution::Resolved(shape) => shape,
         FuncResolution::Missing => {
-            violations.push(finding("call.function-missing", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.function-missing",
+                None,
+                None,
+            )?;
             return Ok(());
         }
         FuncResolution::Ambiguous => {
-            violations.push(finding("call.func-ambiguous", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.func-ambiguous",
+                None,
+                None,
+            )?;
             return Ok(());
         }
         FuncResolution::BadProto => {
-            violations.push(finding("call.bad-prototype", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.bad-prototype",
+                None,
+                None,
+            )?;
             return Ok(());
         }
         FuncResolution::NotFunction => {
-            violations.push(finding("call.not-function", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.not-function",
+                None,
+                None,
+            )?;
             return Ok(());
         }
     };
     if shape.variadic || shape.parameters.len() != pointers.len() {
-        violations.push(finding("call.bundle-mismatch", None, None));
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "call.bundle-mismatch",
+            None,
+            None,
+        )?;
         return Ok(());
     }
     for (param, want_pointer) in shape.parameters.iter().zip(pointers) {
@@ -2301,7 +2586,14 @@ fn check_bundled(
             Ok(resolved) => resolved,
             Err(error) if error.kind() == ErrorKind::LimitExceeded => return Err(error),
             Err(_) => {
-                violations.push(finding("call.bundle-mismatch", None, None));
+                push_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "call.bundle-mismatch",
+                    None,
+                    None,
+                )?;
                 return Ok(());
             }
         };
@@ -2309,26 +2601,62 @@ fn check_bundled(
             Ok(shape) => shape,
             Err(error) if error.kind() == ErrorKind::LimitExceeded => return Err(error),
             Err(_) => {
-                violations.push(finding("call.bundle-mismatch", None, None));
+                push_finding(
+                    violations,
+                    retained,
+                    limits,
+                    "call.bundle-mismatch",
+                    None,
+                    None,
+                )?;
                 return Ok(());
             }
         };
         if matches!(shaped.kind, TypeKind::Pointer { .. }) != *want_pointer {
-            violations.push(finding("call.bundle-mismatch", None, None));
+            push_finding(
+                violations,
+                retained,
+                limits,
+                "call.bundle-mismatch",
+                None,
+                None,
+            )?;
             return Ok(());
         }
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_path_guard(
     image: &Image<'_>,
     relocs: &[Reloc],
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     path: &str,
     forbidden: &str,
     work: &mut u64,
 ) -> Result<(), OperationError> {
+    // R09: index call relocs by site section once, so per-function
+    // scans stay linear in the section's own relocs (no V x R walk).
+    let mut by_sect: std::collections::BTreeMap<usize, Vec<&Reloc>> =
+        std::collections::BTreeMap::new();
+    for reloc in relocs {
+        if reloc.typ != R_BPF_64_32 {
+            continue;
+        }
+        charge(work, 1)?;
+        retain(retained, limits, size_of::<&Reloc>())?;
+        by_sect.entry(reloc.target_sect).or_default().push(reloc);
+    }
+    // R09: bounded reachable-function traversal from every root named
+    // `path`. The visited set (section, value) terminates cycles and
+    // shares work across same-named roots; findings carry no root, so
+    // sharing loses nothing. Unreachable functions are never visited:
+    // the guard stays scoped, never object-wide.
+    let mut visited: std::collections::BTreeSet<(usize, u64)> = std::collections::BTreeSet::new();
+    let mut stack: Vec<(usize, u64, u64)> = Vec::new();
     let mut found = false;
     for sym in &image.symbols {
         if sym.name.as_deref() != Some(path) || sym.kind() != STT_FUNC || sym.size == 0 {
@@ -2341,12 +2669,35 @@ fn check_path_guard(
             continue;
         }
         found = true;
-        let end = sym.value.saturating_add(sym.size);
-        for reloc in relocs {
-            if reloc.typ != R_BPF_64_32 || reloc.target_sect != section.index {
-                continue;
-            }
-            if reloc.offset < sym.value || reloc.offset >= end {
+        stack.push((section.index, sym.value, sym.size));
+    }
+    if !found {
+        push_finding(
+            violations,
+            retained,
+            limits,
+            "init.path-missing",
+            None,
+            None,
+        )?;
+        return Ok(());
+    }
+    let empty: Vec<&Reloc> = Vec::new();
+    while let Some((sect_idx, value, size)) = stack.pop() {
+        if !visited.insert((sect_idx, value)) {
+            continue;
+        }
+        charge(work, 1)?;
+        let Some(section) = image.sections.get(sect_idx) else {
+            continue;
+        };
+        if !section.executable() {
+            continue;
+        }
+        let end = value.saturating_add(size);
+        let site_relocs: &[&Reloc] = by_sect.get(&sect_idx).map(Vec::as_slice).unwrap_or(&empty);
+        for reloc in site_relocs {
+            if reloc.offset < value || reloc.offset >= end {
                 continue;
             }
             charge(work, 1)?;
@@ -2366,19 +2717,36 @@ fn check_path_guard(
                             && dest < cand.value.saturating_add(cand.size)))
             });
             if hits {
-                violations.push(finding(
+                push_section_finding(
+                    violations,
+                    retained,
+                    limits,
                     "init.path-guard",
-                    Some(section.label()),
+                    section,
                     Some(reloc.offset),
-                ));
+                )?;
+            }
+            // R09: follow the edge into its containing function, in the
+            // callee symbol's own section (cross-section calls included).
+            // Interior destinations enqueue their container; padding with
+            // no function is a dead end, not a new finding.
+            if let Some(next) = image.symbols.iter().find(|cand| {
+                cand.kind() == STT_FUNC
+                    && cand.shndx == target_sym.shndx
+                    && cand.size > 0
+                    && dest >= cand.value
+                    && dest < cand.value.saturating_add(cand.size)
+            }) {
+                stack.push((next.shndx as usize, next.value, next.size));
             }
         }
         // F23: linked-style static calls without a covering relocation
         // are invisible to the reloc walk; the guard cannot prove they
-        // avoid `forbidden`, so each is its own finding.
+        // avoid `forbidden`, so each is its own finding. Applies to
+        // every REACHABLE body (R09), never to dead code.
         let body = image.body(section)?;
         let scan_end = end.min(section.len);
-        let mut at = sym.value;
+        let mut at = value;
         while at.saturating_add(8) <= scan_end {
             charge(work, 1)?;
             let off = at as usize;
@@ -2388,22 +2756,20 @@ fn check_path_guard(
                 continue;
             }
             if slot[0] == OP_CALL && slot[1] >> 4 != 0 {
-                let covered = relocs.iter().any(|r| {
-                    r.typ == R_BPF_64_32 && r.target_sect == section.index && r.offset == at
-                });
+                let covered = site_relocs.iter().any(|r| r.offset == at);
                 if !covered {
-                    violations.push(finding(
+                    push_section_finding(
+                        violations,
+                        retained,
+                        limits,
                         "init.unresolved-call",
-                        Some(section.label()),
+                        section,
                         Some(at),
-                    ));
+                    )?;
                 }
             }
             at = at.saturating_add(8);
         }
-    }
-    if !found {
-        violations.push(finding("init.path-missing", None, None));
     }
     Ok(())
 }
@@ -2413,6 +2779,8 @@ fn check_opt_out(
     image: &Image<'_>,
     relocs: &[Reloc],
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     sections: &[String],
     arrays: &[String],
     opt_out_index: u64,
@@ -2445,13 +2813,23 @@ fn check_opt_out(
         }
         charge(work, 1)?;
         if reloc.typ != R_BPF_64_64 {
-            violations.push(finding(
+            push_section_finding(
+                violations,
+                retained,
+                limits,
                 "private-stack.bad-relocation",
-                Some(target.label()),
+                target,
                 Some(reloc.offset),
-            ));
+            )?;
             continue;
         }
+        // R08: the collected reference retains its name; charge the
+        // record plus the string like every other retained clone.
+        retain(
+            retained,
+            limits,
+            size_of::<(usize, u64, String)>().saturating_add(name.len()),
+        )?;
         references.push((reloc.target_sect, reloc.offset, name.to_owned()));
     }
     // F22: every collected reference reconciles against the selected
@@ -2469,11 +2847,14 @@ fn check_opt_out(
     for (sect, address, _) in &references {
         if !selected.contains(sect) {
             charge(work, 1)?;
-            violations.push(finding(
+            push_section_finding(
+                violations,
+                retained,
+                limits,
                 "private-stack.unselected-reference",
-                Some(image.sections[*sect].label()),
+                &image.sections[*sect],
                 Some(*address),
-            ));
+            )?;
         }
     }
     for section_name in sections {
@@ -2504,16 +2885,21 @@ fn check_opt_out(
                 })
                 .count();
             if owners != 1 {
-                violations.push(finding(
+                push_section_finding(
+                    violations,
+                    retained,
+                    limits,
                     "private-stack.unowned-reference",
-                    Some(section.label()),
+                    section,
                     Some(address),
-                ));
+                )?;
             }
         }
         for program in programs {
             check_program(
                 violations,
+                retained,
+                limits,
                 image.data,
                 body,
                 section,
@@ -2536,6 +2922,8 @@ fn check_opt_out(
 #[allow(clippy::too_many_arguments)]
 fn check_program(
     violations: &mut Vec<RuleViolation>,
+    retained: &mut usize,
+    limits: &Limits,
     data: Data,
     body: &[u8],
     section: &Section,
@@ -2553,11 +2941,14 @@ fn check_program(
     let name = program.display();
     let end = program.value.saturating_add(program.size);
     if program.size % 8 != 0 || end > section.len {
-        violations.push(finding(
+        push_section_finding(
+            violations,
+            retained,
+            limits,
             "private-stack.bad-extent",
-            Some(section.label()),
+            section,
             Some(program.value),
-        ));
+        )?;
         return Ok(());
     }
     let start = program.value as usize;
@@ -2613,11 +3004,14 @@ fn check_program(
             }
         }
         let Some(array) = array else {
-            violations.push(finding(
+            push_section_finding(
+                violations,
+                retained,
+                limits,
                 "private-stack.unknown-array",
-                Some(section.label()),
+                section,
                 Some(call_off),
-            ));
+            )?;
             continue;
         };
         let known = index == Some(opt_out_index)
@@ -2625,11 +3019,14 @@ fn check_program(
                 .iter()
                 .any(|(known, slot)| known == array && Some(*slot) == index);
         if !known {
-            violations.push(finding(
+            push_section_finding(
+                violations,
+                retained,
+                limits,
                 "private-stack.unknown-slot",
-                Some(section.label()),
+                section,
                 Some(call_off),
-            ));
+            )?;
         }
     }
     let mut used: Vec<&str> = arrays_at.values().map(String::as_str).collect();
@@ -2643,11 +3040,14 @@ fn check_program(
         plain_array
     };
     if used.iter().any(|array| *array != allowed) {
-        violations.push(finding(
+        push_section_finding(
+            violations,
+            retained,
+            limits,
             "private-stack.wrong-array",
-            Some(section.label()),
+            section,
             Some(program.value),
-        ));
+        )?;
     }
     // Only a program that never addresses its frame and calls no BPF
     // subprogram is provably exempt from the private stack.
@@ -2658,11 +3058,14 @@ fn check_program(
     // or array defect above (the donor aborts there too); the missing
     // prologue fires only when no tail call exists at all.
     if tail_calls == 0 && !stackless {
-        violations.push(finding(
+        push_section_finding(
+            violations,
+            retained,
+            limits,
             "private-stack.opt-out-required",
-            Some(section.label()),
+            section,
             Some(program.value),
-        ));
+        )?;
     }
     Ok(())
 }
