@@ -845,6 +845,77 @@ fn tiny_limits_still_deliver_schema_refusal() {
     );
 }
 
+// RB4 (R02): a tight-but-legal label ceiling still delivers the refusal
+// (no panic): the convenience method/stage tags fit the live ceiling
+// while the category and cause stay exact. Nine bytes keeps the two
+// fitted tags distinct ("adapter-s" vs "adapter-d").
+#[test]
+fn tight_label_ceiling_fits_delivery_refusal_tags() {
+    use scopebase_testkit::{
+        CaseErrorCategory, CaseId, CaseInvocation, CaseInvocationValues, CaseKey, CaseKeyValues,
+        EffectBatch, FixtureAccess, InvocationKey, InvocationKeyValues, Label, OperationScript,
+        RunId, RunLimits, SchemaBinding, SchemaBindingValues,
+    };
+    let mut values = RunLimits::default().values();
+    values.label_bytes = 9;
+    let limits = RunLimits::new(values).unwrap();
+    let label = |text: &str| Label::parse(text).unwrap();
+    let script = serde_json::json!({
+        "schema_version": 1,
+        "kind": "steps-v1",
+        "schema_id": "s",
+        "steps": [{"step_id": "s", "operation": "nope", "inputs": [], "parameters": []}],
+    });
+    let key = InvocationKey::new(
+        InvocationKeyValues {
+            run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+            case_key: CaseKey::new(
+                CaseKeyValues {
+                    case_id: CaseId::parse("TT07.tight-labels").unwrap(),
+                    case_version: 1,
+                    cell_id: "tiny".into(),
+                },
+                &limits,
+            )
+            .unwrap(),
+            attempt: 1,
+            operation_id: 1,
+        },
+        &limits,
+    )
+    .unwrap();
+    let binding = |id: &str| {
+        SchemaBinding::new(
+            SchemaBindingValues {
+                id: label(id),
+                revision: 1,
+            },
+            &limits,
+        )
+        .unwrap()
+    };
+    let invocation = CaseInvocation::new(
+        CaseInvocationValues {
+            key,
+            observation_schema: binding("o-v1"),
+            fixture_schema: binding("f-v1"),
+            script: OperationScript::load(&serde_json::to_vec(&script).unwrap(), &limits).unwrap(),
+            limits: limits.clone(),
+        },
+        &limits,
+    )
+    .unwrap();
+    let access = FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).unwrap();
+    let mut adapter = delivery::DeliveryAdapter::new().unwrap();
+    let error = adapter
+        .execute(&invocation, &access)
+        .expect_err("alien schema must refuse");
+    assert_eq!(*error.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(error.stage().as_str(), "adapter-s");
+    assert_eq!(error.cause().method().as_str(), "adapter-d");
+    assert!(error.step_id().is_none(), "dialect rejection names no step");
+}
+
 // R03/R04: executable boundary tests over the installed operator
 // binary. Dispatch unit tests cannot exercise argv decoding or dead
 // stdio; these drive the real binary.

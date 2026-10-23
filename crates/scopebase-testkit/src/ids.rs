@@ -51,6 +51,18 @@ identifier!(ProfileId, 64);
 
 // A bounded semantic label; distinct from catalog case/profile identifiers.
 identifier!(Label, 96);
+
+impl Label {
+    /// R02: truncate to an invocation label ceiling. Labels are ASCII
+    /// with an alphanumeric start, so any non-empty byte prefix parses;
+    /// ceilings validate to >= 1 byte, and `max(1)` pins even a raw 0.
+    /// Adapter-invented metadata (stage, method) fits this way; caller
+    /// echoes are admitted, and observation bodies must refuse (R07).
+    pub fn truncate(&self, max_bytes: u64) -> Label {
+        let max = (max_bytes.max(1) as usize).min(self.as_str().len());
+        Label::parse(&self.as_str()[..max]).expect("R02: label prefix parses")
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RunId(String);
 impl RunId {
@@ -257,3 +269,30 @@ pub(crate) fn rsp01_key_capacities(key: &InvocationKey) -> [usize; 3] {
 }
 #[allow(dead_code)]
 pub(crate) fn rsp01_label_capacity(label: &Label) -> usize { label.0.capacity() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R02: truncation fits every ceiling, pins a raw 0 to one byte,
+    /// and always parses (ASCII alnum-start prefixes). Every ceiling
+    /// from 0..=96 is exercised, not just sampled.
+    #[test]
+    fn label_truncate_fits_every_ceiling() {
+        for text in [
+            "adapter-dialect",
+            "delivery-operation",
+            "execute",
+            "x",
+            "a.b_c-d9",
+        ] {
+            let label = Label::parse(text).unwrap();
+            for ceiling in 0..=96u64 {
+                let fitted = label.truncate(ceiling);
+                let expect = (ceiling.max(1) as usize).min(text.len());
+                assert_eq!(fitted.as_str(), &text[..expect], "{text} @ {ceiling}");
+                assert!(Label::parse(fitted.as_str()).is_ok());
+            }
+        }
+    }
+}

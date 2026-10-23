@@ -70,6 +70,13 @@ fn label(text: &str) -> Result<Label, OperatorError> {
 /// running executable.
 pub struct DeliveryAdapter {
     subject: SubjectBinding,
+    // R02: refusal metadata labels, parsed once at construction and
+    // truncated per invocation ceiling at use. Fixed strings would
+    // overrun small-but-legal label ceilings and panic construction.
+    stage_schema: Label,
+    stage_operation: Label,
+    method_dialect: Label,
+    method_operation: Label,
 }
 
 impl DeliveryAdapter {
@@ -124,7 +131,13 @@ impl DeliveryAdapter {
             &limits,
         )
         .map_err(|e| engine_error(format!("subject binding rejected: {e}")))?;
-        Ok(Self { subject })
+        Ok(Self {
+            subject,
+            stage_schema: label("adapter-schema")?,
+            stage_operation: label("operation")?,
+            method_dialect: label("adapter-dialect")?,
+            method_operation: label("delivery-operation")?,
+        })
     }
 
     fn unsupported(&self, i: &CaseInvocation, diagnostic: &[u8]) -> CaseError {
@@ -133,20 +146,23 @@ impl DeliveryAdapter {
             CaseErrorValues {
                 key: i.key().clone(),
                 step_id: None,
-                stage: label("adapter-schema").unwrap(),
+                // R02: refusal metadata labels are convenience metadata, not
+                // identity. Held labels are truncated to the live ceiling so
+                // small-but-legal label ceilings refuse instead of panicking.
+                stage: self.stage_schema.truncate(l.label_bytes()),
                 category: CaseErrorCategory::UnsupportedSchema,
                 errno: None,
                 diagnostic_bytes: fit_diagnostic(diagnostic, l),
                 cause: RefusalEvidence::new(
                     RefusalEvidenceValues {
                         cause: RefusalCause::Unknown,
-                        method: label("adapter-dialect").unwrap(),
+                        method: self.method_dialect.truncate(l.label_bytes()),
                         evidence_ids: vec![],
                         tier: EvidenceTier::T0,
                     },
                     l,
                 )
-                .unwrap(),
+                .expect("pre-fitted evidence fits admitted limits"),
                 completed_steps: vec![],
                 partial_observation: None,
                 effects: EffectBatch::empty(l),
@@ -169,20 +185,21 @@ impl DeliveryAdapter {
             CaseErrorValues {
                 key: i.key().clone(),
                 step_id: step,
-                stage: label("operation").unwrap(),
+                // R02: fitted refusal metadata (see unsupported).
+                stage: self.stage_operation.truncate(l.label_bytes()),
                 category,
                 errno: None,
                 diagnostic_bytes: fit_diagnostic(diagnostic, l),
                 cause: RefusalEvidence::new(
                     RefusalEvidenceValues {
                         cause: RefusalCause::Unknown,
-                        method: label("delivery-operation").unwrap(),
+                        method: self.method_operation.truncate(l.label_bytes()),
                         evidence_ids: vec![],
                         tier: EvidenceTier::T0,
                     },
                     l,
                 )
-                .unwrap(),
+                .expect("pre-fitted evidence fits admitted limits"),
                 completed_steps: fit_steps(completed, l),
                 partial_observation: None,
                 effects: EffectBatch::empty(l),
@@ -294,7 +311,10 @@ impl ConformanceAdapter for DeliveryAdapter {
             "kind": kind,
             "steps": values,
         }))
-        .unwrap();
+        // RB4: serializing an adapter-built JSON value to a Vec is
+        // infallible (no floats, no maps with non-string keys, and Vec
+        // writes never fail); the value is constructed above, not parsed.
+        .expect("RB4:built JSON value serializes");
         Observation::new(
             ObservationValues {
                 key: i.key().clone(),
@@ -318,9 +338,16 @@ impl ConformanceAdapter for DeliveryAdapter {
     }
 
     fn retire(&mut self, r: &RetireRequest) -> RetirementReport {
+        // RB4 (R02): the runner protocol guarantees a nonzero call id
+        // (runner sequences from 1; RetireRequest is testkit-internal so
+        // no downstream caller can inject 0). The clamp keeps this
+        // infallible signature total even against a future producer bug.
+        // The request carries no limits, so the adapter default (equal to
+        // every maximum these echoed fields touch) is the only ceiling.
+        let call_id = r.call_id().max(1);
         RetirementReport::new(
             RetirementReportValues {
-                call_id: r.call_id(),
+                call_id,
                 owner: r.owner(),
                 scope: r.scope().clone(),
                 discovered: vec![],
@@ -331,13 +358,19 @@ impl ConformanceAdapter for DeliveryAdapter {
             },
             &RunLimits::default(),
         )
-        .unwrap()
+        .expect("RB4:clamped retirement echoes fit adapter limits")
     }
 }
 
 /// The literal delivery oracle: byte-exact step comparison.
 pub struct DeliveryOracle {
     binding: OracleBinding,
+    // RB4 (R02): verdict labels, parsed once at construction. The
+    // judging path carries no Label::parse expect; verdicts are the
+    // oracle's own fixed products under the default ceiling.
+    check_id: Label,
+    method: Label,
+    evidence_expected: Label,
 }
 
 impl DeliveryOracle {
@@ -359,11 +392,11 @@ impl DeliveryOracle {
         })?;
         let binding = OracleBinding::new(
             OracleBindingValues {
-                id: Label::parse("tt07-literal").unwrap(),
+                id: label("tt07-literal")?,
                 revision: 1,
-                schema_id: Label::parse("tt07-literal-v1").unwrap(),
+                schema_id: label("tt07-literal-v1")?,
                 source_sha256: source,
-                artifact_id: Label::parse("delivery-oracle-source").unwrap(),
+                artifact_id: label("delivery-oracle-source")?,
                 provenance: BindingProvenance::GeneratedBuild {
                     manifest_sha256: source,
                     measurement_sha256: Digest256::of_bytes(&exe_bytes),
@@ -372,7 +405,12 @@ impl DeliveryOracle {
             &limits,
         )
         .map_err(|e| engine_error(format!("oracle binding rejected: {e}")))?;
-        Ok(Self { binding })
+        Ok(Self {
+            binding,
+            check_id: label("value.equal")?,
+            method: label("independent-literal")?,
+            evidence_expected: label("expected")?,
+        })
     }
 }
 
@@ -408,7 +446,7 @@ impl CaseOracle for DeliveryOracle {
                 harness: HarnessValidity::Valid,
                 checks: vec![AssertionCheck::new(
                     AssertionCheckValues {
-                        id: Label::parse("value.equal").unwrap(),
+                        id: self.check_id.clone(),
                         status: if preflight {
                             CheckStatus::NotJudged
                         } else if pass {
@@ -420,7 +458,7 @@ impl CaseOracle for DeliveryOracle {
                     },
                     &l,
                 )
-                .unwrap()],
+                .expect("RB4:fixed literal check fits default limits")],
                 capability: CapabilityEvidence::new(
                     CapabilityEvidenceValues {
                         state: if preflight {
@@ -428,17 +466,17 @@ impl CaseOracle for DeliveryOracle {
                         } else {
                             CapabilityState::Supported
                         },
-                        method: Label::parse("independent-literal").unwrap(),
+                        method: self.method.clone(),
                         context: "TT07 delivery literal comparison".into(),
-                        evidence_ids: vec![Label::parse("expected").unwrap()],
+                        evidence_ids: vec![self.evidence_expected.clone()],
                     },
                     &l,
                 )
-                .unwrap(),
+                .expect("RB4:fixed literal capability fits default limits"),
             },
             &l,
         )
-        .unwrap()
+        .expect("RB4:fixed literal verdict fits default limits")
     }
 }
 
@@ -667,8 +705,17 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
 
     // Assemble the bound contract from the template plus measured values.
     let mut contract = template.clone();
+    // RB4: the profile pin above already proves the template is an
+    // object, but the proof is implicit and far away; refuse loudly
+    // instead of unwrapping on template-file input.
+    let object = contract.as_object_mut().ok_or_else(|| {
+        OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            "contract template is not an object",
+        )
+    })?;
     for key in ["profile", "expected_coordinates", "vector_layout", "ledger_templates"] {
-        contract.as_object_mut().unwrap().remove(key);
+        object.remove(key);
     }
     contract["run_id"] = run_id.clone().into();
     contract["catalog_sha256"] = catalog.source_sha256().as_str().into();

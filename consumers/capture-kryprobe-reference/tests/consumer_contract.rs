@@ -23,7 +23,21 @@ fn script_json(op: &str) -> Vec<u8> {
 }
 
 fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
-    let script = OperationScript::load(&script_json(op), limits).expect("test script loads");
+    invocation_full(
+        limits,
+        "kryprobe-reference-v1",
+        "kryprobe-fixture-v1",
+        &script_json(op),
+    )
+}
+
+fn invocation_full(
+    limits: &RunLimits,
+    obs_schema: &str,
+    fix_schema: &str,
+    script_json: &[u8],
+) -> CaseInvocation {
+    let script = OperationScript::load(script_json, limits).expect("test script loads");
     let key = InvocationKey::new(
         InvocationKeyValues {
             run_id: RunId::parse("0123456789abcdef0123456789abcdef").expect("run id"),
@@ -47,7 +61,7 @@ fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
             key,
             observation_schema: SchemaBinding::new(
                 SchemaBindingValues {
-                    id: Label::parse("kryprobe-reference-v1").expect("schema"),
+                    id: Label::parse(obs_schema).expect("schema"),
                     revision: 1,
                 },
                 limits,
@@ -55,7 +69,7 @@ fn invocation(limits: &RunLimits, op: &str) -> CaseInvocation {
             .expect("observation schema"),
             fixture_schema: SchemaBinding::new(
                 SchemaBindingValues {
-                    id: Label::parse("kryprobe-fixture-v1").expect("schema"),
+                    id: Label::parse(fix_schema).expect("schema"),
                     revision: 1,
                 },
                 limits,
@@ -83,10 +97,25 @@ fn access<'a>(limits: &'a RunLimits, script: &'a [u8]) -> FixtureAccess<'a> {
 fn run(op: &str, script: &[u8]) -> Result<Observation, CaseError> {
     let limits = RunLimits::default();
     let inv = invocation(&limits, op);
-    let fix = access(&limits, script);
+    run_with(&limits, &inv, script)
+}
+
+fn run_with(
+    limits: &RunLimits,
+    inv: &CaseInvocation,
+    script: &[u8],
+) -> Result<Observation, CaseError> {
+    let fix = access(limits, script);
     KryprobeReferenceAdapter::new()
         .expect("adapter builds")
-        .execute(&inv, &fix)
+        .execute(inv, &fix)
+}
+
+fn lowered(mut apply: impl FnMut(&mut scopebase_testkit::RunLimitValues)) -> RunLimits {
+    let base = RunLimits::default();
+    let mut values = base.values();
+    apply(&mut values);
+    base.lowered(values).expect("lowered limits admit")
 }
 
 fn text(obs: &Observation) -> &str {
@@ -189,6 +218,48 @@ fn unknown_op_and_bad_script_refuse() {
         .expect_err("missing slot refuses");
     assert_eq!(*err.category(), CaseErrorCategory::Refused);
     assert_eq!(err.stage().as_str(), "admission");
+}
+
+// RB4 (R07): the observation honors the invocation's own byte ceiling
+// by refusing, never by truncating. The fold/ok body is 18 bytes; a
+// ceiling of 4 refuses at collect with the full diagnostic.
+#[test]
+fn lowered_observation_ceiling_refuses_at_collect() {
+    let limits = lowered(|v| v.observation_bytes = 4);
+    let inv = invocation(&limits, "fold");
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("over-ceiling refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.stage().as_str(), "collect");
+}
+
+// RB4 (R07): exact-fit twin. A ceiling of exactly 18 delivers the whole
+// body; the refusal above is about the ceiling, not the case.
+#[test]
+fn exact_observation_ceiling_completes_whole() {
+    let limits = lowered(|v| v.observation_bytes = 18);
+    let inv = invocation(&limits, "fold");
+    let obs = run_with(&limits, &inv, b"case=ok;").expect("exact fit completes");
+    assert_eq!(text(&obs), "total=10;owner=7;");
+}
+
+// RB4 (R02): a tight-but-legal label ceiling still delivers the refusal
+// (no panic): the convenience method/stage tags fit the live ceiling
+// while the category and cause stay exact. Six bytes admits the
+// "script" slot but neither "dispatch" nor "execute".
+#[test]
+fn tight_label_ceiling_fits_refusal_tags() {
+    let limits = lowered(|v| v.label_bytes = 6);
+    let json = format!(
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"s\",\
+         \"steps\":[{{\"step_id\":\"s\",\"operation\":\"nope\",\
+         \"inputs\":[\"script\"],\"parameters\":[]}}]}}",
+    )
+    .into_bytes();
+    let inv = invocation_full(&limits, "k-v1", "k-f1", &json);
+    let err = run_with(&limits, &inv, b"case=ok;").expect_err("unknown op refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.stage().as_str(), "dispat");
+    assert_eq!(err.cause().method().as_str(), "execut");
 }
 
 #[test]

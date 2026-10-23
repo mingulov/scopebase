@@ -346,19 +346,35 @@ fn parameters_and_input_shape_reject() {
     }
 }
 
-// F26: the observation honors the invocation's own byte ceiling. The
-// empty-mapping verdict is deterministic; a ceiling of 7 truncates it.
-// The old code built under adapter defaults and returned full bytes.
+// RB4 (R07): the observation honors the invocation's own byte ceiling
+// by refusing, never by truncating. The empty-mapping verdict is 30
+// bytes; a ceiling of 7 refuses at collect with the full diagnostic.
 #[test]
-fn lowered_observation_ceiling_truncates() {
+fn lowered_observation_ceiling_refuses_at_collect() {
     let root = owned_root("low-obs");
     let empty = root.write_file("empty.bin", b"").expect("file");
     let empty = empty.to_string_lossy().into_owned();
     let limits = lowered(|v| v.observation_bytes = 7);
     let inv = invocation(&limits, "mapping");
     let script = format!("case=empty;path={empty};");
-    let obs = run_with(&limits, &inv, script.as_bytes()).expect("executes");
-    assert_eq!(obs.bytes(), b"verdict");
+    let err = run_with(&limits, &inv, script.as_bytes()).expect_err("over-ceiling refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(err.stage().as_str(), "collect");
+    root.close().expect("cleanup");
+}
+
+// RB4 (R07): exact-fit twin. A ceiling of exactly 31 delivers the whole
+// verdict; the refusal above is about the ceiling, not the case.
+#[test]
+fn exact_observation_ceiling_completes_whole() {
+    let root = owned_root("exact-obs");
+    let empty = root.write_file("empty.bin", b"").expect("file");
+    let empty = empty.to_string_lossy().into_owned();
+    let limits = lowered(|v| v.observation_bytes = 31);
+    let inv = invocation(&limits, "mapping");
+    let script = format!("case=empty;path={empty};");
+    let obs = run_with(&limits, &inv, script.as_bytes()).expect("exact fit completes");
+    assert_eq!(obs.bytes(), b"verdict=inconclusive:EmptyFile;");
     root.close().expect("cleanup");
 }
 
@@ -370,6 +386,32 @@ fn lowered_diagnostic_ceiling_truncates_refusal() {
     let err = run_with(&limits, &inv, b"case=nope;").expect_err("unknown case refuses");
     assert_eq!(*err.category(), CaseErrorCategory::Refused);
     assert_eq!(err.diagnostic_bytes(), b"LX11:unk");
+}
+
+// RB4 (R02): a tight-but-legal label ceiling still delivers the refusal
+// (no panic): the convenience method/stage tags fit the live ceiling
+// while the category and cause stay exact. Six bytes admits the
+// "script" slot but neither "adapter-schema" nor "execute".
+#[test]
+fn tight_label_ceiling_fits_refusal_tags() {
+    let limits = lowered(|v| v.label_bytes = 6);
+    // The script envelope carries its own schema id, so the shared
+    // builder cannot load here; every label in this script fits the
+    // 6-byte ceiling by hand.
+    let json = format!(
+        // The operation is short on purpose ("nope" fits 6 bytes); the
+        // schema preflight rejects before the operation is ever checked.
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"s\",\
+         \"steps\":[{{\"step_id\":\"s\",\"operation\":\"nope\",\
+         \"inputs\":[\"script\"],\"parameters\":[]}}]}}",
+    )
+    .into_bytes();
+    let inv = invocation_full(&limits, "o-v1", 1, "f-v1", 1, &json);
+    let err = run_with(&limits, &inv, b"case=self;").expect_err("alien schema refuses");
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapte");
+    assert_eq!(err.cause().method().as_str(), "execut");
+    assert!(err.step_id().is_none(), "dialect rejection names no step");
 }
 
 #[test]

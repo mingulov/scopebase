@@ -34,11 +34,35 @@ const CONSUMER: &str = "kryprobe-adapter";
 const SCHEMA_ID: &str = "kryprobe-reference-v1";
 const SCHEMA_REVISION: u32 = 1;
 
+/// RB4 (R02): truncate a refusal diagnostic to an invocation byte
+/// ceiling. Diagnostics are bounded context inside an already-honest
+/// refusal; observation bodies are never truncated (R07).
+fn fit_bytes(bytes: &[u8], ceiling: u64) -> Vec<u8> {
+    let max = ceiling.min(usize::MAX as u64) as usize;
+    bytes.iter().take(max).copied().collect()
+}
+
+/// RB4 (R02): truncate a completed-step list to the invocation step ceiling.
+fn fit_steps(steps: Vec<Label>, limits: &RunLimits) -> Vec<Label> {
+    let max = limits.steps_per_invocation().min(usize::MAX as u64) as usize;
+    steps.into_iter().take(max).collect()
+}
+
 /// KryProbe-shaped reference adapter: insertion folds, counter deltas,
 /// capped signals, loss facts, feed presence and correction holders.
 pub struct KryprobeReferenceAdapter {
     limits: RunLimits,
     subject: SubjectBinding,
+    // RB4 (R02): fixed dialect labels parsed once at construction and
+    // truncated per invocation ceiling at use. The per-invocation path
+    // carries no Label::parse expect and honors the live ceiling,
+    // never the adapter default.
+    schema: Label,
+    method_execute: Label,
+    stage_dispatch: Label,
+    stage_admission: Label,
+    stage_collect: Label,
+    slot_script: Label,
 }
 
 impl KryprobeReferenceAdapter {
@@ -73,61 +97,88 @@ impl KryprobeReferenceAdapter {
             },
             &limits,
         )?;
-        Ok(Self { limits, subject })
+        // RB4 (R02): fixed dialect labels parse once at construction, so
+        // the per-invocation path carries no Label::parse expect. These
+        // expects can only fire on a mistyped constant (a programming
+        // error every construction test exercises); Label::parse has no
+        // HarnessError conversion, so a fallible parse is inexpressible.
+        Ok(Self {
+            limits,
+            subject,
+            schema: Label::parse(SCHEMA_ID).expect("CP11:fixed schema parses"),
+            method_execute: Label::parse("execute").expect("CP11:fixed label parses"),
+            stage_dispatch: Label::parse("dispatch").expect("CP11:fixed stage parses"),
+            stage_admission: Label::parse("admission").expect("CP11:fixed stage parses"),
+            stage_collect: Label::parse("collect").expect("CP11:fixed stage parses"),
+            slot_script: Label::parse("script").expect("CP11:fixed slot parses"),
+        })
     }
 
+    // RB4 (R02/R07): every response is built under the invocation's own
+    // limits, never under the adapter default. The body travels whole:
+    // an over-ceiling body refuses at collect instead of truncating, and
+    // the schema id is identity (refuse on over), not fitted metadata.
     fn observed(
         &self,
         invocation: &CaseInvocation,
         step: &Label,
         body: &str,
     ) -> Result<Observation, HarnessError> {
+        let l = invocation.limits();
         Observation::new(
             ObservationValues {
                 key: invocation.key().clone(),
-                schema_id: Label::parse(SCHEMA_ID).expect("CP11:fixed schema parses"),
+                schema_id: self.schema.clone(),
                 schema_revision: SCHEMA_REVISION,
-                completed_steps: vec![step.clone()],
+                completed_steps: fit_steps(vec![step.clone()], l),
                 bytes: body.as_bytes().to_vec(),
-                effects: EffectBatch::empty(&self.limits),
+                effects: EffectBatch::empty(l),
             },
-            &self.limits,
+            l,
         )
+    }
+
+    fn cause(&self, l: &RunLimits) -> RefusalEvidence {
+        RefusalEvidence::new(
+            RefusalEvidenceValues {
+                cause: RefusalCause::Unknown,
+                // RB4 (R02): the method tag is convenience metadata, so it
+                // is truncated to the live ceiling; the refusal cause and
+                // category carry the identity and stay exact.
+                method: self.method_execute.truncate(l.label_bytes()),
+                evidence_ids: Vec::new(),
+                tier: EvidenceTier::T0,
+            },
+            l,
+        )
+        .expect("RB4:fitted refusal cause fits invocation limits")
     }
 
     fn refusal(
         &self,
         invocation: &CaseInvocation,
         step: Option<Label>,
-        stage: &str,
+        stage: &Label,
         diagnostic: &str,
     ) -> CaseError {
-        let cause = RefusalEvidence::new(
-            RefusalEvidenceValues {
-                cause: RefusalCause::Unknown,
-                method: Label::parse("execute").expect("CP11:fixed label parses"),
-                evidence_ids: Vec::new(),
-                tier: EvidenceTier::T0,
-            },
-            &self.limits,
-        )
-        .expect("CP11:bounded refusal cause");
+        let l = invocation.limits();
         CaseError::new(
             CaseErrorValues {
                 key: invocation.key().clone(),
                 step_id: step,
-                stage: Label::parse(stage).expect("CP11:fixed stage parses"),
+                // RB4 (R02): fitted stage tag (see cause).
+                stage: stage.truncate(l.label_bytes()),
                 category: CaseErrorCategory::Refused,
                 errno: None,
-                diagnostic_bytes: diagnostic.as_bytes().to_vec(),
-                cause,
+                diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
+                cause: self.cause(l),
                 completed_steps: Vec::new(),
                 partial_observation: None,
-                effects: EffectBatch::empty(&self.limits),
+                effects: EffectBatch::empty(l),
             },
-            &self.limits,
+            l,
         )
-        .expect("CP11:bounded case error")
+        .expect("RB4:pre-fitted refusal fits invocation limits")
     }
 }
 
@@ -142,15 +193,19 @@ impl ConformanceAdapter for KryprobeReferenceAdapter {
         fixture: &FixtureAccess<'_>,
     ) -> Result<Observation, CaseError> {
         let Some(step) = invocation.script().steps().first() else {
-            return Err(self.refusal(invocation, None, "dispatch", "CP11:script has no steps"));
+            return Err(self.refusal(
+                invocation,
+                None,
+                &self.stage_dispatch,
+                "CP11:script has no steps",
+            ));
         };
         let op = step.operation().as_str();
-        let slot = Label::parse("script").expect("CP11:fixed slot parses");
-        let Some(raw) = fixture.input(&slot) else {
+        let Some(raw) = fixture.input(&self.slot_script) else {
             return Err(self.refusal(
                 invocation,
                 Some(step.step_id().clone()),
-                "admission",
+                &self.stage_admission,
                 "CP11:missing script slot",
             ));
         };
@@ -158,36 +213,47 @@ impl ConformanceAdapter for KryprobeReferenceAdapter {
             return Err(self.refusal(
                 invocation,
                 Some(step.step_id().clone()),
-                "admission",
+                &self.stage_admission,
                 "CP11:malformed script",
             ));
         };
         let Some(outcome) = run_scenario(op, case) else {
-            let stage = if is_known_op(op) { "admission" } else { "dispatch" };
+            let stage = if is_known_op(op) {
+                &self.stage_admission
+            } else {
+                &self.stage_dispatch
+            };
             let message = if is_known_op(op) {
                 "CP11:unknown case"
             } else {
                 "CP11:unknown operation"
             };
-            return Err(self.refusal(
-                invocation,
-                Some(step.step_id().clone()),
-                stage,
-                message,
-            ));
+            return Err(self.refusal(invocation, Some(step.step_id().clone()), stage, message));
         };
         let body = match outcome {
             Ok(text) => text,
             Err(contract) => format!("refuse={};", refusal_name(&contract)),
         };
         self.observed(invocation, step.step_id(), &body)
-            .map_err(|_| self.refusal(invocation, Some(step.step_id().clone()), "collect", "CP11:observation bounds"))
+            .map_err(|_| {
+                self.refusal(
+                    invocation,
+                    Some(step.step_id().clone()),
+                    &self.stage_collect,
+                    "CP11:observation bounds",
+                )
+            })
     }
 
     fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        // RB4 (R02): the runner protocol guarantees a nonzero call id
+        // (runner sequences from 1; RetireRequest is testkit-internal so
+        // no downstream caller can inject 0). The clamp keeps this
+        // infallible signature total even against a future producer bug.
+        let call_id = request.call_id().max(1);
         RetirementReport::new(
             RetirementReportValues {
-                call_id: request.call_id(),
+                call_id,
                 owner: request.owner(),
                 scope: request.scope().clone(),
                 discovered: Vec::new(),
@@ -198,7 +264,10 @@ impl ConformanceAdapter for KryprobeReferenceAdapter {
             },
             &self.limits,
         )
-        .expect("CP11:bounded retirement report")
+        // RB4 (R02): clamped nonzero id, validated-type echoes (every
+        // touched ceiling equals its maximum under the adapter default),
+        // empty lists, no diagnostic: fits by construction.
+        .expect("RB4:clamped retirement echoes fit adapter limits")
     }
 }
 

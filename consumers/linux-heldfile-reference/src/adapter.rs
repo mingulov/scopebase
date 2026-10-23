@@ -112,6 +112,9 @@ impl HeldfileReferenceAdapter {
 
     // F26: every response is built under the invocation's own limits with
     // pre-fitted payloads, never under the adapter's default limits.
+    // RB4 (R07): the body travels whole; an over-ceiling body refuses at
+    // collect instead of truncating. The schema id is identity (refuse
+    // on over), not fitted metadata.
     fn observed(
         &self,
         invocation: &CaseInvocation,
@@ -125,7 +128,7 @@ impl HeldfileReferenceAdapter {
                 schema_id: self.schema.clone(),
                 schema_revision: SCHEMA_REVISION,
                 completed_steps: fit_steps(vec![step.clone()], l),
-                bytes: fit_bytes(body.as_bytes(), l.observation_bytes()),
+                bytes: body.as_bytes().to_vec(),
                 effects: EffectBatch::empty(l),
             },
             l,
@@ -136,13 +139,16 @@ impl HeldfileReferenceAdapter {
         RefusalEvidence::new(
             RefusalEvidenceValues {
                 cause: RefusalCause::Unknown,
-                method: self.method_execute.clone(),
+                // RB4 (R02): the method tag is convenience metadata, so it
+                // is truncated to the live ceiling; the refusal cause and
+                // category carry the identity and stay exact.
+                method: self.method_execute.truncate(l.label_bytes()),
                 evidence_ids: Vec::new(),
                 tier: EvidenceTier::T0,
             },
             l,
         )
-        .expect("LX11:empty refusal cause fits admitted limits")
+        .expect("RB4:fitted refusal cause fits invocation limits")
     }
 
     fn refusal(
@@ -157,7 +163,8 @@ impl HeldfileReferenceAdapter {
             CaseErrorValues {
                 key: invocation.key().clone(),
                 step_id: step,
-                stage: stage.clone(),
+                // RB4 (R02): fitted stage tag (see cause).
+                stage: stage.truncate(l.label_bytes()),
                 category: CaseErrorCategory::Refused,
                 errno: None,
                 diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
@@ -168,7 +175,7 @@ impl HeldfileReferenceAdapter {
             },
             l,
         )
-        .expect("LX11:pre-fitted refusal fits invocation limits")
+        .expect("RB4:pre-fitted refusal fits invocation limits")
     }
 
     // F27: envelope-shape rejection. The UnsupportedSchema validator
@@ -180,7 +187,8 @@ impl HeldfileReferenceAdapter {
             CaseErrorValues {
                 key: invocation.key().clone(),
                 step_id: None,
-                stage: self.stage_schema.clone(),
+                // RB4 (R02): fitted stage tag (see cause).
+                stage: self.stage_schema.truncate(l.label_bytes()),
                 category: CaseErrorCategory::UnsupportedSchema,
                 errno: None,
                 diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
@@ -284,9 +292,14 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
     }
 
     fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        // RB4 (R02): the runner protocol guarantees a nonzero call id
+        // (runner sequences from 1; RetireRequest is testkit-internal so
+        // no downstream caller can inject 0). The clamp keeps this
+        // infallible signature total even against a future producer bug.
+        let call_id = request.call_id().max(1);
         RetirementReport::new(
             RetirementReportValues {
-                call_id: request.call_id(),
+                call_id,
                 owner: request.owner(),
                 scope: request.scope().clone(),
                 discovered: Vec::new(),
@@ -297,7 +310,10 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
             },
             &self.limits,
         )
-        .expect("LX11:bounded retirement report")
+        // RB4 (R02): clamped nonzero id, validated-type echoes (every
+        // touched ceiling equals its maximum under the adapter default),
+        // empty lists, no diagnostic: fits by construction.
+        .expect("RB4:clamped retirement echoes fit adapter limits")
     }
 }
 
