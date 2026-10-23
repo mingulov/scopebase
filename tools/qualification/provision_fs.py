@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -315,6 +316,29 @@ def run_sudo(argv, timeout=120):
     return (proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
+# F09: incremental recovery persistence. create_command sets _PERSIST to
+# the manifest path once the exclusive recovery record exists; every
+# acquisition record below then persists immediately, so a later
+# failure (or crash between steps) keeps custody of what is live.
+# Single-threaded CLI: no locking needed.
+_PERSIST = None
+
+
+def save_manifest(manifest, path):
+    """Atomically replace the manifest (tmp write, fsync, rename)."""
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(manifest, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def _persist_now(manifest):
+    if _PERSIST is not None:
+        save_manifest(manifest, _PERSIST)
+
+
 def record_mount(manifest, run_root, role, target, expect_super=()):
     table = read_mount_table()
     row = find_mount(table, target)
@@ -328,6 +352,7 @@ def record_mount(manifest, run_root, role, target, expect_super=()):
         "actual_super": row["super"][:512], "mnt_id": row["mnt_id"],
         "expect_super": [s[:256] for s in expect_super],
     })
+    _persist_now(manifest)
 
 
 def record_proc(manifest, role, pid):
@@ -336,6 +361,7 @@ def record_proc(manifest, role, pid):
     ident = proc_identity(pid)
     ident["role"] = role
     manifest["procs"].append(ident)
+    _persist_now(manifest)
     return ident
 
 
@@ -351,6 +377,7 @@ def record_file(manifest, role, path):
         "ino": st.st_ino, "size": st.st_size,
         "sha256": hashlib.sha256(data).hexdigest(),
     })
+    _persist_now(manifest)
 
 
 def pattern_bytes(seed, size):
@@ -451,6 +478,9 @@ def provision_ext4(manifest, run_root):
             return
         loop = out.strip().split()[0]
         manifest["evidence"]["ext4_loop"] = loop
+        # F08: the backing image identity, so cleanup detaches only
+        # the loop it attached (never a reused /dev/loopN name).
+        manifest["evidence"]["ext4_loop_backing"] = str(image)
         mnt = base / "mnt"
         mnt.mkdir(exist_ok=True)
         rc, _, err = run_sudo(["mount", "-t", "ext4", loop, str(mnt)])
@@ -1055,10 +1085,19 @@ def fresh_manifest(run_root, privileged):
         "kernel": host_capabilities(), "cells": cells,
         "mounts": [], "procs": [], "files": [], "evidence": {},
         "aux_roots": [],
+        # F09: lifecycle of the recovery record itself. "creating"
+        # until the final save flips it to "complete"; a failure
+        # mid-create persists "failed" with the error and partial
+        # custody instead of leaving live resources unrecorded.
+        "status": "creating",
+        # F08: run-root (dev, ino) bound right after mkdir; cleanup
+        # refuses to destroy a replacement with a different identity.
+        "run_root_identity": {},
     }
 
 
 def create_command(args):
+    global _PERSIST
     run_root = check_run_root(args.run_root)
     if run_root is None:
         return fail2(f"foreign run-root: {args.run_root[:80]!r}")
@@ -1081,14 +1120,72 @@ def create_command(args):
     except OSError as exc:
         return fail2(f"run-root not creatable: {exc}")
     try:
+        root_st = os.stat(run_root)
+    except OSError as exc:
+        return fail2(f"run-root not statable: {exc}")
+    # F08: bind the anchor identity before anything else is acquired.
+    manifest["run_root_identity"] = {
+        "dev": root_st.st_dev, "ino": root_st.st_ino,
+    }
+    # F09: exclusive durable recovery record before any acquisition.
+    # A missing manifest parent (or a lost creation race) now fails
+    # here — before mounts, procs and files exist — instead of after
+    # effects occurred. The just-created empty anchor is removed with
+    # rmdir (which only removes empty dirs) on this narrow path.
+    try:
+        fd = os.open(args.manifest,
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        try:
+            os.rmdir(run_root)
+        except OSError:
+            pass
+        return fail2(f"already provisioned: {args.manifest} exists; "
+                     "run cleanup first")
+    except OSError as exc:
+        try:
+            os.rmdir(run_root)
+        except OSError:
+            pass
+        return fail2(f"manifest not creatable: {exc}")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(manifest, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    _PERSIST = args.manifest
+    try:
         create_unprivileged(manifest, run_root)
+        save_manifest(manifest, args.manifest)
         if args.privileged:
             provision_ext4(manifest, run_root)
+            save_manifest(manifest, args.manifest)
             provision_overlays(manifest, run_root)
+            save_manifest(manifest, args.manifest)
             provision_sleepers(manifest, run_root)
+            save_manifest(manifest, args.manifest)
     except AdmissionError as exc:
+        # F09: preserve partial custody on failure instead of leaving
+        # live resources unrecorded; cleanup can retire them.
+        manifest["status"] = "failed"
+        manifest["error"] = str(exc)
+        try:
+            save_manifest(manifest, args.manifest)
+        except OSError:
+            pass
         return fail2(f"provisioning refused: {exc}")
-    Path(args.manifest).write_text(json.dumps(manifest, indent=2) + "\n")
+    except OSError as exc:
+        manifest["status"] = "failed"
+        manifest["error"] = f"I/O failure: {exc}"
+        try:
+            save_manifest(manifest, args.manifest)
+        except OSError:
+            pass
+        print(f"create: FAILED {exc}")
+        return 1
+    finally:
+        _PERSIST = None
+    manifest["status"] = "complete"
+    save_manifest(manifest, args.manifest)
     provisioned = sum(1 for c in manifest["cells"].values()
                       if c.get("status") == "provisioned")
     print(f"created {run_root}: {provisioned} cells provisioned, "
@@ -1178,11 +1275,95 @@ def inspect_command(args):
     return 0
 
 
+def admit_run_root_identity(manifest, run_root):
+    """F08: verify the live run-root is the recorded one.
+
+    Returns True when present and admitted, False when already gone
+    (the idempotent retired path). Raises on a replacement: a
+    different (dev, ino) — including a symlink swapped in for the
+    recorded directory — must never be destroyed by a repeated
+    cleanup. Manifests predating the identity record fail closed.
+    """
+    try:
+        st = os.stat(run_root)
+    except OSError:
+        return False
+    rec = manifest.get("run_root_identity") or {}
+    if (st.st_dev, st.st_ino) != (rec.get("dev"), rec.get("ino")):
+        raise AdmissionError(
+            f"run-root identity changed at {run_root}: "
+            f"live=({st.st_dev},{st.st_ino}) "
+            f"manifest=({rec.get('dev')},{rec.get('ino')}); "
+            f"replacement refused")
+    return True
+
+
+def cleanup_one_mount(entry, table, run_root):
+    """Unmount one recorded mount. Returns None on success (or when
+    already gone), else a failure string. A live mount whose identity
+    differs from the record is a replacement: it is refused and left
+    in place, never unmounted. (F08)"""
+    target = entry.get("target", "")
+    if not target or not contained(target, run_root):
+        return f"foreign mount target refused: {target[:60]!r}"
+    if find_mount(table, target) is None:
+        return None
+    try:
+        admit_mount(entry, table, run_root)
+    except AdmissionError as exc:
+        return f"mount {target} replacement refused ({exc}); left in place"
+    rc, _, err = run_sudo(["umount", target])
+    if rc != 0:
+        return f"umount {target} refused: {tail(err)}"
+    return None
+
+
+def read_loop_backing(loop):
+    """Live backing file of a /dev/loopN device, or None when the
+    device is gone (already detached)."""
+    name = os.path.basename(str(loop))
+    try:
+        with open(f"/sys/block/{name}/loop/backing_file",
+                  "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def cleanup_loop_device(loop, backing):
+    """Detach one recorded loop device. Returns None on success (or
+    when already detached), else a failure string. A device whose
+    live backing differs from the recorded image is a reused name:
+    it is refused, never detached. (F08)"""
+    if not loop or not str(loop).startswith("/dev/loop"):
+        return None
+    live = read_loop_backing(loop)
+    if live is None:
+        return None
+    if not backing:
+        return (f"loop {loop} has no recorded backing; refusing detach "
+                f"(live={live[:60]!r})")
+    if live != backing:
+        return (f"loop {loop} backing changed (live={live[:60]!r}); "
+                f"refusing detach")
+    rc, _, err = run_sudo(["losetup", "-d", loop])
+    if rc != 0 and "No such device" not in tail(err):
+        return f"losetup -d {loop} refused: {tail(err)}"
+    return None
+
+
 def cleanup_command(args):
     run_root = check_run_root(args.run_root)
     if run_root is None:
         return fail2(f"foreign run-root: {args.run_root[:80]!r}")
     if not os.path.exists(args.manifest):
+        # F09: a missing manifest with live residue is a refusal,
+        # never a false success.
+        if os.path.exists(run_root):
+            print("cleanup: FAILED\n  - run-root residue without "
+                  "manifest: refusing automatic cleanup; remove "
+                  "manually or reprovision")
+            return 1
         print("cleanup: nothing provisioned (no manifest)")
         return 0
     try:
@@ -1192,6 +1373,14 @@ def cleanup_command(args):
         # recursive delete of unknown state.
         if "mismatch" in str(exc) or "schema" in str(exc):
             return fail2(f"foreign run-root: {exc}")
+        print(f"cleanup: REFUSED {exc}")
+        return 1
+    try:
+        # Raises on a replacement directory; a missing root flows
+        # through the no-op paths below to the idempotent retired
+        # report (aux roots outside it are still retired).
+        admit_run_root_identity(manifest, run_root)
+    except AdmissionError as exc:
         print(f"cleanup: REFUSED {exc}")
         return 1
     failures = []
@@ -1244,23 +1433,18 @@ def cleanup_command(args):
         failures.append(f"mount table unreadable: {exc}")
         table = []
     for entry in reversed(manifest["mounts"]):
-        target = entry.get("target", "")
-        if not target or not contained(target, run_root):
-            failures.append(f"foreign mount target refused: {target[:60]!r}")
-            continue
-        if find_mount(table, target) is None:
-            continue
-        rc, _, err = run_sudo(["umount", target])
-        if rc != 0:
-            failures.append(f"umount {target} refused: {tail(err)}")
-    loop = manifest["evidence"].get("ext4_loop")
-    if loop and str(loop).startswith("/dev/loop"):
-        rc, _, err = run_sudo(["losetup", "-d", loop])
-        if rc != 0 and "No such device" not in tail(err):
-            failures.append(f"losetup -d {loop} refused: {tail(err)}")
+        failure = cleanup_one_mount(entry, table, run_root)
+        if failure is not None:
+            failures.append(failure)
+    failure = cleanup_loop_device(manifest["evidence"].get("ext4_loop"),
+                                  manifest["evidence"].get("ext4_loop_backing"))
+    if failure is not None:
+        failures.append(failure)
     for sv in manifest["evidence"].get("btrfs_subvolumes", []):
         path = os.path.join(run_root, "btrfs", sv)
-        if not contained(path, run_root) or "/" in sv:
+        # F08-adjacent: a bare ".." has no "/" yet escapes the btrfs
+        # dir, so dot segments are refused explicitly.
+        if not contained(path, run_root) or "/" in sv or sv in (".", ".."):
             failures.append(f"foreign subvolume refused: {sv[:40]!r}")
             continue
         if not os.path.exists(path):
@@ -1277,7 +1461,10 @@ def cleanup_command(args):
     if point and contained(point, run_root):
         try:
             live = read_mount_table()
-        except AdmissionError:
+        except AdmissionError as exc:
+            # F08: an unreadable table must not silently skip this
+            # umount (the point would stay mounted under the rmtree).
+            failures.append(f"churn point table unreadable: {exc}")
             live = []
         if find_mount(live, point) is not None:
             rc, _, err = run_sudo(["umount", point])
@@ -1285,10 +1472,15 @@ def cleanup_command(args):
                 failures.append(
                     f"churn point umount refused: {tail(err)}")
     # Never remove a run-root that still hosts a recorded live mount,
-    # or any other mount contained in it.
+    # or any other mount at or under it. F08: no exemptions — an
+    # unexpected mount AT the run-root itself, or a lingering churn
+    # point, refuses cleanup rather than being removed through. (A
+    # cleanly unmounted point is simply absent from the table, so the
+    # old `target != point` carve-out only ever hid failures.)
     try:
         table = read_mount_table()
-    except AdmissionError:
+    except AdmissionError as exc:
+        failures.append(f"mount table unreadable before retire: {exc}")
         table = []
     for entry in manifest["mounts"]:
         if find_mount(table, entry.get("target", "")) is not None:
@@ -1296,8 +1488,7 @@ def cleanup_command(args):
     recorded = {e.get("target") for e in manifest["mounts"]}
     for row in table:
         target = row["target"]
-        if (target != run_root and contained(target, run_root)
-                and target not in recorded and target != point):
+        if contained(target, run_root) and target not in recorded:
             failures.append(f"unrecorded mount under run-root: {target}")
     if failures:
         print("cleanup: FAILED")
@@ -1320,28 +1511,102 @@ def cleanup_command(args):
         for item in failures:
             print(f"  - {item}")
         return 1
-    if not os.path.exists(run_root):
-        print(f"cleanup: already retired {run_root}")
-        return 0
+    # F08: re-verify immediately before destruction: the root may
+    # have been replaced after the entry gate.
+    try:
+        if not admit_run_root_identity(manifest, run_root):
+            print(f"cleanup: already retired {run_root}")
+            return 0
+    except AdmissionError as exc:
+        print(f"cleanup: REFUSED {exc}")
+        return 1
+    # Pin the verified directory: the unprivileged retire below
+    # resolves through this fd, immune to path swaps entirely.
+    try:
+        root_fd = os.open(
+            run_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        if not os.path.exists(run_root):
+            print(f"cleanup: already retired {run_root}")
+            return 0
+        print(f"cleanup: FAILED\n  - run-root not openable: {exc}")
+        return 1
+    try:
+        retire_rc = _retire_pinned_root(
+            manifest, run_root, f"/proc/self/fd/{root_fd}")
+    finally:
+        os.close(root_fd)
+    return retire_rc
+
+
+def _live_root_ok(manifest, run_root):
+    """Re-verify the live root is the recorded directory (not a
+    symlink, not a replacement). True/False; False only when already
+    gone. Raises on replacement. Used immediately before each
+    path-based privileged fallback, which cannot cross the sudo
+    boundary on a pinned fd. (F08)"""
+    try:
+        lst = os.lstat(run_root)
+    except OSError:
+        return False
+    if stat.S_ISLNK(lst.st_mode):
+        raise AdmissionError(
+            f"run-root replaced by symlink at {run_root}; refused")
+    try:
+        st = os.stat(run_root)
+    except OSError:
+        return False
+    rec = manifest.get("run_root_identity") or {}
+    if (st.st_dev, st.st_ino) != (rec.get("dev"), rec.get("ino")):
+        raise AdmissionError(
+            f"run-root identity changed at {run_root}: "
+            f"live=({st.st_dev},{st.st_ino}) "
+            f"manifest=({rec.get('dev')},{rec.get('ino')}); "
+            f"replacement refused")
+    return True
+
+
+def _retire_pinned_root(manifest, run_root, fd_path):
     # Overlay workdirs contain root-owned restricted entries; reclaim
     # ownership of the owned run-root, then retry, then remove via sudo
     # as a last resort. All mounts are already verified gone and the
     # root is containment-checked.
     first_error = ""
     try:
-        shutil.rmtree(run_root, ignore_errors=False)
+        shutil.rmtree(fd_path, ignore_errors=False)
     except OSError as exc:
         first_error = str(exc)
+        try:
+            if not _live_root_ok(manifest, run_root):
+                print(f"cleanup: retired {run_root}")
+                return 0
+        except AdmissionError as refuse:
+            print(f"cleanup: REFUSED {refuse}")
+            return 1
         run_sudo(["chmod", "-R", "u+rwX", run_root])
+        try:
+            if not _live_root_ok(manifest, run_root):
+                print(f"cleanup: retired {run_root}")
+                return 0
+        except AdmissionError as refuse:
+            print(f"cleanup: REFUSED {refuse}")
+            return 1
         rc, _, err = run_sudo(
             ["chown", "-R", f"{os.geteuid()}:{os.getegid()}", run_root])
         if rc == 0:
             try:
-                shutil.rmtree(run_root, ignore_errors=False)
+                shutil.rmtree(fd_path, ignore_errors=False)
             except OSError as exc2:
                 first_error = f"{first_error}; retry: {exc2}"
         else:
             first_error = f"{first_error}; chown refused: {tail(err)}"
+        try:
+            if not _live_root_ok(manifest, run_root):
+                print(f"cleanup: retired {run_root}")
+                return 0
+        except AdmissionError as refuse:
+            print(f"cleanup: REFUSED {refuse}")
+            return 1
         if os.path.exists(run_root):
             rc2, _, err2 = run_sudo(["rm", "-rf", run_root])
             if rc2 != 0 or os.path.exists(run_root):
