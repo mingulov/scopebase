@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "requested_profiles": ["mid-v1"],
+  "path_rules": [
+    {"path": "src/mid.rs", "change": {"type": "cell", "cell_id": "cell-b"}},
+    {"prefix": "docs/", "none": "documentation cannot affect catalog nodes"}
+  ],
+  "default_change": {"type": "unknown", "boundary": null,
+    "reason": "tt08 tail fixture: path matches no impact rule"},
+  "fast_gates": [
+    {"id": "fixture-true", "argv": ["true"]}
+  ],
+  "profile_gates": {
+    "mid-v1": {"id": "mid-true", "argv": ["true"]},
+    "base-v1": {"id": "base-true", "argv": ["true"]}
+  },
+  "cell_bindings": {
+    "cell-a": {"argv": ["true"], "gate_id": "cell-a-true"},
+    "cell-b": {"unavailable": "LOGICAL_ONLY fixture cell: no executable binding"}
+  }
+}

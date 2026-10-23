@@ -1,0 +1,5 @@
+{"attempts": [
+   {"attempt": 1, "outcome": "infrastructure_failure", "detail": "lease denied"},
+   {"attempt": 2, "outcome": "pass", "detail": "retry acquired lease"}
+ ],
+ "resolutions": []}

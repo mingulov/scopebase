@@ -1,0 +1,5 @@
+{"executed": [
+   {"case_id": "H08.base", "case_version": 1, "cell_id": "cell-a"},
+   {"case_id": "H08.mid", "case_version": 1, "cell_id": "cell-b"}
+ ],
+ "inherited": []}

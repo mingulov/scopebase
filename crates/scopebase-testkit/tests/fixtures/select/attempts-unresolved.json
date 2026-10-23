@@ -1,0 +1,5 @@
+{"attempts": [
+   {"attempt": 1, "outcome": "semantic_failure", "detail": "wrong value: expected 7 got 9"},
+   {"attempt": 2, "outcome": "pass", "detail": "retry green"}
+ ],
+ "resolutions": []}
