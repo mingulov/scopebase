@@ -4764,6 +4764,11 @@
       "title": "Final-object inventory and explicit ISA profile admission"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tc04-atomics.md",
+        "reviewed_candidate_commit": "bf0077befa72e7fd0838d26f65f6e84a22cfa5c1",
+        "subject_commit": "bf0077befa72e7fd0838d26f65f6e84a22cfa5c1"
+      },
       "anchor": "tc04-atomic-rmw-oldnew-value-and-atomicload-selector-regressions",
       "depends_on": [
         "TC02",
@@ -4778,10 +4783,15 @@
         "TC-R03",
         "TC-R04"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Atomic RMW old/new-value and AtomicLoad selector regressions"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tc05-graph.md",
+        "reviewed_candidate_commit": "fd334dd705e29cc9f545a8e9789dae494922b4a6",
+        "subject_commit": "fd334dd705e29cc9f545a8e9789dae494922b4a6"
+      },
       "anchor": "tc05-elfbtf-relocation-call-graph-and-metadata-preservation",
       "depends_on": [
         "TC03",
@@ -4797,7 +4807,7 @@
         "TC-R05",
         "TC-R06"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "ELF/BTF relocation, call graph and metadata preservation"
     },
     {
