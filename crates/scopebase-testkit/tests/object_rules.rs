@@ -544,6 +544,13 @@ impl BtfBuilder {
     }
 
     fn add_func(&mut self, name: &str, proto: u32) -> u32 {
+        // GLOBAL linkage (vlen 1): the default for named interface
+        // functions; STATIC twins use add_func_static (F21).
+        let name_off = self.str_off(name);
+        self.push_record(name_off, 12, 1, proto)
+    }
+
+    fn add_func_static(&mut self, name: &str, proto: u32) -> u32 {
         let name_off = self.str_off(name);
         self.push_record(name_off, 12, 0, proto)
     }
@@ -853,10 +860,12 @@ fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 #[test]
-fn initialized_padding_survives_widened_copies() {
-    // A 32-byte transport record with named initialized padding lives in
-    // .rodata; the repair touches .text/symtab/relocs only, so the widened
-    // 8-byte loads spanning the pad keep reading initialized bytes.
+fn named_pad_record_survives_repair_byte_identical() {
+    // A 32-byte transport record with a named `_pad` member lives in
+    // .rodata; the repair touches .text/symtab/relocs only, so the record
+    // (including the 4 pad bytes) survives byte-identical. This is a
+    // shape-preservation test: it does not prove emitted stores
+    // initialize the pad (F24 stays open in TODO).
     let endian = Endian::Little;
     let mut text = Vec::new();
     for _ in 0..2 {
@@ -1540,6 +1549,11 @@ fn linkage_btf(variant: &str) -> Vec<u8> {
             let proto = btf.add_proto(u32_ty, &[("x", 999)]);
             btf.add_func("p11_link_current_identity", proto);
         }
+        "static" => {
+            // F21 twin: valid GLOBAL ELF symbol but STATIC BTF FUNC.
+            let proto = btf.add_proto(u32_ty, &[("out", ptr)]);
+            btf.add_func_static("p11_link_current_identity", proto);
+        }
         "not-function" => {
             btf.add_struct("p11_link_current_identity", 4, &[("x", u32_ty, 0)]);
         }
@@ -1590,6 +1604,10 @@ fn global_linkage_requires_symbol_and_btf() {
     let btf = parse_btf(&linkage_btf("not-function"));
     let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
     assert_eq!(rule_ids(&violations), ["linkage.btf-not-function"]);
+    // F21 STATIC twin: GLOBAL ELF symbol but STATIC BTF FUNC fails.
+    let btf = parse_btf(&linkage_btf("static"));
+    let violations = check_rules(&linkage_carrier(true), std::slice::from_ref(&linkage), Some(&btf));
+    assert_eq!(rule_ids(&violations), ["linkage.btf-not-global"]);
     // Absent BTF type and absent BTF image are distinct findings.
     let mut bare = BtfBuilder::new();
     bare.add_int("unsigned int", 4, 32, 0);
@@ -1751,31 +1769,57 @@ fn init_guard_rejects_only_the_forbidden_path() {
     // unrelated twin may call `memset`: an object-wide ban is the mutant
     // this twin kills.
     let guard = single_rule_manifest("stack", 3);
-    let bytes = guard_fixture(true);
+    let bytes = guard_fixture(GuardCall::Direct);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert_eq!(rule_ids(&violations), ["init.path-guard"]);
     assert_eq!(violations[0].kind, ErrorKind::Incompatible);
     assert_eq!(violations[0].section.as_deref(), Some(".text"));
     assert_eq!(violations[0].offset, Some(0));
     // Twin without the forbidden edge: clean despite `memset` existing.
-    let bytes = guard_fixture(false);
+    let bytes = guard_fixture(GuardCall::None);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert!(violations.is_empty(), "unexpected: {violations:?}");
+    // F23: a section-symbol call landing on `memset` is the same edge.
+    let bytes = guard_fixture(GuardCall::Section);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.path-guard"]);
+    assert_eq!(violations[0].offset, Some(0));
+    // F23: a linked-style call the guard cannot resolve is a finding,
+    // never a silent pass.
+    let bytes = guard_fixture(GuardCall::Linked);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert_eq!(rule_ids(&violations), ["init.unresolved-call"]);
+    assert_eq!(violations[0].section.as_deref(), Some(".text"));
+    assert_eq!(violations[0].offset, Some(0));
     // A missing guarded path cannot be proved clean: finding, not pass.
     let violations = check_rules(&btf_carrier(), &[guard], None);
     assert_eq!(rule_ids(&violations), ["init.path-missing"]);
 }
 
+/// How `emit` reaches (or avoids) `memset` in the guard fixture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GuardCall {
+    /// Direct relocated call against the `memset` function symbol.
+    Direct,
+    /// Section-symbol call: imm 3 resolves to byte 32 (`memset`).
+    Section,
+    /// Linked-style immediate call with no covering relocation.
+    Linked,
+    /// No call at all.
+    None,
+}
+
 /// `.text` with `emit` (guarded path) and `unrelated` (permitted twin);
-/// when `forbidden` is set, `emit` calls `memset`, otherwise only the
-/// twin does. Both functions are rooted so decode succeeds.
-fn guard_fixture(forbidden: bool) -> Vec<u8> {
+/// `emit`'s edge to `memset` follows `style`, otherwise only the twin
+/// calls it. Both functions are rooted so decode succeeds.
+fn guard_fixture(style: GuardCall) -> Vec<u8> {
     let endian = Endian::Little;
     let mut text = Vec::new();
-    if forbidden {
-        text.extend_from_slice(&call_sub(endian, -1));
-    } else {
-        text.extend_from_slice(&exit(endian));
+    match style {
+        GuardCall::Direct => text.extend_from_slice(&call_sub(endian, -1)),
+        GuardCall::Section => text.extend_from_slice(&call_sub(endian, 3)),
+        GuardCall::Linked => text.extend_from_slice(&call_sub(endian, 1)),
+        GuardCall::None => text.extend_from_slice(&exit(endian)),
     }
     text.extend_from_slice(&exit(endian));
     text.extend_from_slice(&call_sub(endian, -1));
@@ -1798,8 +1842,13 @@ fn guard_fixture(forbidden: bool) -> Vec<u8> {
         &[(0, emit, R_BPF_64_32), (8, unrelated, R_BPF_64_32)],
     );
     let mut calls = vec![(16, memset, R_BPF_64_32)];
-    if forbidden {
-        calls.push((0, memset, R_BPF_64_32));
+    match style {
+        GuardCall::Direct => calls.push((0, memset, R_BPF_64_32)),
+        GuardCall::Section => {
+            let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+            calls.push((0, text_sym, R_BPF_64_32));
+        }
+        GuardCall::Linked | GuardCall::None => {}
     }
     obj.reloc_section(".rel.text", text_idx, &calls);
     obj.build()
@@ -1837,8 +1886,15 @@ fn stack_carrier(programs: &[StackProgram]) -> Vec<u8> {
         );
         array_syms.insert(name, sym);
     }
-    // Bodies are grouped per section in program order.
-    for section in ["uprobe", "uretprobe"] {
+    // Bodies are grouped per section in program order: the profile's
+    // selected sections first, then any other program section (F22).
+    let mut order = vec!["uprobe", "uretprobe"];
+    for program in programs {
+        if !order.contains(&program.section) {
+            order.push(program.section);
+        }
+    }
+    for section in order {
         let mut body = Vec::new();
         let mut relocs = Vec::new();
         let mut syms: Vec<(String, u64, u64)> = Vec::new();
@@ -1977,6 +2033,43 @@ fn private_stack_prologue_matrix() {
     let bytes = unowned_array_ref_fixture();
     let violations = check_rules(&bytes, &[manifest], None);
     assert_eq!(rule_ids(&violations), ["private-stack.unowned-reference"]);
+}
+
+#[test]
+fn array_reference_outside_selected_sections_fails() {
+    // F22: the uprobe/uretprobe legs are clean, but a program-array load
+    // in the unselected `kprobe` section fails instead of escaping.
+    let manifest = load_manifest("private-stack");
+    let bytes = stack_carrier(&[
+        StackProgram {
+            name: "big",
+            section: "uprobe",
+            index: Some(-1),
+            array: Some("TAIL_CALLS"),
+            frame_touch: true,
+        },
+        StackProgram {
+            name: "tiny",
+            section: "uretprobe",
+            index: None,
+            array: None,
+            frame_touch: false,
+        },
+        StackProgram {
+            name: "sneaky",
+            section: "kprobe",
+            index: Some(-1),
+            array: Some("TAIL_CALLS"),
+            frame_touch: false,
+        },
+    ]);
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(
+        rule_ids(&violations),
+        ["private-stack.unselected-reference"]
+    );
+    assert_eq!(violations[0].section.as_deref(), Some("kprobe"));
+    assert_eq!(violations[0].offset, Some(0));
 }
 
 /// Stackless `big` plus a call relocation naming TAIL_CALLS: the program

@@ -337,8 +337,10 @@ fn get_label_list(
 /// One admitted verifier-sensitive rule with its manifest parameters.
 #[derive(Debug, Clone)]
 enum Rule {
-    /// A BTF struct/union carries one named initialized member at an
-    /// exact extent with an exact whole size (H08 named padding).
+    /// A BTF struct/union carries one named padding member at an exact
+    /// extent with an exact whole size (H08 named padding, shape only).
+    /// This proves the pad is explicit, not that emitted stores
+    /// initialize it; the byte-initialization check stays open (F24).
     PadNamed {
         ty: String,
         member: String,
@@ -347,7 +349,7 @@ enum Rule {
         struct_size: u64,
     },
     /// One symbol is exactly GLOBAL FUNC in its section with a unique
-    /// valid BTF FUNC prototype (H10 linkage).
+    /// valid BTF FUNC prototype that is itself GLOBAL (H10 linkage).
     LinkageGlobal { symbol: String, section: String },
     /// Every executable function frame counts at least the minimum
     /// against a combined budget (H08/H10 stack accounting).
@@ -2190,7 +2192,13 @@ fn check_linkage(
         return Ok(());
     };
     match resolve_function(btf.expect("checked present"), symbol)? {
-        FuncResolution::Resolved(_) => {}
+        FuncResolution::Resolved(shape) => {
+            // F21: GLOBAL is required in BTF as well as in the symbol
+            // table; a STATIC or EXTERN twin must fail this rule.
+            if shape.linkage != Some(scopebase_bpf::btf::FuncLinkage::Global) {
+                violations.push(finding("linkage.btf-not-global", None, None));
+            }
+        }
         FuncResolution::Missing => violations.push(finding("linkage.btf-missing", None, None)),
         FuncResolution::Ambiguous => violations.push(finding("linkage.btf-ambiguous", None, None)),
         FuncResolution::BadProto => {
@@ -2345,16 +2353,53 @@ fn check_path_guard(
             let target = &image.sections[reloc.target_sect];
             let (callee, dest) = call_dest(image, target, reloc)?;
             let target_sym = &image.symbols[callee];
-            if target_sym.kind() == STT_FUNC
-                && target_sym.name.as_deref() == Some(forbidden)
-                && dest == target_sym.value
-            {
+            // F23: match by resolved destination, not by reloc spelling,
+            // so a section-symbol call landing in `forbidden` (or inside
+            // it) is the same guarded edge as a direct call.
+            let hits = image.symbols.iter().any(|cand| {
+                cand.kind() == STT_FUNC
+                    && cand.shndx == target_sym.shndx
+                    && cand.name.as_deref() == Some(forbidden)
+                    && (cand.value == dest
+                        || (cand.size > 0
+                            && dest > cand.value
+                            && dest < cand.value.saturating_add(cand.size)))
+            });
+            if hits {
                 violations.push(finding(
                     "init.path-guard",
                     Some(section.label()),
                     Some(reloc.offset),
                 ));
             }
+        }
+        // F23: linked-style static calls without a covering relocation
+        // are invisible to the reloc walk; the guard cannot prove they
+        // avoid `forbidden`, so each is its own finding.
+        let body = image.body(section)?;
+        let scan_end = end.min(section.len);
+        let mut at = sym.value;
+        while at.saturating_add(8) <= scan_end {
+            charge(work, 1)?;
+            let off = at as usize;
+            let slot = &body[off..off + 8];
+            if slot[0] == OP_LD_IMM64 {
+                at = at.saturating_add(16);
+                continue;
+            }
+            if slot[0] == OP_CALL && slot[1] >> 4 != 0 {
+                let covered = relocs.iter().any(|r| {
+                    r.typ == R_BPF_64_32 && r.target_sect == section.index && r.offset == at
+                });
+                if !covered {
+                    violations.push(finding(
+                        "init.unresolved-call",
+                        Some(section.label()),
+                        Some(at),
+                    ));
+                }
+            }
+            at = at.saturating_add(8);
         }
     }
     if !found {
@@ -2408,6 +2453,28 @@ fn check_opt_out(
             continue;
         }
         references.push((reloc.target_sect, reloc.offset, name.to_owned()));
+    }
+    // F22: every collected reference reconciles against the selected
+    // sections; a program-array load in any other executable section is
+    // outside the validated bodies and fails instead of escaping review.
+    let selected: std::collections::BTreeSet<usize> = sections
+        .iter()
+        .filter_map(|name| {
+            image
+                .sections
+                .iter()
+                .position(|candidate| candidate.name.as_deref() == Some(name.as_str()))
+        })
+        .collect();
+    for (sect, address, _) in &references {
+        if !selected.contains(sect) {
+            charge(work, 1)?;
+            violations.push(finding(
+                "private-stack.unselected-reference",
+                Some(image.sections[*sect].label()),
+                Some(*address),
+            ));
+        }
     }
     for section_name in sections {
         let Some(section) = image

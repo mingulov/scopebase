@@ -23,7 +23,7 @@ pub mod domain;
 pub mod query;
 
 pub use domain::{BtfDomainId, BtfLimits, TypeRef};
-pub use query::{FunctionShape, MemberExtent, TypeKind, TypeShape};
+pub use query::{FuncLinkage, FunctionShape, MemberExtent, TypeKind, TypeShape};
 
 use adapt::{map_parse_error, preflight, Preflight, RecFacts, WorkBudget};
 

@@ -110,6 +110,6 @@ pub use identity::{
 pub mod btf;
 #[cfg(feature = "btf")]
 pub use btf::{
-    BtfDomainId, BtfImages, BtfLimits, BtfView, ByteOrder, FunctionShape, MemberExtent, TypeKind,
-    TypeRef, TypeShape, BTF_PROFILE_MAX_IMAGE_BYTES,
+    BtfDomainId, BtfImages, BtfLimits, BtfView, ByteOrder, FuncLinkage, FunctionShape,
+    MemberExtent, TypeKind, TypeRef, TypeShape, BTF_PROFILE_MAX_IMAGE_BYTES,
 };

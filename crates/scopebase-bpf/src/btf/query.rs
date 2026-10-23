@@ -80,6 +80,17 @@ pub struct MemberExtent {
     pub ty: TypeRef,
 }
 
+/// BTF function linkage: the `vlen` of `BTF_KIND_FUNC` (`F21`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuncLinkage {
+    /// `BTF_FUNC_STATIC`: visible in its object only.
+    Static,
+    /// `BTF_FUNC_GLOBAL`: visible across objects.
+    Global,
+    /// `BTF_FUNC_EXTERN`: declared, defined elsewhere.
+    Extern,
+}
+
 /// Validated function prototype shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionShape {
@@ -89,6 +100,9 @@ pub struct FunctionShape {
     pub parameters: Vec<TypeRef>,
     /// True when the prototype ends with the `(0, 0)` marker.
     pub variadic: bool,
+    /// Declared linkage of the resolved `BTF_KIND_FUNC` (`None` only for
+    /// a `vlen` outside the static/global/extern encoding).
+    pub linkage: Option<FuncLinkage>,
 }
 
 /// Width of a BPF target pointer in bytes (the profile is 64-bit; BTF
@@ -265,8 +279,19 @@ impl BtfView {
         let id = self.check_ref(ty)?;
         let mut budget = WorkBudget::new(&self.limits);
         budget.consume(Stage::BtfQuery, 1)?;
-        let target = match self.resolve(id)? {
-            btf_rs::Type::Func(func) => func.get_type_id(),
+        let (target, linkage) = match self.resolve(id)? {
+            btf_rs::Type::Func(func) => {
+                let linkage = if func.is_static() {
+                    Some(FuncLinkage::Static)
+                } else if func.is_global() {
+                    Some(FuncLinkage::Global)
+                } else if func.is_extern() {
+                    Some(FuncLinkage::Extern)
+                } else {
+                    None
+                };
+                (func.get_type_id(), linkage)
+            }
             _ => return Err(incompatible_query()),
         };
         let proto_id = target.unwrap_or(0);
@@ -309,6 +334,7 @@ impl BtfView {
             },
             parameters,
             variadic,
+            linkage,
         })
     }
 

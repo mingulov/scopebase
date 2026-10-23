@@ -19,7 +19,7 @@
 //! never from parser roundtrip.
 
 use scopebase_bpf::btf::{
-    BtfDomainId, BtfImages, BtfLimits, BtfView, ByteOrder, TypeKind, TypeRef,
+    BtfDomainId, BtfImages, BtfLimits, BtfView, ByteOrder, FuncLinkage, TypeKind, TypeRef,
     BTF_PROFILE_MAX_IMAGE_BYTES,
 };
 use scopebase_bpf::{ErrorKind, OperationError, Stage};
@@ -518,6 +518,42 @@ fn bogus_func_linkage_refuses() {
     write_u32(&mut mutant, pos + 4, (info & !0xFFFF) | 7);
     let error = parse_base(&mutant).expect_err("bogus linkage must refuse");
     expect_error(&error, ErrorKind::Malformed, Stage::Admission);
+}
+
+#[test]
+fn func_linkage_is_exposed_per_vlen() {
+    // F21: FunctionShape.linkage reports the FUNC vlen encoding; flipping
+    // ID 12 (do_work) between 0 and 1 flips the reported linkage.
+    let bytes = SHAPES.to_vec();
+    let (type_at, _) = type_section(&bytes);
+    let mut pos = type_at;
+    for _ in 1..12u32 {
+        let info = read_u32(&bytes, pos + 4);
+        let kind = ((info >> 24) & 0x1F) as u8;
+        let vlen = (info & 0xFFFF) as usize;
+        let aux = match kind {
+            1 | 14 | 17 => 4,
+            3 => 12,
+            4 | 5 | 15 => vlen * 12,
+            6 | 13 => vlen * 8,
+            _ => 0,
+        };
+        pos += 12 + aux;
+    }
+    let info = read_u32(&bytes, pos + 4);
+    assert_eq!(((info >> 24) & 0x1F) as u8, 12, "expected FUNC at ID 12");
+    for (vlen, want) in [(0u32, FuncLinkage::Static), (1u32, FuncLinkage::Global)] {
+        let mut twin = bytes.clone();
+        write_u32(&mut twin, pos + 4, (info & !0xFFFF) | vlen);
+        let view = parse_base(&twin).expect("vlen twin parses");
+        let shape = view
+            .function(TypeRef {
+                domain: view.domain_id(),
+                id: 12,
+            })
+            .expect("do_work resolves");
+        assert_eq!(shape.linkage, Some(want), "vlen {vlen}");
+    }
 }
 
 #[test]
