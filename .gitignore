@@ -9,3 +9,4 @@ __pycache__/
 /tests/package-policy/fixtures/*/target/
 /tests/package-policy/probes/*/target/
 /consumers/*/target/
+/tests/downstream/*/target/

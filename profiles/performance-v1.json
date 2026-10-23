@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "profile_id": "performance-v1",
+  "revision": 1,
+  "owner": "TT09",
+  "statement": "Frozen workload/parameter/environment/baseline record for ScopeBase resource and performance qualification. Deterministic cap and conservation assertions gate; timing distributions inform and never gate caps. Cross-machine timing comparison is invalid; same-environment relative comparison only.",
+  "environment": {
+    "host": "lu26",
+    "kernel": "Linux 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC x86_64 GNU/Linux",
+    "cpu_model": "AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M",
+    "cpus": 12,
+    "mem_total_kb": 14676696,
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "cargo_profile": "bench (optimized)",
+    "base_commit": "05b12b8",
+    "command": "cargo --offline --locked bench -p scopebase-testkit --bench contract_costs -- --reps 21 --out <report>",
+    "measured_utc": "2026-10-23"
+  },
+  "metric_interpretation": {
+    "timing_ns": "Wall time per repetition of the whole workload (Instant domain). min/median/mean/max over 21 reps. Reports scheduling noise; a slower run is not a cap failure.",
+    "ops_per_sec": "ops_per_rep divided by mean seconds. Derived display value, not an assertion input.",
+    "oracle": "Deterministic expected value asserted every rep (violation count, settled/refunded bytes). Any mismatch fails the run regardless of timing.",
+    "memory_note": "Overlapping memory metrics (retained vs working vs peak) are reported separately and never summed; additivity is not claimed.",
+    "time_bound_note": "Time caps are asserted on caller-supplied elapsed-ms against per-domain time_ms_cap (see resource.rs check_bounds). A timeout interrupts no syscall and proves no worker/mapping/link retirement."
+  },
+  "workloads": {
+    "bounds_check": {
+      "status": "BUILT",
+      "bench": "contract_costs",
+      "workload": "bounds",
+      "params": {"items": 512, "reps": 21, "elapsed_ms": 1000, "caps": {"bytes": 10000, "work": 500, "memory": 20000, "time_ms": 1000}},
+      "deterministic": "items=512 violations_per_rep=158 agreement=check==violations",
+      "baseline": {
+        "oracle": 158,
+        "timing_ns": {"min": 6592, "median": 6623, "mean": 6716, "max": 7615},
+        "ops_per_sec": 76234774
+      }
+    },
+    "ledger_cycle": {
+      "status": "BUILT",
+      "bench": "contract_costs",
+      "workload": "ledger",
+      "params": {"consumers": 1, "cycles": 5000, "reps": 21, "quarantine_cap": "u64::MAX"},
+      "deterministic": "cycles=5000 settled=245016 refunded=245016 conservative=true",
+      "baseline": {
+        "oracle": 245016,
+        "timing_ns": {"min": 758292, "median": 834206, "mean": 898906, "max": 1232588},
+        "ops_per_sec": 5562318
+      }
+    },
+    "ledger_concurrent": {
+      "status": "BUILT",
+      "bench": "contract_costs",
+      "workload": "concurrent",
+      "params": {"consumers": 8, "cycles_each": 1000, "reps": 21, "quarantine_cap": "u64::MAX"},
+      "deterministic": "consumers=8 cycles_each=1000 settled=392136 sentinel=preserved",
+      "baseline": {
+        "oracle": 392136,
+        "timing_ns": {"min": 6473676, "median": 8134569, "mean": 8114273, "max": 9991561},
+        "ops_per_sec": 985917
+      }
+    },
+    "tt03_pair_launch": {
+      "status": "UNBUILT",
+      "reason": "No leased live cell on this executor: a pair launch needs TT03 worker images plus an isolated Linux fixture cell with native process authority, which this lane does not hold. Baselines will be recorded by the TT03/live-cell owner, not estimated here."
+    },
+    "bpf_live_workload": {
+      "status": "UNBUILT",
+      "reason": "No privileged BPF cell on this executor: live BPF load/attach/ring workloads need kernel BPF authority and an isolated live-kernel cell. No baseline is claimed; the BP readiness owner registers this gate."
+    },
+    "capture_domain_live": {
+      "status": "UNBUILT",
+      "reason": "No live capture feed bound on this executor: capture-domain resource gates need a real feed owner with measured loss/counter populations. Pure ledger/bounds contracts above cover the harness; live populations stay with the CP owner."
+    }
+  }
+}

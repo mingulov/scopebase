@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "tt09-coexistence"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+
+# Standalone downstream consumer: detached from the parent workspace so the
+# root Cargo.lock and member set stay untouched. Run with:
+# cargo test --offline --locked --manifest-path tests/downstream/coexistence/Cargo.toml
+[workspace]
+
+[[bin]]
+name = "tt09-coexistence"
+path = "src/main.rs"
+
+[dependencies]
+scopebase-testkit = { version = "=0.1.0", path = "../../../crates/scopebase-testkit" }

@@ -30,6 +30,7 @@ pub mod fixture;
 pub mod observation;
 pub mod prepared;
 pub mod oracle;
+pub mod resource;
 pub mod result;
 pub mod runner;
 pub mod select;
