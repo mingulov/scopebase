@@ -21,6 +21,7 @@ pub(crate) mod fork;
 mod manifest;
 mod oracle;
 mod phase;
+pub mod seccomp;
 mod session;
 pub mod target;
 pub mod wire;
