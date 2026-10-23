@@ -13,10 +13,22 @@
 //! validation, input/retained/work bounds, UTF-8, duplicate-field rejection at
 //! every object level (escape-insensitive), then typed admission. Unknown
 //! fields refuse: new fields require a new `schema_version`, currently 1.
+//!
+//! TC03 appends final-object inventory ([`manifest`]), decoded inspection
+//! ([`inspect`]) and explicit ISA profile admission ([`rules`]) as
+//! submodules reusing this prelude. TC01 parsing above is unchanged.
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
 use serde_json::Value;
 
 use crate::ids::{CaseId, Label, ProfileId};
+
+pub mod inspect;
+pub mod manifest;
+pub mod rules;
+
+pub use inspect::{inspect_final_object, FamilySpan, ObjectInspection, RuleViolation};
+pub use manifest::{AdmittedObject, ArtifactId, FinalObjectManifest, ObjectEntry, ObjectKind};
+pub use rules::{admit_profile, check_object, contract_families, IsaProfile};
 
 /// Admitted profile/register/inventory schema version. Only 1 exists.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -425,8 +437,8 @@ const PROFILE_FIELDS: &[&str] = &[
 const TARGET_FIELDS: &[&str] = &["triple", "arch", "endian", "pointer_width_bits"];
 const BACKEND_FIELDS: &[&str] = &["kind", "name", "version", "sha256"];
 const BACKEND_KINDS: &[&str] = &["llvm-llc", "clang", "rustc", "bpf-linker", "aya", "libbpf"];
-const KNOWN_CPUS: &[&str] = &["generic", "v3", "v4"];
-const KNOWN_FEATURES: &[&str] = &[
+pub(crate) const KNOWN_CPUS: &[&str] = &["generic", "v3", "v4"];
+pub(crate) const KNOWN_FEATURES: &[&str] = &[
     "alu32",
     "jump32",
     "ext-jumps",
@@ -440,7 +452,7 @@ const KNOWN_FEATURES: &[&str] = &[
 ];
 /// Backend features the donor evidence ties to the v4 CPU preset only:
 /// acquire/release lowering and indirect jumps are absent from generic/v3.
-const V4_ONLY_FEATURES: &[&str] = &["acqrel", "indirect-jumps"];
+pub(crate) const V4_ONLY_FEATURES: &[&str] = &["acqrel", "indirect-jumps"];
 
 /// Strict compiler-profile admission contract (TC01 parsing increment).
 ///
@@ -1096,4 +1108,28 @@ impl ToolchainInventory {
     pub fn find(&self, id: &str) -> Option<&ToolPin> {
         self.tools.iter().find(|tool| tool.id == id)
     }
+}
+
+// ---------------------------------------------------------------------------
+// TC03 shared refusal constructor (appended; TC01 helpers above unchanged)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct Tc03Msg(&'static str);
+
+impl std::fmt::Display for Tc03Msg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "tc03 object: {}", self.0)
+    }
+}
+
+impl std::error::Error for Tc03Msg {}
+
+pub(crate) fn tc03_refuse(kind: ErrorKind, message: &'static str) -> OperationError {
+    OperationError::new(
+        kind,
+        Stage::Admission,
+        None,
+        Some(Box::new(Tc03Msg(message))),
+    )
 }
