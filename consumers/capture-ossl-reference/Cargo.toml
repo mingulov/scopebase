@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "capture-ossl-reference"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+scopebase-capture = { version = "=0.1.0", path = "../../crates/scopebase-capture" }
+scopebase-testkit = { version = "=0.1.0", path = "../../crates/scopebase-testkit" }
