@@ -18,8 +18,9 @@
 //! exists. Live attach cells are NOT_RUN (later owners).
 
 use scopebase_bpf::attach::{
-    adjudicate_split, is_terminal_error, AttachBackend, AttachMode, AttachPlan, CustodyCharge,
-    ErrorAction, ErrorPolicy, NativeAttach, NativeRetire, Site,
+    adjudicate_split, execute_plan, is_terminal_error, AttachBackend, AttachMode, AttachOutcome,
+    AttachPlan, CustodyCharge, ErrorAction, ErrorPolicy, NativeAttach, NativeRetire,
+    RetirementPool, Site,
 };
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
 use std::collections::HashSet;
@@ -27,6 +28,9 @@ use std::ops::Range;
 
 #[path = "support/json_mini.rs"]
 mod json_mini;
+
+#[path = "support/fake_backend.rs"]
+mod fake_backend;
 
 const FIXTURE: &str = include_str!("../fixtures/attach-v1/split-trees.json");
 
@@ -987,4 +991,221 @@ fn pure_values_are_send_sync() {
     assert_send_sync::<CustodyCharge>();
     assert_send_sync::<NativeRetire>();
     assert_send_sync::<NativeAttach<FakeLink, FakeUncertain>>();
+}
+
+// ---------------------------------------------------------------------------
+// BP05 effectful executor: the split-tree walk through a scripted backend.
+// The pool takes backend ownership; observation flows through the fake's
+// shared probe. Custody/retirement semantics live in tests/retirement.rs.
+// ---------------------------------------------------------------------------
+
+use fake_backend::{ScriptBackend, ScriptOutcome};
+use scopebase_bpf::attach::{Retirement, RetirementCapacity};
+use std::rc::Rc;
+
+fn effectful_capacity() -> RetirementCapacity {
+    RetirementCapacity {
+        max_groups: usize::MAX,
+        max_links: usize::MAX,
+        max_retained_bytes: usize::MAX,
+    }
+}
+
+#[test]
+fn effectful_all_success_single_attempt() {
+    for n in 1..=8 {
+        let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+        let backend = ScriptBackend::new(sites(n));
+        let probe = Rc::clone(&backend.probe);
+        let mut policy = FixedPolicy(ErrorAction::AbortAndRollback);
+        let outcome = execute_plan(
+            &mut pool,
+            backend,
+            (),
+            plan_for(n),
+            &mut policy,
+            &generous_limits(),
+        );
+        match outcome {
+            AttachOutcome::Active { owner, summary } => {
+                assert_eq!(summary.attempts, 1, "n={n}");
+                assert_eq!(summary.attached_sites, n, "n={n}");
+                assert!(summary.refused_sites.is_empty());
+                assert!(matches!(owner.retire(&mut pool), Retirement::Retired));
+            }
+            other => panic!("n={n}: expected Active, found {other:?}"),
+        }
+        assert_eq!(probe.attach_order(), vec![format!("0-{n}")], "n={n}");
+        assert_eq!(
+            pool.usage(),
+            scopebase_bpf::attach::PoolUsage {
+                groups: 0,
+                links: 0,
+                retained_bytes: 0
+            },
+            "n={n}: net-zero after proven retirement"
+        );
+    }
+}
+
+#[test]
+fn effectful_every_terminal_position() {
+    // Every node of every n=1..8 tree fails terminally once: exactly one
+    // attempt per visited node, no splits past the terminal, every prior
+    // success rolled back and proven.
+    for n in 1..=8 {
+        let visit = fixture_nodes(n);
+        for (k, terminal) in visit.iter().enumerate() {
+            let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+            let mut backend = ScriptBackend::new(sites(n));
+            // All multi nodes split isolatably except the terminal node.
+            for node in &visit {
+                if node.len() > 1 && node != terminal {
+                    backend.script_node(
+                        (node.start, node.end),
+                        ScriptOutcome::NoEffect(ErrorKind::InvalidInput),
+                    );
+                }
+            }
+            backend.script_node(
+                (terminal.start, terminal.end),
+                ScriptOutcome::NoEffect(ErrorKind::Denied),
+            );
+            let probe = Rc::clone(&backend.probe);
+            let mut policy = FixedPolicy(ErrorAction::IsolateSites);
+            let outcome = execute_plan(
+                &mut pool,
+                backend,
+                (),
+                plan_for(n),
+                &mut policy,
+                &generous_limits(),
+            );
+            let order = probe.attach_order();
+            assert_eq!(order.len(), k + 1, "n={n} k={k}: one attempt per node");
+            assert_eq!(
+                order[k],
+                format!("{}-{}", terminal.start, terminal.end),
+                "n={n} k={k}: terminal attempted last"
+            );
+            match outcome {
+                AttachOutcome::RolledBack { summary, cause } => {
+                    assert_eq!(cause.kind(), ErrorKind::Denied, "n={n} k={k}");
+                    assert_eq!(summary.attempts, k + 1, "n={n} k={k}");
+                    // Every attached site was rolled back and proven.
+                    let retired = probe.retire_order().len();
+                    assert_eq!(
+                        summary.attached_sites, retired,
+                        "n={n} k={k}: every success retired"
+                    );
+                }
+                other => panic!("n={n} k={k}: expected RolledBack, found {other:?}"),
+            }
+            assert_eq!(pool.usage().groups, 0, "n={n} k={k}: reaped");
+        }
+    }
+}
+
+#[test]
+fn effectful_mixed_bad_leaves_roll_back() {
+    // Bad singletons refuse while good siblings attach; the first
+    // profile then rolls back every success with proof.
+    let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+    let mut backend = ScriptBackend::new(sites(8));
+    for start in 0..8 {
+        for end in start + 2..=8 {
+            backend.script_node(
+                (start, end),
+                ScriptOutcome::NoEffect(ErrorKind::InvalidInput),
+            );
+        }
+    }
+    for bad in [1, 5] {
+        backend.script_node(
+            (bad, bad + 1),
+            ScriptOutcome::NoEffect(ErrorKind::InvalidInput),
+        );
+    }
+    let probe = Rc::clone(&backend.probe);
+    let mut policy = FixedPolicy(ErrorAction::IsolateSites);
+    let outcome = execute_plan(
+        &mut pool,
+        backend,
+        (),
+        plan_for(8),
+        &mut policy,
+        &generous_limits(),
+    );
+    match outcome {
+        AttachOutcome::RolledBack { summary, cause } => {
+            assert_eq!(cause.kind(), ErrorKind::InvalidInput);
+            assert_eq!(summary.attempts, 15);
+            assert_eq!(summary.attached_sites, 6);
+            assert_eq!(summary.refused_sites, vec![sites(8)[1], sites(8)[5]]);
+        }
+        other => panic!("expected RolledBack, found {other:?}"),
+    }
+    // Six links attached (ids 0..6 in visit order) and all retired once,
+    // in reverse; no successful group was duplicated or skipped.
+    assert_eq!(probe.retire_order(), vec![5, 4, 3, 2, 1, 0]);
+    assert_eq!(
+        pool.usage(),
+        scopebase_bpf::attach::PoolUsage {
+            groups: 0,
+            links: 0,
+            retained_bytes: 0
+        }
+    );
+}
+
+#[test]
+fn effectful_policy_abort_rolls_back_without_splitting() {
+    // A policy abort on the root refuses the whole batch in one attempt.
+    let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+    let mut backend = ScriptBackend::new(sites(4));
+    backend.script_node((0, 4), ScriptOutcome::NoEffect(ErrorKind::InvalidInput));
+    let probe = Rc::clone(&backend.probe);
+    let mut policy = FixedPolicy(ErrorAction::AbortAndRollback);
+    let outcome = execute_plan(
+        &mut pool,
+        backend,
+        (),
+        plan_for(4),
+        &mut policy,
+        &generous_limits(),
+    );
+    match outcome {
+        AttachOutcome::RolledBack { summary, cause } => {
+            assert_eq!(cause.kind(), ErrorKind::InvalidInput);
+            assert_eq!(summary.attempts, 1, "abort does not split");
+            assert_eq!(summary.attached_sites, 0);
+            assert_eq!(summary.refused_sites, sites(4));
+        }
+        other => panic!("expected RolledBack, found {other:?}"),
+    }
+    assert_eq!(probe.attach_order(), vec!["0-4".to_string()]);
+    assert_eq!(probe.retire_calls.get(), 0, "nothing to roll back");
+}
+
+#[test]
+fn effectful_offset_cookie_pairs_exact() {
+    // The executor slices plan ranges, never parallel vectors: every
+    // attach call receives the exact coupled Site records.
+    let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+    let mut backend = ScriptBackend::new(sites(4));
+    backend.script_node((0, 4), ScriptOutcome::NoEffect(ErrorKind::InvalidInput));
+    let probe = Rc::clone(&backend.probe);
+    let mut policy = FixedPolicy(ErrorAction::IsolateSites);
+    let outcome = execute_plan(
+        &mut pool,
+        backend,
+        (),
+        plan_for(4),
+        &mut policy,
+        &generous_limits(),
+    );
+    // node_of in the fake asserts contiguity; reaching Active proves
+    // every slice was an exact coupled plan range.
+    assert!(matches!(outcome, AttachOutcome::Active { .. }));
+    assert_eq!(probe.attach_order(), vec!["0-4", "0-2", "2-4"]);
 }
