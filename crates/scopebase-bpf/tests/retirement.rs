@@ -5,7 +5,7 @@
 //! `OWNER-2026-10-23`; third-party/upstream lines never copied):
 //! - p11scope `.worktrees/v040-integration/crates/bpf-multi/src/lib.rs`
 //!   @ `2c2713e66292b0d2688508a25f79e813ae823d81`: `BisectHalt` with
-//!   `closed_leaves` (lines 336-348), the halt closure that closes
+//!   `closed_leaves` (lines 338-348), the halt closure that closes
 //!   already-created leaves and counts them (lines 411-421), and the
 //!   halt-after-linked-leaf vector (lines 980-1014). ADAPT: silent
 //!   drop-with-count becomes explicit per-link retirement; any unproven

@@ -189,8 +189,6 @@ pub struct ScriptBackend {
     next_id: u64,
     /// When set, `attach` panics at the given call index (0-based).
     pub panic_at_attach: Option<usize>,
-    /// When set, `retire`/`retire_uncertain` panic at the given call index.
-    pub panic_at_retire: Option<usize>,
     pub probe: Rc<Probe>,
 }
 
@@ -203,7 +201,6 @@ impl ScriptBackend {
             retire_script: RetireScript::default(),
             next_id: 0,
             panic_at_attach: None,
-            panic_at_retire: None,
             probe: Rc::new(Probe::default()),
         }
     }
@@ -301,9 +298,6 @@ unsafe impl AttachBackend for ScriptBackend {
     fn retire(&mut self, link: &mut Self::Link) -> NativeRetire {
         let call = self.probe.retire_calls.get();
         self.probe.retire_calls.set(call + 1);
-        if self.panic_at_retire == Some(call) {
-            panic!("scripted backend panic at retire call {call}");
-        }
         self.probe
             .log
             .borrow_mut()
@@ -314,9 +308,6 @@ unsafe impl AttachBackend for ScriptBackend {
     fn retire_uncertain(&mut self, custody: &mut Self::Uncertain) -> NativeRetire {
         let call = self.probe.retire_calls.get();
         self.probe.retire_calls.set(call + 1);
-        if self.panic_at_retire == Some(call) {
-            panic!("scripted backend panic at retire call {call}");
-        }
         self.probe
             .log
             .borrow_mut()

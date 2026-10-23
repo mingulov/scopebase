@@ -5,14 +5,18 @@
 //! `.worktrees/v040-integration/crates/bpf-multi/src/lib.rs`
 //! @ `2c2713e66292b0d2688508a25f79e813ae823d81` (halt-after-linked-leaf
 //! vector, lines 980-1014: the halt closes what it created and counts
-//! it) and KryProbe `crates/kryprobe-core/src/attach.rs` @ `d153f3aa`
+//! it), KryProbe `crates/kryprobe-core/src/attach.rs` @ `d153f3aa`
 //! (`d153f3aaf9a3931337b47c9e1b046c692da55083`, issuance-only
-//! `LinkGroup` construction, lines 38-80). Tickets here are likewise
-//! issuance-only and move-only, but retirement is explicit and
-//! per-object: only confirmed native retirement releases custody, and a
-//! failed cleanup is a typed error, never inferred success. All
-//! user-owned donor slices under blanket `OWNER-2026-10-23`;
-//! third-party/upstream lines never copied.
+//! `LinkGroup` construction, lines 38-80) and KryProbe
+//! `crates/kryprobe-privilege/src/attach.rs` @ `d153f3aa` (RAII
+//! `OwnedLink`, lines 53-72; stale-guard rejection, lines 94-102).
+//! Tickets here are likewise issuance-only and move-only, but
+//! retirement is explicit and per-object: only confirmed native
+//! retirement releases custody, and a failed cleanup is a typed error,
+//! never inferred success. The donor drop-closes RAII becomes
+//! drop-marks-orphaned, and the stale-guard shape becomes the
+//! session/stale-entry refusal. All user-owned donor slices under
+//! blanket `OWNER-2026-10-23`; third-party/upstream lines never copied.
 
 use crate::attach::plan::{AttachBackend, Site};
 use crate::attach::pool::RetirementPool;

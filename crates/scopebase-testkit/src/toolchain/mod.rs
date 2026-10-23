@@ -3,8 +3,9 @@
 //!
 //! Donor slices (p11scope-ws w000 @ 6f97aa47, frozen tree):
 //! `evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py`
-//! (lines 114, 122-126), `evidence/llvm-toolchain-review-20260922/
-//! kernel-oracle/run.py` (lines 56-57, 63-66). Whole files are user-authored
+//! (lines 122-126; line 114 is core-dump `setrlimit`, not ported),
+//! `evidence/llvm-toolchain-review-20260922/kernel-oracle/run.py`
+//! (lines 56-57, 63-66). Whole files are user-authored
 //! (TC01). ADAPT of argv-array subprocess, wall-clock timeout, bounded
 //! capture and hash-pinned-before-use; no upstream lines copied.
 //! Grant: OWNER-2026-10-23.

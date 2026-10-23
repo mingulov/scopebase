@@ -141,6 +141,8 @@ The [ratified descriptive host contract](../specs/2026-10-22-scopebase-bp03-host
 - [ ] **Step 4: Verify staged and live custody.** Pure/T3 command above; register BP11/TT05 `H04.held-file-live`, profile-selected H19 subcases, `H21.rollback-live` for execution after BP10. Use independently known workload operations at the original inode and active negative replacement. Outer timeout preserves unresolved custody; do not claim it interrupted native cleanup.
 - [ ] **Step 5: Review and commit.** Proposed `feat: retain file authority until explicit link retirement`. Acceptance: original authority and persistent charges survive all unproved native outcomes and dropped tickets; repeated failures hit capacity, clean conformance rejects unresolved owners, trait/concurrency/unwind limits are documented.
 
+Fixup 2026-10-23: proc-fd denial injection is designed out — the Linux route retains `Arc<HeldFile>` FDs and never touches procfs, so no procfs-denial seam exists to inject.
+
 ### BP06: Ring frame arithmetic, bounded reader and copied staging
 
 **Requirements:** BP-R06/BP-R07; B07/H12/H13/G10/G15. **Depends on:** BP01; BP10 integrates native readers later.

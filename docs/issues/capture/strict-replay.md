@@ -38,6 +38,16 @@ no raw payload is echoed and library calls emit no stdout/stderr.
 
 ## Deliberate deltas and limits
 
+- Surface redesign (ratified by controller ruling RATIFY-2026-10-23-CP10):
+  the implemented v1 surface differs deliberately from the pre-CP10 spec
+  draft — `max_*` replay limit names, kind/epoch/field raw records with a
+  closed 6-kind + terminal vocabulary, 18 `ReplayErrorKind` variants,
+  `ReplayDocument::new(source, unit, records, terminal)`, a versionless
+  `scopebase-capture/replay-v1` document with
+  `schema/capture/producer/epoch/binding/origin/unit/records` keys,
+  preserved (never forced-`Replayed`) origins, per-row validated types
+  and 8 `ValidatedNeutralV1` accessors. The spec now describes this
+  surface exactly; code is unchanged.
 - V1 corrects the KryProbe donor's bare-integer acceptance: bare JSON
   numbers refuse as `TypeMismatch`, so no float or bare-int coercion
   exists. The digit-string grammar itself is unchanged.
@@ -70,7 +80,9 @@ no raw payload is echoed and library calls emit no stdout/stderr.
   small valid vectors, the 4,096/4,097 record boundary, canonical
   encoding bytes, the control script and the owned-subprocess
   silence probe.
-- `cargo test -p scopebase-capture --features json --doc`: 8 passed.
+- `cargo test -p scopebase-capture --features json --doc`: 8 passed,
+  including the 4 CP10 compile-fail opacity blocks (`ValidatedCounter`,
+  `ValidatedNeutralV1`, `ReplayError`, `ReplayDocument`).
 - Full package: 203 passed with `--no-default-features`, 220 passed
   with `--features json`; zero failures. CP10 files are clippy- and
   rustfmt-clean.

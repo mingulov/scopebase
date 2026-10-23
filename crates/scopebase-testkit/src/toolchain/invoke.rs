@@ -3,8 +3,9 @@
 //!
 //! Donor slices (p11scope-ws w000 @ 6f97aa47, frozen tree):
 //! `evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py`
-//! (lines 114, 122-126: argument-array subprocess, `timeout=20`, piped
-//! capture with per-case logs) and `evidence/llvm-toolchain-review-20260922/
+//! (lines 122-126: argument-array subprocess, `timeout=20`, piped
+//! capture with per-case logs; line 114 is core-dump `setrlimit`, not
+//! ported) and `evidence/llvm-toolchain-review-20260922/
 //! kernel-oracle/run.py` (lines 56-57, 63-66: whole-matrix wall-clock
 //! budget, bytecode hash re-verified before execution, `timeout=10`).
 //! Whole donor files are user-authored (TC01). ADAPT to Rust with typed
@@ -127,9 +128,10 @@ fn is_proxy_key(key: &OsStr) -> bool {
 /// are `LimitExceeded/Admission` with the attempted count; malformed or
 /// network-bearing requests are `InvalidInput/Admission`; a missing
 /// executable is `InvalidInput/Execute`; other spawn failures, nonzero
-/// exits and signals are `Backend/Execute`; stdout/stderr overruns are
-/// `LimitExceeded/Execute` with the observed byte count (stdout takes
-/// precedence when both overrun); wall-clock expiry is
+/// exits, signals and output-reader failures are `Backend/Execute`;
+/// stdout/stderr overruns are `LimitExceeded/Execute` with the observed
+/// byte count (stdout takes precedence when both overrun, and overrun
+/// reports take precedence over reader failures); wall-clock expiry is
 /// `LimitExceeded/Execute` with no byte count. Overrun or expired
 /// children are killed before return.
 pub fn run_pinned(
@@ -221,6 +223,9 @@ pub fn run_pinned(
                 if out.overrun || err.overrun {
                     return Err(capped_error(&out, &err));
                 }
+                if out.read_error || err.read_error {
+                    return Err(reader_failed());
+                }
                 if status.success() {
                     return Ok(NestedOutput {
                         code: status.code(),
@@ -242,6 +247,9 @@ pub fn run_pinned(
                     if out.overrun || err.overrun {
                         return Err(capped_error(&out, &err));
                     }
+                    if out.read_error || err.read_error {
+                        return Err(reader_failed());
+                    }
                     return Err(bound_exceeded("wall-clock timeout", Stage::Execute));
                 }
                 std::thread::sleep(Duration::from_millis(1));
@@ -254,6 +262,7 @@ struct CappedOutput {
     data: Vec<u8>,
     observed: usize,
     overrun: bool,
+    read_error: bool,
 }
 
 fn spawn_capped_reader<R: Read + Send + 'static>(
@@ -272,6 +281,7 @@ fn spawn_capped_reader<R: Read + Send + 'static>(
                         data,
                         observed,
                         overrun: false,
+                        read_error: false,
                     };
                 }
                 Ok(count) => {
@@ -284,6 +294,7 @@ fn spawn_capped_reader<R: Read + Send + 'static>(
                             data,
                             observed,
                             overrun: true,
+                            read_error: false,
                         };
                     }
                     data.extend_from_slice(&chunk[..count]);
@@ -294,6 +305,7 @@ fn spawn_capped_reader<R: Read + Send + 'static>(
                         data,
                         observed,
                         overrun: false,
+                        read_error: true,
                     };
                 }
             }
@@ -327,6 +339,17 @@ fn kill_and_wait(child: &mut Child) -> Result<(), OperationError> {
     Ok(())
 }
 
+/// Output-reader failure: a mid-stream read failed, so the partial bytes
+/// are untrustworthy and never returned as success.
+fn reader_failed() -> OperationError {
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        None,
+        Some(Box::new(Detail("output reader failed"))),
+    )
+}
+
 /// Byte-overrun error with the observed count. Stdout takes precedence
 /// when both streams overrun so the report is deterministic.
 fn capped_error(stdout: &CappedOutput, stderr: &CappedOutput) -> OperationError {
@@ -334,5 +357,41 @@ fn capped_error(stdout: &CappedOutput, stderr: &CappedOutput) -> OperationError 
         bound_exceeded("stdout over bound", Stage::Execute).with_required_size(stdout.observed)
     } else {
         bound_exceeded("stderr over bound", Stage::Execute).with_required_size(stderr.observed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Scripted reader: yields one partial chunk, then a hard read error.
+    struct FailAfterPartial {
+        sent: bool,
+    }
+
+    impl Read for FailAfterPartial {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.sent {
+                self.sent = true;
+                let chunk = b"partial";
+                buf[..chunk.len()].copy_from_slice(chunk);
+                return Ok(chunk.len());
+            }
+            Err(std::io::Error::other("scripted read failure"))
+        }
+    }
+
+    #[test]
+    fn mid_stream_read_error_is_not_silent_eof() {
+        let hit = Arc::new(AtomicBool::new(false));
+        let out = spawn_capped_reader(FailAfterPartial { sent: false }, 1 << 20, hit)
+            .join()
+            .unwrap();
+        assert_eq!(out.data, b"partial");
+        assert!(!out.overrun);
+        assert!(
+            out.read_error,
+            "a mid-stream read failure must be reported, not treated as EOF"
+        );
     }
 }

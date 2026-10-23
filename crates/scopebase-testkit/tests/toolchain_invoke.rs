@@ -3,7 +3,8 @@
 //!
 //! Donor slices (p11scope-ws w000 @ 6f97aa47, frozen tree):
 //! `evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py`
-//! (lines 114, 122-126: argv-array subprocess, timeout=20, bounded capture),
+//! (lines 122-126: argv-array subprocess, timeout=20, bounded capture;
+//! line 114 is core-dump `setrlimit`, not ported),
 //! `evidence/llvm-toolchain-review-20260922/kernel-oracle/run.py`
 //! (lines 56-57, 63-66: wall-clock budget, hash re-verify before exec).
 //! Whole files are user-authored (TC01). ADAPT to Rust; no upstream lines
@@ -454,6 +455,9 @@ fn missing_executable_is_typed() {
 
 #[test]
 fn no_network_access_attempted() {
+    // Serial requirement: this mutates process-global environment. It must
+    // stay the only set_var/remove_var user in this binary; a second one
+    // needs a shared static lock (or --test-threads=1) to avoid races.
     std::env::set_var("TC02_PROBE_LEAK", "must-not-propagate");
     let out = run_pinned(
         &closure(),

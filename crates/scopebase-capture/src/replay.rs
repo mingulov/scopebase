@@ -134,7 +134,9 @@ impl ReplayRecord {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
-    /// Look up a raw member by exact name.
+    /// Look up a raw member by exact name. The canonical [`encode`]
+    /// emitter reads members in fixed order through this lookup, so the
+    /// canonical-encoding tests cover it.
     pub fn get(&self, name: &str) -> Option<&ReplayValue> {
         self.fields
             .iter()

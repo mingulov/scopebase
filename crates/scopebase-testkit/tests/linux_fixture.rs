@@ -385,6 +385,20 @@ fn prepare_collect_run_native_prefix() {
         .resource::<LinuxProcessFixture>(&Label::parse("linux.excluded-process").unwrap())
         .expect("linux.excluded-process resource");
     assert!(excluded.pid() > 0 && excluded.pid() != proc.pid());
+    assert_eq!(
+        excluded.nonleader_tid(),
+        None,
+        "excluded fixture exposes no TID"
+    );
+    let refused = excluded
+        .advance(&label("s01-ready"))
+        .expect_err("excluded fixture must refuse advance");
+    assert_eq!(refused.category(), FixtureErrorCategory::Denied);
+    assert_eq!(refused.step_id(), &label("s01-ready"));
+    assert_eq!(
+        refused.diagnostic_bytes(),
+        b"excluded fixture does not advance".as_slice()
+    );
     assert!(
         access.effects().registrations().len() >= 3,
         "prepare registers case-root and both children"

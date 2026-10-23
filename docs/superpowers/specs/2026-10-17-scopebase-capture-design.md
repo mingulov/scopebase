@@ -434,57 +434,66 @@ Shipped named scripts demonstrate baseline → readiness → admission → close
 
 ### Strict neutral replay
 
-Feature `json` exports the following exact surface. `ReplayRecord`/`ReplayValue`/`ReplayTerminal` are raw input values; only opaque `ReplayDocument` is validated. Public enum construction cannot bypass document admission. JSON variants use the displayed snake_case Rust variant names as `kind`; struct fields use the displayed snake_case names, and every struct/tag rejects unknown members. `ReplayDocument` JSON fields are exactly `schema`, `version`, `binding`, `records`.
+Feature `json` exports the following exact surface. `ReplayRecord`/`ReplayValue`/`ReplayTerminal` are raw input values; only a `ReplayDocument` admitted by `new`/`decode` is validated. Public construction cannot bypass document admission: `ReplayRecord::new` sorts members without checking them, and `ReplayTerminal::new` retains its inventory unchecked. Record `kind` strings use the displayed kebab-case names (`counter`, `loss`, `signal`, `claim`, `partition`, `correction`, `terminal`); record and document members use the displayed kebab-case names, and every object rejects unknown members. `ReplayDocument` JSON fields are exactly `schema`, `capture`, `producer`, `epoch`, `binding`, `origin`, `unit`, `records`; there is no `version` member.
 
 ```rust
 // replay.rs, feature = "json"
 pub struct ReplayLimits {
-    pub bytes: usize, pub records: usize, pub nesting: usize,
-    pub collection_items: usize, pub string_bytes: usize,
+    pub max_bytes: usize, pub max_records: usize, pub max_nesting: usize,
+    pub max_items: usize, pub max_string: usize,
 }
-pub struct ReplayRecord { pub id: u32, pub value: ReplayValue }
 pub enum ReplayValue {
-    Observation(NeutralObservationV1),
-    Counter { source: SourceRef, channel: ChannelId, unit: UnitTag,
-        policy: CounterPolicy, interval: TimeInterval, value: u64 },
-    Loss { source: SourceRef, counter: NeutralCounterV1, kind: LossKind },
-    InsertionLane { source: SourceRef, lane: u32,
-        identity: LaneIdentity<u64>, count: Count<Events> },
-    GenerationCheck { submitted: ObjectKey<u64>, current: ObjectKey<u64> },
-    Interval { source: SourceRef, interval: TimeInterval },
-    Partition { source: SourceRef, unit: UnitTag, total: u64,
-        matched: u64, nonmatched: u64, unknown: u64 },
-    AlternativeCount { source: SourceRef, site: SiteCount<u64>, classes: Vec<MatchClass> },
-    Closure { profile: ClosureProfile, record: ClosureRecord },
-    Correction { epoch: Epoch, from: u64, to: u64, replacement: NeutralObservationV1 },
-    Terminal(ReplayTerminal),
+    Null, Bool(bool), Text(String),
+    Array(Vec<ReplayValue>), Object(Vec<(String, ReplayValue)>),
 }
-pub struct ReplayTerminal {
-    pub required: Vec<u32>, pub observed: Vec<u32>, pub unresolved: Vec<ClaimId>,
+pub struct ReplayRecord { /* private kind/epoch/fields */ }
+impl ReplayRecord {
+    pub fn new(kind: &str, epoch: u64, fields: Vec<(String, ReplayValue)>) -> Self;
+    pub fn kind(&self) -> &str;
+    pub fn epoch(&self) -> u64;
+    pub fn get(&self, name: &str) -> Option<&ReplayValue>;
+    pub fn fields(&self) -> &[(String, ReplayValue)];
 }
-pub struct ReplayDocument { /* private binding + records */ }
+pub struct ReplayTerminal { /* private epoch + six per-kind counts */ }
+impl ReplayTerminal {
+    pub fn new(epoch: u64, counters: u64, loss: u64, signals: u64,
+        claims: u64, partitions: u64, corrections: u64) -> Self;
+    pub fn epoch(&self) -> u64;
+    pub fn counters(&self) -> u64;
+    pub fn loss(&self) -> u64;
+    pub fn signals(&self) -> u64;
+    pub fn claims(&self) -> u64;
+    pub fn partitions(&self) -> u64;
+    pub fn corrections(&self) -> u64;
+}
+pub struct ReplayDocument { /* private records + terminal + validated view */ }
 pub enum ReplayErrorKind {
-    Limit, DuplicateMember, InvalidNumber, InvalidSyntax, InvalidSemantics,
-    VersionMismatch, MissingTerminal, DuplicateTerminal,
+    TooLarge, TooDeep, StringTooLong, TooManyItems, DuplicateMember,
+    Malformed, TypeMismatch, NonCanonicalNumber, UnknownKind,
+    UnknownMember, MissingMember, LimitExceeded, EpochMismatch,
+    TerminalMissing, TerminalDuplicate, TerminalNotFinal,
+    InventoryMismatch, Contract(ContractError),
 }
 pub struct ReplayError { /* structured kind + byte offset, no raw input */ }
 impl ReplayError { pub fn kind(&self) -> ReplayErrorKind; pub fn offset(&self) -> usize; }
 impl ReplayDocument {
-    pub fn new(binding: BindingId, records: Vec<ReplayRecord>, limits: ReplayLimits)
+    pub fn new(source: NeutralSource, unit: NeutralUnit,
+        records: Vec<ReplayRecord>, terminal: ReplayTerminal)
         -> Result<Self, ReplayError>;
     pub fn records(&self) -> &[ReplayRecord];
     pub fn binding(&self) -> BindingId;
-    pub fn origin(&self) -> Origin; // always Replayed for this document container
+    pub fn origin(&self) -> Origin; // the preserved document origin
+    pub fn validated(&self) -> &ValidatedNeutralV1;
 }
 pub fn decode(bytes: &[u8], limits: ReplayLimits) -> Result<ReplayDocument, ReplayError>;
 pub fn encode(document: &ReplayDocument) -> Result<Vec<u8>, ReplayError>;
 ```
 
-Every document record ID is unique; terminal required/observed inventories contain unique prior record IDs and must agree, with unresolved claims retained explicitly. Ordinary records never receive semantic PASS merely because their ID appears in a terminal. Source bindings must match the document binding. Generation-check records validate the same explicit match as `require_generation`; a negative conformance vector therefore expects document rejection. Insertion lanes are grouped by source/channel script in the conformance invocation, rather than combining unrelated record IDs by timestamp. Scope partitions use dynamic unit dispatch to the same `ScopePartition<U>` constructor. Counter, loss, observation, interval, alternative and closure records similarly reuse their owning checked constructors/assessment. Correction requires matching replacement epoch, checked `to=from+1`, and cannot erase synthetic/replayed origin. Neutral insertion fixtures use integer identities only; product identities remain product schema. The document is a strict neutral evidence/vector format, not a universal product-event recorder or generic crypto/DMA reducer.
+Every record epoch must equal the document epoch, and the terminal must be the single last element. The terminal carries six per-kind counts (counters, loss, signals, claims, partitions, corrections) that must equal the unique prior data-record counts exactly; anything else refuses as `InventoryMismatch`. Ordinary records never receive semantic PASS merely because their kind appears in a terminal: every record is first validated alone against `validate_v1` under default neutral limits (so a lone bad row is attributed to its own byte offset), then the combined observation is validated. All records share the single document source; per-record epochs must equal its ordinal. Counter, loss, signal and correction records reuse their owning checked constructors (`Sample`, `LossFact`, `CappedLossSignal`, `Versioned`/`Correction`); partitions reuse `check_conservation` with dynamic unit dispatch to the matching `Count<U>`; claims are validated as vocabulary shape, uniqueness and limits. Correction requires `to = from + 1` from a genesis revision, so v1 admits only `0` to `1`, and cannot erase synthetic/replayed origin. V1 has no generation, insertion-lane, alternative-candidate, interval or closure record kinds. The document is a strict neutral evidence/vector format, not a universal product-event recorder or generic crypto/DMA reducer.
 
-`ReplayLimits` is checked before parsing; documented installed profile values are 1 MiB bytes, 4,096 records, nesting 16, 4,096 collection items and 256 bytes per text field. The neutral format is `schema="scopebase.capture.replay"`, `version=1`, exact binding as 64 lowercase hex characters, records array, and exactly one final terminal record with required operand inventory. Counts/timestamps/ordinals are canonical decimal **strings** matching `0|[1-9][0-9]*`, capped at u64 max; never JSON floating point. IDs are fixed-size lowercase hex without trailing whitespace/newlines. Unknown members/tags, duplicate members at any depth, NaN/Infinity, bool counts, duplicate/missing terminal, records after terminal, contradictions, overflow, malformed identity/generation and mixed domains refuse. No trailing bytes except ASCII JSON whitespace; duplicate detection uses a streaming Serde visitor before constructing a map/`Value`. Allocation/collection/depth limits apply during parse, not after a full unbounded DOM has been made. Invalid input cannot partly publish a document.
+`ReplayLimits` is checked before parsing; documented installed profile values are 1,048,576 max bytes, 4,096 max records, nesting 16, 4,096 max items and 256 bytes per text field. Data records are capped at `max_records`; the mandatory terminal holds one extra structural slot, so the 4,097th data record refuses before any record buffer grows. The neutral format is `schema="scopebase-capture/replay-v1"` with no version member, exact capture/producer/binding pins as 32/32/64 lowercase hex characters, a canonical-u64 `epoch` string, a closed `origin` name, a closed `unit` name, the records array, and exactly one final terminal record carrying the six-kind inventory. Counts/timestamps/ordinals are canonical decimal **strings** matching `0|[1-9][0-9]*`, capped at u64 max; never JSON floating point or bare numbers (bare numbers refuse as `TypeMismatch`, a deliberate tightening of the KryProbe donor, which also accepts bare integers). Pins and clocks are exact lowercase-hex fullmatches without trailing whitespace/newlines. Unknown members/kinds, duplicate members at any depth (compared on decoded names, so an escaped twin refuses), NaN/Infinity, bool counts, duplicate/missing/nonfinal terminal, records after terminal, contradictions, overflow, malformed pins and mixed domains refuse. No trailing bytes except ASCII JSON whitespace; duplicate detection uses a structural pre-scan over raw bytes before `serde_json` builds its DOM. Allocation/collection/depth limits apply during parse, not after a full unbounded DOM has been made. Invalid input cannot partly publish a document.
 
-Every source-bearing record stores `origin`; its JSON source object also has `synthetic` (true exactly when origin is Synthetic), checked consistently. Epoch/source JSON objects have exactly the corresponding constructor fields; SourceRef additionally carries that synthetic flag. `ReplayDocument::origin()` is always `Replayed`. Source origins inside its records are historical metadata describing the recorded assertion, including its synthetic flag; they never describe a newly observed live boundary. `records()` returns those historical operands for checking, without a conversion into current live authority. Import neither rewrites a historical synthetic flag nor presents a historical adapter assertion as a newly performed observation. A caller deliberately constructing a new adapter assertion remains responsible for that claim, exactly as for any safe raw backend. Terminal operands name required case outputs; a terminal does not erase earlier failures or unresolved predicates. Encode/decode self-roundtrip is supplementary only. Independent authored `.jsonl` input/expected vectors include `2^53+1`, u64 max/overflow, missing versus zero, crossed domains, duplicate/late records and synthetic origin. C/Mojo consumers may later use the same vector bytes; no FFI or native ABI is part of v1.
+The document `origin` is a closed name (`adapter-reported`, `synthetic`, `replayed`) preserved exactly through admission; `ReplayDocument::origin()` returns that preserved origin, never a forced `Replayed`. Per-record members use the closed unit, loss-kind, reason, policy and magnitude vocabularies shown in the neutral seam below. Origins are historical metadata describing the recorded assertion; they never describe a newly observed live boundary and are never promoted. `records()` returns those historical operands for checking, without a conversion into current live authority. Import neither rewrites a historical origin nor presents a historical adapter assertion as a newly performed observation. A caller deliberately constructing a new adapter assertion remains responsible for that claim, exactly as for any safe raw backend. The terminal names per-kind record counts; it does not erase earlier failures. `encode` re-emits an admitted document in canonical member order as a deterministic function of admitted content; encode/decode self-roundtrip is supplementary only. Independent hand-authored input/expected vectors include `2^53+1`, u64 max/overflow, missing versus zero, crossed domains, duplicate/late records and synthetic origin. C/Mojo consumers may later use the same vector bytes; no FFI or native ABI is part of v1.
 
 ## Canonical neutral validation seam for selective interoperability
 
@@ -492,36 +501,90 @@ Capture owns semantic validation, while `scopebase-ffi` owns any bounded native 
 
 ```rust
 // neutral.rs; all input structs have the shown public fields.
-pub enum UnitTag { Events, Records, Bytes, Objects, Attempts, Nonexecutions, DiagnosticSignals }
-pub enum NeutralMagnitudeV1 {
-    Exact(u64), AtLeast(u64), Unknown,
-    CappedSignal { observed: u8, cap: u8 },
+pub enum NeutralUnit {
+    Events, Records, Bytes, Objects, Attempts, Nonexecutions, DiagnosticSignals,
 }
-pub struct NeutralCounterV1 {
-    pub channel: u32, pub unit: UnitTag, pub magnitude: NeutralMagnitudeV1,
+pub enum NeutralOrigin { AdapterReported, Synthetic, Replayed }
+pub enum NeutralPolicy { Monotonic, Saturating { maximum: u64 }, Modulo { width: u8 } }
+pub enum NeutralLossKind {
+    Discovery, Transport, KernelNonexecution, Attribution,
+    QueueOverflow, MalformedInput, DiagnosticTruncation,
 }
-pub struct NeutralClaimV1 { pub claim: u32, pub reasons: Vec<QualityReason> }
+pub enum NeutralMagnitude { Exact(u64), AtLeast(u64), Unknown }
+pub enum NeutralReason { ConsumedLoss, MissingEvidence, QueryPartial, Ambiguous, Capacity }
+pub struct NeutralSource {
+    pub capture: [u8; 16], pub producer: [u8; 16], pub ordinal: u64,
+    pub binding: [u8; 32], pub origin: NeutralOrigin,
+}
+pub struct NeutralCounter {
+    pub channel: u32, pub policy: NeutralPolicy, pub clock: [u8; 16],
+    pub start: u64, pub end: u64, pub value: u64, pub unit: NeutralUnit,
+}
+pub struct NeutralLoss {
+    pub channel: u32, pub kind: NeutralLossKind,
+    pub magnitude: NeutralMagnitude, pub unit: NeutralUnit,
+}
+pub struct NeutralSignal {
+    pub channel: u32, pub observed: u8, pub cap: u8, pub unit: NeutralUnit,
+}
+pub struct NeutralClaim { pub claim: u32, pub reasons: Vec<NeutralReason> }
+pub struct NeutralPartition {
+    pub total: u64, pub parts: Vec<u64>, pub unit: NeutralUnit,
+}
+pub struct NeutralCorrection { pub from: u64, pub to: u64 }
 pub struct NeutralObservationV1 {
-    pub capture: [u8; 16], pub producer: [u8; 16], pub epoch: u64,
-    pub binding: [u8; 32], pub origin: Origin,
-    pub counters: Vec<NeutralCounterV1>, pub claims: Vec<NeutralClaimV1>,
+    pub source: NeutralSource, pub unit: NeutralUnit,
+    pub counters: Vec<NeutralCounter>, pub losses: Vec<NeutralLoss>,
+    pub signals: Vec<NeutralSignal>, pub claims: Vec<NeutralClaim>,
+    pub partitions: Vec<NeutralPartition>, pub corrections: Vec<NeutralCorrection>,
 }
 pub struct NeutralLimits {
     pub counters: usize, pub claims: usize, pub reasons_per_claim: usize,
 }
-pub struct ValidatedNeutralV1 { /* private checked source/counters/claims */ }
+pub fn parse_count_u64(text: &str) -> Result<u64, ContractError>;
+pub fn parse_unit_name(name: &str) -> Result<NeutralUnit, ContractError>;
+pub fn parse_origin_name(name: &str) -> Result<NeutralOrigin, ContractError>;
+pub fn parse_loss_kind(name: &str) -> Result<NeutralLossKind, ContractError>;
+pub fn parse_reason_name(name: &str) -> Result<NeutralReason, ContractError>;
+pub struct ValidatedCounter { /* private checked channel/unit/policy/start/end/value */ }
+pub struct ValidatedLoss { /* private checked channel/kind/magnitude/unit */ }
+pub struct ValidatedSignal { /* private checked channel/observed/cap */ }
+pub struct ValidatedClaim { /* private checked claim/reasons */ }
+pub struct ValidatedNeutralV1 { /* private checked source/unit/rows/counts */ }
 pub fn validate_v1(input: &NeutralObservationV1, limits: NeutralLimits)
     -> Result<ValidatedNeutralV1, ContractError>;
+impl ValidatedCounter {
+    pub fn channel(&self) -> u32; pub fn unit(&self) -> NeutralUnit;
+    pub fn policy(&self) -> NeutralPolicy; pub fn start(&self) -> u64;
+    pub fn end(&self) -> u64; pub fn value(&self) -> u64;
+}
+impl ValidatedLoss {
+    pub fn channel(&self) -> u32; pub fn kind(&self) -> NeutralLossKind;
+    pub fn magnitude(&self) -> NeutralMagnitude; pub fn unit(&self) -> NeutralUnit;
+}
+impl ValidatedSignal {
+    pub fn channel(&self) -> u32; pub fn observed(&self) -> u8; pub fn cap(&self) -> u8;
+}
+impl ValidatedClaim {
+    pub fn claim(&self) -> u32; pub fn reasons(&self) -> &[NeutralReason];
+}
 impl ValidatedNeutralV1 {
     pub fn source(&self) -> &SourceRef;
-    pub fn counters(&self) -> &[NeutralCounterV1];
-    pub fn claims(&self) -> &[NeutralClaimV1];
+    pub fn unit(&self) -> NeutralUnit;
+    pub fn counters(&self) -> &[ValidatedCounter];
+    pub fn losses(&self) -> &[ValidatedLoss];
+    pub fn signals(&self) -> &[ValidatedSignal];
+    pub fn claims(&self) -> &[ValidatedClaim];
+    pub fn partition_count(&self) -> usize;
+    pub fn correction_count(&self) -> usize;
 }
 ```
 
-`NeutralLimits::default()` is counters=4,096, claims=4,096, reasons_per_claim=16; a caller may lower each, but may not exceed these v1 maxima. Zero limits permit an empty corresponding collection. Check cardinality before cloning, reject duplicate channels/claims/reasons, all-zero byte-array IDs, and capped signals in units other than `DiagnosticSignals`. Capped signals use the same nonzero-cap/observed≤cap invariant as `CappedLossSignal`. Exact zero and Unknown are distinct accepted inputs. Zero numeric IDs/epoch are valid. Reasons describe only their named claim; QueryPartial remains a view reason and cannot be fed back as persistent consumed loss. SDK uses the three validated accessors as report metadata, never infers global completeness or trusted closure. Metadata summary omits raw payloads and grants no new authority.
+`NeutralLimits::default()` is counters=4,096, claims=4,096, reasons_per_claim=16; a caller may lower each, but may not exceed these v1 maxima. Zero limits permit an empty corresponding collection. Refusal precedence is fixed: limits, source identity, duplicates, unit coherence, then per-item constructor checks in input order; limit checks precede every clone and allocation. Validation rejects duplicate counter/loss/signal channels, duplicate claims, duplicate reasons within a claim, over-limit reason lists, all-zero byte-array IDs, and signals naming a unit other than `DiagnosticSignals`; counters, losses and partitions must name the document unit. Counter policies are closed (`monotonic`, `{"saturating": maximum}`, `{"modulo": width}` with width in `1..=64`); loss magnitudes keep exact zero, lower bounds and Unknown distinct. Signals use the same nonzero-cap/observed≤cap invariant as `CappedLossSignal`. Exact zero and Unknown are distinct accepted inputs. Zero numeric channels/claims/ordinals are valid. Reasons describe only their named claim; QueryPartial remains a view reason and cannot be fed back as persistent consumed loss. SDK uses the eight validated accessors as report metadata, never infers global completeness or trusted closure. Metadata summary omits raw payloads and grants no new authority. The four opaque types (`ValidatedCounter`, `ValidatedNeutralV1`, `ReplayError`, `ReplayDocument`) each carry one compile-fail opacity doctest, 4 blocks total.
 
 This validator cannot bound an input `Vec` already allocated by its caller. The native codec must preflight input byte extent, counts, discriminants and checked count×stride before allocation, then call this one validator for semantic acceptance. Its binary version/discriminants are owned by the native plan, with an explicit mapping to these fixed Rust variants. Capture does not maintain a second binary codec. Replay uses this seam when importing the corresponding neutral observations, avoiding a separate weakened semantic path. CP10 owns its implementation and tests; CP-R01/CP-R02/CP-R12/CP-R16 apply.
+
+Ratification note (controller ruling RATIFY-2026-10-23-CP10, binding): the pre-CP10 draft of this section described a different neutral/replay surface (bare `bytes`/`records` limit names, ID-addressed `ReplayValue` variants, an 8-variant error type, a `version` document member and 3 validated accessors). The implemented and tested surface above — `max_*` limits, kind/epoch/field records, 18 error variants, the versionless `scopebase-capture/replay-v1` document, preserved origins and 8 validated accessors — is coherent and fully covered by the CP10 suites, and is hereby ratified as the v1 contract; this section now describes the implementation exactly.
 
 ## Bounds, errors and concurrency
 
