@@ -18,6 +18,9 @@ pub mod error;
 /// Retained file authority and bounded positional reads with observation-only results.
 pub mod file;
 pub mod identity;
+/// Strict process observation authority, task birth and observer epochs (LX08).
+#[cfg(feature = "process")]
+pub mod process;
 pub mod procfs;
 /// Explicit bounded descriptor-relative directory discovery (LX10).
 #[cfg(feature = "walk")]

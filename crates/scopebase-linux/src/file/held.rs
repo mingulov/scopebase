@@ -194,7 +194,11 @@ impl Ops {
                 acquired: self.acquired,
                 peak: self.peak,
                 read: None,
+                #[cfg(feature = "process")]
+                process: None,
             },
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
     fn semantic(&self, stage: Stage, reason: Reason) -> LinuxError {

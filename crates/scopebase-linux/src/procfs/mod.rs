@@ -81,8 +81,12 @@ fn error(stage: Stage, reason: Reason, line: Option<usize>, c: ParseCharges) -> 
             acquired: 0,
             peak: 0,
             read: None,
+            #[cfg(feature = "process")]
+            process: None,
             parse: Some(c),
         },
+        #[cfg(feature = "process")]
+        process: None,
     }
 }
 fn preflight(

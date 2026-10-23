@@ -13,7 +13,7 @@ include = ["Cargo.toml", "README.md", "src/**", "tests/**", "LICENSE-APACHE", "T
 
 [features]
 default = []
-process = []
+process = ["rustix/process", "rustix/event"]
 mapping = ["process"]
 supervision = ["process"]
 walk = []
@@ -28,3 +28,8 @@ path = "tests/support/fd_probe.rs"
 [[test]]
 name = "proc_parsers"
 path = "tests/proc_parsers.rs"
+
+[[test]]
+name = "process_observation"
+path = "tests/process_observation.rs"
+required-features = ["process"]
