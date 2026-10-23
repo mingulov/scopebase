@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "bp10_loader_manifest",
+  "loader": "aya",
+  "binding": "real",
+  "admitted_versions": ["0.14.0"],
+  "notes": "Narrow adapter over upstream aya =0.14.0 (registry, defaults off). The real binding is compile-verified; live attach cells are NOT_RUN here (no privileged kernel) and belong to BP11/TT05."
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "kind": "bp10_native_output_vector",
+  "cases": [
+    {
+      "name": "lookup-miss-keeps-sentinels",
+      "spans": [
+        { "id": 1, "sentinel": "0011223344556677" },
+        { "id": 2, "sentinel": "8899aabbccddeeff" }
+      ],
+      "lookup": 99,
+      "expect": "miss",
+      "rule": null,
+      "sentinels": ["0011223344556677", "8899aabbccddeeff"]
+    },
+    {
+      "name": "lookup-hit-keeps-sentinels",
+      "spans": [
+        { "id": 1, "sentinel": "0011223344556677" },
+        { "id": 2, "sentinel": "8899aabbccddeeff" }
+      ],
+      "lookup": 2,
+      "expect": "hit",
+      "rule": null,
+      "sentinels": ["0011223344556677", "8899aabbccddeeff"]
+    },
+    {
+      "name": "distinct-sentinels-per-span",
+      "spans": [
+        { "id": 7, "sentinel": "deadbeef00000001" },
+        { "id": 8, "sentinel": "deadbeef00000002" },
+        { "id": 9, "sentinel": "deadbeef00000003" }
+      ],
+      "lookup": 8,
+      "expect": "hit",
+      "rule": null,
+      "sentinels": ["deadbeef00000001", "deadbeef00000002", "deadbeef00000003"]
+    },
+    {
+      "name": "duplicate-span-id-refused",
+      "spans": [
+        { "id": 1, "sentinel": "0011223344556677" },
+        { "id": 1, "sentinel": "8899aabbccddeeff" }
+      ],
+      "lookup": 1,
+      "expect": "refused",
+      "rule": "native.output.distinct-sentinels",
+      "sentinels": []
+    },
+    {
+      "name": "duplicate-sentinel-value-refused",
+      "spans": [
+        { "id": 1, "sentinel": "0011223344556677" },
+        { "id": 2, "sentinel": "0011223344556677" }
+      ],
+      "lookup": 1,
+      "expect": "refused",
+      "rule": "native.output.distinct-sentinels",
+      "sentinels": []
+    },
+    {
+      "name": "empty-ledger-lookup-miss",
+      "spans": [],
+      "lookup": 1,
+      "expect": "miss",
+      "rule": null,
+      "sentinels": []
+    }
+  ]
+}

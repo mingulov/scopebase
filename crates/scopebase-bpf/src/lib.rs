@@ -81,6 +81,24 @@ pub use writer::{
     IDENTITY_PRESENT,
 };
 
+#[cfg(feature = "adapters")]
+pub mod adapters;
+#[cfg(feature = "adapters")]
+pub use adapters::{
+    admit_loader, classify_loader_errno, AdapterViolation, AdmittedLoader, AyaBackend,
+    AyaUprobeShape, BpfmanBackend, BpfmanShape, LibbpfBackend, LibbpfObjectShape, LoaderId,
+    LoaderVersion, NativeConfig, NativeState, OutputLedger, OutputSpan, ProgramAdoptError,
+    RULE_ATTACH_MODE, RULE_ATTACH_PAIRING, RULE_CONFIG_AUTOLOAD, RULE_CONFIG_GENERATION,
+    RULE_CONFIG_POISONED, RULE_CONFIG_TARGET, RULE_OUTPUT_DISTINCT, RULE_PROFILE_SUPPORTED,
+    RULE_VERSION_SUPPORTED,
+};
+#[cfg(all(feature = "adapters", feature = "json"))]
+pub use adapters::{
+    parse_configure_vector, parse_output_vector, ConfigureCase, ConfigureVector, OutputCase,
+    OutputVector, NATIVE_VECTOR_MAX_CASES, NATIVE_VECTOR_MAX_NAME, NATIVE_VECTOR_MAX_SPANS,
+    NATIVE_VECTOR_SCHEMA_VERSION,
+};
+
 pub mod identity;
 pub use identity::{
     advance_exec, plan_exec_read, same_execution, Admission, ExecAdvance, ExecGeneration,

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "bp10_loader_manifest",
+  "loader": "bpfman",
+  "binding": "shape",
+  "admitted_versions": ["0.1.0"],
+  "notes": "Shape-only seam by design: bpfman is an operator/manager API, not a linked loader. The adapter proves admission, version gating and contract vectors over the narrow BpfmanShape seam; an operator binding is later work."
+}

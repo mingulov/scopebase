@@ -16,6 +16,14 @@ autoexamples = false
 [features]
 default = []
 json = ["dep:serde", "dep:serde_json"]
+# BP10 narrow existing-loader adapters (Aya/libbpf/bpfman-shape) over the
+# BP04/BP05 attach seams with Arc<HeldFile> authority. Default off: no new
+# mandatory dependency for host-only users.
+adapters = ["dep:scopebase-linux"]
+# BP10 real Aya binding: implements the narrow AyaUprobeShape seam over
+# upstream aya =0.14.0 (registry, defaults off, no features). Compile-only
+# here; live attach cells are NOT_RUN without a privileged kernel.
+aya = ["adapters", "dep:aya"]
 btf = ["dep:btf-rs"]
 # BP08 optional producer task/exec identity route. Host identity values are
 # always compiled; this feature binds the packaged C fixture route
@@ -25,6 +33,8 @@ btf = ["dep:btf-rs"]
 producer-fixtures = []
 
 [dependencies]
+scopebase-linux = { version = "=0.1.0", path = "../scopebase-linux", default-features = false, optional = true }
+aya = { version = "=0.14.0", default-features = false, optional = true }
 serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
 # BP09 locked parser: retis-org/btf-rs at the SB02-probed revision (v2.0.0).
@@ -37,8 +47,13 @@ sha2 = { version = "=0.11.0", default-features = false }
 
 [dev-dependencies]
 # BP05 retirement tests bind the real LX02 HeldFile authority (from_file
-# adoption, AsFd borrows); the production library stays dependency-free.
+# adoption, AsFd borrows). Default production builds stay dependency-free;
+# the optional BP10 `adapters` feature adds scopebase-linux for HeldFile
+# authority (see [dependencies] above).
 scopebase-linux = { version = "0.1.0", path = "../scopebase-linux" }
+# BP10 seam-ratification test calls TC03/TC05 entry points as independent
+# seams (dev-only; the production adapters never depend on the testkit).
+scopebase-testkit = { version = "=0.1.0", path = "../scopebase-testkit", default-features = false, features = ["object"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))'.dependencies]
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process", "thread", "linux_4_11"] }
@@ -79,6 +94,11 @@ path="examples/who_map_reader.rs"
 [[example]]
 name="bp02_live_fixture"
 path="examples/bp02_live_fixture.rs"
+
+[[example]]
+name = "adapters_smoke"
+path = "examples/adapters_smoke.rs"
+required-features = ["adapters", "json"]
 
 [[test]]
 name = "capability"
@@ -121,3 +141,18 @@ path = "tests/writer_identity.rs"
 [[test]]
 name = "producer_identity"
 path = "tests/producer_identity.rs"
+
+[[test]]
+name = "aya_adapter"
+path = "tests/aya_adapter.rs"
+required-features = ["adapters", "json"]
+
+[[test]]
+name = "libbpf_adapter"
+path = "tests/libbpf_adapter.rs"
+required-features = ["adapters", "json"]
+
+[[test]]
+name = "bpfman_adapter"
+path = "tests/bpfman_adapter.rs"
+required-features = ["adapters", "json"]

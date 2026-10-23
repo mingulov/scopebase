@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "kind": "bp10_loader_manifest",
+  "loader": "libbpf",
+  "binding": "shape",
+  "admitted_versions": ["0.1.0"],
+  "notes": "Shape-only seam in BP10: libbpf-rs was unavailable in the offline crate cache, so no real binding is compiled. The adapter logic, version gate and contract vectors are proven over the narrow LibbpfObjectShape seam; the real libbpf-rs binding is a named follow-up."
+}
