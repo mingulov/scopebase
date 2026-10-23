@@ -10,6 +10,8 @@ use std::path::Path;
 
 /// Receipt envelope schema marker.
 pub const RECEIPT_SCHEMA: &str = "operator-receipt-v1";
+/// R48: the only supported receipt envelope version.
+pub const RECEIPT_SCHEMA_VERSION: u64 = 1;
 /// Explicit non-authority statement carried by every receipt.
 pub const NON_AUTHORITY_STATEMENT: &str = "This receipt records observed historical evidence only; it is not runtime authority and certifies no other build, version or application embedding.";
 
@@ -48,7 +50,7 @@ pub fn build(
         })?;
     let envelope = serde_json::json!({
         "schema": RECEIPT_SCHEMA,
-        "schema_version": 1,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
         "runtime_authority": false,
         "runtime_authority_statement": NON_AUTHORITY_STATEMENT,
         "run_id": run_id,
@@ -71,13 +73,28 @@ pub fn build(
 
 /// Verify a receipt envelope: schema, seal, bindings and verdict shape.
 pub fn verify_receipt(path: &Path) -> Result<ReceiptReport, OperatorError> {
-    let bytes = std::fs::read(path).map_err(|e| {
+    // R37: the envelope is read exactly once; seal, bindings and the
+    // report are all admitted from those same bytes.
+    let bytes = read_envelope_bytes(path)?;
+    Ok(verify_envelope(&bytes)?.0)
+}
+
+/// Read the receipt envelope bytes: the single read site shared by
+/// shallow and full verification.
+fn read_envelope_bytes(path: &Path) -> Result<Vec<u8>, OperatorError> {
+    std::fs::read(path).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
             format!("cannot read receipt {}: {e}", path.display()),
         )
-    })?;
-    let envelope: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+    })
+}
+
+/// Admit one already-read envelope: schema, version, mandatory
+/// shapes, seal and structural verdict. Returns the report plus the
+/// admitted envelope so full verification reuses these same bytes.
+fn verify_envelope(bytes: &[u8]) -> Result<(ReceiptReport, serde_json::Value), OperatorError> {
+    let envelope: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::ReceiptInvalid,
             format!("receipt is not JSON: {e}"),
@@ -86,6 +103,13 @@ pub fn verify_receipt(path: &Path) -> Result<ReceiptReport, OperatorError> {
     invalid_if(
         envelope.get("schema").and_then(|s| s.as_str()) != Some(RECEIPT_SCHEMA),
         "receipt has the wrong schema",
+    )?;
+    // R48: the envelope version and mandatory field shapes gate seal
+    // and report admission. A resealed envelope with an unsupported
+    // version, or with unshaped bindings, never reaches the seal.
+    invalid_if(
+        envelope.get("schema_version").and_then(|v| v.as_u64()) != Some(RECEIPT_SCHEMA_VERSION),
+        "receipt has an unsupported envelope version",
     )?;
     invalid_if(
         envelope.get("runtime_authority") != Some(&serde_json::Value::from(false)),
@@ -98,32 +122,21 @@ pub fn verify_receipt(path: &Path) -> Result<ReceiptReport, OperatorError> {
             != Some(NON_AUTHORITY_STATEMENT),
         "receipt lacks its non-authority statement",
     )?;
-    let sealed = envelope
-        .get("envelope_sha256")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::ReceiptInvalid,
-                "receipt lacks its seal",
-            )
-        })?;
-    let recomputed = scopebase_testkit::Digest256::of_bytes(
-        serde_json::to_vec(&envelope_canonical(&envelope)).unwrap().as_slice(),
-    )
-    .as_str();
-    invalid_if(
-        sealed != recomputed,
-        "receipt seal does not match its contents",
-    )?;
     let run_id = envelope
         .get("run_id")
         .and_then(|r| r.as_str())
-        .unwrap_or("?")
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| {
+            OperatorError::new(OperatorErrorKind::ReceiptInvalid, "receipt lacks a run id")
+        })?
         .to_string();
     let profile = envelope
         .get("profile")
         .and_then(|p| p.as_str())
-        .unwrap_or("?")
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            OperatorError::new(OperatorErrorKind::ReceiptInvalid, "receipt lacks a profile")
+        })?
         .to_string();
     let report_value: serde_json::Value = envelope.get("report").cloned().ok_or_else(|| {
         OperatorError::new(
@@ -131,14 +144,34 @@ pub fn verify_receipt(path: &Path) -> Result<ReceiptReport, OperatorError> {
             "receipt lacks its report",
         )
     })?;
+    invalid_if(!report_value.is_object(), "receipt report is not an object")?;
+    let sealed = envelope
+        .get("envelope_sha256")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| {
+            OperatorError::new(OperatorErrorKind::ReceiptInvalid, "receipt lacks its seal")
+        })?;
+    let recomputed = scopebase_testkit::Digest256::of_bytes(
+        serde_json::to_vec(&envelope_canonical(&envelope))
+            .unwrap()
+            .as_slice(),
+    )
+    .as_str();
+    invalid_if(
+        sealed != recomputed,
+        "receipt seal does not match its contents",
+    )?;
     let qualification = structural_qualification(&report_value, &run_id)?;
-    Ok(ReceiptReport {
-        schema: RECEIPT_SCHEMA.into(),
-        run_id,
-        profile,
-        qualification,
-        runtime_authority: false,
-    })
+    Ok((
+        ReceiptReport {
+            schema: RECEIPT_SCHEMA.into(),
+            run_id,
+            profile,
+            qualification,
+            runtime_authority: false,
+        },
+        envelope,
+    ))
 }
 
 /// Verify a receipt with full engine admission against a catalog.
@@ -150,7 +183,10 @@ pub fn verify_receipt_with_catalog(
     path: &Path,
     catalog_bytes: &[u8],
 ) -> Result<ReceiptReport, OperatorError> {
-    let shallow = verify_receipt(path)?;
+    // R37: one read; the seal-checked envelope below is the same
+    // value the report and bindings are admitted from.
+    let bytes = read_envelope_bytes(path)?;
+    let (shallow, envelope) = verify_envelope(&bytes)?;
     let staged = path
         .parent()
         .map(|d| d.join("staging").join("contract.json"))
@@ -176,49 +212,34 @@ pub fn verify_receipt_with_catalog(
             format!("catalog rejected: {e}"),
         )
     })?;
-    let profile_id =
-        scopebase_testkit::ProfileId::parse(&shallow.profile).map_err(|_| {
-            OperatorError::new(
-                OperatorErrorKind::ReceiptInvalid,
-                "receipt profile is not an identifier",
-            )
-        })?;
+    let profile_id = scopebase_testkit::ProfileId::parse(&shallow.profile).map_err(|_| {
+        OperatorError::new(
+            OperatorErrorKind::ReceiptInvalid,
+            "receipt profile is not an identifier",
+        )
+    })?;
     let plan = scopebase_testkit::ProfilePlan::select(&catalog, &profile_id).map_err(|_| {
         OperatorError::new(
             OperatorErrorKind::ReceiptInvalid,
             "receipt profile is not in the catalog",
         )
     })?;
-    let contract =
-        RunContract::load(&catalog, &plan, &contract_bytes, RunLimits::default()).map_err(|e| {
+    let contract = RunContract::load(&catalog, &plan, &contract_bytes, RunLimits::default())
+        .map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::ReceiptInvalid,
                 format!("staged contract rejected: {e}"),
             )
         })?;
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!("cannot re-read receipt: {e}"),
-            )
-        })?)
-        .map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::ReceiptInvalid,
-                format!("receipt is not JSON: {e}"),
-            )
-        })?;
-    let report_bytes = serde_json::to_vec(envelope.get("report").unwrap_or(&serde_json::Value::Null))
-        .unwrap();
-    let admitted = RunReport::from_json(&contract, &report_bytes, RunLimits::default()).map_err(
-        |e| {
+    let report_bytes =
+        serde_json::to_vec(envelope.get("report").unwrap_or(&serde_json::Value::Null)).unwrap();
+    let admitted =
+        RunReport::from_json(&contract, &report_bytes, RunLimits::default()).map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::ReceiptInvalid,
                 format!("report re-admission rejected: {e}"),
             )
-        },
-    )?;
+        })?;
     if admitted.qualification() != shallow.qualification {
         return Err(OperatorError::new(
             OperatorErrorKind::ReceiptInvalid,

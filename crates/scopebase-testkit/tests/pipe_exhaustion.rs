@@ -18,11 +18,58 @@ fn fd_count() -> usize {
         .count()
 }
 
+/// R32: exclusively create a private temp dir; a pre-existing
+/// candidate is refused, never reused (see filesystem_cells).
+fn claim_temp_dir(dir: &std::path::Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) => panic!(
+            "refused: temp candidate {} already exists ({e})",
+            dir.display()
+        ),
+    }
+}
+
 #[test]
 fn second_pipe_failure_leaks_no_descriptors() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // R32 canary, folded into this test: a second #[test] in this
+    // binary would share the process with fd exhaustion. A
+    // preplanted symlink at the claimed path is refused, never
+    // followed.
+    {
+        let plant = std::env::temp_dir().join(format!(
+            "tt04-pipe-f20-plant-{}-{:x}",
+            std::process::id(),
+            nonce
+        ));
+        let _ = std::fs::remove_file(&plant);
+        let outside = std::env::temp_dir().join(format!(
+            "tt04-pipe-f20-outside-{}-{:x}",
+            std::process::id(),
+            nonce
+        ));
+        let _ = std::fs::remove_dir_all(&outside);
+        claim_temp_dir(&outside);
+        let canary = outside.join("canary.txt");
+        std::fs::write(&canary, b"canary").expect("canary bytes");
+        std::os::unix::fs::symlink(&outside, &plant).expect("plant link");
+        let outcome = std::panic::catch_unwind(|| claim_temp_dir(&plant));
+        assert!(
+            outcome.is_err(),
+            "preplanted symlink was claimed instead of refused"
+        );
+        assert_eq!(std::fs::read(&canary).expect("canary reads"), b"canary");
+        std::fs::remove_file(&plant).expect("plant cleanup");
+        std::fs::remove_dir_all(&outside).expect("outside cleanup");
+    }
     // Fixture the mapping target can mmap (needs >= 4096 bytes).
-    let dir = std::env::temp_dir().join(format!("tt04-pipe-f20-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
+    let dir =
+        std::env::temp_dir().join(format!("tt04-pipe-f20-{}-{:x}", std::process::id(), nonce));
+    claim_temp_dir(&dir);
     let fixture = dir.join("map.bin");
     std::fs::write(&fixture, vec![0xA5u8; 8192]).expect("fixture bytes");
 

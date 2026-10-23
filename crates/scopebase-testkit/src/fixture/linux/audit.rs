@@ -82,6 +82,10 @@ pub struct MmapEvent {
     pub len: u64,
     pub prot: u32,
     pub flags: u32,
+    /// R46: mremap new size (`rdx`); 0 for mmap (which has no second
+    /// length). Separating it from `flags` keeps size bits out of
+    /// the flag ledger.
+    pub new_len: u64,
     /// Raw return: map address or -errno.
     pub result: i64,
     /// R28/R29: a successful file-backed map whose object identity
@@ -392,6 +396,7 @@ struct Pending {
     len: u64,
     prot: u32,
     flags: u32,
+    new_len: u64,
     /// Enter-time attribution already failed (R28); the exit stop
     /// can only confirm or extend this, never clear it.
     unattributed: bool,
@@ -964,6 +969,13 @@ fn read_regs(pid: libc::pid_t) -> Option<libc::user_regs_struct> {
 #[cfg(target_arch = "x86_64")]
 fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
     let regs = read_regs(pid)?;
+    decode_enter(pid, &regs)
+}
+
+/// Pure register decode behind [`syscall_enter`], split out so
+/// register vectors (R46) test without a live tracee.
+#[cfg(target_arch = "x86_64")]
+fn decode_enter(pid: libc::pid_t, regs: &libc::user_regs_struct) -> Option<Pending> {
     let nr = regs.orig_rax as i64;
     if nr != libc::SYS_mmap && nr != libc::SYS_munmap && nr != libc::SYS_mremap {
         return None;
@@ -980,6 +992,7 @@ fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
             len: regs.rsi,
             prot: 0,
             flags: 0,
+            new_len: 0,
             unattributed: false,
         });
     }
@@ -991,6 +1004,9 @@ fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
         let (dev, ino, path) = mapped_object(pid, regs.rdi)
             .map(|(dev, ino, path)| (Some(dev), Some(ino), path))
             .unwrap_or((None, None, None));
+        // R46: x86-64 mremap is (old_addr=rdi, old_size=rsi,
+        // new_size=rdx, flags=r10, new_addr=r8). Flags come from
+        // r10; the new size rides separately, never as flag bits.
         return Some(Pending {
             nr,
             fd: -2,
@@ -1002,7 +1018,8 @@ fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
             addr: regs.rdi,
             len: regs.rsi,
             prot: 0,
-            flags: regs.rdx as u32,
+            flags: regs.r10 as u32,
+            new_len: regs.rdx,
         });
     }
     let fd = regs.r8 as i32;
@@ -1028,6 +1045,7 @@ fn syscall_enter(pid: libc::pid_t) -> Option<Pending> {
         len: regs.rsi,
         prot: regs.rdx as u32,
         flags,
+        new_len: 0,
         unattributed,
     })
 }
@@ -1076,6 +1094,7 @@ fn syscall_exit(pid: libc::pid_t, call: Pending, config: &AuditConfig, report: &
         len: call.len,
         prot: call.prot,
         flags: call.flags,
+        new_len: call.new_len,
         result,
         unattributed,
     });
@@ -1207,6 +1226,7 @@ mod tests {
             len: 4096,
             prot: 1,
             flags: 2,
+            new_len: 0,
             result,
             unattributed: false,
         }
@@ -1287,6 +1307,26 @@ mod tests {
             libc::close(fd);
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// R46: mremap decodes flags from r10 with the old and new
+    /// sizes on separate registers (rsi/rdx), so size bits never
+    /// leak into the flag ledger. The vector uses three distinct
+    /// values, which the old rdx-as-flags decode fails.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn mremap_decodes_flags_and_lengths_from_distinct_registers() {
+        let mut regs: libc::user_regs_struct = unsafe { std::mem::zeroed() };
+        regs.orig_rax = libc::SYS_mremap as u64;
+        regs.rdi = 0xdead_0000;
+        regs.rsi = 0x1000;
+        regs.rdx = 0x2000;
+        regs.r10 = 0x3;
+        let me = std::process::id() as libc::pid_t;
+        let pending = decode_enter(me, &regs).expect("mremap decodes");
+        assert_eq!(pending.flags, 0x3, "flags must come from r10");
+        assert_eq!(pending.len, 0x1000, "old size must come from rsi");
+        assert_eq!(pending.new_len, 0x2000, "new size must come from rdx");
     }
 
     /// R29: a mapping whose file is unlinked while mapped

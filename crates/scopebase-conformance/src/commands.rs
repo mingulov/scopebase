@@ -67,11 +67,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
     match argv[1].as_str() {
         "describe" => {
             let catalog = required(&argv[2..], "--catalog")?;
-            reject_unknown(
-                &argv[2..],
-                &["--catalog"],
-                &["describe --catalog PATH"],
-            )?;
+            reject_unknown(&argv[2..], &["--catalog"], &["describe --catalog PATH"], 0)?;
             let bytes = std::fs::read(catalog).map_err(|e| {
                 OperatorError::new(
                     OperatorErrorKind::MissingInput,
@@ -90,6 +86,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 &argv[2..],
                 &["--catalog", "--profile", "--fixture-root", "--mapping-policy"],
                 &["plan --catalog PATH --profile ID --fixture-root PATH"],
+                0,
             )?;
             let bytes = std::fs::read(catalog).map_err(|e| {
                 OperatorError::new(
@@ -120,6 +117,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                     "--mapping-policy",
                 ],
                 &["run --catalog PATH --profile ID --fixture-root PATH --output PATH"],
+                0,
             )?;
             let mut adapter = crate::delivery::DeliveryAdapter::new()?;
             let oracle = crate::delivery::DeliveryOracle::new()?;
@@ -160,7 +158,7 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
                 .find(|a| !a.starts_with("--"))
                 .ok_or_else(usage)?;
             let catalog = flag_value(rest, "--catalog");
-            reject_unknown(rest, &["--catalog"], &["verify-receipt PATH [--catalog PATH]"])?;
+            reject_unknown(rest, &["--catalog"], &["verify-receipt PATH [--catalog PATH]"], 1)?;
             let report = match catalog {
                 Some(path) => {
                     let bytes = std::fs::read(path).map_err(|e| {
@@ -187,7 +185,12 @@ fn dispatch(argv: &[String]) -> Result<(), OperatorError> {
         "cleanup" => {
             let run = required(&argv[2..], "--run")?;
             let expected = flag_value(&argv[2..], "--expect-run-id");
-            reject_unknown(&argv[2..], &["--run", "--expect-run-id"], &["cleanup --run PATH"])?;
+            reject_unknown(
+                &argv[2..],
+                &["--run", "--expect-run-id"],
+                &["cleanup --run PATH"],
+                0,
+            )?;
             let report = crate::cleanup::cleanup_run(
                 PathBuf::from(run).as_path(),
                 expected.map(str::to_string).as_deref(),
@@ -237,9 +240,16 @@ fn optional<'a>(args: &'a [String], name: &str, default: &'a str) -> &'a str {
     flag_value(args, name).unwrap_or(default)
 }
 
-fn reject_unknown(args: &[String], known: &[&str], forms: &[&str]) -> Result<(), OperatorError> {
-    let mut iter = args.iter().peekable();
-    while let Some(arg) = iter.next() {
+fn reject_unknown(
+    args: &[String],
+    known: &[&str],
+    forms: &[&str],
+    positionals: usize,
+) -> Result<(), OperatorError> {
+    let mut index = 0;
+    let mut seen_positionals = 0;
+    while index < args.len() {
+        let arg = &args[index];
         if arg.starts_with("--") {
             let name = arg.split('=').next().unwrap_or(arg);
             if !known.contains(&name) {
@@ -252,9 +262,10 @@ fn reject_unknown(args: &[String], known: &[&str], forms: &[&str]) -> Result<(),
             // missing value or a following option is a usage error, never
             // a silent default.
             if !arg.contains('=') {
-                match iter.peek() {
+                match args.get(index + 1) {
                     Some(next) if !next.starts_with("--") => {
-                        iter.next();
+                        index += 2;
+                        continue;
                     }
                     _ => {
                         return Err(OperatorError::new(
@@ -267,6 +278,23 @@ fn reject_unknown(args: &[String], known: &[&str], forms: &[&str]) -> Result<(),
                     }
                 }
             }
+            index += 1;
+        } else {
+            // R47: bare tokens are positional arguments, and each
+            // command admits a fixed arity. Consumed flag values never
+            // reach this branch (they are skipped above), so anything
+            // counted here is genuinely unmatched.
+            seen_positionals += 1;
+            if seen_positionals > positionals {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::Usage,
+                    format!(
+                        "unexpected positional argument {arg}; expected {}",
+                        forms.join(" | ")
+                    ),
+                ));
+            }
+            index += 1;
         }
     }
     Ok(())

@@ -302,6 +302,7 @@ dependencies = [
 name = "scopebase-conformance"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "scopebase-testkit",
  "serde",
  "serde_json",

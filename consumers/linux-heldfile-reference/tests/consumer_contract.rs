@@ -27,6 +27,12 @@ const MOUNTS_BAD: &[u8] = b"17 1 0:42 / /mnt rw - fuse.demo source rw\n\
                               broken\n";
 
 fn script_json(op: &str) -> Vec<u8> {
+    script_json_with_id(op, "heldfile-script")
+}
+
+/// R33: same script envelope under an explicit dialect id, so
+/// alien-script negatives stay otherwise valid.
+fn script_json_with_id(op: &str, schema_id: &str) -> Vec<u8> {
     // F27: declared inputs must cover exactly the slots the adapter
     // consumes; parse operations additionally consume the body slot.
     let inputs = if op == "parse-maps" || op == "parse-mountinfo" {
@@ -35,7 +41,7 @@ fn script_json(op: &str) -> Vec<u8> {
         "[\"script\"]"
     };
     format!(
-        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"heldfile-script\",\
+        "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"{schema_id}\",\
          \"steps\":[{{\"step_id\":\"only-step\",\"operation\":\"{op}\",\
          \"inputs\":{inputs},\"parameters\":[]}}]}}"
     )
@@ -261,10 +267,12 @@ fn walk_tight_and_missing_refuse() {
 }
 
 #[test]
-fn unknown_op_case_and_bad_script_refuse() {
-    let err = run("no-such-op", b"case=ok;", None).expect_err("unknown op refuses");
-    assert_eq!(*err.category(), CaseErrorCategory::Refused);
-    assert_eq!(err.stage().as_str(), "dispatch");
+fn unknown_op_unsupported_bad_script_refuses() {
+    // R33: an unknown opcode is a dialect this adapter does not
+    // speak: pre-read UnsupportedSchema, not a dispatch refusal.
+    let err = run("no-such-op", b"case=ok;", None).expect_err("unknown op unsupported");
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapter-schema");
     let err = run("open", b"not-a-script", None).expect_err("bad script refuses");
     assert_eq!(*err.category(), CaseErrorCategory::Refused);
     assert_eq!(err.stage().as_str(), "admission");
@@ -287,6 +295,57 @@ fn unknown_op_case_and_bad_script_refuse() {
         .expect_err("missing slot refuses");
     assert_eq!(*err.category(), CaseErrorCategory::Refused);
     assert_eq!(err.stage().as_str(), "admission");
+}
+
+/// R33: an otherwise-valid invocation under an alien script
+/// dialect is pre-read UnsupportedSchema — even with an empty
+/// fixture, which proves the dialect admits before any slot is
+/// touched (a slot check would refuse missing-slot instead).
+#[test]
+fn alien_script_dialect_unsupported_before_reads() {
+    let limits = RunLimits::default();
+    let script = script_json_with_id("open", "alien-script");
+    let inv = invocation_full(
+        &limits,
+        "heldfile-reference-v1",
+        1,
+        "heldfile-fixture-v1",
+        1,
+        &script,
+    );
+    let fix =
+        FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).expect("empty fixture");
+    for (name, fix) in [
+        ("empty", &fix),
+        (
+            "full",
+            &FixtureAccess::new(
+                &[FixtureInput::new(
+                    Label::parse("script").expect("slot"),
+                    b"case=ok;",
+                )],
+                &[],
+                EffectBatch::empty(&limits),
+                &limits,
+            )
+            .expect("full fixture"),
+        ),
+    ] {
+        let err = HeldfileReferenceAdapter::new()
+            .expect("adapter builds")
+            .execute(&inv, fix)
+            .expect_err(&format!("alien script unsupported ({name})"));
+        assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+        assert_eq!(err.stage().as_str(), "adapter-schema");
+    }
+    // Unknown opcodes admit the same way: pre-read, before slots.
+    let inv = invocation(&limits, "no-such-op");
+    let err = HeldfileReferenceAdapter::new()
+        .expect("adapter builds")
+        .execute(&inv, &fix)
+        .expect_err("unknown op unsupported before reads");
+    assert_eq!(*err.category(), CaseErrorCategory::UnsupportedSchema);
+    assert_eq!(err.stage().as_str(), "adapter-schema");
 }
 
 fn lowered(mut apply: impl FnMut(&mut scopebase_testkit::RunLimitValues)) -> RunLimits {

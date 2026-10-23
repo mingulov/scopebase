@@ -129,11 +129,44 @@ fn read_held(held: &HeldFile) -> Vec<u8> {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// R32: process-start nonce so a rerun under a recycled PID never
+/// collides with crash residue (which would otherwise panic below).
+static START_NONCE: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+fn start_nonce() -> u128 {
+    *START_NONCE.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    })
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("tt04-{}-{}-{}", std::process::id(), id, tag));
-    std::fs::create_dir_all(&dir).expect("owned temp dir");
+    let dir = std::env::temp_dir().join(format!(
+        "tt04-{}-{}-{}-{:x}",
+        std::process::id(),
+        id,
+        tag,
+        start_nonce()
+    ));
+    claim_temp_dir(&dir);
     dir
+}
+
+/// R32: exclusively create a private temp dir. A pre-existing
+/// candidate (preplanted symlink, stale residue) is refused
+/// loudly: silently reusing it would let a planted link redirect
+/// privileged fixture writes outside the temp tree.
+fn claim_temp_dir(dir: &Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) => panic!(
+            "refused: temp candidate {} already exists ({e}); remove stale tt04-* dirs or a preplant",
+            dir.display()
+        ),
+    }
 }
 
 fn pattern_bytes(seed: usize, size: usize) -> Vec<u8> {
@@ -148,6 +181,36 @@ fn skip(cell: &str, reason: &str) {
 
 fn pass(cell: &str, evidence: &str) {
     println!("TT04-PASS {cell}: {evidence}");
+}
+
+/// R32: a preplanted symlink at the claimed path is refused, never
+/// followed: the outside canary survives and nothing is written
+/// through the link. The old `create_dir_all` helper would have
+/// descended into the plant.
+#[test]
+fn temp_claim_refuses_preplanted_symlink() {
+    let plant = std::env::temp_dir().join(format!(
+        "tt04-{}-canary-plant-{:x}",
+        std::process::id(),
+        start_nonce()
+    ));
+    let _ = std::fs::remove_file(&plant);
+    let _ = std::fs::remove_dir_all(&plant);
+    let outside = temp_dir("canary-outside");
+    let canary = outside.join("canary.txt");
+    std::fs::write(&canary, b"canary").unwrap();
+    std::os::unix::fs::symlink(&outside, &plant).unwrap();
+    let outcome = std::panic::catch_unwind(|| claim_temp_dir(&plant));
+    assert!(
+        outcome.is_err(),
+        "preplanted symlink was claimed instead of refused"
+    );
+    assert_eq!(
+        std::fs::read(&canary).unwrap(),
+        b"canary",
+        "claim wrote through the planted link"
+    );
+    std::fs::remove_file(&plant).unwrap();
 }
 
 /// One parsed /proc/PID/maps row from the independent std oracle.

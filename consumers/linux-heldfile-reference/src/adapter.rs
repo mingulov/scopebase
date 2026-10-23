@@ -29,6 +29,9 @@ const SCHEMA_ID: &str = "heldfile-reference-v1";
 const SCHEMA_REVISION: u32 = 1;
 const FIXTURE_SCHEMA_ID: &str = "heldfile-fixture-v1";
 const FIXTURE_SCHEMA_REVISION: u32 = 1;
+/// R33: the only script dialect this adapter executes. Anything
+/// else is pre-read UnsupportedSchema, before any slot is touched.
+const SCRIPT_SCHEMA_ID: &str = "heldfile-script";
 
 /// F26: truncate a byte payload to an invocation byte ceiling.
 fn fit_bytes(bytes: &[u8], ceiling: u64) -> Vec<u8> {
@@ -51,7 +54,6 @@ pub struct HeldfileReferenceAdapter {
     subject: SubjectBinding,
     schema: Label,
     method_execute: Label,
-    stage_dispatch: Label,
     stage_admission: Label,
     stage_collect: Label,
     stage_schema: Label,
@@ -101,7 +103,6 @@ impl HeldfileReferenceAdapter {
             subject,
             schema: Label::parse(SCHEMA_ID).expect("LX11:fixed schema parses"),
             method_execute: Label::parse("execute").expect("LX11:fixed label parses"),
-            stage_dispatch: Label::parse("dispatch").expect("LX11:fixed stage parses"),
             stage_admission: Label::parse("admission").expect("LX11:fixed stage parses"),
             stage_collect: Label::parse("collect").expect("LX11:fixed stage parses"),
             stage_schema: Label::parse("adapter-schema").expect("LX11:fixed stage parses"),
@@ -215,7 +216,7 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
     ) -> Result<Observation, CaseError> {
         // F27: envelope preflight before any slot read or effect. Schema,
         // step count, parameters and declared inputs are validated here;
-        // unknown operations and malformed scripts stay Refused below.
+        // malformed scripts stay Refused below.
         if invocation.observation_schema().id().as_str() != SCHEMA_ID
             || *invocation.observation_schema().revision() != SCHEMA_REVISION
         {
@@ -225,6 +226,11 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
             || *invocation.fixture_schema().revision() != FIXTURE_SCHEMA_REVISION
         {
             return Err(self.unsupported(invocation, "LX11:unsupported fixture schema"));
+        }
+        // R33: the script dialect admits before dispatch: an alien
+        // script never reaches operation matching or slot reads.
+        if invocation.script().schema_id().as_str() != SCRIPT_SCHEMA_ID {
+            return Err(self.unsupported(invocation, "LX11:unsupported script schema"));
         }
         let [step] = invocation.script().steps() else {
             return Err(self.unsupported(invocation, "LX11:exactly one step"));
@@ -241,12 +247,10 @@ impl ConformanceAdapter for HeldfileReferenceAdapter {
         }
         required.sort_unstable();
         if !is_known_op(op) {
-            return Err(self.refusal(
-                invocation,
-                Some(step.step_id().clone()),
-                &self.stage_dispatch,
-                "LX11:unknown operation",
-            ));
+            // R33: an unknown opcode is a dialect this adapter does
+            // not speak: pre-read UnsupportedSchema, like an alien
+            // script id — before any slot is touched.
+            return Err(self.unsupported(invocation, "LX11:unknown operation"));
         }
         if declared != required {
             return Err(self.unsupported(invocation, "LX11:unsupported step shape"));

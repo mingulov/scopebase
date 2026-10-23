@@ -8,7 +8,7 @@ use scopebase_conformance::{
     commands, cleanup, closure, delivery, describe, plan, receipt, OperatorErrorKind,
     EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_USAGE,
 };
-use scopebase_testkit::{CaseOracle, ConformanceAdapter, Qualification};
+use scopebase_testkit::{CaseOracle, ConformanceAdapter, Digest256, Qualification};
 use std::path::{Path, PathBuf};
 
 fn delivery_root() -> PathBuf {
@@ -311,6 +311,237 @@ fn receipt_is_not_runtime_authority() {
     assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
 }
 
+// R37: full verification reads the envelope exactly once. A FIFO
+// serves its bytes to the first reader only: the old second read
+// hung on reopen, so completing with the right report proves the
+// seal, bindings and report all came from one read.
+#[cfg(unix)]
+#[test]
+fn receipt_full_verification_reads_once() {
+    let root = delivery_root();
+    let out = scratch("receipt-once");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    let receipt_bytes = std::fs::read(&outcome.receipt_path).unwrap();
+    // A verification dir: the real staged contract beside a FIFO receipt.
+    let dir = out.join("verify");
+    std::fs::create_dir_all(dir.join("staging")).unwrap();
+    std::fs::copy(
+        out.join("run").join("staging").join("contract.json"),
+        dir.join("staging").join("contract.json"),
+    )
+    .unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        dir.join("receipt.json"),
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )
+    .unwrap();
+    let catalog = std::fs::read(root.join("catalog.json")).unwrap();
+    // The writer serves the envelope once, then closes (EOF); a
+    // second open would block forever with no writer left.
+    let fifo = dir.join("receipt.json");
+    let writer = std::thread::spawn(move || {
+        std::fs::write(&fifo, &receipt_bytes).unwrap();
+    });
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let report = receipt::verify_receipt_with_catalog(&dir.join("receipt.json"), &catalog);
+        let _ = tx.send(report.map(|r| (r.run_id, r.qualification)));
+    });
+    let (run_id, qualification) = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("verification blocked on a second envelope read")
+        .unwrap();
+    writer.join().unwrap();
+    assert_eq!(run_id, outcome.run_id);
+    assert_eq!(qualification, outcome.qualification);
+}
+
+// R48: a resealed envelope with an unsupported version is refused by
+// both shallow and full verification, with the valid report and
+// bindings otherwise intact.
+#[test]
+fn receipt_with_unsupported_version_is_refused() {
+    let root = delivery_root();
+    let out = scratch("receipt-version");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    let mut envelope = read_json(&outcome.receipt_path);
+    envelope["schema_version"] = 2.into();
+    // Reseal over the altered envelope: the unkeyed seal recomputes,
+    // so only the version gate can refuse this.
+    let mut canonical = envelope.clone();
+    canonical.as_object_mut().unwrap().remove("envelope_sha256");
+    let digest = Digest256::of_bytes(&serde_json::to_vec(&canonical).unwrap()).as_str();
+    envelope["envelope_sha256"] = digest.into();
+    let bad = out.join("run").join("receipt-v2.json");
+    std::fs::write(&bad, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
+    let err = receipt::verify_receipt(&bad).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+    let catalog = std::fs::read(root.join("catalog.json")).unwrap();
+    let err = receipt::verify_receipt_with_catalog(&bad, &catalog).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+}
+
+// R40: the oracle judges the exact expected/actual kind pair. Steps
+// stay byte-identical across every row; only the kinds vary.
+#[test]
+fn oracle_judges_exact_kind_pairs() {
+    use scopebase_testkit::{
+        CaseId, CaseKey, CaseKeyValues, CatalogLimits, CheckStatus, EffectBatch, ExpectedEvidence,
+        ExpectedEvidenceValues, InvocationKey, InvocationKeyValues, Label, Observation,
+        ObservationValues, RunId, RunLimits, SchemaBinding, SchemaBindingValues, TruthKind,
+    };
+    let catalog_bytes = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    let catalog =
+        scopebase_testkit::CaseCatalog::load(&catalog_bytes, CatalogLimits::default()).unwrap();
+    let spec = catalog
+        .case(&CaseId::parse("TT07.closure").unwrap(), 1)
+        .unwrap();
+    let oracle = delivery::DeliveryOracle::new().unwrap();
+    let limits = RunLimits::default();
+    let judge = |expected_kind: Option<&str>, actual_kind: Option<&str>| {
+        let key = InvocationKey::new(
+            InvocationKeyValues {
+                run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+                case_key: CaseKey::new(
+                    CaseKeyValues {
+                        case_id: CaseId::parse("TT07.closure").unwrap(),
+                        case_version: 1,
+                        cell_id: "installed".to_string(),
+                    },
+                    &limits,
+                )
+                .unwrap(),
+                attempt: 1,
+                operation_id: 1,
+            },
+            &limits,
+        )
+        .unwrap();
+        let steps = serde_json::json!([{"step_id": "s1", "value": "abc"}]);
+        let mut expected_json = serde_json::json!({"schema_version": 1, "steps": steps});
+        if let Some(kind) = expected_kind {
+            expected_json["kind"] = kind.into();
+        }
+        let mut actual_json = serde_json::json!({"schema_version": 1, "steps": steps});
+        if let Some(kind) = actual_kind {
+            actual_json["kind"] = kind.into();
+        }
+        let expected = ExpectedEvidence::new(
+            ExpectedEvidenceValues {
+                key: key.clone(),
+                oracle: oracle.identity(),
+                fixture_schema: SchemaBinding::new(
+                    SchemaBindingValues {
+                        id: Label::parse("s").unwrap(),
+                        revision: 1,
+                    },
+                    &limits,
+                )
+                .unwrap(),
+                truth_kind: TruthKind::FixedBeforeExecute,
+                expected_bytes: serde_json::to_vec(&expected_json).unwrap(),
+                ledger_bytes: b"{}".to_vec(),
+                coverage: vec![],
+                effects: EffectBatch::empty(&limits),
+            },
+            &limits,
+        )
+        .unwrap();
+        let observation = Observation::new(
+            ObservationValues {
+                key,
+                schema_id: Label::parse("o").unwrap(),
+                schema_revision: 1,
+                completed_steps: vec![],
+                bytes: serde_json::to_vec(&actual_json).unwrap(),
+                effects: EffectBatch::empty(&limits),
+            },
+            &limits,
+        )
+        .unwrap();
+        let verdict = oracle.evaluate(
+            spec,
+            &expected,
+            &scopebase_testkit::CaseOutcome::Observed(observation),
+        );
+        *verdict.checks()[0].status()
+    };
+    // Matched pairs pass with identical steps: expected vectors
+    // speak `-expected`, observations `-observation`.
+    assert_eq!(
+        judge(
+            Some("tt07-closure-v1-expected"),
+            Some("tt07-closure-v1-observation")
+        ),
+        CheckStatus::Pass
+    );
+    assert_eq!(
+        judge(
+            Some("tt07-binding-v1-expected"),
+            Some("tt07-binding-v1-observation")
+        ),
+        CheckStatus::Pass
+    );
+    // Crossed, missing, same-dialect and unadmitted kinds fail with
+    // identical steps.
+    assert_eq!(
+        judge(
+            Some("tt07-closure-v1-expected"),
+            Some("tt07-binding-v1-observation")
+        ),
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        judge(
+            Some("tt07-binding-v1-expected"),
+            Some("tt07-closure-v1-observation")
+        ),
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        judge(
+            Some("tt07-closure-v1-observation"),
+            Some("tt07-closure-v1-observation")
+        ),
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        judge(Some("tt07-closure-v1-expected"), None),
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        judge(None, Some("tt07-closure-v1-observation")),
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        judge(Some("tt07-evil-v1"), Some("tt07-evil-v1")),
+        CheckStatus::Fail
+    );
+}
+
 // describe/plan perform no active setup and create no files.
 #[test]
 fn describe_and_plan_have_no_effects() {
@@ -346,6 +577,104 @@ fn describe_and_plan_have_no_effects() {
     .unwrap();
     assert!(!doc.closure_complete);
     assert!(!doc.missing.is_empty());
+}
+
+// R38: planning never reads outside the root, unbounded, or
+// blocking. Escape entries, pseudo-devices, oversized manifests and
+// FIFOs are accounted without ever being opened the old way.
+#[test]
+fn plan_accounting_is_bounded_and_root_validated() {
+    let catalog = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    // (a) Absolute escape and pseudo-device entries land in
+    // `mismatched`, never read: the old fallback read them (an EIO
+    // pseudo-device even miscategorized as `missing`).
+    let root = copy_closure("plan-escape");
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    for (path, sha) in [
+        (
+            "/proc/self/mem",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        (
+            "../../outside.json",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+    ] {
+        manifest["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": path,
+                "length": "8",
+                "sha256": sha,
+            }));
+    }
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let doc = plan::plan(
+        &catalog,
+        "operator-delivery-v1",
+        &root,
+        "no-new-target-mappings",
+    )
+    .unwrap();
+    assert!(!doc.closure_complete);
+    assert!(doc.mismatched.iter().any(|m| m == "/proc/self/mem"));
+    assert!(doc.mismatched.iter().any(|m| m == "../../outside.json"));
+    assert!(!doc.missing.iter().any(|m| m == "/proc/self/mem"));
+
+    // (b) An oversized manifest is refused as a unit: the old code
+    // read and parsed it, then accounted every entry individually.
+    let root = copy_closure("plan-oversized");
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["padding"] = "x".repeat(2 << 20).into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let doc = plan::plan(
+        &catalog,
+        "operator-delivery-v1",
+        &root,
+        "no-new-target-mappings",
+    )
+    .unwrap();
+    assert!(!doc.closure_complete);
+    assert!(doc.mismatched.iter().any(|m| m == closure::MANIFEST_FILE));
+
+    // (c) A writer-less FIFO member refuses fast instead of hanging
+    // verification or the accounting fallback. Completing proves it.
+    #[cfg(unix)]
+    {
+        let root = copy_closure("plan-fifo");
+        let manifest_path = root.join("fixture-manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": "stall.bin",
+                "length": "4",
+                "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            }));
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            root.join("stall.bin"),
+            rustix::fs::Mode::from_bits_truncate(0o600),
+        )
+        .unwrap();
+        let doc = plan::plan(
+            &catalog,
+            "operator-delivery-v1",
+            &root,
+            "no-new-target-mappings",
+        )
+        .unwrap();
+        assert!(!doc.closure_complete);
+        assert!(doc.mismatched.iter().any(|m| m == "stall.bin"));
+    }
 }
 
 // Box3b: describe/plan emit the no-qualification marker, never a verdict.
@@ -489,6 +818,62 @@ fn cli_flag_arity_is_strict() {
     assert!(leftovers.is_empty(), "arity refusals must not write effects");
 }
 
+// R47: positional arity is strict. Flags-only commands take no bare
+// tokens, and `verify-receipt` takes exactly one: extras refuse with
+// usage before any I/O, never execute.
+#[test]
+fn cli_positional_arity_is_strict() {
+    let work = scratch("cli-positional");
+    let argv = |tail: &[&str]| {
+        let mut v = vec!["scopebase-conformance".to_string()];
+        v.extend(tail.iter().map(|s| s.to_string()));
+        v
+    };
+    // Stray tokens on flags-only commands.
+    assert_eq!(
+        commands::run_argv(&argv(&["cleanup", "--run", "somewhere", "stray"])),
+        EXIT_USAGE
+    );
+    assert_eq!(
+        commands::run_argv(&argv(&["describe", "--catalog", "c.json", "stray"])),
+        EXIT_USAGE
+    );
+    assert_eq!(
+        commands::run_argv(&argv(&[
+            "run",
+            "--catalog",
+            "c.json",
+            "--profile",
+            "p",
+            "--fixture-root",
+            "r",
+            "--output",
+            "o",
+            "stray"
+        ])),
+        EXIT_USAGE
+    );
+    // A second positional on verify-receipt.
+    assert_eq!(
+        commands::run_argv(&argv(&["verify-receipt", "a.json", "b.json"])),
+        EXIT_USAGE
+    );
+    // Flag values that look bare are still values, not positionals:
+    // this reaches catalog I/O (exit 3), not a usage refusal.
+    let missing = work.join("no-such-catalog.json");
+    let code = commands::run_argv(&argv(&[
+        "describe",
+        "--catalog",
+        missing.to_string_lossy().as_ref(),
+    ]));
+    assert_eq!(code, EXIT_INCOMPLETE);
+    let leftovers: Vec<_> = std::fs::read_dir(&work).unwrap().collect();
+    assert!(
+        leftovers.is_empty(),
+        "arity refusals must not write effects"
+    );
+}
+
 // Read-only fixture roots still run; writes stay in the output dir.
 #[test]
 fn offline_read_only_prefix() {
@@ -581,6 +966,159 @@ fn cleanup_is_identity_checked() {
     let report = cleanup::cleanup_run(&out.join("run"), None).unwrap();
     assert!(!out.join("run").exists());
     assert_eq!(report.run_id.len(), 32);
+}
+
+// R36: a manifest reached only through a symlink is an identity spoof:
+// the old path-based reader followed it, the pinned reader refuses.
+#[test]
+fn cleanup_refuses_symlink_manifest() {
+    let out = scratch("cleanup-symlink-manifest");
+    let elsewhere = out.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join("run-manifest.json"),
+        r#"{"schema":"operator-run-manifest-v1","run_id":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","profile":"p"}"#,
+    )
+    .unwrap();
+    let run = out.join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        elsewhere.join("run-manifest.json"),
+        run.join("run-manifest.json"),
+    )
+    .unwrap();
+    let err = cleanup::cleanup_run(&run, None).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(run.exists());
+    assert!(elsewhere.join("run-manifest.json").exists());
+}
+
+// R36: planted symlinks inside a run dir are unlinked, never followed:
+// outside targets survive cleanup.
+#[test]
+fn cleanup_never_follows_planted_symlinks() {
+    let out = scratch("cleanup-planted-links");
+    let outside = out.join("outside.txt");
+    std::fs::write(&outside, b"precious").unwrap();
+    let run = out.join("run");
+    let nested = run.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        run.join("run-manifest.json"),
+        r#"{"schema":"operator-run-manifest-v1","run_id":"ffffffffffffffffffffffffffffffff","profile":"p"}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, nested.join("escape")).unwrap();
+        std::os::unix::fs::symlink(&out, run.join("loop-back")).unwrap();
+    }
+    let report = cleanup::cleanup_run(&run, None).unwrap();
+    assert_eq!(report.run_id, "ffffffffffffffffffffffffffffffff");
+    assert!(!run.exists());
+    assert_eq!(std::fs::read(&outside).unwrap(), b"precious");
+}
+
+// R36: validation-to-deletion replacement. While a swapper thread
+// cycles a victim (non-run) dir and a valid run dir under one name,
+// cleanup either removes the run or refuses — the victim's bytes
+// always survive. A name-based unlink keeps a residual window that
+// can only ever remove an empty attacker-planted dir (and is then
+// reported as a refusal); the non-empty victim here proves the
+// fd-bound validation rules out the destructive case.
+#[test]
+fn cleanup_survives_validation_to_deletion_swaps() {
+    const RUN_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let out = scratch("cleanup-swaps");
+    let victim_src = out.join("victim-src");
+    std::fs::create_dir_all(&victim_src).unwrap();
+    std::fs::write(victim_src.join("precious.txt"), b"precious").unwrap();
+    let run_src = out.join("run-src");
+    std::fs::create_dir_all(&run_src).unwrap();
+    std::fs::write(
+        run_src.join("run-manifest.json"),
+        format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
+    )
+    .unwrap();
+    std::fs::write(run_src.join("filler.txt"), b"run-owned").unwrap();
+    let slot = out.join("slot");
+    let park = out.join("park");
+    let tmp = out.join("tmp");
+    std::fs::rename(&run_src, &slot).unwrap();
+    std::fs::rename(&victim_src, &park).unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let swapper = {
+        let (slot, park, tmp, stop) = (slot.clone(), park.clone(), tmp.clone(), stop.clone());
+        std::thread::spawn(move || {
+            // Exchange slot <-> park; cleanup may remove the name
+            // mid-exchange, so every rename error is ignored.
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = std::fs::rename(&slot, &tmp);
+                let _ = std::fs::rename(&park, &slot);
+                let _ = std::fs::rename(&tmp, &park);
+                std::thread::yield_now();
+            }
+        })
+    };
+    // Replant a fresh valid run whenever the slot is missing, so
+    // every round exposes the validation-to-deletion window instead
+    // of stopping at the first uncontended success.
+    let plant = |dst: &Path| {
+        let staging = dst.with_extension("plant");
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(
+            staging.join("run-manifest.json"),
+            format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
+        )
+        .unwrap();
+        std::fs::write(staging.join("filler.txt"), b"run-owned").unwrap();
+        // Fails when the slot holds a non-empty dir (victim or an
+        // unprocessed run): the round simply runs against that.
+        let _ = std::fs::rename(&staging, dst);
+    };
+    let mut successes = 0;
+    for _ in 0..2000 {
+        if std::fs::symlink_metadata(&slot).is_err() {
+            plant(&slot);
+        }
+        match cleanup::cleanup_run(&slot, None) {
+            Ok(report) => {
+                // Only the validated run is ever removed.
+                assert_eq!(report.run_id, RUN_ID);
+                successes += 1;
+            }
+            Err(err) => assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused),
+        }
+    }
+    assert!(successes >= 1, "uncontended rounds must succeed");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    swapper.join().unwrap();
+    // The victim's bytes survive wherever the swapper parked them.
+    let mut precious = 0;
+    for entry in walkdir(&out) {
+        if entry
+            .file_name()
+            .map(|n| n == "precious.txt")
+            .unwrap_or(false)
+        {
+            assert_eq!(std::fs::read(&entry).unwrap(), b"precious");
+            precious += 1;
+        }
+    }
+    assert_eq!(precious, 1, "victim bytes must survive exactly once");
+    // And cleanup still works once the swapping stops.
+    let calm = out.join("calm");
+    std::fs::create_dir_all(&calm).unwrap();
+    std::fs::write(
+        calm.join("run-manifest.json"),
+        format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
+    )
+    .unwrap();
+    let report = cleanup::cleanup_run(&calm, None).unwrap();
+    assert_eq!(report.run_id, RUN_ID);
+    assert!(!calm.exists());
 }
 
 // Unknown mapping policies are usage errors, not silent defaults.
@@ -680,10 +1218,12 @@ fn ledger_file_id_traversal_is_refused() {
     );
 }
 
-// F31: the default template is manifest-pinned; a tampered copy refuses as
-// a broken package. (verify_closure pins every file up front; the F31 fix
-// additionally re-checks the bytes at use through closure.read, closing
-// the verify-then-reopen window.)
+// F31/R41: a template tampered before verification refuses as a broken
+// package. This pins the pre-verify refusal only — it cannot inject a
+// mutation between verification and use (both happen inside one
+// `run_delivery`). The verify/use window itself is covered by the
+// closure unit test `read_rechecks_pin_after_verify`, with a
+// protection-removed control proving it fails without the re-check.
 #[test]
 fn tampered_default_template_is_refused() {
     let root = copy_closure("tampered-template");
@@ -733,6 +1273,145 @@ fn second_run_into_occupied_output_dir_refuses() {
     assert_eq!(err.kind(), OperatorErrorKind::Usage);
     let after = std::fs::read(out.join("run").join("receipt.json")).unwrap();
     assert_eq!(before, after, "refused rerun must not touch the first run");
+}
+
+// R35: an empty output path refuses before any I/O — the old check
+// admitted it (`read_dir("")` is `NotFound`) and wrote run files
+// into the current directory. Both the API and the CLI refuse, and
+// the current directory stays clean.
+#[test]
+fn empty_output_dir_refuses_before_io() {
+    let root = delivery_root();
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: PathBuf::from(""),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::Usage);
+    let code = commands::run_argv(&[
+        "scopebase-conformance".to_string(),
+        "run".to_string(),
+        "--catalog".to_string(),
+        root.join("catalog.json").to_string_lossy().into(),
+        "--profile".to_string(),
+        "operator-delivery-v1".to_string(),
+        "--fixture-root".to_string(),
+        root.to_string_lossy().into(),
+        "--output".to_string(),
+        String::new(),
+    ]);
+    assert_eq!(code, EXIT_USAGE);
+    for canary in ["staging", "receipt.json", "run-manifest.json"] {
+        assert!(
+            !Path::new(canary).exists(),
+            "empty output must not write ./{canary}"
+        );
+    }
+}
+
+// R36: two runs racing the same output are exclusive — exactly one
+// wins, and the loser refuses before writing anything. (In-process
+// this outcome also holds on old code by scheduling luck — the slow
+// adapter construction ahead of the check separates the two checks —
+// so the old-code-discriminating control is the pre-created-empty
+// race below, which old code admits and new code refuses.)
+#[test]
+fn concurrent_runs_into_same_output_are_exclusive() {
+    let root = delivery_root();
+    let out = scratch("concurrent-out");
+    let target = out.join("run");
+    let run = |root: PathBuf, target: PathBuf| {
+        delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: target,
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+    };
+    let first = {
+        let (root, target) = (root.clone(), target.clone());
+        std::thread::spawn(move || run(root, target))
+    };
+    let second = {
+        let (root, target) = (root.clone(), target.clone());
+        std::thread::spawn(move || run(root, target))
+    };
+    let (r1, r2) = (first.join().unwrap(), second.join().unwrap());
+    let (winner, loser) = match (r1, r2) {
+        (Ok(w), Err(l)) => (w, l),
+        (Err(l), Ok(w)) => (w, l),
+        (Ok(_), Ok(_)) => panic!("both concurrent runs succeeded"),
+        (Err(e1), Err(e2)) => panic!("both concurrent runs failed: {e1} / {e2}"),
+    };
+    assert_eq!(winner.qualification, Qualification::Qualified);
+    assert_eq!(loser.kind(), OperatorErrorKind::Usage);
+    // The winner's run is complete and sealed: the receipt verifies,
+    // and no temp/sealed-write leftovers remain.
+    let report = receipt::verify_receipt(&winner.receipt_path).unwrap();
+    assert_eq!(report.run_id, winner.run_id);
+    for entry in walkdir(&target) {
+        let name = entry
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        assert!(
+            !name.starts_with(".tmp-"),
+            "sealed-write leftover: {}",
+            entry.display()
+        );
+    }
+}
+
+// R36: delivery never inherits another directory — a pre-created
+// (even empty) output refuses, so two runs racing it both lose with
+// usage errors and the dir stays untouched. Old code admitted empty
+// dirs, so at least one old run always proceeded past the check.
+#[test]
+fn pre_created_output_dir_refuses_both_racers() {
+    let root = delivery_root();
+    let out = scratch("precreated-out");
+    let target = out.join("run");
+    std::fs::create_dir_all(&target).unwrap();
+    let run = |root: PathBuf, target: PathBuf| {
+        delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: target,
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+    };
+    let first = {
+        let (root, target) = (root.clone(), target.clone());
+        std::thread::spawn(move || run(root, target))
+    };
+    let second = {
+        let (root, target) = (root.clone(), target.clone());
+        std::thread::spawn(move || run(root, target))
+    };
+    let (r1, r2) = (first.join().unwrap(), second.join().unwrap());
+    for result in [&r1, &r2] {
+        let err = result.as_ref().unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::Usage);
+    }
+    let entries: Vec<_> = std::fs::read_dir(&target).unwrap().collect();
+    assert!(entries.is_empty(), "refused runs must not write");
 }
 
 // F30: outer bindings are compared against the admitted catalog and staged

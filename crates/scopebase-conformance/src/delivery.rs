@@ -24,7 +24,11 @@ use scopebase_testkit::{
     RetirementReportValues, RunContract, RunLimits, SubjectBinding,
     SubjectBindingValues, VectorBundle, VectorFixtureSession, VectorManifest,
 };
-use std::path::PathBuf;
+use std::ffi::CString;
+use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Delivery profile served by the linked reference adapter.
 pub const DELIVERY_PROFILE: &str = "operator-delivery-v1";
@@ -80,6 +84,23 @@ pub struct DeliveryAdapter {
 }
 
 impl DeliveryAdapter {
+    /// R40: (script schema, step operation, observation kind)
+    /// triples, stated where the adapter admits its dialect. The
+    /// observation kinds must agree with the oracle's admitted set;
+    /// the positive delivery tests prove the agreement end to end.
+    const SCRIPT_DIALECT: [(&'static str, &'static str, &'static str); 2] = [
+        (
+            "tt07-closure-v1",
+            "sha256-hex",
+            "tt07-closure-v1-observation",
+        ),
+        (
+            "tt07-binding-v1",
+            "subject-coords",
+            "tt07-binding-v1-observation",
+        ),
+    ];
+
     /// Measure the linked delivery subject.
     pub fn new() -> Result<Self, OperatorError> {
         let limits = RunLimits::default();
@@ -265,11 +286,11 @@ impl ConformanceAdapter for DeliveryAdapter {
         f: &FixtureAccess<'_>,
     ) -> Result<Observation, CaseError> {
         let schema = i.script().schema_id().as_str().to_string();
-        let (operation, kind): (String, String) = match schema.as_str() {
-            "tt07-closure-v1" => ("sha256-hex".into(), "tt07-closure-v1-observation".into()),
-            "tt07-binding-v1" => ("subject-coords".into(), "tt07-binding-v1-observation".into()),
-            _ => return Err(self.unsupported(i, b"unknown delivery schema")),
-        };
+        let (operation, kind): (String, String) =
+            match Self::SCRIPT_DIALECT.iter().find(|t| t.0 == schema) {
+                Some(triple) => (triple.1.to_string(), triple.2.to_string()),
+                None => return Err(self.unsupported(i, b"unknown delivery schema")),
+            };
         let mut values = Vec::new();
         let mut completed = Vec::new();
         for step in i.script().steps() {
@@ -374,6 +395,28 @@ pub struct DeliveryOracle {
 }
 
 impl DeliveryOracle {
+    /// R40: the exact (expected kind, observation kind) pairs this
+    /// oracle's dialect admits, stated where the oracle judges — not
+    /// in a distant helper. The expected vectors speak the
+    /// `-expected` dialect, observations the `-observation` dialect;
+    /// only the matched pairs pass.
+    const KIND_PAIRS: [(&'static str, &'static str); 2] = [
+        ("tt07-closure-v1-expected", "tt07-closure-v1-observation"),
+        ("tt07-binding-v1-expected", "tt07-binding-v1-observation"),
+    ];
+
+    /// R40: the verdict requires the case's exact expected/actual
+    /// kind pair. Missing, crossed or unadmitted kinds fail even
+    /// with byte-identical steps.
+    fn kinds_pair(expected: Option<&str>, actual: Option<&str>) -> bool {
+        match (expected, actual) {
+            (Some(want), Some(got)) => Self::KIND_PAIRS.contains(&(want, got)),
+            _ => false,
+        }
+    }
+}
+
+impl DeliveryOracle {
     /// Build the oracle with its pinned, measured identity.
     pub fn new() -> Result<Self, OperatorError> {
         let limits = RunLimits::default();
@@ -419,19 +462,12 @@ impl CaseOracle for DeliveryOracle {
         self.binding.clone()
     }
 
-    fn evaluate(
-        &self,
-        _: &CaseSpec,
-        e: &ExpectedEvidence,
-        o: &CaseOutcome,
-    ) -> AssertionVerdict {
+    fn evaluate(&self, _: &CaseSpec, e: &ExpectedEvidence, o: &CaseOutcome) -> AssertionVerdict {
         let l = RunLimits::default();
         let expected: serde_json::Value =
             serde_json::from_slice(e.expected_bytes()).unwrap_or(serde_json::Value::Null);
         let actual = match o {
-            CaseOutcome::Observed(x) => {
-                serde_json::from_slice::<serde_json::Value>(x.bytes()).ok()
-            }
+            CaseOutcome::Observed(x) => serde_json::from_slice::<serde_json::Value>(x.bytes()).ok(),
             _ => None,
         };
         let preflight = matches!(o, CaseOutcome::OperationError(error) if *error.category() == CaseErrorCategory::UnsupportedSchema);
@@ -439,7 +475,10 @@ impl CaseOracle for DeliveryOracle {
             a.get("schema_version") == Some(&serde_json::Value::from(1u64))
                 && expected.get("schema_version") == Some(&serde_json::Value::from(1u64))
                 && a.get("steps") == expected.get("steps")
-                && kinds_pair(a.get("kind").and_then(|k| k.as_str()))
+                && Self::kinds_pair(
+                    expected.get("kind").and_then(|k| k.as_str()),
+                    a.get("kind").and_then(|k| k.as_str()),
+                )
         });
         AssertionVerdict::new(
             AssertionVerdictValues {
@@ -478,13 +517,6 @@ impl CaseOracle for DeliveryOracle {
         )
         .expect("RB4:fixed literal verdict fits default limits")
     }
-}
-
-fn kinds_pair(kind: Option<&str>) -> bool {
-    matches!(
-        kind,
-        Some("tt07-closure-v1-observation") | Some("tt07-binding-v1-observation")
-    )
 }
 
 fn engine_error(detail: String) -> OperatorError {
@@ -531,32 +563,16 @@ pub struct RunOutcome {
 #[allow(clippy::too_many_lines)]
 pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError> {
     check_mapping_policy(&request.mapping_policy)?;
-    // F11: fresh-run discipline. Cleanup deletes the whole run dir once a
-    // run manifest marks it, so delivery only runs into a missing or empty
-    // directory: everything under it is then run-owned, and a second run
-    // can neither inherit nor orphan another run's files.
-    match std::fs::read_dir(&request.output_dir) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!(
-                    "cannot inspect output dir {}: {error}",
-                    request.output_dir.display()
-                ),
-            ));
-        }
-        Ok(mut entries) => {
-            if entries.next().is_some() {
-                return Err(OperatorError::new(
-                    OperatorErrorKind::Usage,
-                    format!(
-                        "output dir is not empty (clean it up first): {}",
-                        request.output_dir.display()
-                    ),
-                ));
-            }
-        }
+    // R35: an empty output path previously fell through the old
+    // `read_dir` check (`NotFound` admitted) and wrote
+    // staging/receipt files into the current directory. Reject it
+    // before any I/O. (F11/R36: the output dir itself is acquired
+    // exclusively after validation, below.)
+    if request.output_dir.as_os_str().is_empty() {
+        return Err(OperatorError::new(
+            OperatorErrorKind::Usage,
+            "output dir must name a directory",
+        ));
     }
     let catalog_bytes = std::fs::read(&request.catalog_path).map_err(|e| {
         OperatorError::new(
@@ -567,13 +583,12 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
             ),
         )
     })?;
-    let catalog =
-        CaseCatalog::load(&catalog_bytes, CatalogLimits::default()).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::MissingInput,
-                format!("catalog rejected: {e}"),
-            )
-        })?;
+    let catalog = CaseCatalog::load(&catalog_bytes, CatalogLimits::default()).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("catalog rejected: {e}"),
+        )
+    })?;
     let profile_id = ProfileId::parse(&request.profile).map_err(|_| {
         OperatorError::new(
             OperatorErrorKind::UnknownProfile,
@@ -629,16 +644,20 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     check_coordinates(&template, request.adapter.subject())?;
     check_oracle_pins(&template, request.oracle.identity())?;
 
-    // Fresh run identity: time, process and closure binding.
+    // Fresh run identity: time, process, thread, sequence and
+    // closure binding. Two concurrent runs in one process never mint
+    // the same id even on a coarse clock.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let run_id = Digest256::of_bytes(
         format!(
-            "tt07-run-v1:{}:{}:{}:{}",
+            "tt07-run-v1:{}:{}:{:?}:{}:{}:{}",
             now,
             std::process::id(),
+            std::thread::current().id(),
+            RUN_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             closure.manifest_sha256.as_str(),
             request.profile
         )
@@ -647,22 +666,51 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     .as_str()[..32]
         .to_string();
 
-    let staging = request.output_dir.join("staging");
-    std::fs::create_dir_all(&staging).map_err(|e| {
+    // R36: acquire fresh run ownership exclusively (exactly one of
+    // two concurrent runs wins) and hold it: every write below is
+    // descriptor-relative to the acquired dir, never path-resolved.
+    let acquired = acquire_output_dir(&request.output_dir)?;
+    let staging_fd = rustix::fs::mkdirat(
+        acquired.fd.as_fd(),
+        c"staging",
+        rustix::fs::Mode::from_bits_truncate(0o700),
+    )
+    .map_err(|e| {
         OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!(
-                "cannot create output dir {}: {e}",
-                request.output_dir.display()
-            ),
+            OperatorErrorKind::Engine,
+            format!("cannot create run staging: {e}"),
         )
+    })
+    .and_then(|()| {
+        rustix::fs::openat(
+            &acquired.fd,
+            c"staging",
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                format!("cannot open run staging: {e}"),
+            )
+        })
     })?;
 
     // Regenerate run-bound ledger vectors under the writable output dir; the
     // fixture root itself is never written.
     let layout = template.get("vector_layout").cloned().unwrap_or_default();
-    let ledger_templates = template.get("ledger_templates").cloned().unwrap_or_default();
-    let mut generated: std::collections::BTreeMap<String, (PathBuf, u64, String)> =
+    let ledger_templates = template
+        .get("ledger_templates")
+        .cloned()
+        .unwrap_or_default();
+    let mut generated: std::collections::BTreeMap<String, (u64, String)> =
+        std::collections::BTreeMap::new();
+    // R36: staged ledger files are held open from creation: the
+    // bundle read below consumes these descriptors, never a path.
+    let mut staged: std::collections::BTreeMap<String, std::fs::File> =
         std::collections::BTreeMap::new();
     for (file_id, path_value) in ledger_templates.as_object().cloned().unwrap_or_default() {
         admit_ledger_file_id(&file_id)?;
@@ -686,20 +734,34 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
             ));
         }
         let bytes = text.replace("@RUN_ID@", &run_id).into_bytes();
-        let staged = staging.join(format!("{file_id}.json"));
-        std::fs::write(&staged, &bytes).map_err(|e| {
+        let staged_name = CString::new(format!("{file_id}.json")).map_err(|_| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger file id is not a file name: {file_id:?}"),
+            )
+        })?;
+        write_excl(staging_fd.as_fd(), staged_name.as_c_str(), &bytes).map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::Engine,
                 format!("cannot stage ledger {file_id}: {e}"),
             )
         })?;
+        let staged_fd = rustix::fs::openat(
+            &staging_fd,
+            staged_name.as_c_str(),
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                format!("cannot hold staged ledger {file_id}: {e}"),
+            )
+        })?;
+        staged.insert(file_id.clone(), std::fs::File::from(staged_fd));
         generated.insert(
             file_id,
-            (
-                staged,
-                bytes.len() as u64,
-                Digest256::of_bytes(&bytes).as_str(),
-            ),
+            (bytes.len() as u64, Digest256::of_bytes(&bytes).as_str()),
         );
     }
 
@@ -714,7 +776,12 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
             "contract template is not an object",
         )
     })?;
-    for key in ["profile", "expected_coordinates", "vector_layout", "ledger_templates"] {
+    for key in [
+        "profile",
+        "expected_coordinates",
+        "vector_layout",
+        "ledger_templates",
+    ] {
         object.remove(key);
     }
     contract["run_id"] = run_id.clone().into();
@@ -734,13 +801,13 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
         })?
     {
         let id = artifact.get("id").and_then(|i| i.as_str()).unwrap_or("");
-        if let Some((_, length, sha)) = generated.get(id) {
+        if let Some((length, sha)) = generated.get(id) {
             artifact["length"] = length.to_string().into();
             artifact["sha256"] = sha.clone().into();
         }
     }
     let contract_bytes = serde_json::to_vec(&contract).unwrap();
-    std::fs::write(staging.join("contract.json"), &contract_bytes).map_err(|e| {
+    write_excl(staging_fd.as_fd(), c"contract.json", &contract_bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::Engine,
             format!("cannot stage contract: {e}"),
@@ -752,30 +819,34 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     // Assemble the vector manifest from the bound contract plus the layout.
     let manifest_value = bundle_manifest(&bound, &layout)?;
     let manifest_bytes = serde_json::to_vec(&manifest_value).unwrap();
-    std::fs::write(staging.join("bundle.json"), &manifest_bytes).map_err(|e| {
+    write_excl(staging_fd.as_fd(), c"bundle.json", &manifest_bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::Engine,
             format!("cannot stage bundle manifest: {e}"),
         )
     })?;
-    let bundle_manifest =
-        VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
-            .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
+    let bundle_manifest = VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
+        .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
 
     let vector_paths: std::collections::BTreeMap<String, PathBuf> =
         closure.vector_paths().into_iter().collect();
     let mut held: Vec<(Label, std::fs::File)> = Vec::new();
     for file in bundle_manifest.files() {
         let id = file.file_id().as_str().to_string();
-        let path = if let Some((staged, _, _)) = generated.get(&id) {
-            staged.clone()
+        // R36: staged vectors come from the held descriptors minted
+        // at creation. Closure vectors open by path, but their
+        // bytes are hash-pinned at read: substituted content fails
+        // the bundle measurement, so a swap only fails the run.
+        let handle = if let Some(staged_file) = staged.remove(&id) {
+            staged_file
+        } else if let Some(path) = vector_paths.get(&id) {
+            std::fs::File::open(path)
+                .map_err(|e| engine_error(format!("cannot open vector {id}: {e}")))?
         } else {
-            vector_paths.get(&id).cloned().ok_or_else(|| {
-                engine_error(format!("vector file has no closure path: {id}"))
-            })?
+            return Err(engine_error(format!(
+                "vector file has no closure path: {id}"
+            )));
         };
-        let handle = std::fs::File::open(&path)
-            .map_err(|e| engine_error(format!("cannot open vector {id}: {e}")))?;
         held.push((file.file_id().clone(), handle));
     }
     let opened: Vec<OpenedVector<'_>> = held
@@ -792,11 +863,16 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     let mut session = VectorFixtureSession::new(bound.clone(), bundle)
         .map_err(|e| engine_error(format!("session rejected: {e}")))?;
 
-    let report = scopebase_testkit::run_profile(&plan, request.adapter, &mut session, request.oracle)
-        .map_err(|e| engine_error(format!("engine run rejected: {e}")))?;
+    let report =
+        scopebase_testkit::run_profile(&plan, request.adapter, &mut session, request.oracle)
+            .map_err(|e| engine_error(format!("engine run rejected: {e}")))?;
     let qualification = report.qualification();
 
-    let receipt_path = request.output_dir.join("receipt.json");
+    // R36: the engine run above is long; confirm the output name
+    // still addresses our acquired dir before publishing the
+    // path-visible artifacts. The sealed writes below are atomic at
+    // the name (temp + rename), so readers never see partial bytes.
+    acquired.reverify()?;
     let envelope = receipt::build(
         &bound,
         &report,
@@ -806,8 +882,12 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
         &request.mapping_policy,
         &run_id,
     )?;
-    std::fs::write(&receipt_path, serde_json::to_vec_pretty(&envelope).unwrap())
-        .map_err(|e| engine_error(format!("cannot write receipt: {e}")))?;
+    write_sealed(
+        acquired.fd.as_fd(),
+        c"receipt.json",
+        &serde_json::to_vec_pretty(&envelope).unwrap(),
+    )
+    .map_err(|e| engine_error(format!("cannot write receipt: {e}")))?;
     let run_manifest = serde_json::json!({
         "schema": "operator-run-manifest-v1",
         "run_id": run_id,
@@ -816,17 +896,254 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
         "mapping_policy": request.mapping_policy,
         "receipt": "receipt.json",
     });
-    std::fs::write(
-        request.output_dir.join("run-manifest.json"),
-        serde_json::to_vec_pretty(&run_manifest).unwrap(),
+    write_sealed(
+        acquired.fd.as_fd(),
+        c"run-manifest.json",
+        &serde_json::to_vec_pretty(&run_manifest).unwrap(),
     )
     .map_err(|e| engine_error(format!("cannot write run manifest: {e}")))?;
+    acquired.reverify()?;
 
     Ok(RunOutcome {
         qualification,
         run_id,
-        receipt_path,
+        receipt_path: acquired.display.join("receipt.json"),
     })
+}
+
+/// R36: per-process run-id sequence; two threads minting in the same
+/// clock tick still diverge.
+static RUN_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// R36: per-process sealed-write temp-name sequence.
+static SEALED_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// R36: an exclusively acquired output directory. The parent is
+/// pinned, the run dir is held open, and its identity was bound at
+/// creation; every effect is descriptor-relative to these.
+struct AcquiredDir {
+    parent: OwnedFd,
+    name: CString,
+    fd: OwnedFd,
+    id: (u64, u64),
+    display: PathBuf,
+}
+
+impl AcquiredDir {
+    /// Confirm the output name still addresses the acquired dir. A
+    /// swap or removal refuses instead of publishing under a name
+    /// that no longer means this run.
+    fn reverify(&self) -> Result<(), OperatorError> {
+        let live = rustix::fs::openat(
+            &self.parent,
+            self.name.as_c_str(),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                format!("output dir lost during run: {e}"),
+            )
+        })?;
+        let live_id = rustix::fs::fstat(&live).map(|st| (st.st_dev, st.st_ino))
+            .map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("output dir not statable: {e}"),
+                )
+            })?;
+        if live_id != self.id {
+            return Err(OperatorError::new(
+                OperatorErrorKind::Engine,
+                "output dir replaced during run",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// R36: acquire fresh run ownership. The run dir is created
+/// exclusively (`mkdirat` without `EEXIST` tolerance), so two
+/// concurrent runs racing the same output cannot both proceed: the
+/// loser refuses with a usage error. An existing name of any kind
+/// refuses — delivery never inherits another directory.
+fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
+    let name = raw
+        .file_name()
+        .filter(|n| *n != "." && *n != "..")
+        .ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::Usage,
+                "output dir must name one directory",
+            )
+        })?;
+    let parent = raw
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name_c = CString::new(name.as_bytes()).map_err(|_| {
+        OperatorError::new(
+            OperatorErrorKind::Usage,
+            "output dir name is not a single component",
+        )
+    })?;
+    std::fs::create_dir_all(parent).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("cannot create output parent {}: {e}", parent.display()),
+        )
+    })?;
+    let parent_fd = rustix::fs::open(
+        parent,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("cannot open output parent {}: {e}", parent.display()),
+        )
+    })?;
+    match rustix::fs::mkdirat(
+        &parent_fd,
+        name_c.as_c_str(),
+        rustix::fs::Mode::from_bits_truncate(0o700),
+    ) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::EXIST) => {
+            return Err(OperatorError::new(
+                OperatorErrorKind::Usage,
+                format!(
+                    "output dir already exists (remove it or choose another path): {}",
+                    raw.display()
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err(OperatorError::new(
+                OperatorErrorKind::MissingInput,
+                format!("cannot create output dir {}: {e}", raw.display()),
+            ));
+        }
+    }
+    let fd = rustix::fs::openat(
+        &parent_fd,
+        name_c.as_c_str(),
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::Engine,
+            format!("cannot open fresh output dir: {e}"),
+        )
+    })?;
+    // Prove the opened dir is the one `mkdirat` created: fresh dirs
+    // are empty, `0700`, and owned by us. (A same-uid actor swapping
+    // in their own empty `0700` dir inside this window stays inside
+    // the operator's trust boundary; every later effect is
+    // fd-relative to this descriptor regardless.)
+    let st = rustix::fs::fstat(&fd).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::Engine,
+            format!("fresh output dir not statable: {e}"),
+        )
+    })?;
+    if st.st_uid != rustix::process::getuid().as_raw() || st.st_mode & 0o777 != 0o700 {
+        return Err(OperatorError::new(
+            OperatorErrorKind::Engine,
+            "fresh output dir ownership mismatch",
+        ));
+    }
+    let mut entries = rustix::fs::Dir::read_from(fd.as_fd()).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::Engine,
+            format!("fresh output dir not listable: {e}"),
+        )
+    })?;
+    if entries.any(|entry| {
+        entry
+            .map(|e| {
+                let name = e.file_name();
+                name.to_bytes() != b"." && name.to_bytes() != b".."
+            })
+            .unwrap_or(true)
+    }) {
+        return Err(OperatorError::new(
+            OperatorErrorKind::Engine,
+            "fresh output dir is not empty",
+        ));
+    }
+    Ok(AcquiredDir {
+        parent: parent_fd,
+        name: name_c,
+        id: (st.st_dev, st.st_ino),
+        fd,
+        display: raw.to_path_buf(),
+    })
+}
+
+/// R36: create one file exclusively under a held directory and write
+/// its full bytes. `EXCL` refuses a second writer; `NOFOLLOW`
+/// refuses links. Returns the open file for an optional fsync.
+fn write_excl(
+    dir: std::os::fd::BorrowedFd<'_>,
+    name: &std::ffi::CStr,
+    bytes: &[u8],
+) -> Result<OwnedFd, std::io::Error> {
+    let fd = rustix::fs::openat(
+        dir,
+        name,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )?;
+    let mut written = 0;
+    while written < bytes.len() {
+        // `rustix::io::write` retries `EINTR`; loop for partial writes.
+        let n = rustix::io::write(&fd, &bytes[written..])?;
+        written += n;
+    }
+    Ok(fd)
+}
+
+/// R36: publish one path-visible artifact atomically: exclusive temp
+/// write, fsync, same-directory rename, directory fsync. Readers of
+/// the final name never see partial bytes, and a crash leaves either
+/// the old name or the complete new one (plus a run-owned temp the
+/// failed run's cleanup accounts).
+fn write_sealed(
+    dir: std::os::fd::BorrowedFd<'_>,
+    name: &std::ffi::CStr,
+    bytes: &[u8],
+) -> Result<(), std::io::Error> {
+    let tmp = CString::new(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        SEALED_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ))
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "sealed temp name"))?;
+    let fd = write_excl(dir, tmp.as_c_str(), bytes)?;
+    rustix::fs::fsync(&fd)?;
+    drop(fd);
+    if let Err(e) = rustix::fs::renameat(dir, tmp.as_c_str(), dir, name) {
+        let _ = rustix::fs::unlinkat(dir, tmp.as_c_str(), rustix::fs::AtFlags::empty());
+        return Err(e.into());
+    }
+    rustix::fs::fsync(dir)?;
+    Ok(())
 }
 
 /// Refuse oracles whose pinned identity differs from the template.
