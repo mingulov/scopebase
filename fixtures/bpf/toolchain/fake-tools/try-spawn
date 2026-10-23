@@ -1,0 +1,5 @@
+#!/bin/sh
+# TC02 fake direct tool: attempt a subshell fork (must die SIGSYS under enforcement).
+# SPDX-License-Identifier: Apache-2.0
+(exit 0)
+exit 0

@@ -1,0 +1,15 @@
+#!/bin/sh
+# TC02 fake direct tool: emit $TC02_EMIT_BYTES on stdout, marker to -o (cap control).
+# Pure shell builtins only: survives the direct-no-children sandbox.
+# SPDX-License-Identifier: Apache-2.0
+count="${TC02_EMIT_BYTES:-0}"
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  prev="$arg"
+done
+i=0
+while [ "$i" -lt "$count" ]; do printf x; i=$((i+1)); done
+printf 'TC02OBJ\n' > "$out"
+exit 0

@@ -105,13 +105,13 @@ fn bound_exceeded(message: &'static str, stage: Stage) -> OperationError {
     )
 }
 
-fn has_nul(value: &OsStr) -> bool {
+pub(crate) fn has_nul(value: &OsStr) -> bool {
     // NUL is ASCII, so lossy conversion is exact for this check on any
     // platform while other non-UTF8 bytes pass through untouched.
     value.to_string_lossy().contains('\0')
 }
 
-fn is_proxy_key(key: &OsStr) -> bool {
+pub(crate) fn is_proxy_key(key: &OsStr) -> bool {
     key.to_string_lossy().to_ascii_lowercase().contains("proxy")
 }
 
@@ -258,14 +258,14 @@ pub fn run_pinned(
     }
 }
 
-struct CappedOutput {
-    data: Vec<u8>,
-    observed: usize,
-    overrun: bool,
-    read_error: bool,
+pub(crate) struct CappedOutput {
+    pub data: Vec<u8>,
+    pub observed: usize,
+    pub overrun: bool,
+    pub read_error: bool,
 }
 
-fn spawn_capped_reader<R: Read + Send + 'static>(
+pub(crate) fn spawn_capped_reader<R: Read + Send + 'static>(
     mut stream: R,
     cap: usize,
     hit: Arc<AtomicBool>,
@@ -313,7 +313,7 @@ fn spawn_capped_reader<R: Read + Send + 'static>(
     })
 }
 
-fn join_readers(
+pub(crate) fn join_readers(
     stdout: std::thread::JoinHandle<CappedOutput>,
     stderr: std::thread::JoinHandle<CappedOutput>,
 ) -> Result<(CappedOutput, CappedOutput), OperationError> {
@@ -331,7 +331,7 @@ fn join_readers(
     ))
 }
 
-fn kill_and_wait(child: &mut Child) -> Result<(), OperationError> {
+pub(crate) fn kill_and_wait(child: &mut Child) -> Result<(), OperationError> {
     let _ = child.kill();
     child
         .wait()
