@@ -4587,8 +4587,13 @@
         "BP-R12",
         "BP-R14"
       ],
-      "status": "PLANNED",
-      "title": "Narrow existing-loader adapters and native contract vectors"
+      "status": "ACCEPTED",
+      "title": "Narrow existing-loader adapters and native contract vectors",
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-wave29.md",
+        "reviewed_candidate_commit": "d66350ea71df2404af3059d00534ca842a4355b7",
+        "subject_commit": "d66350ea71df2404af3059d00534ca842a4355b7"
+      }
     },
     {
       "anchor": "bp11-bpf-package-and-installed-downstream-conformance",
@@ -5210,8 +5215,13 @@
         "CP-R15",
         "CP-R18"
       ],
-      "status": "PLANNED",
-      "title": "Cross-stage reservation evaluation with a gated internal pilot"
+      "status": "ACCEPTED",
+      "title": "Cross-stage reservation evaluation with a gated internal pilot",
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-wave29.md",
+        "reviewed_candidate_commit": "765402017262c3bf362974699c4588ce0e932459",
+        "subject_commit": "765402017262c3bf362974699c4588ce0e932459"
+      }
     },
     {
       "anchor": "task-cp13-packaged-conformance-installed-operator-route-and-release-gate",
