@@ -9,7 +9,7 @@ publish = false
 build = false
 readme = "README.md"
 description = "ScopeBase host BPF error and budget contracts"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**", "fixtures/btf-v1/**", "fixtures/writer-v1/**"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "include/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**", "fixtures/btf-v1/**", "fixtures/writer-v1/**", "fixtures/identity-v1/**"]
 autotests = false
 autoexamples = false
 
@@ -17,6 +17,12 @@ autoexamples = false
 default = []
 json = ["dep:serde", "dep:serde_json"]
 btf = ["dep:btf-rs"]
+# BP08 optional producer task/exec identity route. Host identity values are
+# always compiled; this feature binds the packaged C fixture route
+# (include/scopebase/*.h, fixtures/identity-v1/producer.c) and its
+# consistency checks. It pulls no BPF toolchain: host tests never invoke a
+# compiler with or without this feature.
+producer-fixtures = []
 
 [dependencies]
 serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
@@ -111,3 +117,7 @@ required-features = ["btf"]
 [[test]]
 name = "writer_identity"
 path = "tests/writer_identity.rs"
+
+[[test]]
+name = "producer_identity"
+path = "tests/producer_identity.rs"
