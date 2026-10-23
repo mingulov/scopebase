@@ -12,7 +12,7 @@ include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"
 [features]
 default = []
 bpf-host = ["dep:scopebase-bpf"]
-object = ["dep:scopebase-bpf"]
+object = ["dep:scopebase-bpf", "scopebase-bpf/btf"]
 toolchain = ["object", "dep:libc"]
 bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
 linux-fixtures = ["dep:scopebase-linux", "dep:rustix", "dep:libc"]
@@ -54,6 +54,11 @@ required-features = ["toolchain"]
 [[test]]
 name = "object_isa"
 path = "tests/object_isa.rs"
+required-features = ["object"]
+
+[[test]]
+name = "object_graph"
+path = "tests/object_graph.rs"
 required-features = ["object"]
 
 [[test]]
