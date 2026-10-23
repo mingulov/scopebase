@@ -282,12 +282,25 @@ impl OpCtx<'_> {
 /// Record one sub-operation's charges against the FD ceiling. A breached
 /// ceiling replaces the sub-operation's own result: the operation is over
 /// budget regardless of what the sub-operation reports.
+///
+/// F13: the sub-operation runs as a thunk behind an exhausted-budget
+/// preflight. Every tracked sub-operation acquires at least one FD, so
+/// when the budget is already spent, running it could only acquire past
+/// the ceiling; refusing first means a zero-FD budget performs zero
+/// acquisitions instead of opening transiently and rejecting after.
 fn tracked<T>(
     ctx: &mut OpCtx,
-    result: Result<T, LinuxError>,
+    run: impl FnOnce() -> Result<T, LinuxError>,
     project: fn(&T) -> &ResourceCharges,
 ) -> Result<T, LinuxError> {
-    match result {
+    if ctx.fd_spent >= ctx.max_open_fds as u64 {
+        return Err(pool::pool_error(
+            Stage::ObserveMapping,
+            Reason::LimitExceeded(LimitKind::OpenFds),
+            CleanupDisposition::Complete,
+        ));
+    }
+    match run() {
         Ok(value) => {
             let charges = project(&value).clone();
             match ctx.spend(&charges) {
@@ -424,7 +437,7 @@ fn run_observation(
     // Birth bracket: only a live same-birth target proceeds.
     let birth = match tracked(
         ctx,
-        request.process.verify_birth(control),
+        || request.process.verify_birth(control),
         crate::process::BirthVerification::charges,
     ) {
         Ok(birth) => birth,
@@ -444,7 +457,7 @@ fn run_observation(
     // Before maps read: the named range must render.
     let maps_before = match tracked(
         ctx,
-        request.process.read_maps(proc, control),
+        || request.process.read_maps(proc, control),
         crate::process::MapsObservation::charges,
     ) {
         Ok(maps) => maps,
@@ -462,9 +475,14 @@ fn run_observation(
     // Independent per-range association with both descriptors alive.
     let assoc = match tracked(
         ctx,
-        request
-            .process
-            .read_map_files_identity(range.start(), range.end(), proc, control),
+        || {
+            request.process.read_map_files_identity(
+                range.start(),
+                range.end(),
+                proc,
+                control,
+            )
+        },
         crate::process::MapFilesObservation::charges,
     ) {
         Ok(observation) => {
@@ -557,7 +575,7 @@ fn run_observation(
     // After maps read: the named range, offset and permissions must retain.
     let maps_after = match tracked(
         ctx,
-        request.process.read_maps(proc, control),
+        || request.process.read_maps(proc, control),
         crate::process::MapsObservation::charges,
     ) {
         Ok(maps) => maps,
@@ -715,7 +733,7 @@ fn mount_resolve_key(
     loop {
         let table = match tracked(
             ctx,
-            process.read_mountinfo(proc, ctx.control),
+            || process.read_mountinfo(proc, ctx.control),
             crate::process::MountObservation::charges,
         ) {
             Ok(table) => table,

@@ -18,8 +18,6 @@ use crate::{
     identity::{MountViewId, ObservationInterval, ProcViewId, TaskBirthObservation},
     procfs::{parse_maps, parse_mountinfo, MapsSnapshot, MountTableSnapshot},
 };
-#[cfg(feature = "mapping")]
-use rustix::fs::AtFlags;
 use std::{
     fmt,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
@@ -621,19 +619,28 @@ impl fmt::Debug for MapFilesIdentity {
     }
 }
 
-/// One bracketed map_files stat plus its interval and charges. Values only.
+/// One bracketed map_files association plus its interval and charges. The
+/// mapped object's own descriptor stays open in the observation (F14):
+/// identity is read from the held object, and both descriptors are alive
+/// while the caller compares.
 #[cfg(feature = "mapping")]
 pub struct MapFilesObservation {
     identity: MapFilesIdentity,
     interval: ObservationInterval,
     charges: ResourceCharges,
     effects: EffectSummary,
+    object: OwnedFd,
 }
 
 #[cfg(feature = "mapping")]
 impl MapFilesObservation {
     pub fn identity(&self) -> MapFilesIdentity {
         self.identity
+    }
+
+    /// The retained mapped-object descriptor behind [`Self::identity`].
+    pub fn object(&self) -> BorrowedFd<'_> {
+        self.object.as_fd()
     }
     pub fn interval(&self) -> &ObservationInterval {
         &self.interval
@@ -698,11 +705,36 @@ impl ProcessObservation {
         ops.check(control, Stage::ReadProc)?;
         let mut scratch = [0u8; MAP_FILES_NAME_LEN];
         let name = map_files_name(start, end, &mut scratch);
-        let stat = ops.syscall(|| rustix::fs::statat(dir.as_fd(), name, AtFlags::empty()));
+        // F14: open the VMA's own file and read identity from the held
+        // object. The entry is a kernel-rendered symlink, so plain
+        // openat follows it (openat2's NO_SYMLINKS would refuse); the
+        // name is hex-and-dash only and the parent dir is strictly bound.
+        let object = ops.syscall(|| {
+            rustix::fs::openat(
+                dir.as_fd(),
+                name,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+        });
+        let object = match object {
+            Ok(object) => object,
+            Err(errno) => {
+                ops.fd_released(1);
+                return Err(ops.fail(Stage::ReadProc, map_errno(errno), Some(errno.into())));
+            }
+        };
+        ops.fd_acquired();
+        if let Err(error) = super::check_cloexec(&mut ops, control, &object, Stage::ReadProc) {
+            // The helper released the object; the directory drops here too.
+            ops.fd_released(1);
+            return Err(error);
+        }
+        let stat = ops.syscall(|| rustix::fs::fstat(&object));
         let stat = match stat {
             Ok(stat) => stat,
             Err(errno) => {
-                ops.fd_released(1);
+                ops.fd_released(2);
                 return Err(ops.fail(Stage::ReadProc, map_errno(errno), Some(errno.into())));
             }
         };
@@ -725,6 +757,7 @@ impl ProcessObservation {
             interval: ObservationInterval::new(started, finished),
             charges: ops.charges(),
             effects: ops.effects(),
+            object,
         })
     }
 }

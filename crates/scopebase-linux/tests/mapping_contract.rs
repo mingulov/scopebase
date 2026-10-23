@@ -164,12 +164,19 @@ fn maps_lines_with_inode(process: &ProcessObservation, inode: u64) -> usize {
         .count()
 }
 
-/// Independent map_files oracle: stat through a std path, outside the library.
-/// Returns the (dev, ino) the kernel reports for the VMA's own file.
-fn oracle_map_files_identity(pid: u32, start: u64, end: u64) -> std::io::Result<(u64, u64)> {
+/// Independent map_files oracle: open the VMA's own file through a std path,
+/// outside the library, and read identity from the held descriptor (F14).
+/// Returns the open file plus the (dev, ino) the kernel reports; callers
+/// keep the file alive through their comparison.
+fn oracle_map_files_identity(
+    pid: u32,
+    start: u64,
+    end: u64,
+) -> std::io::Result<(std::fs::File, (u64, u64))> {
     use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::metadata(format!("/proc/{pid}/map_files/{start:x}-{end:x}"))?;
-    Ok((metadata.dev(), metadata.ino()))
+    let file = std::fs::File::open(format!("/proc/{pid}/map_files/{start:x}-{end:x}"))?;
+    let metadata = file.metadata()?;
+    Ok((file, (metadata.dev(), metadata.ino())))
 }
 
 fn fd_count() -> usize {
@@ -379,7 +386,12 @@ fn mapped_range_verdict_agrees_with_map_files_oracle() {
         let outcome = observe_mapping(&pool, &held, &process, range, policy, None)
             .expect("mapped range observes");
         match (&oracle, &outcome) {
-            (Ok((dev, ino)), MappingOutcome::ExactRange(proof)) => {
+            (Ok((file, (dev, ino))), MappingOutcome::ExactRange(proof)) => {
+                // F14: the oracle descriptor is alive through this
+                // comparison (it is dropped only after the match).
+                use std::os::unix::fs::MetadataExt;
+                let live = file.metadata().unwrap();
+                assert_eq!((live.dev(), live.ino()), (*dev, *ino));
                 assert_eq!((*dev, *ino), (held_key.device_raw(), held_key.inode()));
                 assert_eq!(proof.range(), range);
                 assert_eq!(
@@ -401,7 +413,7 @@ fn mapped_range_verdict_agrees_with_map_files_oracle() {
             (oracle, outcome) => panic!(
                 "verdict {outcome:?} disagrees with oracle {}",
                 match oracle {
-                    Ok((dev, ino)) => format!("Ok({dev},{ino})"),
+                    Ok((_, (dev, ino))) => format!("Ok({dev},{ino})"),
                     Err(error) => format!("Err({error})"),
                 }
             ),
@@ -420,6 +432,58 @@ fn mapped_range_verdict_agrees_with_map_files_oracle() {
         maps_lines_with_inode(&process, held.stat().unwrap().key().inode()),
         1
     );
+    drop(mapping);
+    drop(file);
+}
+
+#[test]
+fn map_files_observation_holds_its_object_descriptor() {
+    // F14: where the environment grants map_files, the observation carries
+    // the open mapped object: the descriptor is alive, its fstat equals the
+    // reported identity and the oracle, and charges record both the
+    // transient directory and the held object acquisition. Where the
+    // environment denies map_files, library and oracle deny together.
+    let epoch = epoch();
+    let process = ProcessObservation::acquire(me(), &epoch, proc_limits(), &control()).unwrap();
+    let temp = TempFile::create(8192);
+    let held = temp.hold();
+    let file = std::fs::File::open(&temp.path).unwrap();
+    let mapping = TestMapping::map(&file, page_size());
+    let addr = mapping.addr();
+    let maps = process.read_maps(proc_limits(), &control()).unwrap();
+    let line = maps
+        .snapshot()
+        .containing(addr)
+        .expect("test mapping is rendered");
+    match process.read_map_files_identity(line.start(), line.end(), proc_limits(), &control()) {
+        Ok(obs) => {
+            let (_ofile, (dev, ino)) =
+                oracle_map_files_identity(std::process::id(), line.start(), line.end())
+                    .expect("oracle grants where the library grants");
+            let identity = obs.identity();
+            assert_eq!((identity.device(), identity.inode()), (dev, ino));
+            // The held descriptor is open and names the same object: a
+            // shadow open through /proc/self/fd stats the same identity.
+            use std::os::fd::AsRawFd;
+            use std::os::unix::fs::MetadataExt;
+            let shadow = std::fs::File::open(format!(
+                "/proc/self/fd/{}",
+                obs.object().as_raw_fd()
+            ))
+            .expect("held object descriptor is open");
+            let live = shadow.metadata().expect("shadow stats");
+            assert_eq!((live.dev(), live.ino()), (dev, ino));
+            assert!(obs.charges().fd_acquisitions() >= 2);
+            let _ = &held;
+        }
+        Err(error) => {
+            assert_eq!(error.reason(), Reason::Denied);
+            assert!(
+                oracle_map_files_identity(std::process::id(), line.start(), line.end()).is_err(),
+                "oracle must deny where the library denies"
+            );
+        }
+    }
     drop(mapping);
     drop(file);
 }
@@ -823,6 +887,20 @@ fn zero_fd_ceiling_refuses_before_effects() {
     assert_eq!(
         failure.error().reason(),
         Reason::LimitExceeded(LimitKind::OpenFds)
+    );
+    // F13: the refusal happens before effects, so no acquisition may be
+    // recorded anywhere on the failure (neither stage charges nor the
+    // error's own charges). Transient open-then-reject would show up here.
+    let staged: u64 = failure
+        .stage_charges()
+        .iter()
+        .map(|charges| charges.fd_acquisitions())
+        .sum();
+    assert_eq!(staged, 0, "zero-FD refusal must acquire nothing");
+    assert_eq!(
+        failure.error().charges().fd_acquisitions(),
+        0,
+        "refusal error must carry no acquisitions"
     );
     pool.close(&control()).unwrap();
 }

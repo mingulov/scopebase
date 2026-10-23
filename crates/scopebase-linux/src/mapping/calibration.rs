@@ -204,7 +204,11 @@ pub(crate) fn calibrate(
             }
         }
         Err(error) => match error.reason() {
-            Reason::Denied | Reason::Disappeared | Reason::Inconclusive => {}
+            // F13: tolerated, but the attempt's spend still counts: the
+            // read ran and acquired before it was denied or vanished.
+            Reason::Denied | Reason::Disappeared | Reason::Inconclusive => {
+                charges.push(error.charges().clone());
+            }
             _ => return abort_calibration(permit, failed(error, charges)),
         },
     }
@@ -231,7 +235,10 @@ pub(crate) fn calibrate(
     }
 }
 
-fn failed(error: LinuxError, charges: Vec<ResourceCharges>) -> MappingFailure {
+fn failed(error: LinuxError, mut charges: Vec<ResourceCharges>) -> MappingFailure {
+    // F13: the failing step's own spend joins the carried charges, so the
+    // caller absorbs every acquisition including the one that failed.
+    charges.push(error.charges().clone());
     MappingFailure {
         observation: None,
         error,
