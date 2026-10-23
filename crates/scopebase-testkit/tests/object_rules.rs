@@ -894,6 +894,41 @@ fn prune_error(bytes: &[u8], allow: &PruneAllowlist, limits: &Limits) -> Operati
     prune_dead_code_with_report(bytes, &contract(), allow, limits).expect_err("repair must refuse")
 }
 
+#[test]
+fn repeated_long_names_hit_retained_ceiling() {
+    // F12: every cloned symbol name accounts against the cumulative
+    // retained ceiling. A ceiling just above the input size refuses,
+    // while the generous ceiling admits the same object.
+    let endian = Endian::Little;
+    let mut obj = ObjBuilder::little();
+    let mut text = Vec::new();
+    text.extend_from_slice(&exit(endian));
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let live = obj.func("live", true, text_idx, 0, 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    let filler = format!("filler-{}", "x".repeat(200));
+    for _ in 0..1000 {
+        obj.symbol(&filler, 0, 0, 0, 0);
+    }
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, live, R_BPF_64_32)]);
+    let bytes = obj.build();
+    assert!(bytes.len() < (1 << 20), "fixture must fit input_bytes");
+    let mut tight = limits();
+    tight.retained_bytes = bytes.len() + 1024;
+    let error = prune_error(&bytes, &load_allowlist(), &tight);
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+    assert_eq!(error.stage(), Stage::Inspect);
+    let (out, report) =
+        prune_dead_code_with_report(&bytes, &contract(), &load_allowlist(), &limits())
+            .expect("generous ceiling admits");
+    assert!(report.removed().is_empty());
+    assert_eq!(out, bytes);
+}
+
 fn assert_refusal(error: &OperationError, kind: ErrorKind, stage: Stage, fragment: &str) {
     // OperationError display never formats its source, so semantic
     // assertions traverse to it explicitly (TC05 precedent).
@@ -992,6 +1027,9 @@ fn shifted_entry_target_refuses_repair() {
 #[test]
 fn interior_call_target_refuses_repair() {
     // Entry relocation resolves 8 bytes inside `live`, not at a start.
+    // Loader call semantics (F01): a section-symbol call adds (imm + 1)
+    // slots, so imm 0 against `.text` lands at byte 8, the interior of
+    // `live@0..16`.
     let endian = Endian::Little;
     let mut obj = ObjBuilder::little();
     let mut text = Vec::new();
@@ -1000,16 +1038,55 @@ fn interior_call_target_refuses_repair() {
     text.extend_from_slice(&exit(endian));
     let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
     let mut entry = Vec::new();
-    entry.extend_from_slice(&call_sub(endian, 8));
+    entry.extend_from_slice(&call_sub(endian, 0));
     entry.extend_from_slice(&exit(endian));
     let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
-    let live = obj.func("live", true, text_idx, 0, 16);
+    let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+    obj.func("live", true, text_idx, 0, 16);
     obj.func("memset", true, text_idx, 16, 8);
     obj.func("entry", true, uprobe_idx, 0, 16);
-    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, live, R_BPF_64_32)]);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, text_sym, R_BPF_64_32)]);
     let bytes = obj.build();
     let error = prune_error(&bytes, &load_allowlist(), &limits());
     assert_refusal(&error, ErrorKind::InvalidInput, Stage::Inspect, "inside");
+}
+
+#[test]
+fn section_symbol_call_resolves_loader_slots() {
+    // F01 twin: a section-symbol call with imm 0 resolves to byte 8
+    // (value + (0 + 1) * 8), the live `memset`, not byte 0. The
+    // unreachable trailing builtin is stripped; the section-called
+    // `memset` stays live. Under the old byte addend the call resolved
+    // to byte 0 and the live `memset` was stripped instead.
+    let endian = Endian::Little;
+    let mut obj = ObjBuilder::little();
+    let mut text = Vec::new();
+    text.extend_from_slice(&exit(endian));
+    text.extend_from_slice(&exit(endian));
+    text.extend_from_slice(&exit(endian));
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&call_sub(endian, 0));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let text_sym = obj.symbol(".text", STT_SECTION, text_idx as u16, 0, 0);
+    let live = obj.func("live", true, text_idx, 0, 8);
+    obj.func("memset", true, text_idx, 8, 8);
+    obj.func("memcpy", true, text_idx, 16, 8);
+    obj.func("entry", true, uprobe_idx, 0, 24);
+    obj.reloc_section(
+        ".reluprobe",
+        uprobe_idx,
+        &[(0, live, R_BPF_64_32), (8, text_sym, R_BPF_64_32)],
+    );
+    let bytes = obj.build();
+    let (out, report) =
+        prune_dead_code_with_report(&bytes, &contract(), &load_allowlist(), &limits())
+            .expect("section-called memset prunes");
+    assert_eq!(report.removed(), &["memcpy".to_owned()]);
+    assert_eq!((report.text_before(), report.text_after()), (24, 16));
+    assert_eq!(report.output_sha256(), &digest(&out));
 }
 
 #[test]

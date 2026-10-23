@@ -90,6 +90,7 @@ const SHT_REL: u32 = 9;
 const SHT_SYMTAB_SHNDX: u32 = 18;
 
 const STT_FUNC: u8 = 2;
+const STT_SECTION: u8 = 3;
 /// Exact `st_info` for a GLOBAL FUNC symbol (donor `0x12` linkage check).
 const ST_INFO_GLOBAL_FUNC: u8 = 0x12;
 
@@ -149,6 +150,17 @@ fn charge(work: &mut u64, steps: u64) -> Result<(), OperationError> {
         return Err(limited());
     }
     *work -= steps;
+    Ok(())
+}
+
+/// Account `bytes` of decoded heap retention against the cumulative
+/// `retained_bytes` ceiling (F12): shared strings cloned per symbol or
+/// record would otherwise amplify a small input without bound.
+fn retain(retained: &mut usize, limits: &Limits, bytes: usize) -> Result<(), OperationError> {
+    *retained = retained.checked_add(bytes).ok_or_else(limited)?;
+    if *retained > limits.retained_bytes {
+        return Err(limited());
+    }
     Ok(())
 }
 
@@ -745,12 +757,13 @@ fn decode<'a>(
     contract: &ObjectContract,
     limits: &Limits,
     work: &mut u64,
-) -> Result<Image<'a>, OperationError> {
+) -> Result<(Image<'a>, usize), OperationError> {
     limits.validate()?;
     if bytes.len() > limits.input_bytes || bytes.len() > limits.retained_bytes {
         return Err(limited());
     }
     charge(work, 1)?;
+    let mut retained = bytes.len();
     if bytes.len() < 64 {
         return Err(refuse(ErrorKind::Malformed, "truncated elf header"));
     }
@@ -804,6 +817,7 @@ fn decode<'a>(
     let mut sections = Vec::with_capacity(usize::from(shnum));
     for index in 0..usize::from(shnum) {
         charge(work, 1)?;
+        retain(&mut retained, limits, size_of::<Section>())?;
         let header = &bytes[shoff as usize + index * 64..shoff as usize + (index + 1) * 64];
         sections.push(Section {
             index,
@@ -840,9 +854,11 @@ fn decode<'a>(
             .iter()
             .position(|byte| *byte == 0)
             .ok_or_else(|| refuse(ErrorKind::Malformed, "bad section name"))?;
+        charge(work, end as u64)?;
         let name = std::str::from_utf8(&table[name_off..name_off + end])
             .map_err(|_| refuse(ErrorKind::Malformed, "bad section name"))?;
         if section.index != 0 {
+            retain(&mut retained, limits, name.len())?;
             section.name = Some(name.to_owned());
         }
     }
@@ -897,6 +913,7 @@ fn decode<'a>(
     let mut symbols = Vec::with_capacity(raw.len() / 24);
     for entry in raw.chunks_exact(24) {
         charge(work, 1)?;
+        retain(&mut retained, limits, size_of::<Symbol>())?;
         let name_off = data.u32(&entry[0..4]) as usize;
         if name_off >= strtab.len() {
             return Err(refuse(ErrorKind::Malformed, "bad symbol name"));
@@ -905,8 +922,12 @@ fn decode<'a>(
             .iter()
             .position(|byte| *byte == 0)
             .ok_or_else(|| refuse(ErrorKind::Malformed, "bad symbol name"))?;
+        charge(work, end as u64)?;
         let name = std::str::from_utf8(&strtab[name_off..name_off + end])
             .map_err(|_| refuse(ErrorKind::Malformed, "bad symbol name"))?;
+        if !name.is_empty() {
+            retain(&mut retained, limits, name.len())?;
+        }
         symbols.push(Symbol {
             name: if name.is_empty() {
                 None
@@ -920,12 +941,15 @@ fn decode<'a>(
             size: data.u64(&entry[16..24]),
         });
     }
-    Ok(Image {
-        bytes,
-        data,
-        sections,
-        symbols,
-    })
+    Ok((
+        Image {
+            bytes,
+            data,
+            sections,
+            symbols,
+        },
+        retained,
+    ))
 }
 
 fn digest_of(bytes: &[u8]) -> [u8; 32] {
@@ -1016,7 +1040,7 @@ pub fn prune_dead_code_with_report(
     limits: &Limits,
 ) -> Result<(Vec<u8>, PruneReport), OperationError> {
     let mut work = limits.work_steps;
-    let image = decode(bytes, contract, limits, &mut work)?;
+    let (image, mut retained) = decode(bytes, contract, limits, &mut work)?;
     if image
         .sections
         .iter()
@@ -1030,8 +1054,8 @@ pub fn prune_dead_code_with_report(
         .iter()
         .position(|section| section.kind == SHT_SYMTAB)
         .ok_or_else(|| refuse(ErrorKind::InvalidInput, "missing symtab"))?;
-    let funcs = collect_funcs(&image, text_idx, &mut work)?;
-    let relocs = collect_relocs(&image, &mut work)?;
+    let funcs = collect_funcs(&image, text_idx, &mut work, &mut retained, limits)?;
+    let relocs = collect_relocs(&image, &mut work, &mut retained, limits)?;
     check_call_coverage(&image, &relocs, &mut work)?;
     let roots = entry_roots(&image, text_idx, &relocs, &mut work)?;
     let live = reachable(&image, text_idx, &funcs, &relocs, &roots, &mut work)?;
@@ -1086,6 +1110,8 @@ fn collect_funcs(
     image: &Image<'_>,
     text_idx: usize,
     work: &mut u64,
+    retained: &mut usize,
+    limits: &Limits,
 ) -> Result<Vec<Func>, OperationError> {
     let len = image.sections[text_idx].len;
     if len % 8 != 0 {
@@ -1125,6 +1151,11 @@ fn collect_funcs(
                 format!("function '{name}' runs past .text"),
             ));
         }
+        retain(
+            retained,
+            limits,
+            size_of::<Func>().saturating_add(name.len()),
+        )?;
         funcs.push(Func {
             name,
             value: sym.value,
@@ -1162,7 +1193,12 @@ fn collect_funcs(
     Ok(funcs)
 }
 
-fn collect_relocs(image: &Image<'_>, work: &mut u64) -> Result<Vec<Reloc>, OperationError> {
+fn collect_relocs(
+    image: &Image<'_>,
+    work: &mut u64,
+    retained: &mut usize,
+    limits: &Limits,
+) -> Result<Vec<Reloc>, OperationError> {
     let mut out = Vec::new();
     for section in &image.sections {
         if section.kind != SHT_REL {
@@ -1214,6 +1250,7 @@ fn collect_relocs(image: &Image<'_>, work: &mut u64) -> Result<Vec<Reloc>, Opera
             if typ == R_BPF_NONE {
                 continue;
             }
+            retain(retained, limits, size_of::<Reloc>())?;
             out.push(Reloc {
                 rel_sect: section.index,
                 target_sect: section.info as usize,
@@ -1288,8 +1325,12 @@ fn check_call_coverage(
 }
 
 /// Resolve one call reloc to the referenced symbol plus the destination
-/// byte offset: the symbol value plus the call slot's own immediate,
-/// where LLVM's unresolved `-1` means a zero addend.
+/// byte offset, using loader call semantics (aya-obj `relocation.rs`:
+/// a call against a function symbol resolves to the symbol value; a
+/// call against a section symbol resolves to the symbol value plus
+/// `(imm + 1)` instruction slots). LLVM's unresolved `-1` therefore
+/// means a zero addend in both forms. Any other symbol kind is refused:
+/// pruning must agree with the loader, never guess a destination.
 fn call_dest(
     image: &Image<'_>,
     target: &Section,
@@ -1325,7 +1366,28 @@ fn call_dest(
         .value
         .try_into()
         .map_err(|_| refuse(ErrorKind::InvalidInput, "call reloc target overflows"))?;
-    let addend: i64 = if raw == -1 { 0 } else { i64::from(raw) };
+    let addend: i64 = match sym.kind() {
+        STT_FUNC => 0,
+        STT_SECTION => i64::from(raw)
+            .checked_add(1)
+            .and_then(|slots| slots.checked_mul(8))
+            .ok_or_else(|| {
+                refuse(
+                    ErrorKind::InvalidInput,
+                    format!("call reloc at {:#x} target overflows", reloc.offset),
+                )
+            })?,
+        _ => {
+            return Err(refuse(
+                ErrorKind::Unsupported,
+                format!(
+                    "call reloc at {:#x} targets unsupported symbol kind {}",
+                    reloc.offset,
+                    sym.kind()
+                ),
+            ))
+        }
+    };
     let dest = base
         .checked_add(addend)
         .ok_or_else(|| refuse(ErrorKind::InvalidInput, "call reloc target overflows"))?;
@@ -1819,7 +1881,7 @@ fn verify(
     report: &PruneReport,
 ) -> Result<(), OperationError> {
     let mut work = limits.work_steps;
-    let image = decode(out, contract, limits, &mut work)?;
+    let (image, mut retained) = decode(out, contract, limits, &mut work)?;
     let text_idx = image.find_text()?;
     if image.sections[text_idx].len != report.text_after {
         return Err(refuse(
@@ -1840,7 +1902,7 @@ fn verify(
             }
         }
     }
-    let relocs = collect_relocs(&image, &mut work)?;
+    let relocs = collect_relocs(&image, &mut work, &mut retained, limits)?;
     for reloc in &relocs {
         if reloc.sym_idx >= image.symbols.len() {
             return Err(refuse(
@@ -1878,8 +1940,8 @@ pub fn check_verifier_rules(
     limits: &Limits,
 ) -> Result<Vec<RuleViolation>, OperationError> {
     let mut work = limits.work_steps;
-    let image = decode(bytes, contract, limits, &mut work)?;
-    let relocs = collect_relocs(&image, &mut work)?;
+    let (image, mut retained) = decode(bytes, contract, limits, &mut work)?;
+    let relocs = collect_relocs(&image, &mut work, &mut retained, limits)?;
     let mut violations = Vec::new();
     for manifest in manifests {
         for rule in &manifest.rules {
