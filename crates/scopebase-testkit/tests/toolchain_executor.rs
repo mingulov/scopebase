@@ -2231,3 +2231,34 @@ fn fake_linker_records_loaded_llvm_distinct() {
     assert_ne!(loaded, rust);
     assert_ne!(loaded, clang);
 }
+
+fn max_timeout_bounds() -> NestedBounds {
+    NestedBounds {
+        max_stdout_bytes: 1 << 20,
+        max_stderr_bytes: 1 << 20,
+        timeout_ms: u64::MAX,
+        max_args: 64,
+        max_env: 64,
+    }
+}
+
+/// R05 sweep: `timeout_ms` is u64 MILLISECONDS, so even u64::MAX
+/// (~584M years) stays inside the Instant range: the MAX timeout is
+/// honored as very-long, never refused and never panicking. Only raw
+/// `Duration` params (audit/target sites) can overflow. This locks
+/// the no-panic behavior: if the site ever takes a raw Duration,
+/// MAX must panic here loudly instead of silently passing.
+#[test]
+fn run_pinned_max_timeout_is_honored_without_panic() {
+    let manifest = manifest_of(&[pin_json("ctl", "backend", "1.0.0", &fake_tool("try-spawn"))]);
+    let out = run_pinned(
+        &manifest,
+        "ctl",
+        &fake_tool("try-spawn"),
+        &[],
+        &[],
+        &max_timeout_bounds(),
+    )
+    .unwrap();
+    assert!(out.success(), "MAX timeout must still run the tool");
+}

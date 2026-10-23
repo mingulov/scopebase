@@ -49,10 +49,16 @@ fn flag_value(argv: &[String], name: &str) -> Option<String> {
 }
 
 /// F15: map one target page transiently on a worker thread.
-/// Returns the worker's exit status (0 clean).
+/// Returns the worker's exit status (0 clean; 10/11/12 worker body
+/// failures; 13 join failure; R06: 14 NUL in target, 15 spawn
+/// refused). Every nonzero code exits 2 from main: setup failure,
+/// never a panic.
 fn thread_plant(target: &str) -> i32 {
-    let path = std::ffi::CString::new(target).expect("target path encodes");
-    let worker = std::thread::Builder::new()
+    let path = match std::ffi::CString::new(target) {
+        Ok(path) => path,
+        Err(_) => return 14,
+    };
+    let worker = match std::thread::Builder::new()
         .name("plant-worker".to_string())
         .spawn(move || {
             // SAFETY: NUL-terminated admitted path; all results checked.
@@ -83,8 +89,11 @@ fn thread_plant(target: &str) -> i32 {
                 libc::close(fd);
             }
             0
-        })
-        .expect("worker spawns");
+        }) {
+        Ok(worker) => worker,
+        // R06: EAGAIN/denied spawn is a setup error, not a panic.
+        Err(_) => return 15,
+    };
     worker.join().unwrap_or(13)
 }
 

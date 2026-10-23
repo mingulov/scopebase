@@ -1803,7 +1803,9 @@ fn fork_exec_exit_verdicts() {
         other => panic!("pre-exec victim range must resolve positive, saw {other:?}"),
     }
     exec_target.trigger_exec();
-    let exe = exec_target.wait_exe("sleep", Duration::from_secs(10));
+    let exe = exec_target
+        .wait_exe("sleep", Duration::from_secs(10))
+        .expect("exe barrier poll");
     assert!(exe.ends_with("sleep"), "exec barrier never showed sleep");
     // Birth survives exec; the old range no longer resolves.
     let birth = eobs.verify_birth(&ctl).expect("verify birth");
@@ -2390,4 +2392,106 @@ fn non_mapping_targets_have_no_range() {
     let exec = OwnedTarget::exec_transition().expect("exec target");
     assert_eq!(exec.range(), None);
     pass("FS-target-range", "stopped/exec range is None");
+}
+
+/// R05: an unrepresentable audit timeout refuses BEFORE the subject
+/// spawns. The control proves the marker script executes in this
+/// environment (skipped on noexec mounts); the audit itself must
+/// return the overflow refusal with no marker and no spawn. Old code
+/// panicked in `Instant + Duration` after spawning the subject.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn audit_max_timeout_refuses_before_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("audit-maxtime");
+    let script = dir.join("never-exec.sh");
+    let marker = dir.join("spawned.marker");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Control: the script really touches its marker when executed.
+    let control = std::process::Command::new(&script).status();
+    match control {
+        Ok(status) if status.success() && marker.exists() => {}
+        _ => {
+            skip("FS10", "marker script cannot execute here (noexec mount?)");
+            return;
+        }
+    }
+    std::fs::remove_file(&marker).unwrap();
+    let config = AuditConfig {
+        target_dev: 0,
+        target_ino: 0,
+        max_entries: 8,
+        timeout: Duration::MAX,
+    };
+    let err = audit::audit_subject(&script, &[], &config).unwrap_err();
+    assert!(
+        format!("{err}").contains("overflow"),
+        "refusal must name the overflow: {err}"
+    );
+    assert!(
+        !marker.exists(),
+        "refused audit spawned its subject: marker exists"
+    );
+    pass(
+        "FS10",
+        "max timeout refuses before spawn; subject never ran",
+    );
+}
+
+/// R06: a thread-plant worker that cannot spawn reports setup
+/// failure (exit 2, `worker=15`) instead of panicking. RLIMIT_NPROC=1
+/// in the child makes the clone fail deterministically; the report
+/// write itself needs no threads.
+#[test]
+fn thread_plant_spawn_denial_is_setup_error() {
+    use std::os::unix::process::CommandExt;
+    let dir = temp_dir("audit-nproc");
+    let target_file = dir.join("nproc-target.bin");
+    std::fs::write(&target_file, pattern_bytes(9, 4096)).unwrap();
+    let report = dir.join("nproc.report");
+    let mut child = std::process::Command::new(audit_subject_bin());
+    child.args([
+        "thread-plant",
+        "--target",
+        &target_file.to_string_lossy(),
+        "--report",
+        &report.to_string_lossy(),
+    ]);
+    // SAFETY: the hook runs one raw syscall (setrlimit, async-signal-safe:
+    // no allocation, no locks) and lowering a limit needs no privilege.
+    unsafe {
+        child.pre_exec(|| {
+            let limit = libc::rlimit {
+                rlim_cur: 1,
+                rlim_max: 1,
+            };
+            if libc::setrlimit(libc::RLIMIT_NPROC, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = match child.status() {
+        Ok(status) => status,
+        Err(e) => {
+            skip("FS10", &format!("denial child would not spawn: {e}"));
+            return;
+        }
+    };
+    assert_eq!(
+        status.code(),
+        Some(2),
+        "spawn denial must be a setup error, not a panic"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report).unwrap_or_default().trim(),
+        "worker=15",
+        "denied spawn must report worker=15"
+    );
+    pass("FS10", "RLIMIT_NPROC denial exits 2 with worker=15");
 }

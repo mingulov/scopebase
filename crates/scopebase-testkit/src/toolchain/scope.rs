@@ -39,7 +39,7 @@ use std::time::Instant;
 
 use crate::object::invalid;
 use crate::toolchain::identity::CompilerClosure;
-use crate::toolchain::invoke::{join_readers, kill_and_wait, spawn_capped_reader};
+use crate::toolchain::invoke::{join_readers, kill_and_wait, spawn_capped_reader_on};
 
 /// One selected compiler tool: offline path, recorded hash, version evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -796,10 +796,33 @@ unsafe impl BuildScopeBackend for DirectScope {
         let stderr = child.stderr.take().expect("piped stderr");
         let stdout_hit = Arc::new(AtomicBool::new(false));
         let stderr_hit = Arc::new(AtomicBool::new(false));
-        let stdout_reader =
-            spawn_capped_reader(stdout, request.max_output_bytes, Arc::clone(&stdout_hit));
-        let stderr_reader =
-            spawn_capped_reader(stderr, request.max_output_bytes, Arc::clone(&stderr_hit));
+        // R06: reader-thread spawn is fallible; a denial retires
+        // the child with no effect instead of panicking.
+        let stdout_reader = match spawn_capped_reader_on(
+            std::thread::Builder::new().name("scope-stdout".to_string()),
+            stdout,
+            request.max_output_bytes,
+            Arc::clone(&stdout_hit),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = kill_and_wait(&mut child);
+                return ScopeStart::NoEffect(scope_backend(error));
+            }
+        };
+        let stderr_reader = match spawn_capped_reader_on(
+            std::thread::Builder::new().name("scope-stderr".to_string()),
+            stderr,
+            request.max_output_bytes,
+            Arc::clone(&stderr_hit),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = kill_and_wait(&mut child);
+                let _ = stdout_reader.join();
+                return ScopeStart::NoEffect(scope_backend(error));
+            }
+        };
         ScopeStart::Started(DirectJob {
             child: Some(child),
             stdout_reader: Some(stdout_reader),

@@ -41,7 +41,14 @@ impl std::error::Error for TargetError {}
 /// PORT P test_subject.rs:106-129: poll one fd for readability with an
 /// EINTR-resilient deadline. True means readable, false means timeout.
 pub fn poll_fd(fd: RawFd, timeout: Duration) -> std::io::Result<bool> {
-    let deadline = Instant::now() + timeout;
+    // R05: an unrepresentable timeout is a typed refusal, never an
+    // `Instant + Duration` panic. Checked before the fd is touched.
+    let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "poll timeout overflows deadline",
+        )
+    })?;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout_ms = i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX);
@@ -94,7 +101,10 @@ fn read_exact_deadline(
 }
 
 fn wait_pid_exited(pid: libc::pid_t, timeout: Duration) -> Result<i32, TargetError> {
-    let deadline = Instant::now() + timeout;
+    // R05: checked before any waitpid call.
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| TargetError::new("fixture wait timeout overflows deadline"))?;
     loop {
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
@@ -166,7 +176,10 @@ impl OwnedTarget {
         let TargetKind::Stopped { child } = &mut owned.kind else {
             unreachable!("just constructed");
         };
-        let deadline = Instant::now() + timeout;
+        // R05: hardened though all call sites pass constant timeouts.
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| TargetError::new("fixture readiness timeout overflows deadline"))?;
         let mut output = child
             .stdout
             .take()
@@ -472,8 +485,12 @@ impl OwnedTarget {
 
     /// Poll `/proc/<pid>/exe` until its file name is `expect`.
     /// Returns the observed link: the exe switch is the exec barrier.
-    pub fn wait_exe(&self, expect: &str, timeout: Duration) -> String {
-        let deadline = Instant::now() + timeout;
+    /// R05: an unrepresentable timeout is a typed refusal, never an
+    /// `Instant + Duration` panic.
+    pub fn wait_exe(&self, expect: &str, timeout: Duration) -> Result<String, TargetError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| TargetError::new("fixture exe timeout overflows deadline"))?;
         loop {
             let link = std::fs::read_link(format!("/proc/{}/exe", self.pid())).ok();
             let name = link
@@ -482,10 +499,10 @@ impl OwnedTarget {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if name == expect {
-                return link.map(|p| p.display().to_string()).unwrap_or_default();
+                return Ok(link.map(|p| p.display().to_string()).unwrap_or_default());
             }
             if Instant::now() >= deadline {
-                return name;
+                return Ok(name);
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -581,5 +598,46 @@ impl Drop for OwnedTarget {
                 let _ = wait_pid_exited(*pid, Duration::from_secs(5));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R05: an unrepresentable poll timeout is a typed refusal, not
+    /// an `Instant + Duration` panic. The bogus fd is never touched:
+    /// the deadline check fires first.
+    #[test]
+    fn poll_fd_refuses_overflowing_timeout() {
+        let err = poll_fd(-1, Duration::MAX).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            format!("{err}").contains("overflow"),
+            "refusal must name the overflow: {err}"
+        );
+    }
+
+    /// R05: same overflow refusal for the reap-poll helper. The
+    /// unallocated pid is never waited on.
+    #[test]
+    fn wait_pid_exited_refuses_overflowing_timeout() {
+        let err = wait_pid_exited(999_999_937, Duration::MAX).unwrap_err();
+        assert!(
+            format!("{err}").contains("overflow"),
+            "refusal must name the overflow: {err}"
+        );
+    }
+
+    /// R05: `wait_exe` refuses an unrepresentable timeout instead of
+    /// panicking. Any live target serves: the check fires first.
+    #[test]
+    fn wait_exe_refuses_overflowing_timeout() {
+        let target = OwnedTarget::stopped().expect("stopped target");
+        let err = target.wait_exe("sleep", Duration::MAX).unwrap_err();
+        assert!(
+            format!("{err}").contains("overflow"),
+            "refusal must name the overflow: {err}"
+        );
     }
 }

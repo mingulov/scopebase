@@ -277,6 +277,12 @@ fn audit_subject_x86_64(
     config: &AuditConfig,
 ) -> Result<AuditReport, AuditError> {
     use std::os::unix::process::CommandExt as _;
+    // R05: the deadline must exist before the subject does. An
+    // unrepresentable timeout refuses here, with no spawn and no
+    // side effect; computing it after spawn panicked.
+    let deadline = Instant::now()
+        .checked_add(config.timeout)
+        .ok_or_else(|| AuditError::new("audit timeout overflows representable deadline"))?;
     let program: PathBuf = program.to_path_buf();
     let mut child = unsafe {
         Command::new(&program)
@@ -297,7 +303,6 @@ fn audit_subject_x86_64(
     }
     .map_err(|e| AuditError::new(format!("subject spawn refused: {e}")))?;
     let pid = child.id() as libc::pid_t;
-    let deadline = Instant::now() + config.timeout;
     let mut report = AuditReport {
         exit_code: None,
         target_dev: config.target_dev,

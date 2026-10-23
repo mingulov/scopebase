@@ -204,8 +204,40 @@ pub fn run_pinned(
     let stderr = child.stderr.take().expect("piped stderr");
     let stdout_hit = Arc::new(AtomicBool::new(false));
     let stderr_hit = Arc::new(AtomicBool::new(false));
-    let stdout_reader = spawn_capped_reader(stdout, bounds.max_stdout_bytes, stdout_hit.clone());
-    let stderr_reader = spawn_capped_reader(stderr, bounds.max_stderr_bytes, stderr_hit.clone());
+    // R06: reader-thread spawn is fallible. A denied spawn kills
+    // the already-spawned child (and joins a half-started sibling
+    // reader) instead of panicking; the error is Backend/Execute
+    // like every other output-reader failure.
+    let stdout_reader = match spawn_capped_reader_on(
+        std::thread::Builder::new().name("invoke-stdout".to_string()),
+        stdout,
+        bounds.max_stdout_bytes,
+        stdout_hit.clone(),
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = kill_and_wait(&mut child);
+            return Err(backend(error, Stage::Execute));
+        }
+    };
+    let stderr_reader = match spawn_capped_reader_on(
+        std::thread::Builder::new().name("invoke-stderr".to_string()),
+        stderr,
+        bounds.max_stderr_bytes,
+        stderr_hit.clone(),
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = kill_and_wait(&mut child);
+            let _ = stdout_reader.join();
+            return Err(backend(error, Stage::Execute));
+        }
+    };
+    // R05 sweep note: this addition cannot overflow. `timeout_ms` is a
+    // u64 of MILLISECONDS: even u64::MAX is ~584M years, and now()+that
+    // stays far inside the Instant range (verified: checked_add at MAX
+    // returns Some). Only raw `Duration` params (audit/target sites)
+    // can carry an unrepresentable span.
     let deadline = Instant::now() + Duration::from_millis(bounds.timeout_ms);
 
     loop {
@@ -265,12 +297,32 @@ pub(crate) struct CappedOutput {
     pub read_error: bool,
 }
 
+/// Default-named wrapper; production passes explicit builders to
+/// the seam below, so this exists only for the unit tests.
+#[cfg(test)]
 pub(crate) fn spawn_capped_reader<R: Read + Send + 'static>(
+    stream: R,
+    cap: usize,
+    hit: Arc<AtomicBool>,
+) -> std::io::Result<std::thread::JoinHandle<CappedOutput>> {
+    spawn_capped_reader_on(
+        std::thread::Builder::new().name("invoke-reader".to_string()),
+        stream,
+        cap,
+        hit,
+    )
+}
+
+/// R06 seam: the caller supplies the thread builder, so tests can
+/// force a genuine spawn failure (e.g. a zero stack size) without
+/// touching process limits. Production passes named builders.
+pub(crate) fn spawn_capped_reader_on<R: Read + Send + 'static>(
+    builder: std::thread::Builder,
     mut stream: R,
     cap: usize,
     hit: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<CappedOutput> {
-    std::thread::spawn(move || {
+) -> std::io::Result<std::thread::JoinHandle<CappedOutput>> {
+    builder.spawn(move || {
         let mut data = Vec::new();
         let mut observed = 0usize;
         let mut chunk = [0u8; 8192];
@@ -385,6 +437,7 @@ mod tests {
     fn mid_stream_read_error_is_not_silent_eof() {
         let hit = Arc::new(AtomicBool::new(false));
         let out = spawn_capped_reader(FailAfterPartial { sent: false }, 1 << 20, hit)
+            .expect("reader spawns")
             .join()
             .unwrap();
         assert_eq!(out.data, b"partial");
@@ -392,6 +445,32 @@ mod tests {
         assert!(
             out.read_error,
             "a mid-stream read failure must be reported, not treated as EOF"
+        );
+    }
+
+    /// R06: a denied reader-thread spawn surfaces as `Err` instead of
+    /// panicking the caller. An absurd stack size makes pthread attr
+    /// setup fail deterministically (EINVAL, no threads or limits
+    /// touched); small sizes merely round up and still spawn.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reader_spawn_failure_is_typed_error() {
+        let hit = Arc::new(AtomicBool::new(false));
+        let denied = std::thread::Builder::new().stack_size(usize::MAX);
+        // Control: the default builder spawns (its reader is joined
+        // and dropped; FailAfterPartial ends in a read error, which
+        // is fine here since only spawn success is asserted).
+        let control = spawn_capped_reader(FailAfterPartial { sent: false }, 1 << 20, hit.clone());
+        assert!(
+            control.is_ok(),
+            "default reader spawn must succeed, both branches asserted"
+        );
+        let _ = control.unwrap().join();
+        let denied_err =
+            spawn_capped_reader_on(denied, FailAfterPartial { sent: false }, 1 << 20, hit);
+        assert!(
+            denied_err.is_err(),
+            "absurd-stack reader spawn must fail, not panic or spawn"
         );
     }
 }
