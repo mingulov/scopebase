@@ -190,6 +190,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "scopebase-conformance"
+version = "0.1.0"
+dependencies = [
+ "scopebase-testkit",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "scopebase-linux"
 version = "0.1.0"
 dependencies = [

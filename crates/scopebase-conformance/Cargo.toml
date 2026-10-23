@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "scopebase-conformance"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+description = "ScopeBase installed operator command and downstream delivery route (TT07)"
+readme = "README.md"
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**/*.rs", "tests/*.rs", "delivery/**"]
+
+[dependencies]
+scopebase-testkit = { version = "=0.1.0", path = "../scopebase-testkit" }
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+sha2 = { version = "=0.11.0", default-features = false }
+
+[[bin]]
+name = "scopebase-conformance"
+path = "src/main.rs"

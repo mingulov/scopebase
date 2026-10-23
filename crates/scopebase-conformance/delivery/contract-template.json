@@ -1,0 +1,326 @@
+{
+ "profile": "operator-delivery-v1",
+ "expected_coordinates": {
+  "package_name": "scopebase-conformance",
+  "package_version": "0.1.0",
+  "source_sha256": "dbab223bf54cb9e2cd791624ec58966dbcb2f6af4b91faf5be908575e8abb85f",
+  "consumer": "scopebase-conformance"
+ },
+ "vector_layout": {
+  "TT07.closure": {
+   "inputs": {
+    "closure-input": "closure-input"
+   },
+   "expected": "closure-expected",
+   "ledger": "closure-ledger"
+  },
+  "TT07.binding": {
+   "inputs": {
+    "binding-input": "binding-input"
+   },
+   "expected": "binding-expected",
+   "ledger": "binding-ledger"
+  }
+ },
+ "ledger_templates": {
+  "closure-ledger": "vectors/ledger-closure.json.tmpl",
+  "binding-ledger": "vectors/ledger-binding.json.tmpl"
+ },
+ "schema_version": 1,
+ "kind": "tt02-run-contract",
+ "run_id": "@RUN_ID@",
+ "catalog_sha256": "@CATALOG_SHA256@",
+ "catalog_revision": 1,
+ "selection": "@SELECTION@",
+ "expected_subject": "@EXPECTED_SUBJECT@",
+ "expected_oracle": {
+  "id": "tt07-literal",
+  "revision": 1,
+  "schema_id": "tt07-literal-v1",
+  "source_sha256": "912d34a2214e26068ff78238016a2465263993ad6e7b0653adb654c4048d0637",
+  "artifact_id": "delivery-oracle-source",
+  "provenance": {
+   "kind": "generated_build",
+   "manifest_sha256": "912d34a2214e26068ff78238016a2465263993ad6e7b0653adb654c4048d0637",
+   "measurement_sha256": "@MEASUREMENT@"
+  }
+ },
+ "artifacts": [
+  {
+   "id": "binding-expected",
+   "revision": 1,
+   "role": "expected_vector",
+   "length": "133",
+   "sha256": "100b4f3eb7f86d8fcbca3734310aacca6f52efb0e1270150bfac3e1bf48c1241"
+  },
+  {
+   "id": "binding-input",
+   "revision": 1,
+   "role": "fixture_input",
+   "length": "27",
+   "sha256": "15aaf652edca291dd17d6ea2ccd019a1ec69c94db7d6cb4ee756d49e482785ae"
+  },
+  {
+   "id": "binding-ledger",
+   "revision": 1,
+   "role": "fixture_ledger",
+   "length": "521",
+   "sha256": "c6c0bebce71b43c643e36587c2c7d9a2bc99a23b4b2817e3d69086bebdf2ae6e"
+  },
+  {
+   "id": "closure-expected",
+   "revision": 1,
+   "role": "expected_vector",
+   "length": "170",
+   "sha256": "f17751f9afcd90dc5eb9b1e35f99ea51d6c9b37db1b3c88d33fe23b48961790c"
+  },
+  {
+   "id": "closure-input",
+   "revision": 1,
+   "role": "fixture_input",
+   "length": "115",
+   "sha256": "d3577a3ae37c06d8da7facd59dbdc06ea795f9de0dc02155b6a66146c4af07e7"
+  },
+  {
+   "id": "closure-ledger",
+   "revision": 1,
+   "role": "fixture_ledger",
+   "length": "521",
+   "sha256": "9a3e10e92ab85cd5abb0a886860df38f5a83026606f51e0fbd89021e02957d41"
+  },
+  {
+   "id": "delivery-case-source",
+   "revision": 1,
+   "role": "case_source",
+   "length": "680",
+   "sha256": "dbab223bf54cb9e2cd791624ec58966dbcb2f6af4b91faf5be908575e8abb85f"
+  },
+  {
+   "id": "delivery-control-source",
+   "revision": 1,
+   "role": "control_source",
+   "length": "528",
+   "sha256": "0c7bb9b859572373bb7caeb081bd3c18b32760b741796b8e157e9c9f2f71f958"
+  },
+  {
+   "id": "delivery-fixture-manifest",
+   "revision": 1,
+   "role": "fixture_manifest",
+   "length": "470",
+   "sha256": "baaf0c41b541a7b6759e2c875dc03749ccbd5875f00475e285be1234be477523"
+  },
+  {
+   "id": "delivery-oracle-source",
+   "revision": 1,
+   "role": "oracle_source",
+   "length": "543",
+   "sha256": "912d34a2214e26068ff78238016a2465263993ad6e7b0653adb654c4048d0637"
+  }
+ ],
+ "case_rules": [
+  {
+   "case_key": {
+    "case_id": "TT07.closure",
+    "case_version": 1,
+    "cell_id": "installed"
+   },
+   "tier": "T0",
+   "observation_schema": {
+    "id": "tt07-closure-v1",
+    "revision": 1
+   },
+   "fixture_schema": {
+    "id": "tt02-fixture-v1",
+    "revision": 1
+   },
+   "script": {
+    "schema_version": 1,
+    "kind": "steps-v1",
+    "schema_id": "tt07-closure-v1",
+    "steps": [
+     {
+      "step_id": "closure",
+      "operation": "sha256-hex",
+      "inputs": [
+       "closure-input"
+      ],
+      "parameters": []
+     }
+    ]
+   },
+   "assertions": [
+    {
+     "id": "value.equal",
+     "requires_coverage": [
+      "excluded",
+      "positive",
+      "setup",
+      "trigger"
+     ],
+     "requires_positive_twin": false
+    }
+   ],
+   "coverage": [
+    {
+     "id": "excluded",
+     "kind": "active_excluded",
+     "minimum": "1",
+     "step_ids": [
+      "closure"
+     ]
+    },
+    {
+     "id": "positive",
+     "kind": "positive",
+     "minimum": "1",
+     "step_ids": [
+      "closure"
+     ]
+    },
+    {
+     "id": "setup",
+     "kind": "setup",
+     "minimum": "1",
+     "step_ids": [
+      "closure"
+     ]
+    },
+    {
+     "id": "trigger",
+     "kind": "trigger",
+     "minimum": "1",
+     "step_ids": [
+      "closure"
+     ]
+    }
+   ],
+   "intent": {
+    "kind": "positive_support"
+   },
+   "attempts": 1,
+   "operation_ids": [
+    "1"
+   ],
+   "max_effects": 0
+  },
+  {
+   "case_key": {
+    "case_id": "TT07.binding",
+    "case_version": 1,
+    "cell_id": "installed"
+   },
+   "tier": "T0",
+   "observation_schema": {
+    "id": "tt07-binding-v1",
+    "revision": 1
+   },
+   "fixture_schema": {
+    "id": "tt02-fixture-v1",
+    "revision": 1
+   },
+   "script": {
+    "schema_version": 1,
+    "kind": "steps-v1",
+    "schema_id": "tt07-binding-v1",
+    "steps": [
+     {
+      "step_id": "binding",
+      "operation": "subject-coords",
+      "inputs": [
+       "binding-input"
+      ],
+      "parameters": []
+     }
+    ]
+   },
+   "assertions": [
+    {
+     "id": "value.equal",
+     "requires_coverage": [
+      "excluded",
+      "positive",
+      "setup",
+      "trigger"
+     ],
+     "requires_positive_twin": false
+    }
+   ],
+   "coverage": [
+    {
+     "id": "excluded",
+     "kind": "active_excluded",
+     "minimum": "1",
+     "step_ids": [
+      "binding"
+     ]
+    },
+    {
+     "id": "positive",
+     "kind": "positive",
+     "minimum": "1",
+     "step_ids": [
+      "binding"
+     ]
+    },
+    {
+     "id": "setup",
+     "kind": "setup",
+     "minimum": "1",
+     "step_ids": [
+      "binding"
+     ]
+    },
+    {
+     "id": "trigger",
+     "kind": "trigger",
+     "minimum": "1",
+     "step_ids": [
+      "binding"
+     ]
+    }
+   ],
+   "intent": {
+    "kind": "positive_support"
+   },
+   "attempts": 1,
+   "operation_ids": [
+    "2"
+   ],
+   "max_effects": 0
+  }
+ ],
+ "limits": {
+  "input_bytes": "8388608",
+  "observation_bytes": "8388608",
+  "vector_bytes": "8388608",
+  "receipt_bytes": "8388608",
+  "retained_bytes": "67108864",
+  "diagnostic_bytes": "65536",
+  "steps_total": "65536",
+  "assertion_records": "65536",
+  "coverage_records": "65536",
+  "read_calls": "65536",
+  "name_bytes": "256",
+  "features": "256",
+  "label_bytes": "96",
+  "measure_file_bytes": "268435456",
+  "measure_total_bytes": "1073741824",
+  "measurement_attempts": "4096",
+  "case_attempts": "4096",
+  "effects_total": "4096",
+  "artifacts": "4096",
+  "scalar_bytes": "4096",
+  "steps_per_invocation": "64",
+  "assertions_per_case": "64",
+  "coverage_per_case": "64",
+  "effects_per_case": "64",
+  "resource_views": "64",
+  "attempts_per_case": "16",
+  "input_slots": "16",
+  "script_parameters": "16",
+  "json_depth": "32",
+  "json_edges": "262144",
+  "execution_ms": "30000",
+  "retirement_ms": "5000"
+ }
+}
