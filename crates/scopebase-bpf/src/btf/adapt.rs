@@ -8,8 +8,9 @@
 //! cap), runs a single forward pass with no backtracking, and records the
 //! exact INT aux words the parser API does not expose. Behavior reference
 //! (no lines copied): KryProbe `btf.rs` strict walk at frozen
-//! `d153f3aaf9a3931337b47c9e1b046c692da55083`; record layout itself follows
-//! the kernel UAPI (`linux/btf.h`).
+//! `d153f3aaf9a3931337b47c9e1b046c692da55083` (header/record walk 79-151,
+//! aux shapes 1780-1809, wrapper chase 202-221 under DESCENT_CAP 43-45);
+//! record layout itself follows the kernel UAPI (`linux/btf.h`).
 //!
 //! Charging schedule (pinned by white-box tests): parse admission 1 step,
 //! then per image 1 header step, per record 1 step plus aux units (fixed

@@ -127,11 +127,15 @@ for kind, entries, key in (("fast", gates["fast_gates"], "gate_id"),
         gid = entry.get("gate_id") or entry.get("id") or entry.get(key, "?")
         print(f"{kind}\t{gid}\t" + "\t".join(shlex.quote(a) for a in entry["argv"]))
 ' "$RUN_ROOT/gates.json" > "$RUN_ROOT/gate-argv.tsv"
+gate_seq=0
 while IFS=$'\t' read -r kind gid argv_rest; do
   [ -n "$kind" ] || continue
   # shellcheck disable=SC2086
   eval "set -- $argv_rest"
-  safe="$(printf '%s-%s' "$kind" "$gid" | tr -c 'A-Za-z0-9-_.' '_')"
+  # Sequence keeps logs distinct when several profiles share one gate id
+  # (e.g. the same package suite backs multiple profiles).
+  gate_seq=$((gate_seq + 1))
+  safe="$(printf '%s-%s-%d' "$kind" "$gid" "$gate_seq" | tr -c 'A-Za-z0-9-_.' '_')"
   run_gate "$kind" "$gid" "$RUN_ROOT/logs/$safe.log" "$@"
 done < "$RUN_ROOT/gate-argv.tsv"
 
@@ -200,5 +204,10 @@ if [ "$FULL" = "true" ] && [ "$GATE_EXIT" -eq 0 ]; then
   echo "verdict=COMPLETE"
   exit 0
 fi
+# Intended narrowed-complete signal, not an error: no gate failed, but the
+# full matrix stays unattested (FULL=false). Callers must not report this as
+# a pass; only exit 0 attests full_matrix_complete. Retrying the same
+# selection cannot turn it green — the missing checks need executable
+# bindings or a broader run (see docs/testing/ci.md).
 echo "verdict=INCOMPLETE gate_exit=$GATE_EXIT (no gate failures; required checks unavailable or unexecuted)"
 exit 3

@@ -14,7 +14,9 @@
 //! base/split twins, T2 the admitted BP02 `btf-u32-u64.bin` linkage image,
 //! T3 authored shape/hostile graphs; see `fixtures/btf-v1/README.md`.
 //! Behavior reference (no lines copied): KryProbe `btf.rs` at frozen
-//! `d153f3aaf9a3931337b47c9e1b046c692da55083`.
+//! `d153f3aaf9a3931337b47c9e1b046c692da55083` (header/record walk 79-151,
+//! aux shapes 1780-1809, wrapper chase 43-45 + 202-221, split routing
+//! 1331-1351 + 1362-1371 + 1420-1433).
 
 pub mod adapt;
 pub mod domain;

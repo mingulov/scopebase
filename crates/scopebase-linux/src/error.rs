@@ -40,7 +40,6 @@ pub enum LimitKind {
     BufferCapacity,
     Entries,
     LineBytes,
-    Depth,
     QueuedEntries,
     PathBytes,
     ReadBytes,

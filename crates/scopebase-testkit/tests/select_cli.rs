@@ -322,3 +322,45 @@ fn resolve_maps_selected_cells_to_gates_or_unavailable() {
     assert!(profiles.contains(&"mid-v1".to_owned()));
     assert_eq!(gates["fast_gates"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn resolve_consumes_impact_id_for_fast_and_profile_gates() {
+    // TT08 fixup: the impact `id` key is consumed for BOTH fast and profile
+    // gates; every emitted gate carries a uniform `gate_id`.
+    let dir = workdir("resolve-id");
+    let plan = select_plan(&dir, "manifest-cell-b.json", "mid-v1");
+    let plan_path = dir.join("plan.json");
+    std::fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    let impact = fixture("impact.json");
+    let catalog = fixture("catalog.json");
+    let manifest = fixture("manifest-cell-b.json");
+    let out = dir.join("gates.json");
+    run_ok(&[
+        "resolve",
+        "--catalog",
+        catalog.to_str().unwrap(),
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--requested",
+        "mid-v1",
+        "--plan",
+        plan_path.to_str().unwrap(),
+        "--impact",
+        impact.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+    ]);
+    let gates = read_json(&out);
+    // The profile gate_id comes from the impact `id`, not the profile name.
+    let mid = gates["profile_gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gate| gate["profile"] == "mid-v1")
+        .expect("mid-v1 gate is affected");
+    assert_eq!(mid["gate_id"], "mid-true");
+    // Fast gates are normalized to the same uniform shape.
+    let fast = &gates["fast_gates"].as_array().unwrap()[0];
+    assert_eq!(fast["gate_id"], "fixture-true");
+    assert_eq!(fast["id"], "fixture-true");
+}

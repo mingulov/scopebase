@@ -56,6 +56,13 @@ incomplete with no failures (required checks unavailable or unexecuted).
 A green run with unavailable required checks exits `3`: the verdict is
 reported as incomplete, never as a quiet pass.
 
+Exit `3` with zero gate failures is the intended narrowed-complete signal,
+not an error: every runnable gate passed, but `full_matrix_complete` is
+false (unavailable required checks or unexecuted cells, e.g. the
+`LOGICAL_ONLY` H33 cells or any narrowed selection). Callers must treat `3`
+as "no failures, qualification still open" — retrying the same selection
+cannot turn it green, and only exit `0` attests the full matrix.
+
 ## Impact map maintenance
 
 When a case gains an executable registration, add `path_rules` entries for

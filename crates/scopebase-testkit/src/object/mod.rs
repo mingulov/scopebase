@@ -16,7 +16,7 @@
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
 use serde_json::Value;
 
-use crate::ids::{Label, ProfileId};
+use crate::ids::{CaseId, Label, ProfileId};
 
 /// Admitted profile/register/inventory schema version. Only 1 exists.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -133,6 +133,10 @@ fn parse_profile(text: &str, field: &'static str) -> Result<(), OperationError> 
     ProfileId::parse(text)
         .map(|_| ())
         .map_err(|_| invalid(field))
+}
+
+fn parse_case(text: &str, field: &'static str) -> Result<(), OperationError> {
+    CaseId::parse(text).map(|_| ()).map_err(|_| invalid(field))
 }
 
 fn parse_id_list(
@@ -716,6 +720,10 @@ impl PatchRecord {
     pub fn patch_sha256(&self) -> &[u8; 32] {
         &self.patch_sha256
     }
+    /// When the patch applies (scope/conditions in prose).
+    pub fn applicability(&self) -> &str {
+        &self.applicability
+    }
     /// Affected conformance profiles.
     pub fn affected_profiles(&self) -> &[String] {
         &self.affected_profiles
@@ -829,9 +837,7 @@ impl PatchRegister {
                 return Err(invalid("owner"));
             }
             let defect_test = get_str(patch, "defect_test")?;
-            if defect_test.is_empty() {
-                return Err(invalid("defect_test"));
-            }
+            parse_case(defect_test, "defect_test")?;
             let status = patch
                 .get("upstream_status")
                 .and_then(Value::as_object)
@@ -846,13 +852,9 @@ impl PatchRegister {
                 return Err(invalid("upstream ref"));
             }
             let inclusion_test = get_str(patch, "inclusion_test")?;
-            if inclusion_test.is_empty() {
-                return Err(invalid("inclusion_test"));
-            }
+            parse_case(inclusion_test, "inclusion_test")?;
             let removal_test = get_str(patch, "removal_test")?;
-            if removal_test.is_empty() {
-                return Err(invalid("removal_test"));
-            }
+            parse_case(removal_test, "removal_test")?;
             let expired = patch
                 .get("expired")
                 .and_then(Value::as_bool)

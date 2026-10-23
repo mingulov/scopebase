@@ -3,9 +3,11 @@
 //!
 //! ADAPT (behavior reference only, no lines copied): KryProbe
 //! `kryprobe/crates/kryprobe-privilege/src/btf.rs` at frozen
-//! `d153f3aaf9a3931337b47c9e1b046c692da55083` (strict header/record walk,
-//! wrapper-chase depth cap, exact prototype/member discipline, split string
-//! bias). The parser itself is the locked third-party btf-rs 2.0.0 at
+//! `d153f3aaf9a3931337b47c9e1b046c692da55083` (strict header/record walk
+//! 79-151, aux shapes 1780-1809, DESCENT_CAP chase 43-45 + 202-221, exact
+//! prototype discipline 223-317, member discipline 739-765, split string
+//! bias 1331-1351 + 1362-1371 + 1420-1433). The parser itself is the locked
+//! third-party btf-rs 2.0.0 at
 //! `0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0` (see Cargo.toml); all budgets
 //! are enforced by the ScopeBase preflight wrapper, never by upstream.
 //!

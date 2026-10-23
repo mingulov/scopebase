@@ -14,7 +14,7 @@
 //!
 //! ADAPT of the two-window check-before-spend plus checked-add budget
 //! mechanism from p11scope `src/discovery/scan.rs` (`remaining_window_io`,
-//! `allowed_io`, `record_io`, `charge`, lines 1051-1120) at commit
+//! `allowed_io`, `record_io`, `charge`, lines 1051-1123) at commit
 //! `7f8ca02bf926a5cbd4345180bbe7367c4f1abdf4`, under blanket grant
 //! `OWNER-2026-10-23` and the scoped D03 GPL-to-Apache destination grant. Only
 //! the allowance/checked-charge/sticky-stop shape is carried over; limits,

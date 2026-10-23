@@ -506,9 +506,12 @@ fn cmd_resolve(args: &[String]) {
                     "profile".to_owned(),
                     Value::String(root.as_str().to_owned()),
                 );
+                // Impact authors write `id`; `gate_id` stays accepted so both
+                // spellings steer the emitted gate, never the profile name.
                 object.insert(
                     "gate_id".to_owned(),
                     gate.get("gate_id")
+                        .or(gate.get("id"))
                         .cloned()
                         .unwrap_or_else(|| Value::String(root.as_str().to_owned())),
                 );
@@ -540,7 +543,30 @@ fn cmd_resolve(args: &[String]) {
         "unbound_profiles".to_owned(),
         Value::Array(unbound_profiles),
     );
-    object.insert("fast_gates".to_owned(), get(&impact, "fast_gates").clone());
+    // Fast gates pass through with a normalized `gate_id` derived from the
+    // same `gate_id`-or-`id` spelling the profile gates consume, so every
+    // emitted gate carries one uniform key and the runner never branches on
+    // which section an entry came from.
+    let fast_gates: Vec<Value> = get(&impact, "fast_gates")
+        .as_array()
+        .unwrap_or_else(|| fail("impact fast_gates must be an array"))
+        .iter()
+        .map(|entry| {
+            let mut object = entry
+                .as_object()
+                .unwrap_or_else(|| fail("fast gate entries must be objects"))
+                .clone();
+            if object.get("gate_id").is_none() {
+                let id = object
+                    .get("id")
+                    .cloned()
+                    .unwrap_or_else(|| fail("fast gate entries need an id"));
+                object.insert("gate_id".to_owned(), id);
+            }
+            Value::Object(object)
+        })
+        .collect();
+    object.insert("fast_gates".to_owned(), Value::Array(fast_gates));
     let out_path = opt(args, "--out").to_owned();
     write_json(&out_path, &Value::Object(object));
     let written = read_json(&out_path);

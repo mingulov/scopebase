@@ -557,7 +557,7 @@ class LockDiagnosticControls(unittest.TestCase):
         try:
             result = self.command(ident, toolchain, subject/'Cargo.toml')
             metadata = json.loads(policy.stdout(result))
-            self.assertEqual(len(metadata['workspace_members']), 2)
+            self.assertEqual(len(metadata['workspace_members']), len(self.matrix['members']))
         except policy.PolicyError as error:
             reason = error.code
         row = self.execution.by_id[ident]

@@ -523,6 +523,11 @@ fn shipped_patch_register_loads_with_separate_llvm_and_linker_repairs() {
     assert_ne!(llvm.scope(), linker.scope());
     assert!(!llvm.expired());
     assert!(!linker.expired());
+    assert_eq!(
+        llvm.applicability(),
+        "BPF backend used-result RMW old-value lowering (LLVM issue 210280)."
+    );
+    assert_ne!(llvm.applicability(), linker.applicability());
     assert!(register.find("aya-ring-reader").is_some());
     assert!(register.find("aya-obj-map-relocation").is_some());
     assert_eq!(register.len(), 4);
@@ -536,8 +541,10 @@ fn shipped_toolchain_inventory_resolves_offline() {
         "inventory must not reference the network"
     );
     let inventory = ToolchainInventory::from_json(&bytes, &limits()).unwrap();
+    assert_eq!(inventory.len(), 11);
     for id in [
         "ubuntu-clang-18.1.8",
+        "ubuntu-llc-18.1.8",
         "ubuntu-llc-21.1.8",
         "llvm-23.1.2-source",
         "llvm-23.1.2-pristine-llc",
@@ -615,4 +622,45 @@ fn shipped_provenance_files_load_and_cross_resolve() {
             );
         }
     }
+}
+
+#[test]
+fn patch_test_ids_require_validated_case_ids() {
+    // TC01 Interfaces: defect/inclusion/removal test ids consume the shared
+    // validated CaseId constructors, not bare nonempty strings.
+    for field in ["defect_test", "inclusion_test", "removal_test"] {
+        for bad in [
+            String::new(),
+            "has space".to_owned(),
+            "H29.bad\n".to_owned(),
+            "x".repeat(97),
+        ] {
+            let mut doc: serde_json::Value = serde_json::from_str(&valid_patch()).unwrap();
+            doc["patches"][0][field] = serde_json::json!(bad);
+            assert_eq!(
+                refusal(
+                    &PatchRegister::from_json(
+                        serde_json::to_vec(&doc).unwrap().as_slice(),
+                        &limits()
+                    )
+                    .unwrap_err()
+                ),
+                (ErrorKind::InvalidInput, Stage::Admission),
+                "{field} {bad:?} must refuse"
+            );
+        }
+    }
+    // Valid twins still admit with exact ids and applicability preserved.
+    let register = PatchRegister::from_json(valid_patch().as_bytes(), &limits()).unwrap();
+    let record = &register.patches()[0];
+    assert_eq!(record.defect_test(), "H29.live-old-value");
+    assert_eq!(
+        record.inclusion_test(),
+        "H29.live-old-value-on-selected-backend"
+    );
+    assert_eq!(record.removal_test(), "H29.fixed-backend-controls");
+    assert_eq!(
+        record.applicability(),
+        "BPF backend used-result RMW lowering"
+    );
 }

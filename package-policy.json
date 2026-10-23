@@ -1740,13 +1740,25 @@
       "role": "product",
       "minimal": [],
       "default": [],
-      "supported_unions": [],
+      "supported_unions": [
+        [
+          "btf"
+        ]
+      ],
       "clients": [
         {
           "id": "bpf-contracts",
           "source": "tests/package-policy/clients/bpf-contracts.rs",
           "default_features": false,
           "features": []
+        },
+        {
+          "id": "bpf-btf",
+          "source": "tests/package-policy/clients/bpf-btf.rs",
+          "default_features": false,
+          "features": [
+            "btf"
+          ]
         }
       ],
       "package_files": [
@@ -1856,7 +1868,34 @@
         "tests/ui/bp03_deserialize.rs",
         "tests/ui/bp03_native_owner.rs",
         "tests/ui/bp03_positive.rs",
-        "tests/ui/bp03_private.rs"
+        "tests/ui/bp03_private.rs",
+        "fixtures/attach-v1/split-trees.json",
+        "src/attach/mod.rs",
+        "src/attach/plan.rs",
+        "tests/attach.rs",
+        "fixtures/ring-v1/cursors.json",
+        "fixtures/ring-v1/staging.json",
+        "src/ring/bounded.rs",
+        "src/ring/frame.rs",
+        "src/ring/mod.rs",
+        "src/ring/stage.rs",
+        "tests/ring.rs",
+        "fixtures/btf-v1/README.md",
+        "fixtures/btf-v1/expected.json",
+        "fixtures/btf-v1/generate_vectors.py",
+        "fixtures/btf-v1/graphs.json",
+        "fixtures/btf-v1/images/base-rivals.bin",
+        "fixtures/btf-v1/images/cycle.bin",
+        "fixtures/btf-v1/images/maps.bin",
+        "fixtures/btf-v1/images/shapes.bin",
+        "fixtures/btf-v1/images/split-extra.bin",
+        "fixtures/btf-v1/manifest.json",
+        "src/btf/adapt.rs",
+        "src/btf/domain.rs",
+        "src/btf/mod.rs",
+        "src/btf/query.rs",
+        "tests/btf.rs",
+        "tests/support/json_mini.rs"
       ],
       "allowed_dependencies": [
         {
@@ -1872,6 +1911,27 @@
           "sha256": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa",
           "source": "registry+https://github.com/rust-lang/crates.io-index",
           "version": "0.12.1"
+        },
+        {
+          "name": "btf-rs",
+          "role": "host-rust",
+          "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9",
+          "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+          "version": "2.0.0"
+        },
+        {
+          "name": "btf-rs-derive",
+          "role": "host-proc-macro",
+          "sha256": "a6773e829f63429d3f5ca6e0123f32ab68d3e1342e24fc487d743944408eafc9",
+          "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+          "version": "2.0.0"
+        },
+        {
+          "name": "byteorder",
+          "role": "host-rust",
+          "sha256": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "1.5.0"
         },
         {
           "name": "cfg-if",
@@ -1909,6 +1969,13 @@
           "version": "0.3.14"
         },
         {
+          "name": "fallible-iterator",
+          "role": "host-rust",
+          "sha256": "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.3.0"
+        },
+        {
           "name": "hybrid-array",
           "role": "host-rust",
           "sha256": "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17",
@@ -1944,6 +2011,13 @@
           "version": "2.8.3"
         },
         {
+          "name": "memmap2",
+          "role": "host-rust",
+          "sha256": "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.9.12"
+        },
+        {
           "name": "rustix",
           "role": "host-build",
           "sha256": "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d",
@@ -1977,6 +2051,20 @@
           "sha256": "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4",
           "source": "registry+https://github.com/rust-lang/crates.io-index",
           "version": "0.11.0"
+        },
+        {
+          "name": "thiserror",
+          "role": "host-build",
+          "sha256": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.21"
+        },
+        {
+          "name": "thiserror-impl",
+          "role": "host-proc-macro",
+          "sha256": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.21"
         },
         {
           "name": "typenum",
@@ -2127,6 +2215,52 @@
           "bundled": false,
           "files": [
             {
+              "path": "LICENSE",
+              "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+            }
+          ],
+          "license_expression": "LGPL-2.1-or-later",
+          "name": "btf-rs",
+          "selected_option": "LGPL-2.1-or-later",
+          "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+          "version": "2.0.0"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
+              "path": "LICENSE",
+              "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+            }
+          ],
+          "license_expression": "LGPL-2.1-or-later",
+          "name": "btf-rs-derive",
+          "selected_option": "LGPL-2.1-or-later",
+          "source": "git+https://github.com/retis-org/btf-rs?rev=0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0#0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0",
+          "version": "2.0.0"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
+              "path": "COPYING",
+              "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+            },
+            {
+              "path": "LICENSE-MIT",
+              "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+            }
+          ],
+          "license_expression": "Unlicense OR MIT",
+          "name": "byteorder",
+          "selected_option": "MIT",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "1.5.0"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
               "path": "LICENSE-APACHE",
               "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
             },
@@ -2212,6 +2346,24 @@
           "selected_option": "Apache-2.0",
           "source": "registry+https://github.com/rust-lang/crates.io-index",
           "version": "0.3.14"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
+              "path": "LICENSE-APACHE",
+              "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+            },
+            {
+              "path": "LICENSE-MIT",
+              "sha256": "0816e154b159ba255c563f7c8c7df5bbb8cc5fc96f5ab8cf9f4743b4f41fe7eb"
+            }
+          ],
+          "license_expression": "MIT OR Apache-2.0",
+          "name": "fallible-iterator",
+          "selected_option": "Apache-2.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.3.0"
         },
         {
           "bundled": false,
@@ -2315,6 +2467,24 @@
           "bundled": false,
           "files": [
             {
+              "path": "LICENSE-APACHE",
+              "sha256": "04ea4849dba9dcae07113850c6f1b1a69052c625210639914eee352023f750ad"
+            },
+            {
+              "path": "LICENSE-MIT",
+              "sha256": "0d25d03b5ab49576178ad0cae7a2648d12c17ad0452fe49c07e55e4b59aa5257"
+            }
+          ],
+          "license_expression": "MIT OR Apache-2.0",
+          "name": "memmap2",
+          "selected_option": "Apache-2.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "0.9.12"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
               "path": "COPYRIGHT",
               "sha256": "377c2e7c53250cc5905c0b0532d35973392af16ffb9596a41d99d202cf3617c9"
             },
@@ -2413,6 +2583,42 @@
           "bundled": false,
           "files": [
             {
+              "path": "LICENSE-APACHE",
+              "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+            },
+            {
+              "path": "LICENSE-MIT",
+              "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+            }
+          ],
+          "license_expression": "MIT OR Apache-2.0",
+          "name": "thiserror",
+          "selected_option": "Apache-2.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.21"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
+              "path": "LICENSE-APACHE",
+              "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+            },
+            {
+              "path": "LICENSE-MIT",
+              "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+            }
+          ],
+          "license_expression": "MIT OR Apache-2.0",
+          "name": "thiserror-impl",
+          "selected_option": "Apache-2.0",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "version": "2.0.21"
+        },
+        {
+          "bundled": false,
+          "files": [
+            {
               "path": "LICENSE",
               "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a"
             },
@@ -2446,6 +2652,59 @@
           "version": "1.0.23"
         }
       ],
+      "license_files": [
+        {
+          "path": "LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "denied_packages": [
+        "aya",
+        "aya-obj",
+        "aya-ebpf",
+        "aya-build",
+        "libbpf-rs",
+        "libbpf-sys",
+        "bpf-linker",
+        "cc",
+        "bindgen"
+      ]
+    },
+    {
+      "id": "scopebase-sdk",
+      "manifest": "crates/scopebase-sdk/Cargo.toml",
+      "role": "product",
+      "minimal": [],
+      "default": [],
+      "supported_unions": [],
+      "clients": [
+        {
+          "id": "sdk-minimal",
+          "source": "tests/package-policy/clients/sdk-minimal.rs",
+          "default_features": false,
+          "features": []
+        }
+      ],
+      "package_files": [
+        "Cargo.toml",
+        "README.md",
+        "LICENSE-APACHE",
+        "src/context.rs",
+        "src/diagnostic.rs",
+        "src/lib.rs",
+        "src/limits.rs",
+        "src/profile.rs",
+        "tests/context.rs",
+        "tests/dependencies.rs",
+        "tests/diagnostic.rs",
+        "tests/isolated_contexts.rs",
+        "tests/limits.rs",
+        "tests/profile.rs",
+        "Cargo.toml.orig",
+        "Cargo.lock"
+      ],
+      "allowed_dependencies": [],
+      "notice_entries": [],
       "license_files": [
         {
           "path": "LICENSE-APACHE",
