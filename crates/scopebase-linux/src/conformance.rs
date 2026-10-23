@@ -8,8 +8,14 @@
 //! APIs; no consumer-only helper is shared any other way.
 //! NEW (LX11): reference-only; no donor lines copied.
 use crate::error::LinuxError;
+use rustix::fs::{self as rfs, Mode, OFlags};
 use std::{
-    io,
+    ffi::CString,
+    io::{self, Write as _},
+    os::{
+        fd::{AsFd, BorrowedFd, OwnedFd},
+        unix::ffi::OsStrExt,
+    },
     path::{Component, Path, PathBuf},
 };
 
@@ -88,20 +94,55 @@ impl FixtureRoot {
 
     /// Write `bytes` to `rel` under the root, creating parent directories.
     /// Absolute paths and any `..`/prefix escape are refused before any write.
+    ///
+    /// F25: every level resolves descriptor-relative with symlinks
+    /// refused (`NOFOLLOW` per component over pinned directory fds —
+    /// the fd-pinned equivalent of `openat2` `NO_SYMLINKS`, matching
+    /// the `HeldFile` open discipline). A symlink planted at an
+    /// intermediate or final component refuses with `ELOOP` instead
+    /// of writing outside the root.
     pub fn write_file(&self, rel: &str, bytes: &[u8]) -> io::Result<PathBuf> {
-        let full = self.join(rel)?;
-        if let Some(parent) = full.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&full, bytes)?;
-        Ok(full)
+        let pieces = self.split(rel)?;
+        let dir = self.open_parent_dir(&pieces)?;
+        let name = piece_cstr(pieces[pieces.len() - 1])?;
+        let fd = rfs::openat(
+            dir.as_fd(),
+            &name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(0o666),
+        )
+        .map_err(io::Error::from)?;
+        let mut file = std::fs::File::from(fd);
+        file.write_all(bytes)?;
+        self.join(rel)
     }
 
     /// Create (or reuse) `rel` as a directory under the root.
+    /// Idempotent for real directories; symlinks (intermediate or
+    /// final) refuse (F25).
     pub fn subdir(&self, rel: &str) -> io::Result<PathBuf> {
-        let full = self.join(rel)?;
-        std::fs::create_dir_all(&full)?;
-        Ok(full)
+        let pieces = self.split(rel)?;
+        let dir = self.open_parent_dir(&pieces)?;
+        let name = piece_cstr(pieces[pieces.len() - 1])?;
+        match rfs::mkdirat(dir.as_fd(), &name, Mode::from_bits_truncate(0o777)) {
+            Ok(()) => {}
+            Err(rustix::io::Errno::EXIST) => {
+                // Present: verify it is a real directory, since
+                // mkdirat also reports EEXIST for symlinks and files.
+                rfs::openat(
+                    dir.as_fd(),
+                    &name,
+                    OFlags::RDONLY
+                        | OFlags::DIRECTORY
+                        | OFlags::NOFOLLOW
+                        | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?;
+            }
+            Err(errno) => return Err(io::Error::from(errno)),
+        }
+        self.join(rel)
     }
 
     /// Remove the whole tree. Consumes the root so cleanup runs exactly once.
@@ -110,6 +151,16 @@ impl FixtureRoot {
     }
 
     fn join(&self, rel: &str) -> io::Result<PathBuf> {
+        let mut full = self.path.clone();
+        for piece in self.split(rel)? {
+            full.push(piece);
+        }
+        Ok(full)
+    }
+
+    /// Validated normal pieces of `rel`: relative, NUL-free, no
+    /// `..`/prefix escapes, at least one real component.
+    fn split<'a>(&self, rel: &'a str) -> io::Result<Vec<&'a std::ffi::OsStr>> {
         if rel.is_empty() || rel.contains('\0') {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad rel path"));
         }
@@ -117,10 +168,10 @@ impl FixtureRoot {
         if target.is_absolute() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "abs rel path"));
         }
-        let mut full = self.path.clone();
+        let mut pieces = Vec::new();
         for part in target.components() {
             match part {
-                Component::Normal(piece) => full.push(piece),
+                Component::Normal(piece) => pieces.push(piece),
                 Component::CurDir => {}
                 _ => {
                     return Err(io::Error::new(
@@ -130,13 +181,51 @@ impl FixtureRoot {
                 }
             }
         }
-        if full == self.path {
+        if pieces.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "empty rel path",
             ));
         }
-        Ok(full)
+        Ok(pieces)
+    }
+
+    /// Open the directory holding the final piece, creating missing
+    /// intermediate directories. Every level resolves with symlinks
+    /// refused; held directory fds pin each level against renames.
+    fn open_parent_dir(&self, pieces: &[&std::ffi::OsStr]) -> io::Result<OwnedFd> {
+        let mut dir = rfs::open(
+            &self.path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        for piece in &pieces[..pieces.len() - 1] {
+            dir = open_child_dir(dir.as_fd(), &piece_cstr(piece)?)?;
+        }
+        Ok(dir)
+    }
+}
+
+/// One path piece as a `CString` (NUL was already rejected, so this
+/// only re-checks the invariant at the FFI boundary).
+fn piece_cstr(piece: &std::ffi::OsStr) -> io::Result<CString> {
+    CString::new(piece.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad rel path"))
+}
+
+/// Open one child directory, creating it when missing. Symlinks
+/// refuse with `ELOOP` (`NOFOLLOW`); files refuse with `ENOTDIR`.
+fn open_child_dir(parent: BorrowedFd<'_>, name: &CString) -> io::Result<OwnedFd> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match rfs::openat(parent, name, flags, Mode::empty()) {
+        Ok(fd) => Ok(fd),
+        Err(rustix::io::Errno::NOENT) => {
+            rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o777))
+                .map_err(io::Error::from)?;
+            rfs::openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)
+        }
+        Err(errno) => Err(io::Error::from(errno)),
     }
 }
 

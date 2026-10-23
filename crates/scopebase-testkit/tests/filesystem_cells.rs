@@ -1005,6 +1005,20 @@ fn audit_subject_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tt04-audit-subject"))
 }
 
+/// F18: an FS10 observation only counts when the production phase
+/// genuinely observed the mapping. The subject exits 0 and writes a
+/// `verdict=...` report for every completed observation INCLUDING
+/// failures, so a bare `starts_with("verdict=")` check passes
+/// vacuously on `verdict=Failure` (and the planted leg would flag
+/// its plant even when the observation itself failed, since the
+/// plant runs independently). Only the two positive outcomes gate.
+fn positive_verdict(report: &str) -> bool {
+    matches!(
+        report.trim(),
+        "verdict=ExactRange" | "verdict=KeyCompatible"
+    )
+}
+
 /// FS10: the independent syscall audit detects even a transient
 /// target-backed mmap during the production no-new-mapping phase. The
 /// planted violation MUST be flagged (sensitivity); the clean NoNew
@@ -1057,6 +1071,15 @@ fn transient_target_mmap_detected() {
         plant_report.exists(),
         "fixture unexercised: planted subject wrote no verdict report"
     );
+    // F18: the sensitivity leg only counts on a genuine observation;
+    // the plant runs even when the observation failed.
+    let planted_verdict = std::fs::read_to_string(&plant_report)
+        .expect("fixture unexercised: planted subject wrote no report");
+    assert!(
+        positive_verdict(&planted_verdict),
+        "fixture unexercised: planted observation was not positive: {}",
+        planted_verdict.trim()
+    );
     let planted_hit = planted
         .target_backed_mmaps()
         .into_iter()
@@ -1090,9 +1113,13 @@ fn transient_target_mmap_detected() {
     assert_eq!(clean.exit_code, Some(0), "clean subject must exit 0");
     let verdict = std::fs::read_to_string(&clean_report)
         .expect("fixture unexercised: clean subject wrote no report");
+    // F18: the clean leg only counts on a genuine positive
+    // observation, never on a Failure/Inconclusive/Mismatch that
+    // trivially maps no target bytes.
     assert!(
-        verdict.starts_with("verdict="),
-        "fixture unexercised: clean subject observed nothing"
+        positive_verdict(&verdict),
+        "fixture unexercised: clean observation was not positive: {}",
+        verdict.trim()
     );
     assert!(
         clean.target_backed_mmaps().is_empty(),
@@ -1229,6 +1256,60 @@ fn audit_deadline_kills_hung_subject() {
         "FS10",
         &format!("yama {yama}; sleep 300 killed after {elapsed:?}"),
     );
+}
+
+/// F18 control: a non-positive observation exits 0 with a
+/// `verdict=...` report (the trap the old `starts_with` gate fell
+/// into), and the strict gate rejects it. Runs the subject directly
+/// — no ptrace, so this control never skips.
+#[test]
+fn clean_gate_rejects_nonpositive_verdicts() {
+    let dir = temp_dir("audit-gate");
+    let target_file = dir.join("gate-target.bin");
+    std::fs::write(&target_file, pattern_bytes(31, 8192)).unwrap();
+    let target = OwnedTarget::mapping(&target_file).expect("gate target");
+    let gate_report = dir.join("gate.report");
+    // The null page is never mapped: the observation cannot be positive.
+    let status = std::process::Command::new(audit_subject_bin())
+        .args([
+            "observe",
+            "--target",
+            &target_file.to_string_lossy(),
+            "--pid",
+            &target.pid().to_string(),
+            "--range",
+            "1000-2000",
+            "--report",
+            &gate_report.to_string_lossy(),
+        ])
+        .status()
+        .expect("subject runs");
+    assert_eq!(status.code(), Some(0), "subject exits 0 even when not positive");
+    let verdict =
+        std::fs::read_to_string(&gate_report).expect("subject wrote its report");
+    assert!(
+        verdict.starts_with("verdict="),
+        "control unexercised: no verdict to gate, got {verdict:?}"
+    );
+    assert!(
+        !positive_verdict(&verdict),
+        "control failed: unmapped range observed positive: {}",
+        verdict.trim()
+    );
+    for accepted in ["verdict=ExactRange\n", "verdict=KeyCompatible\n"] {
+        assert!(positive_verdict(accepted), "gate must accept {accepted:?}");
+    }
+    for rejected in [
+        "verdict=Failure:MappingDown\n",
+        "verdict=Mismatch:Key\n",
+        "verdict=Inconclusive:Unresolved\n",
+        "verdict=Other:X\n",
+        "garbage\n",
+        "",
+    ] {
+        assert!(!positive_verdict(rejected), "gate must reject {rejected:?}");
+    }
+    pass("FS10", &format!("gate rejects {}; accepts positives", verdict.trim()));
 }
 
 /// FS01 ext4 control: hardlink alias identity, rename/delete path
@@ -1701,9 +1782,26 @@ fn fork_exec_exit_verdicts() {
     );
     let victim = pre_rows
         .iter()
-        .find(|e| e.path.is_some() && e.end - e.start >= 4096)
+        .find(|e| {
+            e.path.as_ref().is_some_and(|p| p.starts_with('/')) && e.end - e.start >= 4096
+        })
         .expect("fixture unexercised: no file-backed pre-exec range");
-    let vrange = MapRange::new(victim.start, victim.start + 4096).unwrap();
+    // The observer matches whole maps rows, so the victim range is
+    // the full row, not a prefix of it.
+    let vrange = MapRange::new(victim.start, victim.end).unwrap();
+    // F19: hold the ACTUAL backing file of the victim range. The old
+    // leg held the unrelated exit-leg life.bin, so its post-exec
+    // Mismatch was preordained (wrong file mismatches with or
+    // without an exec) and proved nothing about exec invalidation.
+    let victim_file = hold(Path::new(
+        victim.path.as_ref().expect("victim has a path"),
+    ));
+    // Pre-exec positive: the held backing file genuinely resolves at
+    // the victim range before the exec.
+    match observe(&pool, &victim_file, &eobs, vrange, policy, &ctl) {
+        Ok(MappingOutcome::ExactRange(_)) | Ok(MappingOutcome::KeyCompatible(_)) => {}
+        other => panic!("pre-exec victim range must resolve positive, saw {other:?}"),
+    }
     exec_target.trigger_exec();
     let exe = exec_target.wait_exe("sleep", Duration::from_secs(10));
     assert!(exe.ends_with("sleep"), "exec barrier never showed sleep");
@@ -1714,7 +1812,7 @@ fn fork_exec_exit_verdicts() {
         scopebase_linux::process::BirthStatus::AliveSameBirth,
         "exec must preserve birth"
     );
-    match observe(&pool, &held, &eobs, vrange, policy, &ctl) {
+    match observe(&pool, &victim_file, &eobs, vrange, policy, &ctl) {
         Ok(MappingOutcome::Mismatch(_)) => {}
         other => panic!("post-exec stale range must mismatch, saw {other:?}"),
     }

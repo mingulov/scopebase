@@ -44,22 +44,31 @@ fn bpf_limits() -> Limits {
 fn fabricated_topology_never_equals_live_truth() {
     use scopebase_bpf::LiveCpuTopology;
 
-    // Fabricated high-ID range: parses fine as a description.
-    let fabricated = CpuTopology::parse_possible(b"64512-65535", 65535, 65536)
-        .expect("descriptive parse accepts caller bytes");
-    assert_eq!(fabricated.count(), 1024);
-
     // Live truth comes only from the kernel-owned FDs.
     let live = LiveCpuTopology::acquire(&bpf_limits()).expect("live acquire works");
+    let live_count = live.snapshot().count();
+    // F34: the fabricated description is host-relative, so the
+    // descriptive-versus-live boundary holds on ANY host size. The
+    // old test fabricated a fixed 1024-id range and asserted
+    // live < 1024, which fails on hosts with >= 1024 possible CPUs.
+    let spec = if live_count <= 65535 {
+        // One id more than live truth holds.
+        format!("0-{live_count}")
+    } else {
+        // Maxed-out host (all 65536 possible): one id fewer.
+        "0-65534".to_string()
+    };
+    let fabricated = CpuTopology::parse_possible(spec.as_bytes(), 65535, 65536)
+        .expect("descriptive parse accepts caller bytes");
+    assert_ne!(
+        fabricated.count(),
+        live_count,
+        "fabricated size must differ from live on any host"
+    );
     assert_ne!(
         live.snapshot().ids(),
         fabricated.ids(),
         "fabricated bytes must not equal live kernel truth"
-    );
-    assert!(
-        live.snapshot().count() < fabricated.count(),
-        "live count {} must stay below the fabricated 1024",
-        live.snapshot().count()
     );
     live.revalidate().expect("fresh live owner revalidates");
 
