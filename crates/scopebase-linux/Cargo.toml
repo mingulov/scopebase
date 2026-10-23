@@ -9,7 +9,7 @@ description = "ScopeBase retained file acquisition, bounded reads and strict raw
 publish = false
 readme = "README.md"
 build = false
-include = ["Cargo.toml", "README.md", "src/**", "tests/**", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
+include = ["Cargo.toml", "README.md", "src/**", "tests/**", "examples/**", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"]
 
 [features]
 default = []
@@ -24,6 +24,20 @@ rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"
 [[example]]
 name = "fd_probe"
 path = "tests/support/fd_probe.rs"
+
+[[example]]
+name = "held_inspect"
+path = "examples/held_inspect.rs"
+
+[[example]]
+name = "observe_self"
+path = "examples/observe_self.rs"
+required-features = ["process"]
+
+[[example]]
+name = "walk_root"
+path = "examples/walk_root.rs"
+required-features = ["walk"]
 
 [[test]]
 name = "proc_parsers"

@@ -13,6 +13,8 @@
 //! ```
 #[cfg(not(target_os = "linux"))]
 compile_error!("scopebase-linux requires Linux");
+/// Developer conformance vocabulary for downstream Linux clients (LX11).
+pub mod conformance;
 pub mod control;
 pub mod error;
 /// Retained file authority and bounded positional reads with observation-only results.
