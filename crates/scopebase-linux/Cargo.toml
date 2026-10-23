@@ -38,3 +38,8 @@ required-features = ["process"]
 name = "mapping_contract"
 path = "tests/mapping_contract.rs"
 required-features = ["mapping"]
+
+[[test]]
+name = "rl01_mapping_negatives"
+path = "tests/rl01_mapping_negatives.rs"
+required-features = ["mapping"]
