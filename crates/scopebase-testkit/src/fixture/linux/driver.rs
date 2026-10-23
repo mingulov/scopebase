@@ -10,12 +10,18 @@
 //! | TT03-SF-14 no-control | O `tests/target_lifecycle.rs:359-375` @ `4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a` | ADAPT_NO_CONTROL_FACET: borrow-only observation leaves independent A/B sentinels responsive; signals/waits stay in original-parent custody outside any subject window |
 //!
 //! Resume handshake/regrant, sibling/task verification, third-slot canary
-//! inventory and the deadline hold are NEW narrow fixture composition over
-//! accepted TT02, as the TT03 contract authorizes.
+//! inventory, the deadline hold and worker-death outage injection are NEW
+//! narrow fixture composition over accepted TT02, as the TT03 contract
+//! authorizes.
 //!
-//! Snapshot full-schema conformance and worker-death outage injection are
-//! documented follow-ups.
-pub use super::manifest::{Scenario, ScenarioStep};
+//! Outage controls arm through the A worker's boot Hello (`worker_exit`,
+//! `partial_file_write`) or fail parent setup after the named registration
+//! (`parent_failure_after_register`). Deaths report typed [`DriverErrorKind::WorkerDeath`]
+//! with the observed wait status and never hang past the reply deadline;
+//! setup failures report [`DriverErrorKind::SetupFailure`] with the exact
+//! registered prefix. Snapshot full-schema conformance is a documented
+//! follow-up.
+pub use super::manifest::{control_pairing_applies, Control, Scenario, ScenarioStep};
 use super::oracle::{exited_unreaped_owned, TRICKY_COMM};
 use super::wire::{
     canonical_json, parse_canonical, run_id_from_hex, sha256_of, validate_hello_reply,
@@ -48,6 +54,12 @@ pub struct LaunchConfig {
     pub scenario: Scenario,
     pub deadline_ns: u64,
     pub cancel: Arc<AtomicBool>,
+    /// Closed outage-injection triple for the worker-death row. Worker kinds
+    /// (`worker_exit`, `partial_file_write`) arm the A worker through its boot
+    /// Hello; the parent kind (`parent_failure_after_register`) fails parent
+    /// setup after the named registration. Pairing is validated before any
+    /// native effect; `None` runs the valid twin.
+    pub control: Option<Control>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +70,14 @@ pub enum DriverErrorKind {
     Refused,
     Cancelled,
     Deferred,
+    /// The owned worker died mid-protocol: the step never completed and no
+    /// ACK covers it. Never silent: the diagnostic carries the step and the
+    /// observed wait status, and the drained-raw prefix stays readable.
+    WorkerDeath,
+    /// Parent setup failed after registering the named native prefix
+    /// (injected `parent_failure_after_register`). The diagnostic names every
+    /// registered owner and the cleanup proof records its retirement.
+    SetupFailure,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +113,11 @@ impl DriverError {
         self.cleanup = cleanup;
         self
     }
+    fn with_note(mut self, note: String) -> Self {
+        self.diagnostic.push_str("; ");
+        self.diagnostic.push_str(&note);
+        self
+    }
     pub fn kind(&self) -> DriverErrorKind {
         self.kind
     }
@@ -121,6 +146,21 @@ fn protocol(step: Option<&str>, detail: impl Into<String>) -> DriverError {
 }
 fn refused(step: Option<&str>, detail: impl Into<String>) -> DriverError {
     DriverError::new(DriverErrorKind::Refused, step, detail.into())
+}
+fn worker_death(step: Option<&str>, status: ReapedExit) -> DriverError {
+    let status_text = match (status.signal, status.code) {
+        (Some(signal), _) => format!("killed by signal {signal}"),
+        (None, Some(code)) => format!("exited with code {code}"),
+        (None, None) => "gone with unknown wait status".to_string(),
+    };
+    DriverError::new(
+        DriverErrorKind::WorkerDeath,
+        step,
+        format!("worker died mid-protocol with no ACK for this step ({status_text})"),
+    )
+}
+fn setup_failure(step: Option<&str>, detail: impl Into<String>) -> DriverError {
+    DriverError::new(DriverErrorKind::SetupFailure, step, detail.into())
 }
 fn io_error(step: Option<&str>, error: rustix::io::Errno) -> DriverError {
     let mut e = DriverError::new(
@@ -177,6 +217,65 @@ struct ChildState {
     exit: Option<ReapedExit>,
 }
 
+impl ChildState {
+    /// Non-blocking exit poll that records the reap exactly once. Returns
+    /// `Some` status when the child is gone (newly observed or previously
+    /// recorded) and `None` while it is still alive. A wait error (the status
+    /// was already consumed) means gone-with-unknown-status: losing a status
+    /// is honest, hanging on a dead child is not.
+    fn poll_gone(&mut self) -> Option<ReapedExit> {
+        if self.reaped {
+            return Some(self.exit.unwrap_or(ReapedExit {
+                signal: None,
+                code: None,
+            }));
+        }
+        let Some(child) = self.child.as_mut() else {
+            self.reaped = true;
+            return Some(self.exit.unwrap_or(ReapedExit {
+                signal: None,
+                code: None,
+            }));
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let exit = exit_of(status);
+                self.exit = Some(exit);
+                self.reaped = true;
+                self.child.take();
+                Some(exit)
+            }
+            Ok(None) => None,
+            Err(_) => {
+                self.reaped = true;
+                self.child.take();
+                Some(self.exit.unwrap_or(ReapedExit {
+                    signal: None,
+                    code: None,
+                }))
+            }
+        }
+    }
+}
+
+/// Graceful gone-poll for transport-failure paths. The kernel closes a
+/// dying worker's socket before the task becomes a zombie, so EOF/EPIPE/
+/// ECONNRESET may arrive while waitpid still says running. Spin briefly
+/// for the zombie; a worker still alive afterwards is a genuine protocol
+/// violator, not a death. Bounded (100ms) far under the reply timeout.
+fn poll_gone_graceful(state: &mut ChildState) -> Option<ReapedExit> {
+    if let Some(status) = state.poll_gone() {
+        return Some(status);
+    }
+    for _ in 0..10 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        if let Some(status) = state.poll_gone() {
+            return Some(status);
+        }
+    }
+    None
+}
+
 #[derive(Debug)]
 struct Channel {
     sock: OwnedFd,
@@ -206,8 +305,8 @@ impl Channel {
             if ready > 0 {
                 return Ok(());
             }
-            if self.try_child_gone() {
-                return Err(protocol(step, "worker channel closed: child is gone"));
+            if let Some(status) = self.child.poll_gone() {
+                return Err(worker_death(step, status));
             }
             remaining -= chunk;
             if remaining <= 0 {
@@ -220,11 +319,9 @@ impl Channel {
         }
     }
 
-    fn try_child_gone(&mut self) -> bool {
-        match self.child.child.as_mut() {
-            Some(child) => matches!(child.try_wait(), Ok(Some(_))),
-            None => true,
-        }
+    /// Non-blocking gone check with reap recording, for pre-step guards.
+    fn observed_gone(&mut self) -> bool {
+        self.child.poll_gone().is_some()
     }
 
     fn send(
@@ -269,7 +366,14 @@ impl Channel {
                 rustix::net::sendmsg(&self.sock, &iov, &mut cbuf, rustix::net::SendFlags::empty())
             }
         }
-        .map_err(|e| io_error(step, e))?;
+        .map_err(|e| {
+            // Any transport failure with a dead peer is the death, whatever
+            // errno flavor the teardown race produced (EPIPE, ECONNRESET).
+            if let Some(status) = poll_gone_graceful(&mut self.child) {
+                return worker_death(step, status);
+            }
+            io_error(step, e)
+        })?;
         if sent != HEADER_BYTES + payload.len() {
             return Err(protocol(step, "short datagram send"));
         }
@@ -294,13 +398,24 @@ impl Channel {
             &mut cbuf,
             rustix::net::RecvFlags::CMSG_CLOEXEC,
         )
-        .map_err(|e| io_error(step, e))?;
+        .map_err(|e| {
+            if let Some(status) = poll_gone_graceful(&mut self.child) {
+                return worker_death(step, status);
+            }
+            io_error(step, e)
+        })?;
         if received.flags.contains(rustix::net::ReturnFlags::TRUNC)
             || received.flags.contains(rustix::net::ReturnFlags::CTRUNC)
         {
             return Err(protocol(step, "truncated datagram or ancillary"));
         }
         if received.bytes < HEADER_BYTES {
+            // A zero-byte read is EOF: the peer closed, which only happens
+            // when the worker exited. Report the typed death, never a bare
+            // short datagram, whenever the owned child is gone.
+            if let Some(status) = poll_gone_graceful(&mut self.child) {
+                return Err(worker_death(step, status));
+            }
             return Err(protocol(step, "datagram shorter than header"));
         }
         let header: [u8; HEADER_BYTES] = data[..HEADER_BYTES].try_into().unwrap();
@@ -491,6 +606,7 @@ fn hello_exchange(
     completed_steps: u32,
     image_epoch: u32,
     next_record: u32,
+    control: Option<&Control>,
     step: Option<&str>,
 ) -> Result<(), DriverError> {
     let steps: Vec<serde_json::Value> = scenario
@@ -498,6 +614,12 @@ fn hello_exchange(
         .iter()
         .map(|s| serde_json::json!({"id": s.id, "action": s.action.as_str(), "actor": s.actor.as_str()}))
         .collect();
+    let control_value = match control {
+        Some(armed) => serde_json::json!({
+            "kind": armed.kind, "step_id": armed.step_id, "point": armed.point,
+        }),
+        None => serde_json::Value::Null,
+    };
     let request = serde_json::json!({
         "schema_version": 1,
         "invocation": invocation,
@@ -518,7 +640,7 @@ fn hello_exchange(
         "execution_deadline_ns": deadline_ns.to_string(),
         "limits": transport_limits(),
         "blobs": [],
-        "control": null,
+        "control": control_value,
         "inherited_fds": [0, 1, 2],
     });
     let body = canonical_json(&request).map_err(|e| wire_error(step, e))?;
@@ -569,6 +691,9 @@ fn resume_after_exec(
         completed,
         new_epoch,
         1,
+        // Outage controls arm the boot Hello only; an armed worker never
+        // survives to exec, so resume carries no control.
+        None,
         Some(step_id),
     )?;
     inner.a.image_epoch = new_epoch;
@@ -602,9 +727,8 @@ fn resume_after_exec(
     }
 }
 
-fn launch_channel(
+fn spawn_channel(
     worker: &std::path::Path,
-    slot: Actor,
     slot_name: &'static str,
     run_id: [u8; 16],
     operation_id: u64,
@@ -619,15 +743,11 @@ fn launch_channel(
     .map_err(|e| io_error(step, e))?;
     let child = spawn_worker(worker, slot_name, child_end).map_err(|e| std_io_error(step, e))?;
     let pid = child.id();
-    let raw = i32::try_from(pid).unwrap_or(0);
-    let pidfd = rustix::process::Pid::from_raw(raw)
-        .and_then(|p| rustix::process::pidfd_open(p, rustix::process::PidfdFlags::empty()).ok());
-    let _ = slot;
     Ok(Channel {
         sock: parent_end,
         child: ChildState {
             child: Some(child),
-            pidfd,
+            pidfd: None,
             pid,
             reaped: false,
             exit: None,
@@ -643,18 +763,74 @@ fn launch_channel(
     })
 }
 
+fn open_pidfd(pid: u32) -> Option<OwnedFd> {
+    let raw = i32::try_from(pid).unwrap_or(0);
+    rustix::process::Pid::from_raw(raw)
+        .and_then(|p| rustix::process::pidfd_open(p, rustix::process::PidfdFlags::empty()).ok())
+}
+
+/// Best-effort case-dir removal with an honest outcome note for the
+/// setup-failure diagnostic: success is claimed only when observed.
+fn dir_retirement_note(case_dir: &std::path::Path) -> String {
+    match std::fs::remove_dir_all(case_dir) {
+        Ok(()) => "case dir retired".to_string(),
+        Err(e) => format!("case dir removal FAILED ({e})"),
+    }
+}
+
+/// Shutdown reap: recorded reaps are preserved, and a live worker gets a
+/// bounded wait for its natural post-close exit before any SIGKILL. The
+/// close-handshake counterpart exits in microseconds; killing first would
+/// race its teardown and randomly report signal 9 instead of code 0.
+fn reap_shutdown(channel: &mut Channel) {
+    if channel.child.poll_gone().is_some() {
+        return;
+    }
+    let Some(child) = channel.child.child.as_mut() else {
+        channel.child.reaped = true;
+        return;
+    };
+    match exact_wait(child, None) {
+        Ok(exit) => {
+            channel.child.exit = Some(exit);
+        }
+        Err(_) => {
+            let _ = child.kill();
+            if let Ok(status) = child.wait() {
+                channel.child.exit = Some(exit_of(status));
+            }
+        }
+    }
+    channel.child.reaped = true;
+    channel.child.child.take();
+}
+
+/// Setup-path retirement for a never-helloed worker: SIGKILL plus a
+/// blocking reap. The child runs no protocol yet, so no channel exchange is
+/// attempted; the recorded status feeds the setup-failure cleanup proof.
+fn kill_and_reap_setup(channel: &mut Channel) {
+    if channel.child.poll_gone().is_none() {
+        if let Some(child) = channel.child.child.as_mut() {
+            let _ = child.kill();
+            if let Ok(status) = child.wait() {
+                channel.child.exit = Some(exit_of(status));
+            }
+            channel.child.reaped = true;
+            channel.child.child.take();
+        }
+    }
+}
+
 fn cleanup_children(a: &mut Channel, b: &mut Channel) -> CleanupProof {
     for channel in [&mut *a, &mut *b] {
-        if !channel.child.reaped {
+        if channel.child.poll_gone().is_none() {
             if let Some(child) = channel.child.child.as_mut() {
                 let _ = child.kill();
-                if let Ok(Some(status)) = child.try_wait() {
+                if let Ok(status) = child.wait() {
                     channel.child.exit = Some(exit_of(status));
-                    channel.child.reaped = true;
-                } else if let Ok(status) = child.wait() {
-                    channel.child.exit = Some(exit_of(status));
-                    channel.child.reaped = true;
                 }
+                channel.child.reaped = true;
+                channel.child.child.take();
             }
         }
     }
@@ -692,6 +868,34 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     if !config.worker.is_absolute() || !config.image_a.is_absolute() || !config.image_b.is_absolute()
     {
         return Err(refused(None, "worker and image paths must be absolute"));
+    }
+    if let Some(control) = &config.control {
+        if !control_pairing_applies(
+            &control.kind,
+            &control.step_id,
+            &control.point,
+            config.scenario,
+        ) {
+            return Err(refused(
+                None,
+                format!(
+                    "control pairing {} at {}/{} is not applicable to {}",
+                    control.kind,
+                    control.step_id,
+                    control.point,
+                    config.scenario.as_str(),
+                ),
+            ));
+        }
+        match control.kind.as_str() {
+            "worker_exit" | "partial_file_write" | "parent_failure_after_register" => {}
+            other => {
+                return Err(refused(
+                    None,
+                    format!("control kind {other} has no driver population on this route"),
+                ))
+            }
+        }
     }
     if config.cancel.load(Ordering::Relaxed) {
         return Err(DriverError::new(
@@ -740,9 +944,82 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
     };
     let invocation = hello_invocation(&config.run_hex, config.operation_id);
     let manifest_sha_hex = hex_bytes(&config.manifest_sha256);
+    let parent_failure = match &config.control {
+        Some(armed) if armed.kind == "parent_failure_after_register" => Some(armed.point.clone()),
+        _ => None,
+    };
+    if parent_failure.as_deref() == Some("after_case_root_register") {
+        let dir_note = dir_retirement_note(&case_dir_owned);
+        return Err(setup_failure(
+            Some("s01-ready"),
+            format!(
+                "parent setup failed after case-root registration \
+                 (parent_failure_after_register/after_case_root_register at s01-ready): \
+                 registered [case-root]; no child ever spawned; {dir_note}"
+            ),
+        ));
+    }
+    let mut channel_a = spawn_channel(&config.image_a, "a", run_id, config.operation_id, None)?;
+    if parent_failure.as_deref() == Some("after_child_register") {
+        let pid = channel_a.child.pid;
+        kill_and_reap_setup(&mut channel_a);
+        let dir_note = dir_retirement_note(&case_dir_owned);
+        return Err(setup_failure(
+            Some("s01-ready"),
+            format!(
+                "parent setup failed after child registration \
+                 (parent_failure_after_register/after_child_register at s01-ready): \
+                 registered [case-root, child-A pid={pid}]; B never spawned; \
+                 child-A reaped and {dir_note}"
+            ),
+        )
+        .with_cleanup(CleanupProof {
+            spawned: true,
+            a_reaped: true,
+            b_reaped: false,
+        }));
+    }
+    channel_a.child.pidfd = open_pidfd(channel_a.child.pid);
+    if parent_failure.as_deref() == Some("after_pidfd_register") {
+        let pid = channel_a.child.pid;
+        let pidfd_state = if channel_a.child.pidfd.is_some() { "held" } else { "missing" };
+        kill_and_reap_setup(&mut channel_a);
+        let dir_note = dir_retirement_note(&case_dir_owned);
+        if channel_a.child.pidfd.is_some() {
+            return Err(setup_failure(
+                Some("s01-ready"),
+                format!(
+                    "parent setup failed after pidfd registration \
+                     (parent_failure_after_register/after_pidfd_register at s01-ready): \
+                     registered [case-root, child-A pid={pid}, pidfd-A]; B never spawned; \
+                     child-A reaped and {dir_note}"
+                ),
+            )
+            .with_cleanup(CleanupProof {
+                spawned: true,
+                a_reaped: true,
+                b_reaped: false,
+            }));
+        }
+        return Err(DriverError::new(
+            DriverErrorKind::Io,
+            Some("s01-ready"),
+            format!(
+                "pidfd-A {pidfd_state}: after_pidfd_register cannot populate on this kernel; \
+                 child-A reaped and {dir_note}"
+            ),
+        )
+        .with_cleanup(CleanupProof {
+            spawned: true,
+            a_reaped: true,
+            b_reaped: false,
+        }));
+    }
+    let mut channel_b = spawn_channel(&config.image_b, "b", run_id, config.operation_id, None)?;
+    channel_b.child.pidfd = open_pidfd(channel_b.child.pid);
     let mut inner = PairInner {
-        a: launch_channel(&config.image_a, Actor::A, "a", run_id, config.operation_id, None)?,
-        b: launch_channel(&config.image_b, Actor::B, "b", run_id, config.operation_id, None)?,
+        a: channel_a,
+        b: channel_b,
         scenario: config.scenario,
         completed: Vec::new(),
         cursor: 0,
@@ -775,10 +1052,18 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         cancel: Arc::clone(&config.cancel),
     };
     let shas = [sha_a, sha_b];
+    let worker_control = match &config.control {
+        Some(armed) if matches!(armed.kind.as_str(), "worker_exit" | "partial_file_write") => {
+            Some(armed)
+        }
+        _ => None,
+    };
     let mut failed: Option<DriverError> = None;
     for (index, (slot, marker)) in [(Actor::A, "A"), (Actor::B, "B")].into_iter().enumerate() {
         let outcome = (|| -> Result<(), DriverError> {
             let channel = if index == 0 { &mut inner.a } else { &mut inner.b };
+            // Outage controls are A-only; B always boots clean.
+            let hello_control = if index == 0 { worker_control } else { None };
             hello_exchange(
                 channel,
                 inner.scenario,
@@ -792,6 +1077,7 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                 0,
                 1,
                 1,
+                hello_control,
                 None,
             )?;
             authenticate_executable(channel.child.pid, &shas[index], None)?;
@@ -800,10 +1086,7 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         })();
         if let Err(error) = outcome {
             let channel = if index == 0 { &mut inner.a } else { &mut inner.b };
-            let gone = matches!(
-                channel.child.child.as_mut().map(|c| c.try_wait()),
-                Some(Ok(Some(_)))
-            );
+            let gone = channel.observed_gone();
             failed = Some(if gone {
                 refused(
                     None,
@@ -1252,10 +1535,9 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
     if negative_hit.is_some() {
         return Err(protocol(Some(step_id), "negative child unexpectedly holds the canary"));
     }
-    for (channel, what) in [(&mut inner.a.child, "A"), (&mut inner.b.child, "B")] {
-        match channel.child.as_mut().map(|c| c.try_wait()) {
-            Some(Ok(None)) => {}
-            _ => return Err(protocol(Some(step_id), format!("child {what} died during inventory"))),
+    for (channel, what) in [(&mut inner.a, "A"), (&mut inner.b, "B")] {
+        if channel.observed_gone() {
+            return Err(protocol(Some(step_id), format!("child {what} died during inventory")));
         }
     }
     let positive_values = serde_json::json!({
@@ -1432,13 +1714,18 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
     }
     match action {
         Action::Ready | Action::CaptureRaw | Action::SetTrickyComm => {
-            let a_dead = inner.a.child.reaped
-                || inner.a.child.exit.is_some()
-                || matches!(inner.a.child.child.as_mut().map(|c| c.try_wait()), Some(Ok(Some(_))));
+            // Expected deaths (after parent_exit) are witnessed WITHOUT
+            // reaping, so the later parent_reap still performs the exact
+            // wait; unexpected deaths reap here for their wait status.
+            let a_dead = inner.a.child.reaped || wnowait_dead(inner.a.child.pid);
             if action == Action::CaptureRaw && a_dead {
                 sample_post_death(&mut inner, step_id)?;
             } else if a_dead {
-                return Err(protocol(Some(step_id), "worker-backed step after death"));
+                let status = inner.a.child.poll_gone().unwrap_or(ReapedExit {
+                    signal: None,
+                    code: None,
+                });
+                return Err(worker_death(Some(step_id), status));
             } else {
                 worker_advance(&mut inner, action, 0, script_index, step_id)?;
                 if action == Action::SetTrickyComm {
@@ -1451,7 +1738,13 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
             if !inner.uploaded.iter().all(|u| *u) {
                 return Err(protocol(Some(step_id), "blobs must upload before create"));
             }
-            worker_advance(&mut inner, action, 3, script_index, step_id)?;
+            match worker_advance(&mut inner, action, 3, script_index, step_id) {
+                Ok(()) => {}
+                Err(e) if e.kind() == DriverErrorKind::WorkerDeath => {
+                    return Err(record_create_death(&mut inner, step_id, e));
+                }
+                Err(e) => return Err(e),
+            }
             for (leaf, expect) in [
                 ("a", inner.blobs[0].as_ref().unwrap().len() as u64),
                 ("b", inner.blobs[1].as_ref().unwrap().len() as u64),
@@ -1486,15 +1779,21 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
                 return Err(protocol(Some(step_id), "pulled file B content mismatch"));
             }
         }
-        Action::ReplaceFileA | Action::UnlinkOriginalA | Action::MutateFileA => {
-            let mask = if action == Action::MutateFileA { 4 } else { 0 };
-            worker_advance(&mut inner, action, mask, script_index, step_id)?;
-            if action == Action::MutateFileA {
-                let expect = inner.blobs[2].as_ref().expect("mutation").clone();
-                let got = read_fd_all(inner.file_a.as_ref().expect("file a"), step_id)?;
-                if got != expect {
-                    return Err(protocol(Some(step_id), "mutated content mismatch"));
+        Action::ReplaceFileA | Action::UnlinkOriginalA => {
+            worker_advance(&mut inner, action, 0, script_index, step_id)?;
+        }
+        Action::MutateFileA => {
+            match worker_advance(&mut inner, action, 4, script_index, step_id) {
+                Ok(()) => {}
+                Err(e) if e.kind() == DriverErrorKind::WorkerDeath => {
+                    return Err(record_mutate_death(&mut inner, step_id, e));
                 }
+                Err(e) => return Err(e),
+            }
+            let expect = inner.blobs[2].as_ref().expect("mutation").clone();
+            let got = read_fd_all(inner.file_a.as_ref().expect("file a"), step_id)?;
+            if got != expect {
+                return Err(protocol(Some(step_id), "mutated content mismatch"));
             }
         }
         Action::ParentExit => {
@@ -1615,6 +1914,146 @@ pub(crate) fn advance_a_step(shared: &SharedPair, step_id: &str) -> Result<(), D
     Ok(())
 }
 
+/// Non-reaping liveness witness for expected-death captures: true only
+/// when waitid/WNOWAIT observes the owned child exited-but-unreaped.
+/// Witness errors (including ECHILD after a recorded reap) mean "not
+/// observed dead"; the protocol exchange then decides with typed errors.
+fn wnowait_dead(pid: u32) -> bool {
+    matches!(exited_unreaped_owned(pid, 8), Ok(Some(_)))
+}
+
+enum LeafSample {
+    Absent,
+    Unreadable,
+    Bytes(Vec<u8>),
+}
+
+fn push_parent_mutation(
+    inner: &mut PairInner,
+    step_id: &str,
+    slot: &str,
+    sample: &LeafSample,
+) -> Result<(), ()> {
+    let (byte_count, readback_hex) = match sample {
+        LeafSample::Bytes(bytes) => (
+            bytes.len().to_string(),
+            serde_json::Value::String(hex_bytes(bytes)),
+        ),
+        _ => ("0".to_string(), serde_json::Value::Null),
+    };
+    let body = serde_json::json!({
+        "schema_version": 1,
+        "invocation": inner.invocation.clone(),
+        "step_id": step_id,
+        "record_index": 0,
+        "sequence": null,
+        "actor_slot": "parent",
+        "record_kind": "mutation",
+        "source": "parent_file",
+        "bytes_hex": null,
+        "values": {
+            "original_slot": slot,
+            "replacement_slot": null,
+            "operation": "worker_death_sample",
+            "offset": "0",
+            "byte_count": byte_count,
+            "readback_hex": readback_hex,
+        },
+        "call_result": "observed",
+        "errno": null,
+        "producer_charges": null,
+    });
+    let bytes = canonical_json(&body).map_err(|_| ())?.into_bytes();
+    inner.raw.push(DrainedRecord {
+        actor: "parent".to_string(),
+        step_id: step_id.to_string(),
+        record_index: 0,
+        kind: "mutation".to_string(),
+        bytes,
+    });
+    Ok(())
+}
+
+/// Parent-side file-prefix sampling after a worker death during create:
+/// each leaf is opened through the retained case root and its actual bytes
+/// are sealed into mutation records. Sampling never masks the death: any
+/// sampling failure returns the original error unchanged.
+fn record_create_death(inner: &mut PairInner, step_id: &str, death: DriverError) -> DriverError {
+    let samples: Option<Vec<LeafSample>> = (|| {
+        let case_root = inner.case_root.as_ref()?;
+        let mut out = Vec::with_capacity(2);
+        for leaf in ["a", "b"] {
+            let fd: OwnedFd = match rustix::fs::openat(
+                case_root,
+                leaf,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            ) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    out.push(LeafSample::Absent);
+                    continue;
+                }
+            };
+            match read_fd_all(&fd, step_id) {
+                Ok(bytes) => out.push(LeafSample::Bytes(bytes)),
+                Err(_) => out.push(LeafSample::Unreadable),
+            }
+        }
+        Some(out)
+    })();
+    let Some(samples) = samples else {
+        return death;
+    };
+    let mut notes = Vec::with_capacity(2);
+    for (leaf, slot, sample) in
+        [("a", "linux.file-a"), ("b", "linux.file-b")]
+            .into_iter()
+            .zip(samples.iter())
+            .map(|((leaf, slot), sample)| (leaf, slot, sample))
+    {
+        match sample {
+            LeafSample::Bytes(bytes) => notes.push(format!("{leaf}: present {} bytes", bytes.len())),
+            LeafSample::Absent => notes.push(format!("{leaf}: absent")),
+            LeafSample::Unreadable => notes.push(format!("{leaf}: unreadable")),
+        }
+        if push_parent_mutation(inner, step_id, slot, sample).is_err() {
+            return death;
+        }
+    }
+    death.with_note(format!("file prefix at death: {}", notes.join(", ")))
+}
+
+/// Parent-side partial-write sampling after a worker death during mutate:
+/// the actual bytes are read through the retained original FileA owner and
+/// sealed into a mutation record with the matched mutation prefix counted.
+fn record_mutate_death(inner: &mut PairInner, step_id: &str, death: DriverError) -> DriverError {
+    let readback: Option<Vec<u8>> = (|| {
+        let file_a = inner.file_a.as_ref()?;
+        read_fd_all(file_a, step_id).ok()
+    })();
+    let Some(readback) = readback else {
+        return death;
+    };
+    let (mutation_len, matched_prefix) = match inner.blobs[2].as_ref() {
+        Some(mutation) => (
+            mutation.len(),
+            readback.iter().zip(mutation.iter()).take_while(|(a, b)| a == b).count(),
+        ),
+        None => (0, 0),
+    };
+    if push_parent_mutation(inner, step_id, "linux.file-a", &LeafSample::Bytes(readback.clone()))
+        .is_err()
+    {
+        return death;
+    }
+    death.with_note(format!(
+        "file-a partial: {matched_prefix}/{mutation_len} mutation bytes from offset 0; \
+         {} bytes retained",
+        readback.len()
+    ))
+}
+
 fn sample_post_death(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError> {
     let pid = inner.a.child.pid;
     let bytes = std::fs::read(format!("/proc/{pid}/stat")).unwrap_or_default();
@@ -1638,18 +2077,12 @@ fn close_channel_step(
     if channel.closed {
         return Ok(());
     }
-    let gone = channel.child.reaped
-        || matches!(channel.child.child.as_mut().map(|c| c.try_wait()), Some(Ok(Some(_))));
+    // A dead A retires through close: the reap is already recorded by the
+    // poll, so no second wait is attempted (a second wait would fail ECHILD).
+    // B must always close clean.
+    let gone = channel.observed_gone();
     if gone && is_a {
         channel.closed = true;
-        if !channel.child.reaped {
-            if let Some(child) = channel.child.child.as_mut() {
-                let exit = exact_wait(child, Some(step_id))?;
-                channel.child.exit = Some(exit);
-                channel.child.reaped = true;
-                channel.child.child.take();
-            }
-        }
         return Ok(());
     }
     if gone {
@@ -1873,16 +2306,7 @@ impl LivePair {
             }
             let pair: &mut PairInner = &mut inner;
             let channel = if is_a { &mut pair.a } else { &mut pair.b };
-            if !channel.child.reaped {
-                if let Some(child) = channel.child.child.as_mut() {
-                    let _ = child.kill();
-                    if let Ok(status) = child.wait() {
-                        channel.child.exit = Some(exit_of(status));
-                    }
-                    channel.child.reaped = true;
-                    channel.child.child.take();
-                }
-            }
+            reap_shutdown(channel);
         }
         if let Some(case_root) = inner.case_root.as_ref() {
             for leaf in ["a", "b", "a-original", "missing-executable"] {
@@ -1968,19 +2392,12 @@ pub(crate) fn deadline_hold_run(
     {
         let mut inner = shared.lock().expect("pair lock");
         for what in ["A", "B"] {
-            let child = if what == "A" {
-                &mut inner.a.child
-            } else {
-                &mut inner.b.child
-            };
-            match child.child.as_mut().map(|c| c.try_wait()) {
-                Some(Ok(None)) => {}
-                _ => {
-                    return Err(protocol(
-                        Some(completed_prefix),
-                        format!("child {what} died during the hold"),
-                    ))
-                }
+            let channel = if what == "A" { &mut inner.a } else { &mut inner.b };
+            if channel.observed_gone() {
+                return Err(protocol(
+                    Some(completed_prefix),
+                    format!("child {what} died during the hold"),
+                ));
             }
         }
     }

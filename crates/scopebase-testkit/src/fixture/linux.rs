@@ -8,10 +8,12 @@
 //! exec round-trip/failure/nonleader exec, real sibling spawn plus
 //! leader-only exit with handover), the exact public
 //! session/custody/finalizer API with native TT02 prepare/collect wiring,
-//! third-slot descriptor inventory and the runner-deadline hold, plus ported
-//! donor facets. Worker-death outage injection, Snapshot full-schema
-//! conformance, F rows, the strict materializer and final-index joint
-//! compatibility are documented follow-ups, not claimed here.
+//! third-slot descriptor inventory, the runner-deadline hold and worker-death
+//! outage injection (real mid-protocol death, orphaned retirement with
+//! retained evidence, partial-file detection), plus ported donor facets.
+//! Snapshot full-schema conformance, F rows, the strict materializer and
+//! final-index joint compatibility are documented follow-ups, not claimed
+//! here.
 mod creator;
 mod driver;
 mod manifest;
@@ -24,6 +26,7 @@ pub use driver::{
     launch_pair, CleanupProof, DeadlineHoldReport, DrainedRecord, DriverError, DriverErrorKind,
     LaunchConfig, LivePair, ReapedExit, Scenario, ScenarioStep, ShutdownReport,
 };
+pub use manifest::{control_pairing_applies, Control};
 pub use wire::{Action, Actor};
 pub use oracle::{
     exited_unreaped_owned, generation_of, gone_from_result, parse_stat_comm_state_starttime,

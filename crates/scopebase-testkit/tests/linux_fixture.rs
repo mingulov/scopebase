@@ -3,7 +3,7 @@
 //! worker driven through the developer driver. Wire/manifest/creator internals
 //! are covered by unit tests inside their private modules.
 use scopebase_testkit::fixture::linux::{
-    launch_pair, DriverErrorKind, LaunchConfig, LinuxFixtureFiles, LinuxFixtureSession,
+    launch_pair, Control, DriverErrorKind, LaunchConfig, LinuxFixtureFiles, LinuxFixtureSession,
     LinuxOuterCleanupAdmissionErrorKind, LinuxOuterCleanupBudget, LinuxProcessFixture,
     Scenario, TRICKY_COMM,
 };
@@ -60,6 +60,15 @@ fn stage_images(dir: &std::path::Path) -> (File, PathBuf, File, PathBuf) {
 }
 
 fn manifest_bytes(run_hex: &str, scenario: &str, operation_id: u64) -> Vec<u8> {
+    manifest_bytes_control(run_hex, scenario, operation_id, None)
+}
+
+fn manifest_bytes_control(
+    run_hex: &str,
+    scenario: &str,
+    operation_id: u64,
+    control: Option<(&str, &str, &str)>,
+) -> Vec<u8> {
     let steps: Vec<serde_json::Value> = Scenario::parse(scenario)
         .unwrap()
         .steps()
@@ -68,6 +77,12 @@ fn manifest_bytes(run_hex: &str, scenario: &str, operation_id: u64) -> Vec<u8> {
             serde_json::json!({"id": s.id, "action": s.action.as_str(), "actor": s.actor.as_str()})
         })
         .collect();
+    let control_value = match control {
+        Some((kind, step_id, point)) => {
+            serde_json::json!({"kind": kind, "step_id": step_id, "point": point})
+        }
+        None => serde_json::Value::Null,
+    };
     serde_json::json!({
         "schema_version": 1,
         "kind": "tt03-linux-fixture",
@@ -84,7 +99,7 @@ fn manifest_bytes(run_hex: &str, scenario: &str, operation_id: u64) -> Vec<u8> {
             },
             "scenario": scenario,
             "steps": steps,
-            "control": null,
+            "control": control_value,
             "expected_file_a_hex": null,
             "expected_file_b_hex": null,
             "mutation_hex": null,
@@ -352,12 +367,24 @@ fn native_session(
     scopebase_testkit::RunContract,
     scopebase_testkit::CaseInvocation,
 ) {
+    native_session_control(dir, scenario, None)
+}
+
+fn native_session_control(
+    dir: &std::path::Path,
+    scenario: &str,
+    control: Option<(&str, &str, &str)>,
+) -> (
+    LinuxFixtureSession,
+    scopebase_testkit::RunContract,
+    scopebase_testkit::CaseInvocation,
+) {
     let (_, _, contract) = support::load();
     let invocation = invocation_for(&contract);
     let op = *invocation.key().operation_id();
     let root = File::open(dir).unwrap();
     let files = make_files(dir, root);
-    let manifest = manifest_bytes(contract.run_id().as_str(), scenario, op);
+    let manifest = manifest_bytes_control(contract.run_id().as_str(), scenario, op, control);
     let cancel = Arc::new(AtomicBool::new(false));
     let session = LinuxFixtureSession::new(
         contract.clone(),
@@ -484,6 +511,7 @@ fn live_pair_with_images(
         scenario,
         deadline_ns: u64::MAX,
         cancel: Arc::new(AtomicBool::new(false)),
+        control: None,
     };
     let pair = launch_pair(&cfg).unwrap();
     (pair, dir)
@@ -497,6 +525,67 @@ fn live_pair(
     PathBuf,
 ) {
     live_pair_with_images(scenario, op, false)
+}
+
+fn outage_control(kind: &str, step_id: &str, point: &str) -> Control {
+    Control {
+        kind: kind.to_string(),
+        step_id: step_id.to_string(),
+        point: point.to_string(),
+    }
+}
+
+fn launch_config_with_control(
+    dir: &std::path::Path,
+    root: File,
+    scenario: Scenario,
+    op: u64,
+    control: Option<Control>,
+) -> (LaunchConfig, PathBuf) {
+    let (fa, pa, fb, pb) = stage_images(dir);
+    drop((fa, fb));
+    let cfg = LaunchConfig {
+        worker: pa.clone(),
+        image_a: pa,
+        image_b: pb,
+        root,
+        run_hex: "00".repeat(16),
+        operation_id: op,
+        manifest_sha256: [0u8; 32],
+        scenario,
+        deadline_ns: u64::MAX,
+        cancel: Arc::new(AtomicBool::new(false)),
+        control,
+    };
+    (cfg, dir.to_path_buf())
+}
+
+fn live_pair_with_control(
+    scenario: Scenario,
+    op: u64,
+    control: Control,
+) -> (
+    scopebase_testkit::fixture::linux::LivePair,
+    PathBuf,
+) {
+    let (dir, root) = temp_root("live-outage");
+    let (cfg, dir) = launch_config_with_control(&dir, root, scenario, op, Some(control));
+    let pair = launch_pair(&cfg).unwrap();
+    (pair, dir)
+}
+
+fn case_path(dir: &std::path::Path, op: u64) -> PathBuf {
+    dir.join(format!("tt03-{}-{op}", "00".repeat(16)))
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(H[(b >> 4) as usize] as char);
+        s.push(H[(b & 15) as usize] as char);
+    }
+    s
 }
 
 fn stage_distinct_images(dir: &std::path::Path) -> (File, PathBuf, File, PathBuf) {
@@ -694,6 +783,7 @@ fn wrong_image_refused_before_grant() {
         scenario: Scenario::LeaderLifecycle,
         deadline_ns: u64::MAX,
         cancel: Arc::new(AtomicBool::new(false)),
+        control: None,
     };
     let err = launch_pair(&cfg).unwrap_err();
     assert!(matches!(err.kind(), DriverErrorKind::Refused));
@@ -722,6 +812,7 @@ fn cancel_before_create_spawns_nothing() {
         scenario: Scenario::LeaderLifecycle,
         deadline_ns: u64::MAX,
         cancel,
+        control: None,
     };
     let err = launch_pair(&cfg).unwrap_err();
     assert!(matches!(err.kind(), DriverErrorKind::Cancelled));
@@ -1007,6 +1098,401 @@ fn reached_deadline_30s_schedule() {
     assert_eq!(report.extra_worker_datagrams, 0);
     a.advance(&label("s07-close")).unwrap();
     pair.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn assert_worker_death(
+    err: &scopebase_testkit::fixture::linux::LinuxPhaseError,
+    step_id: &str,
+    elapsed: Duration,
+) {
+    assert_eq!(
+        err.category(),
+        FixtureErrorCategory::InvalidProtocol,
+        "worker death is a typed protocol failure"
+    );
+    assert_eq!(err.step_id(), &label(step_id));
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(
+        diagnostic.contains("died mid-protocol"),
+        "death is reported, never silent: {diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("code 3"),
+        "control death carries the distinct wait status: {diagnostic}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "death is detected at once, never via the 10s reply timeout: {elapsed:?}"
+    );
+}
+
+#[test]
+fn worker_exit_after_root_grant_is_typed_death() {
+    let (pair, dir) = live_pair_with_control(
+        Scenario::LeaderLifecycle,
+        31,
+        outage_control("worker_exit", "s01-ready", "after_root_grant"),
+    );
+    let a = pair.a_process();
+    let start = Instant::now();
+    let err = a
+        .advance(&label("s01-ready"))
+        .expect_err("root-granted worker exit must fail the step");
+    assert_worker_death(&err, "s01-ready", start.elapsed());
+    // B never received the control and stays fully serviceable.
+    pair.b_heartbeat(&label("s01-ready"))
+        .expect("excluded worker is unaffected by A's death");
+    // Orphaned retirement: A reaped with its control status, B closed clean,
+    // case directory removed.
+    let report = pair.shutdown();
+    assert_eq!(report.a_exit.map(|e| e.code), Some(Some(3)));
+    assert_eq!(report.b_exit.map(|e| e.code), Some(Some(0)));
+    assert!(report.case_root_removed);
+    let case = case_path(&dir, 31);
+    assert!(!case.exists(), "retired case directory is gone");
+    std::fs::remove_dir_all(&dir).unwrap();
+    // Valid twin: the same script without the control proceeds past s01.
+    let (twin, twin_dir) = live_pair(Scenario::LeaderLifecycle, 32);
+    let t = twin.a_process();
+    t.advance(&label("s01-ready")).unwrap();
+    t.advance(&label("s02-live")).unwrap();
+    let shutdown = twin.shutdown();
+    assert!(shutdown.case_root_removed);
+    std::fs::remove_dir_all(&twin_dir).unwrap();
+}
+
+#[test]
+fn worker_exit_after_file_register_keeps_file_a_first() {
+    let (pair, dir) = live_pair_with_control(
+        Scenario::FileReplacement,
+        33,
+        outage_control("worker_exit", "s02-create-files", "after_file_register"),
+    );
+    let a = pair.a_process();
+    let blob_a = b"alpha-content-001".to_vec();
+    let blob_b = b"beta--content-002".to_vec();
+    let mutation = b"ALPHA-CONTENT-001".to_vec();
+    pair.upload_blobs(&blob_a, &blob_b, &mutation).unwrap();
+    a.advance(&label("s01-ready")).unwrap();
+    let start = Instant::now();
+    let err = a
+        .advance(&label("s02-create-files"))
+        .expect_err("FileA-created exit must fail the step");
+    assert_worker_death(&err, "s02-create-files", start.elapsed());
+    // FileA was registered first, before FileB and before the death: its
+    // complete bytes survive on the retained case root; FileB never exists.
+    let case = case_path(&dir, 33);
+    assert_eq!(std::fs::read(case.join("a")).unwrap(), blob_a);
+    assert!(
+        !case.join("b").exists(),
+        "FileB is never created before the death"
+    );
+    // The parent sampled the file prefix at death into retained evidence.
+    let raw = pair.drained_raw();
+    let sample = raw
+        .iter()
+        .find(|r| r.kind == "mutation" && r.step_id == "s02-create-files")
+        .expect("parent death-sample record");
+    let body: serde_json::Value = serde_json::from_slice(&sample.bytes).unwrap();
+    assert_eq!(body["values"]["readback_hex"], hex_of(&blob_a));
+    assert_eq!(body["values"]["byte_count"], blob_a.len().to_string());
+    // Drained prefix before the death is retained, not dropped.
+    assert!(raw.iter().any(|r| r.step_id == "s01-ready"));
+    let report = pair.shutdown();
+    assert_eq!(report.a_exit.map(|e| e.code), Some(Some(3)));
+    assert!(report.case_root_removed);
+    assert!(!case.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn partial_file_write_detected_typed() {
+    let (pair, dir) = live_pair_with_control(
+        Scenario::FileReplacement,
+        34,
+        outage_control("partial_file_write", "s08-mutate", "before_ack"),
+    );
+    let a = pair.a_process();
+    let blob_a = b"alpha-content-001".to_vec();
+    let blob_b = b"beta--content-002".to_vec();
+    // Premise: equal length, bytes 0 and 1 each differ.
+    let mutation = b"ZZpha-content-001".to_vec();
+    assert_eq!(mutation.len(), blob_a.len());
+    assert_ne!(mutation[0], blob_a[0]);
+    assert_ne!(mutation[1], blob_a[1]);
+    pair.upload_blobs(&blob_a, &blob_b, &mutation).unwrap();
+    for step in [
+        "s01-ready",
+        "s02-create-files",
+        "s03-offer-files",
+        "s04-original",
+        "s05-replace",
+        "s06-replaced",
+        "s07-unlink",
+    ] {
+        a.advance(&label(step)).unwrap();
+    }
+    let start = Instant::now();
+    let err = a
+        .advance(&label("s08-mutate"))
+        .expect_err("one-byte partial write must fail the step");
+    assert_worker_death(&err, "s08-mutate", start.elapsed());
+    // Partial-file detection through the parent's retained original FileA:
+    // exactly the first byte changed, the tail is untouched. Positional
+    // read: the shared description's offset sits at EOF after the worker's
+    // positional create write.
+    use std::os::unix::fs::FileExt;
+    let pulled = pair.pulled_file_a().unwrap();
+    let mut readback = vec![0u8; blob_a.len()];
+    pulled.read_exact_at(&mut readback, 0).unwrap();
+    let mut expect = blob_a.clone();
+    expect[0] = mutation[0];
+    assert_eq!(readback, expect, "exactly one byte was written");
+    assert_ne!(readback, mutation, "a full mutation must not be claimed");
+    let raw = pair.drained_raw();
+    let sample = raw
+        .iter()
+        .find(|r| r.kind == "mutation" && r.step_id == "s08-mutate")
+        .expect("parent partial-write record");
+    let body: serde_json::Value = serde_json::from_slice(&sample.bytes).unwrap();
+    assert_eq!(body["values"]["readback_hex"], hex_of(&readback));
+    assert_eq!(body["values"]["offset"], "0");
+    let report = pair.shutdown();
+    assert_eq!(report.a_exit.map(|e| e.code), Some(Some(3)));
+    assert_eq!(report.b_exit.map(|e| e.code), Some(Some(0)));
+    assert!(report.case_root_removed);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn partial_file_write_premise_violation_refused() {
+    let (pair, dir) = live_pair_with_control(
+        Scenario::FileReplacement,
+        35,
+        outage_control("partial_file_write", "s08-mutate", "before_ack"),
+    );
+    let a = pair.a_process();
+    let blob_a = b"alpha-content-001".to_vec();
+    let blob_b = b"beta--content-002".to_vec();
+    // Byte 0 matches: the one-byte premise cannot hold, so the worker must
+    // refuse with a typed Error instead of dying.
+    let mutation = b"aLPHA-CONTENT-001".to_vec();
+    pair.upload_blobs(&blob_a, &blob_b, &mutation).unwrap();
+    for step in [
+        "s01-ready",
+        "s02-create-files",
+        "s03-offer-files",
+        "s04-original",
+        "s05-replace",
+        "s06-replaced",
+        "s07-unlink",
+    ] {
+        a.advance(&label(step)).unwrap();
+    }
+    let err = a
+        .advance(&label("s08-mutate"))
+        .expect_err("premise violation must refuse the step");
+    assert_eq!(err.category(), FixtureErrorCategory::InvalidProtocol);
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    // The frozen Error shape carries detail hex-encoded in diagnostic_hex;
+    // 7072656d697365 is "premise".
+    assert!(
+        diagnostic.contains("7072656d697365"),
+        "refusal names the premise: {diagnostic}"
+    );
+    assert!(
+        !diagnostic.contains("died mid-protocol"),
+        "a refusal is not a death: {diagnostic}"
+    );
+    // The worker is alive and responsive: the same step refuses again.
+    let retry = a.advance(&label("s08-mutate")).unwrap_err();
+    assert!(
+        String::from_utf8_lossy(retry.diagnostic_bytes()).contains("7072656d697365"),
+        "live worker refuses the retried step"
+    );
+    let report = pair.shutdown();
+    assert_eq!(report.a_exit.map(|e| e.code), Some(Some(0)));
+    assert!(report.case_root_removed);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn parent_failure_after_case_root_register() {
+    let (dir, root) = temp_root("parent-fail-root");
+    let (cfg, _) = launch_config_with_control(
+        &dir,
+        root,
+        Scenario::LeaderLifecycle,
+        36,
+        Some(outage_control(
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_case_root_register",
+        )),
+    );
+    let err = launch_pair(&cfg).unwrap_err();
+    assert!(matches!(err.kind(), DriverErrorKind::SetupFailure));
+    assert_eq!(err.step_id(), Some("s01-ready"));
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(diagnostic.contains("after_case_root_register"), "{diagnostic}");
+    assert!(diagnostic.contains("case-root"), "{diagnostic}");
+    assert!(!err.cleanup_proof().spawned, "no child ever spawns");
+    assert!(!case_path(&dir, 36).exists(), "case dir is retired");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn parent_failure_after_child_register() {
+    let (dir, root) = temp_root("parent-fail-child");
+    let (cfg, _) = launch_config_with_control(
+        &dir,
+        root,
+        Scenario::LeaderLifecycle,
+        37,
+        Some(outage_control(
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_child_register",
+        )),
+    );
+    let err = launch_pair(&cfg).unwrap_err();
+    assert!(matches!(err.kind(), DriverErrorKind::SetupFailure));
+    assert_eq!(err.step_id(), Some("s01-ready"));
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(diagnostic.contains("after_child_register"), "{diagnostic}");
+    assert!(diagnostic.contains("child-A"), "{diagnostic}");
+    assert!(diagnostic.contains("B never spawned"), "{diagnostic}");
+    let proof = err.cleanup_proof();
+    assert!(proof.spawned && proof.a_reaped && !proof.b_reaped);
+    assert!(!case_path(&dir, 37).exists(), "case dir is retired");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn parent_failure_after_pidfd_register() {
+    let (dir, root) = temp_root("parent-fail-pidfd");
+    let (cfg, _) = launch_config_with_control(
+        &dir,
+        root,
+        Scenario::LeaderLifecycle,
+        38,
+        Some(outage_control(
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_pidfd_register",
+        )),
+    );
+    let err = launch_pair(&cfg).unwrap_err();
+    assert!(matches!(err.kind(), DriverErrorKind::SetupFailure));
+    assert_eq!(err.step_id(), Some("s01-ready"));
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(diagnostic.contains("after_pidfd_register"), "{diagnostic}");
+    assert!(diagnostic.contains("pidfd-A"), "{diagnostic}");
+    let proof = err.cleanup_proof();
+    assert!(proof.spawned && proof.a_reaped && !proof.b_reaped);
+    assert!(!case_path(&dir, 38).exists(), "case dir is retired");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn outage_control_pairing_refused_before_effects() {
+    // Inapplicable pairing: partial writes exist only in file-replacement.
+    let (dir, root) = temp_root("outage-refused");
+    let (cfg, _) = launch_config_with_control(
+        &dir,
+        root,
+        Scenario::LeaderLifecycle,
+        39,
+        Some(outage_control("partial_file_write", "s01-ready", "before_ack")),
+    );
+    let err = launch_pair(&cfg).unwrap_err();
+    assert!(matches!(err.kind(), DriverErrorKind::Refused));
+    assert!(!err.cleanup_proof().spawned);
+    assert!(!case_path(&dir, 39).exists(), "refused before effects");
+    // Admitted pairing with no population on this route stays loud, too.
+    let (dir2, root2) = temp_root("outage-unrouted");
+    let (cfg2, _) = launch_config_with_control(
+        &dir2,
+        root2,
+        Scenario::LeaderLifecycle,
+        40,
+        Some(outage_control("wrong_run", "s01-ready", "before_ack")),
+    );
+    let err2 = launch_pair(&cfg2).unwrap_err();
+    assert!(matches!(err2.kind(), DriverErrorKind::Refused));
+    assert!(
+        String::from_utf8_lossy(err2.diagnostic_bytes()).contains("no driver population"),
+        "unrouted kinds refuse loudly"
+    );
+    assert!(!err2.cleanup_proof().spawned);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&dir2).unwrap();
+}
+
+#[test]
+fn prepare_reports_worker_death_typed() {
+    let (dir, _root) = temp_root("prepare-death");
+    let (mut session, _, invocation) = native_session_control(
+        &dir,
+        "leader-lifecycle",
+        Some(("worker_exit", "s01-ready", "after_root_grant")),
+    );
+    let err = match session.prepare(&invocation) {
+        Ok(_) => panic!("prepare must report the worker death"),
+        Err(e) => e,
+    };
+    assert_eq!(*err.category(), FixtureErrorCategory::InvalidProtocol);
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(diagnostic.contains("died mid-protocol"), "{diagnostic}");
+    assert!(diagnostic.contains("code 3"), "{diagnostic}");
+    // The orphaned pair was retired inside prepare; finalize stays clean.
+    let report = session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(4),
+            max_native_attempts: 512,
+            max_records: 64,
+            max_retained_bytes: 262144,
+        })
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&report).unwrap();
+    assert_eq!(v["kind"], "clean");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn prepare_reports_parent_failure_typed() {
+    let (dir, _root) = temp_root("prepare-parent-fail");
+    let (mut session, _, invocation) = native_session_control(
+        &dir,
+        "leader-lifecycle",
+        Some((
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_child_register",
+        )),
+    );
+    let err = match session.prepare(&invocation) {
+        Ok(_) => panic!("prepare must report the parent setup failure"),
+        Err(e) => e,
+    };
+    assert_eq!(*err.category(), FixtureErrorCategory::Other);
+    let diagnostic = String::from_utf8_lossy(err.diagnostic_bytes());
+    assert!(diagnostic.contains("after_child_register"), "{diagnostic}");
+    let report = session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(4),
+            max_native_attempts: 512,
+            max_records: 64,
+            max_retained_bytes: 262144,
+        })
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&report).unwrap();
+    assert_eq!(v["kind"], "clean");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

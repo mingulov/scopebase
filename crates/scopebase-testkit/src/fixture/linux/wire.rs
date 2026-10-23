@@ -845,6 +845,36 @@ pub fn validate_hello_request(value: &serde_json::Value) -> Result<(), WireError
     Ok(())
 }
 
+/// Closed outage-control value carried by the Hello `control` field: null
+/// or exactly `{kind,step_id,point}` with nonempty strings. Shape only; the
+/// driver and worker additionally check scenario pairing via the manifest
+/// predicate before arming anything.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HelloControl {
+    pub kind: String,
+    pub step_id: String,
+    pub point: String,
+}
+
+pub fn parse_hello_control(value: &serde_json::Value) -> Result<Option<HelloControl>, WireError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    exact_keys(value, &["kind", "step_id", "point"], "hello control")?;
+    let mut parts = Vec::with_capacity(3);
+    for key in ["kind", "step_id", "point"] {
+        match value[key].as_str() {
+            Some(s) if !s.is_empty() && s.len() <= 256 => parts.push(s.to_string()),
+            _ => return Err(WireError::new("hello control fields must be 1..256 chars")),
+        }
+    }
+    Ok(Some(HelloControl {
+        kind: parts.remove(0),
+        step_id: parts.remove(0),
+        point: parts.remove(0),
+    }))
+}
+
 pub fn validate_hello_reply(value: &serde_json::Value, slot: &str) -> Result<(), WireError> {
     exact_keys(value, &HELLO_REPLY_KEYS, "hello reply")?;
     if value["schema_version"] != 1 || value["slot"] != slot {
@@ -1296,6 +1326,42 @@ mod tests {
             hex::decode("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
                 .unwrap()[..]
         );
+    }
+
+    #[test]
+    fn hello_control_shapes() {
+        assert_eq!(
+            parse_hello_control(&serde_json::Value::Null).unwrap(),
+            None
+        );
+        let good = serde_json::json!({
+            "kind": "worker_exit", "step_id": "s01-ready", "point": "after_root_grant",
+        });
+        assert_eq!(
+            parse_hello_control(&good).unwrap(),
+            Some(HelloControl {
+                kind: "worker_exit".to_string(),
+                step_id: "s01-ready".to_string(),
+                point: "after_root_grant".to_string(),
+            })
+        );
+        for bad in [
+            serde_json::json!({"kind": "worker_exit", "step_id": "s01-ready"}),
+            serde_json::json!({
+                "kind": "worker_exit", "step_id": "s01-ready",
+                "point": "after_root_grant", "extra": 1,
+            }),
+            serde_json::json!({
+                "kind": "", "step_id": "s01-ready", "point": "after_root_grant",
+            }),
+            serde_json::json!({
+                "kind": "worker_exit", "step_id": "s01-ready", "point": 7,
+            }),
+            serde_json::json!("worker_exit"),
+            serde_json::json!(["worker_exit"]),
+        ] {
+            assert!(parse_hello_control(&bad).is_err(), "accepted {bad}");
+        }
     }
 
     mod hex {
