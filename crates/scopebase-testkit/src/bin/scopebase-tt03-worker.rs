@@ -2,10 +2,21 @@
 //! TT03 standalone fixture worker: serves one protocol channel on fd 0.
 //!
 //! Fixed argv: `[image, --scopebase-fixture-v1, --slot, a|b, --handover, -]`.
-//! First increment serves boot Hello, ready, capture_raw, set_tricky_comm
-//! (via /proc/self/comm), blob upload, file create/offer/pull, replace,
-//! unlink, mutate and close. Exec, sibling, inventory and resume Hello are
-//! refused with typed Error replies; the parent owns all exits and reaps.
+//! Serves boot/resume Hello, ready, capture_raw, set_tricky_comm (via
+//! /proc/self/comm), blob upload, file create/offer/pull, replace, unlink,
+//! mutate, real exec (A/B round-trip, failing missing-leaf attempt, nonleader
+//! exec), real sibling thread spawn plus leader-only exit with service
+//! handover, and close. The parent owns all exits and reaps.
+//!
+//! Grant: OWNER-2026-10-23 (user-owned donor slices to Apache-2.0).
+//!
+//! | Facet | Donor slice | Disposition |
+//! |---|---|---|---|
+//! | Exec epoch carry | P `src/process.rs:2205-2222` @ `2c2713e66292b0d2688508a25f79e813ae823d81` | ADAPT_ENV_CARRY: re-exec state (epoch/marker/slot) rides explicit env vars over an otherwise cleared environment, mirroring the donor re-exec helper's env-carried errno/target/start/token |
+//!
+//! Sibling spawn/handover, exec-attempt evidence and resume Hello are NEW
+//! narrow fixture composition over accepted TT02, as the TT03 contract
+//! authorizes; the wire codec already froze their record shapes.
 #[cfg(not(target_os = "linux"))]
 compile_error!("scopebase-tt03-worker is Linux-only");
 
@@ -17,8 +28,15 @@ use scopebase_testkit::fixture::linux::wire::{
     RawRequest, DATAGRAM_MAX, HEADER_BYTES, PAYLOAD_MAX,
 };
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 const EXIT_USAGE: i32 = 2;
+/// Post-exec resume state, set only by this worker immediately before a real
+/// execve. Value: `<epoch>:<marker>:<slot>`, e.g. `2:B:a`.
+const RESUME_ENV: &str = "SCOPEBASE_TT03_RESUME";
+/// Leaf the worker attempts (and must fail) to execute for `exec_missing`.
+const MISSING_LEAF: &str = "missing-executable";
 
 fn fail(message: &str) -> ! {
     let _ = writeln!(std::io::stderr(), "tt03-worker: {message}");
@@ -56,6 +74,12 @@ impl Blob {
     }
 }
 
+enum PostReply {
+    None,
+    Exec { target: PathBuf, marker: &'static str },
+    Handover,
+}
+
 struct Worker {
     // SAFETY: fd 0 is the inherited protocol socket for the process lifetime.
     sock: rustix::fd::BorrowedFd<'static>,
@@ -73,19 +97,63 @@ struct Worker {
     file_b: Option<rustix::fd::OwnedFd>,
     charges: Charges,
     hello_done: bool,
+    image_paths: [Option<PathBuf>; 2],
+    sibling_tid: Option<u32>,
+    sibling_handoff: Option<std::sync::mpsc::Sender<Worker>>,
+    leader_exited: bool,
+    resume_pending: bool,
 }
 
-fn current_tid() -> std::io::Result<u32> {
-    let mut tids = Vec::new();
-    for entry in std::fs::read_dir("/proc/self/task")? {
-        let name = entry?.file_name();
-        if let Some(tid) = name.to_string_lossy().parse::<u32>().ok() {
-            tids.push(tid);
-        }
+fn assert_worker_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Worker>();
+}
+
+/// Exact kernel thread id of the calling thread.
+fn thread_tid() -> u32 {
+    // SAFETY: gettid takes no arguments and always succeeds on Linux.
+    unsafe { libc::gettid() as u32 }
+}
+
+/// Own-thread proc path: `/proc/self/<file>` follows the group leader, whose
+/// mm is gone (ENOENT) once it is a zombie, so serving threads address their
+/// own task entries. Identical bytes while single-threaded.
+fn self_task_file(name: &str) -> String {
+    format!("/proc/self/task/{}/{}", thread_tid(), name)
+}
+
+fn decode_hex_lower(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0
+        || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("path_hex must be lowercase hex".to_string());
     }
-    tids.into_iter().next().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no task entry")
-    })
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "hex decode".to_string()))
+        .collect()
+}
+
+fn parse_resume_env(value: &str, slot: Actor) -> Result<(u32, &'static str), String> {
+    let mut parts = value.split(':');
+    let (epoch_s, marker_s, slot_s) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(e), Some(m), Some(s), None) => (e, m, s),
+        _ => return Err("resume env must be <epoch>:<marker>:<slot>".to_string()),
+    };
+    let epoch: u32 = epoch_s
+        .parse()
+        .ok()
+        .filter(|e| *e >= 2)
+        .ok_or_else(|| "resume epoch must be >= 2".to_string())?;
+    let marker = match marker_s {
+        "A" => "A",
+        "B" => "B",
+        _ => return Err("resume marker must be A or B".to_string()),
+    };
+    if slot_s != slot.as_str() {
+        return Err("resume slot differs from argv slot".to_string());
+    }
+    Ok((epoch, marker))
 }
 
 fn term_disposition_default() -> bool {
@@ -251,10 +319,9 @@ impl Worker {
         let _ = self.send(envelope, canonical.as_bytes(), None);
     }
 
-    fn task_record(&mut self, step_id: &str, sequence: u64) -> Result<Vec<u8>, String> {
+    fn task_record(&mut self, step_id: &str, sequence: u64, tid: u32) -> Result<Vec<u8>, String> {
         self.charges.native_attempts += 1;
         let pid = std::process::id();
-        let tid = current_tid().map_err(|e| e.to_string())?;
         self.charges.native_successes += 1;
         let record = RawRecord {
             invocation: self.invocation.clone(),
@@ -288,7 +355,7 @@ impl Worker {
     fn stat_record(&mut self, step_id: &str, sequence: u64) -> Result<Vec<u8>, String> {
         self.charges.native_attempts += 1;
         self.charges.read_attempts += 1;
-        let stat = std::fs::read("/proc/self/stat").map_err(|e| e.to_string())?;
+        let stat = std::fs::read(self_task_file("stat")).map_err(|e| e.to_string())?;
         self.charges.native_successes += 1;
         self.charges.read_bytes += stat.len() as u64;
         let record = RawRecord {
@@ -321,14 +388,67 @@ impl Worker {
         Ok(bytes)
     }
 
+    fn exec_record(
+        &mut self,
+        step_id: &str,
+        sequence: u64,
+        image_before: &str,
+        image_after: &str,
+        call_result: &str,
+        errno: Option<i32>,
+    ) -> Result<Vec<u8>, String> {
+        self.charges.native_attempts += 1;
+        let exe = std::fs::read(self_task_file("exe")).map_err(|e| e.to_string())?;
+        let stat = std::fs::read(self_task_file("stat")).map_err(|e| e.to_string())?;
+        self.charges.native_successes += 1;
+        let (_, _, birth) =
+            scopebase_testkit::fixture::linux::parse_stat_comm_state_starttime(&stat)
+                .map_err(|e| e.detail().to_string())?;
+        let record = RawRecord {
+            invocation: self.invocation.clone(),
+            step_id: step_id.to_string(),
+            record_index: self.next_record,
+            sequence: Some(sequence),
+            actor_slot: self.slot.as_str().to_string(),
+            record_kind: "exec".to_string(),
+            source: "worker_kernel".to_string(),
+            bytes_hex: None,
+            values: serde_json::json!({
+                "image_before": image_before,
+                "image_after": image_after,
+                "executable_slot": self.slot.as_str(),
+                "executable_sha256": hex_bytes(&sha256_of(&exe)),
+                "birth_ticks": birth.to_string(),
+            }),
+            call_result: Some(call_result.to_string()),
+            errno,
+            producer_charges: Some(ProducerCharges {
+                image_prefix: self.charges,
+                handover_carry: None,
+            }),
+        };
+        let bytes = record.encode().map_err(|e| e.detail().to_string())?;
+        self.charges.encoded_bytes += bytes.len() as u64;
+        self.next_record += 1;
+        Ok(bytes)
+    }
+
     fn serve_hello(&mut self, request: &Envelope, payload: &[u8]) -> Result<(), String> {
         let value = parse_canonical(payload, PAYLOAD_MAX).map_err(|e| e.detail().to_string())?;
         validate_hello_request(&value).map_err(|e| e.detail().to_string())?;
-        if value["mode"] != "boot" {
-            return Err("resume hello is a follow-up increment".to_string());
+        let mode = value["mode"].as_str().unwrap_or("");
+        match (mode, self.resume_pending) {
+            ("boot", false) => {}
+            ("resume", true) => {}
+            ("boot", true) => return Err("boot hello after exec state; resume required".to_string()),
+            ("resume", false) => return Err("resume hello without post-exec state".to_string()),
+            _ => return Err("hello mode must be boot or resume".to_string()),
         }
         if value["slot"] != self.slot.as_str() {
             return Err("hello slot mismatch".to_string());
+        }
+        if mode == "resume" && value["image_epoch"] != self.epoch {
+            return Err("resume epoch differs from post-exec epoch".to_string());
         }
         if !term_disposition_default() {
             return Err("SIGTERM disposition is not default/unblocked".to_string());
@@ -344,15 +464,29 @@ impl Worker {
                     .collect()
             })
             .unwrap_or_default();
+        let images = value["images"].as_array().ok_or("hello images must be an array")?;
+        if images.len() != 2 {
+            return Err("hello must carry exactly two images".to_string());
+        }
+        for (index, image) in images.iter().enumerate() {
+            let path_hex = image["path_hex"].as_str().ok_or("image path_hex must be hex")?;
+            let bytes = decode_hex_lower(path_hex)?;
+            if bytes.is_empty() || bytes.len() > 4096 || bytes.contains(&0) {
+                return Err("image path is not admittable".to_string());
+            }
+            self.image_paths[index] = Some(PathBuf::from(
+                std::ffi::OsStr::from_bytes(&bytes).to_os_string(),
+            ));
+        }
         let pid = std::process::id();
-        let tid = current_tid().map_err(|e| e.to_string())?;
+        let tid = thread_tid();
         let reply = serde_json::json!({
             "schema_version": 1,
-            "mode": "boot",
+            "mode": mode,
             "slot": self.slot.as_str(),
             "manifest_sha256": self.manifest_sha,
             "image_marker": self.marker,
-            "image_epoch": 1,
+            "image_epoch": self.epoch,
             "pid": pid,
             "tid": tid,
             "inherited_fds": [0, 1, 2],
@@ -364,6 +498,7 @@ impl Worker {
         self.send(envelope, canonical.as_bytes(), None)
             .map_err(|e| e.to_string())?;
         self.hello_done = true;
+        self.resume_pending = false;
         Ok(())
     }
 
@@ -385,92 +520,186 @@ impl Worker {
         }
         let first = self.next_record;
         let made: u32;
+        let reply_tid: u32;
+        let post: PostReply;
         let step_hint = self.step_label(request.script_index)?;
         match decoded.action {
             Action::Ready => {
                 if decoded.blob_mask != 0 {
                     return Err("ready takes no blob mask".to_string());
                 }
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 made = 1;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             Action::CaptureRaw => {
                 if decoded.blob_mask != 0 {
                     return Err("capture takes no blob mask".to_string());
                 }
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 let fresh = self.stat_record(&step_hint, request.sequence)?;
                 self.records.push(fresh);
                 made = 2;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             Action::SetTrickyComm => {
                 if decoded.blob_mask != 0 {
                     return Err("set_tricky_comm takes no blob mask".to_string());
                 }
                 std::fs::write("/proc/self/comm", TRICKY_COMM).map_err(|e| e.to_string())?;
-                let stat = std::fs::read("/proc/self/stat").map_err(|e| e.to_string())?;
+                let stat = std::fs::read(self_task_file("stat")).map_err(|e| e.to_string())?;
                 let (comm, _, _) =
                     scopebase_testkit::fixture::linux::parse_stat_comm_state_starttime(&stat)
                         .map_err(|e| e.detail().to_string())?;
                 if comm != TRICKY_COMM.as_bytes() {
                     return Err("comm did not take the tricky literal".to_string());
                 }
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 let fresh = self.stat_record(&step_hint, request.sequence)?;
                 self.records.push(fresh);
                 made = 2;
+                reply_tid = thread_tid();
+                post = PostReply::None;
+            }
+            Action::ExecB | Action::ExecA | Action::ExecFromSibling => {
+                if decoded.blob_mask != 0 {
+                    return Err("exec takes no blob mask".to_string());
+                }
+                let (target_index, marker): (usize, &'static str) = match decoded.action {
+                    Action::ExecB => (1, "B"),
+                    Action::ExecA => (0, "A"),
+                    _ => (1, "B"),
+                };
+                if decoded.action == Action::ExecFromSibling && !self.leader_exited {
+                    return Err("exec_from_sibling needs the leader-only exit first".to_string());
+                }
+                if decoded.action != Action::ExecFromSibling
+                    && (self.sibling_tid.is_some() || self.leader_exited)
+                {
+                    return Err("plain exec refuses while sibling state is active".to_string());
+                }
+                let target = self.image_paths[target_index]
+                    .clone()
+                    .ok_or("exec needs hello-bound image paths")?;
+                let metadata = std::fs::metadata(&target).map_err(|e| e.to_string())?;
+                if !metadata.is_file() {
+                    return Err("exec target is not a file".to_string());
+                }
+                self.charges.native_attempts += 1;
+                self.charges.native_successes += 1;
+                // No pre-exec record: the old image execs immediately after
+                // this reply, so no drain could ever fetch one. The parent
+                // authenticates the transition via the resume handshake plus
+                // its own executable-digest witnesses.
+                made = 0;
+                reply_tid = thread_tid();
+                post = PostReply::Exec { target, marker };
+            }
+            Action::ExecMissing => {
+                if decoded.blob_mask != 0 {
+                    return Err("exec_missing takes no blob mask".to_string());
+                }
+                let errno = self.attempt_missing_exec()?;
+                let fresh = self.exec_record(
+                    &step_hint,
+                    request.sequence,
+                    self.marker,
+                    self.marker,
+                    "failed",
+                    Some(errno),
+                )?;
+                self.records.push(fresh);
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
+                self.records.push(fresh);
+                made = 2;
+                reply_tid = thread_tid();
+                post = PostReply::None;
+            }
+            Action::StartSibling => {
+                if decoded.blob_mask != 0 {
+                    return Err("start_sibling takes no blob mask".to_string());
+                }
+                let sibling = self.start_sibling()?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
+                self.records.push(fresh);
+                made = 1;
+                reply_tid = sibling;
+                post = PostReply::None;
+            }
+            Action::ExitLeader => {
+                if decoded.blob_mask != 0 {
+                    return Err("exit_leader takes no blob mask".to_string());
+                }
+                if self.sibling_tid.is_none() || self.sibling_handoff.is_none() {
+                    return Err("exit_leader needs a live sibling".to_string());
+                }
+                let sibling = self.sibling_tid.unwrap();
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
+                self.records.push(fresh);
+                made = 1;
+                reply_tid = sibling;
+                post = PostReply::Handover;
             }
             Action::CreateFiles => {
                 if decoded.blob_mask != 3 {
                     return Err("create_files needs blob mask 3".to_string());
                 }
                 self.create_files()?;
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 made = 1;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             Action::ReplaceFileA => {
                 if decoded.blob_mask != 0 {
                     return Err("replace takes no blob mask".to_string());
                 }
                 self.replace_file_a()?;
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 made = 1;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             Action::UnlinkOriginalA => {
                 if decoded.blob_mask != 0 {
                     return Err("unlink takes no blob mask".to_string());
                 }
                 self.unlink_original_a()?;
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 made = 1;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             Action::MutateFileA => {
                 if decoded.blob_mask != 4 {
                     return Err("mutate needs blob mask 4".to_string());
                 }
                 self.mutate_file_a()?;
-                let fresh = self.task_record(&step_hint, request.sequence)?;
+                let fresh = self.task_record(&step_hint, request.sequence, thread_tid())?;
                 self.records.push(fresh);
                 made = 1;
+                reply_tid = thread_tid();
+                post = PostReply::None;
             }
             other => {
                 return Err(format!("{} is a follow-up increment", other.as_str()));
             }
         }
         let pid = std::process::id();
-        let tid = current_tid().map_err(|e| e.to_string())?;
         let reply = AdvanceReply {
             action: decoded.action,
             actor: self.slot,
             image_epoch: self.epoch,
             pid,
-            tid,
+            tid: reply_tid,
             first_record: first,
             record_count: made,
             phase_flags: 0,
@@ -478,7 +707,166 @@ impl Worker {
         let encoded = reply.encode();
         let envelope =
             self.reply_envelope(request, MessageKind::AdvanceReply, encoded.len() as u32, 0);
-        self.send(envelope, &encoded, None).map_err(|e| e.to_string())
+        self.send(envelope, &encoded, None).map_err(|e| e.to_string())?;
+        match post {
+            PostReply::None => Ok(()),
+            PostReply::Exec { target, marker } => self.exec_into(target, marker),
+            PostReply::Handover => self.handover_to_sibling(),
+        }
+    }
+
+    /// Real failing exec: the missing case-root leaf is probed natively and
+    /// then genuinely execve'd so the returned errno is the kernel's exec
+    /// refusal, not a canned value. The leaf must stay absent; a present leaf
+    /// refuses instead of executing an unexpected program.
+    fn attempt_missing_exec(&mut self) -> Result<i32, String> {
+        use std::os::unix::io::AsRawFd;
+        let root = self.case_root.as_ref().ok_or("exec_missing needs the case root")?;
+        self.charges.native_attempts += 1;
+        match rustix::fs::openat(
+            root,
+            MISSING_LEAF,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        ) {
+            Ok(_) => return Err("missing leaf unexpectedly present; refusing to exec".to_string()),
+            Err(e) if e == rustix::io::Errno::NOENT => {}
+            Err(e) => return Err(format!("missing-leaf probe failed: {e}")),
+        }
+        let fd_path = format!("/proc/self/fd/{}/{}", root.as_raw_fd(), MISSING_LEAF);
+        let path = std::ffi::CString::new(fd_path).map_err(|e| e.to_string())?;
+        let arg0 = std::ffi::CString::new("missing").map_err(|e| e.to_string())?;
+        let argv = [arg0.as_ptr(), std::ptr::null()];
+        let envp = [std::ptr::null()];
+        self.charges.native_attempts += 1;
+        // SAFETY: execve with valid pointers; it returns only on failure.
+        let rc = unsafe { libc::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+        if rc == 0 {
+            return Err("execve of the missing leaf unexpectedly succeeded".to_string());
+        }
+        // SAFETY: errno read immediately on the failing thread.
+        let errno = unsafe { *libc::__errno_location() };
+        self.charges.native_successes += 1;
+        Ok(errno)
+    }
+
+    /// Real image exec: carries epoch/marker/slot over the cleared
+    /// environment, then execve's the hello-bound target with the fixed boot
+    /// argv. Success never returns; failure clears the carry so the stale
+    /// resume state cannot be mistaken for a post-exec barrier.
+    fn exec_into(&mut self, target: PathBuf, marker: &'static str) -> Result<(), String> {
+        let epoch = self.epoch.checked_add(1).ok_or("epoch overflow")?;
+        std::env::set_var(RESUME_ENV, format!("{epoch}:{marker}:{}", self.slot.as_str()));
+        let argv0 = std::ffi::CString::new(target.as_os_str().as_bytes())
+            .map_err(|e| e.to_string())?;
+        let a1 = std::ffi::CString::new("--scopebase-fixture-v1").unwrap();
+        let a2 = std::ffi::CString::new("--slot").unwrap();
+        let a3 = std::ffi::CString::new(self.slot.as_str()).unwrap();
+        let a4 = std::ffi::CString::new("--handover").unwrap();
+        let a5 = std::ffi::CString::new("-").unwrap();
+        let argv = [
+            argv0.as_ptr(),
+            a1.as_ptr(),
+            a2.as_ptr(),
+            a3.as_ptr(),
+            a4.as_ptr(),
+            a5.as_ptr(),
+            std::ptr::null(),
+        ];
+        let carry = std::ffi::CString::new(format!(
+            "{RESUME_ENV}={epoch}:{marker}:{}",
+            self.slot.as_str()
+        ))
+        .map_err(|e| e.to_string())?;
+        let envp = [carry.as_ptr(), std::ptr::null()];
+        self.charges.native_attempts += 1;
+        // SAFETY: execve with valid pointers; success never returns.
+        unsafe { libc::execve(argv0.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+        // SAFETY: errno read immediately on the failing thread.
+        let errno = unsafe { *libc::__errno_location() };
+        std::env::remove_var(RESUME_ENV);
+        Err(format!("execve of image {marker} failed with errno {errno}"))
+    }
+
+    /// Real sibling spawn: a second OS thread reports its kernel TID and then
+    /// parks for the leader-exit handover. Refused once sibling state exists.
+    fn start_sibling(&mut self) -> Result<u32, String> {
+        if self.sibling_tid.is_some() || self.leader_exited {
+            return Err("sibling already started or leader exited".to_string());
+        }
+        let (tid_tx, tid_rx) = std::sync::mpsc::channel::<u32>();
+        let (handoff_tx, handoff_rx) = std::sync::mpsc::channel::<Worker>();
+        std::thread::Builder::new()
+            .name("tt03-sibling".to_string())
+            .spawn(move || {
+                let tid = thread_tid();
+                if tid_tx.send(tid).is_err() {
+                    std::process::exit(1);
+                }
+                match handoff_rx.recv() {
+                    Ok(mut worker) => serve_forever(&mut worker),
+                    Err(_) => std::process::exit(1),
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        let tid = tid_rx.recv().map_err(|e| e.to_string())?;
+        if tid == thread_tid() {
+            return Err("sibling TID equals the leader TID".to_string());
+        }
+        self.charges.native_attempts += 1;
+        self.charges.native_successes += 1;
+        self.sibling_tid = Some(tid);
+        self.sibling_handoff = Some(handoff_tx);
+        Ok(tid)
+    }
+
+    /// Leader-only native exit: the pre-handover reply is already on the
+    /// wire; the whole service state moves to the parked sibling and the
+    /// calling (leader) thread exits natively while the process survives.
+    /// The exit is the raw thread-exit syscall, not `pthread_exit`: forced
+    /// unwinding through Rust frames aborts (nounwind boundary since Rust
+    /// 1.81; `C-unwind` dies with libgcc "exception not rethrown"), while the
+    /// raw exit ends exactly this task with no locks held. The leader task
+    /// remains visible as a zombie (state Z) until process exit; the kernel
+    /// keeps the tgid pinned to it. Verified by probe 2026-10-23.
+    fn handover_to_sibling(&mut self) -> Result<(), String> {
+        let handoff = self
+            .sibling_handoff
+            .take()
+            .ok_or("handover needs a parked sibling")?;
+        // SAFETY: fd 0 is the inherited protocol socket for the process lifetime.
+        let sock: rustix::fd::BorrowedFd<'static> =
+            unsafe { rustix::fd::BorrowedFd::borrow_raw(0) };
+        let mut tombstone = Worker {
+            sock,
+            slot: self.slot,
+            marker: self.marker,
+            invocation: serde_json::Value::Null,
+            manifest_sha: String::new(),
+            steps: Vec::new(),
+            epoch: self.epoch,
+            next_record: 1,
+            records: Vec::new(),
+            blobs: [Blob::empty(), Blob::empty(), Blob::empty()],
+            case_root: None,
+            file_a: None,
+            file_b: None,
+            charges: Charges::default(),
+            hello_done: false,
+            image_paths: [None, None],
+            sibling_tid: None,
+            sibling_handoff: None,
+            leader_exited: true,
+            resume_pending: false,
+        };
+        std::mem::swap(self, &mut tombstone);
+        tombstone.leader_exited = true;
+        handoff.send(tombstone).map_err(|e| e.to_string())?;
+        // SAFETY: the raw thread-exit syscall ends only the calling task;
+        // no lock is held here (the handoff send completed) and no
+        // thread-local destructor is required. It diverges.
+        unsafe { libc::syscall(libc::SYS_exit, 0) };
+        unreachable!("raw thread exit never returns")
     }
 
     fn create_files(&mut self) -> Result<(), String> {
@@ -722,7 +1110,21 @@ impl Worker {
     }
 }
 
+fn serve_forever(worker: &mut Worker) -> ! {
+    loop {
+        match worker.recv() {
+            Ok((request, payload, fds)) => worker.serve_one(request, payload, fds),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => std::process::exit(1),
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "tt03-worker transport: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 fn main() {
+    assert_worker_send();
     let argv: Vec<String> = std::env::args().collect();
     if argv.len() != 6
         || argv[1] != "--scopebase-fixture-v1"
@@ -732,10 +1134,18 @@ fn main() {
     {
         fail("usage: worker --scopebase-fixture-v1 --slot a|b --handover -");
     }
-    let (slot, marker) = match argv[3].as_str() {
+    let (slot, boot_marker) = match argv[3].as_str() {
         "a" => (Actor::A, "A"),
         "b" => (Actor::B, "B"),
         _ => fail("slot must be a or b in this increment"),
+    };
+    let (epoch, marker, resume_pending) = match std::env::var(RESUME_ENV) {
+        Ok(value) => {
+            let (epoch, marker) = parse_resume_env(&value, slot).unwrap_or_else(|d| fail(&d));
+            std::env::remove_var(RESUME_ENV);
+            (epoch, marker, true)
+        }
+        Err(_) => (1, boot_marker, false),
     };
     // SAFETY: fd 0 is the inherited protocol socket; it is never closed here.
     let sock: rustix::fd::BorrowedFd<'static> =
@@ -747,7 +1157,7 @@ fn main() {
         invocation: serde_json::Value::Null,
         manifest_sha: String::new(),
         steps: Vec::new(),
-        epoch: 1,
+        epoch,
         next_record: 1,
         records: Vec::new(),
         blobs: [Blob::empty(), Blob::empty(), Blob::empty()],
@@ -756,15 +1166,11 @@ fn main() {
         file_b: None,
         charges: Charges::default(),
         hello_done: false,
+        image_paths: [None, None],
+        sibling_tid: None,
+        sibling_handoff: None,
+        leader_exited: false,
+        resume_pending,
     };
-    loop {
-        match worker.recv() {
-            Ok((request, payload, fds)) => worker.serve_one(request, payload, fds),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => std::process::exit(1),
-            Err(e) => {
-                let _ = writeln!(std::io::stderr(), "tt03-worker transport: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
+    serve_forever(&mut worker);
 }

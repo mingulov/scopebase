@@ -3,12 +3,15 @@
 //! admission/finalizer and ported donor oracle facets.
 //!
 //! Binding authority: `docs/superpowers/specs/2026-10-22-scopebase-tt03-linux-fixture.md`.
-//! First increment covers the ordinary-host worker core (boot Hello, ready,
-//! capture_raw, set_tricky_comm, blob upload, file create/offer, close), the
-//! exact public session/custody/finalizer API, and six ported donor facets.
-//! Exec handover, sibling threads, descriptor inventory, TT02 prepare/collect
-//! native wiring, Snapshot full-schema conformance and the strict materializer
-//! are documented follow-ups, not claimed here.
+//! Covers the ordinary-host worker core (boot/resume Hello, ready,
+//! capture_raw, set_tricky_comm, blob upload, file create/offer, close, real
+//! exec round-trip/failure/nonleader exec, real sibling spawn plus
+//! leader-only exit with handover), the exact public
+//! session/custody/finalizer API with native TT02 prepare/collect wiring,
+//! third-slot descriptor inventory and the runner-deadline hold, plus ported
+//! donor facets. Worker-death outage injection, Snapshot full-schema
+//! conformance, F rows, the strict materializer and final-index joint
+//! compatibility are documented follow-ups, not claimed here.
 mod creator;
 mod driver;
 mod manifest;
@@ -18,8 +21,8 @@ mod session;
 pub mod wire;
 
 pub use driver::{
-    launch_pair, CleanupProof, DrainedRecord, DriverError, DriverErrorKind, LaunchConfig,
-    LivePair, ReapedExit, Scenario, ScenarioStep, ShutdownReport,
+    launch_pair, CleanupProof, DeadlineHoldReport, DrainedRecord, DriverError, DriverErrorKind,
+    LaunchConfig, LivePair, ReapedExit, Scenario, ScenarioStep, ShutdownReport,
 };
 pub use wire::{Action, Actor};
 pub use oracle::{
