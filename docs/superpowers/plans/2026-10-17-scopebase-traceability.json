@@ -4728,6 +4728,11 @@
       "title": "Explicit compiler closure and bounded nested-build helper"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tc03-isa.md",
+        "reviewed_candidate_commit": "98097ff0e841e755e6e373a3238eeabafb1023c1",
+        "subject_commit": "98097ff0e841e755e6e373a3238eeabafb1023c1"
+      },
       "anchor": "tc03-final-object-inventory-and-explicit-isa-profile-admission",
       "depends_on": [
         "TC01",
@@ -4755,7 +4760,7 @@
         "TC-R07",
         "TC-R10"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Final-object inventory and explicit ISA profile admission"
     },
     {
@@ -5710,6 +5715,11 @@
       "title": "Capture metadata integration and consumer-linked conformance"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-sdk04-observer.md",
+        "reviewed_candidate_commit": "c9ff38227b26c0c6134d637796da4c17c5b4d5b4",
+        "subject_commit": "c9ff38227b26c0c6134d637796da4c17c5b4d5b4"
+      },
       "anchor": "sdk04-independently-useful-owned-workload-host-observer",
       "depends_on": [
         "SDK03",
@@ -5730,7 +5740,7 @@
         "SDK-R07",
         "SDK-R10"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Independently useful owned-workload host observer"
     },
     {
@@ -6367,6 +6377,11 @@
       "title": "Causal CI selection and safe parallel scheduling"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tt09-perf.md",
+        "reviewed_candidate_commit": "a3923c70f1f41bbcfe864af9f986a91ea81eead8",
+        "subject_commit": "a3923c70f1f41bbcfe864af9f986a91ea81eead8"
+      },
       "anchor": "tt09-resource-performance-and-concurrent-consumer-qualification",
       "depends_on": [
         "TT03",
@@ -6383,7 +6398,7 @@
         "TT-R12",
         "TT-R13"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Resource, performance and concurrent-consumer qualification"
     },
     {
