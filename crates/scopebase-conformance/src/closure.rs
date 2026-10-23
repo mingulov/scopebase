@@ -235,8 +235,23 @@ fn check_pin(path: &str, bytes: &[u8], pinned: &PinnedFile) -> Result<(), Operat
 }
 
 fn reject_escape(root: &Path, path: &str) -> Result<(), OperatorError> {
-    let candidate = root.join(path);
-    let normal_root = normalize(root);
+    // F35: anchor a relative root (".") to the current directory first;
+    // without this the normalized root is empty and every in-root file
+    // is misread as an escape.
+    let abs_root = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!("cannot anchor fixture root: {e}"),
+                )
+            })?
+            .join(root)
+    };
+    let candidate = abs_root.join(path);
+    let normal_root = normalize(&abs_root);
     let normal_candidate = normalize(&candidate);
     if normal_candidate != normal_root && !normal_candidate.starts_with(&format!("{normal_root}/"))
     {
@@ -264,12 +279,73 @@ fn normalize(path: &Path) -> String {
 }
 
 fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
-    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    // F32: open once and validate the open descriptor. Metadata and the
+    // capped read both go through the FD, so a path swapped (or a symlink
+    // raced in) between a stat and a read cannot bypass the type check or
+    // the length cap. Symlinks still resolve; callers pin the bytes by
+    // hash afterward, so substituted content fails there.
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("not a regular file".into());
     }
     if meta.len() > max {
         return Err(format!("exceeds {max} bytes"));
     }
-    std::fs::read(path).map_err(|e| e.to_string())
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max {
+        return Err(format!("exceeds {max} bytes"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(case: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tt07-closure-{case}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // F32: the length cap and the type check bind the bytes read.
+    #[test]
+    fn bounded_read_caps_bytes_and_rejects_directories() {
+        let dir = scratch("bounded");
+        std::fs::write(dir.join("exact.bin"), vec![7u8; 16]).unwrap();
+        std::fs::write(dir.join("over.bin"), vec![7u8; 17]).unwrap();
+        std::fs::create_dir(dir.join("subdir")).unwrap();
+        assert_eq!(read_bounded(&dir.join("exact.bin"), 16).unwrap().len(), 16);
+        assert!(read_bounded(&dir.join("over.bin"), 16).is_err());
+        assert!(read_bounded(&dir.join("subdir"), 16).is_err());
+        assert!(read_bounded(&dir.join("missing.bin"), 16).is_err());
+    }
+
+    // F35: relative roots (".") anchor to the working directory, so
+    // in-root files pass and parent escapes fail, same as absolute roots.
+    #[test]
+    fn escape_check_handles_relative_and_absolute_roots() {
+        let abs = scratch("abs-root");
+        assert!(reject_escape(&abs, "catalog.json").is_ok());
+        assert!(reject_escape(&abs, "vectors/closure-input.txt").is_ok());
+        assert!(reject_escape(&abs, "../evil.json").is_err());
+        assert!(reject_escape(&abs, "vectors/../../evil.json").is_err());
+        assert!(reject_escape(Path::new("."), "catalog.json").is_ok());
+        assert!(reject_escape(Path::new("."), "./catalog.json").is_ok());
+        assert!(reject_escape(Path::new("."), "../evil.json").is_err());
+        assert!(reject_escape(Path::new("some/rel/root"), "file.json").is_ok());
+        assert!(reject_escape(Path::new("some/rel/root"), "../../evil.json").is_err());
+    }
 }

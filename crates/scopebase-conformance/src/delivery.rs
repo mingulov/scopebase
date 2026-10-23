@@ -136,7 +136,7 @@ impl DeliveryAdapter {
                 stage: label("adapter-schema").unwrap(),
                 category: CaseErrorCategory::UnsupportedSchema,
                 errno: None,
-                diagnostic_bytes: diagnostic.to_vec(),
+                diagnostic_bytes: fit_diagnostic(diagnostic, l),
                 cause: RefusalEvidence::new(
                     RefusalEvidenceValues {
                         cause: RefusalCause::Unknown,
@@ -153,7 +153,7 @@ impl DeliveryAdapter {
             },
             l,
         )
-        .unwrap()
+        .expect("pre-fitted refusal fits admitted limits")
     }
 
     fn failed(
@@ -172,7 +172,7 @@ impl DeliveryAdapter {
                 stage: label("operation").unwrap(),
                 category,
                 errno: None,
-                diagnostic_bytes: diagnostic.to_vec(),
+                diagnostic_bytes: fit_diagnostic(diagnostic, l),
                 cause: RefusalEvidence::new(
                     RefusalEvidenceValues {
                         cause: RefusalCause::Unknown,
@@ -183,14 +183,58 @@ impl DeliveryAdapter {
                     l,
                 )
                 .unwrap(),
-                completed_steps: completed,
+                completed_steps: fit_steps(completed, l),
                 partial_observation: None,
                 effects: EffectBatch::empty(l),
             },
             l,
         )
-        .unwrap()
+        .expect("pre-fitted refusal fits admitted limits")
     }
+}
+
+/// F10: a ledger file id becomes one path segment under the staging dir,
+/// so it must be exactly one normal component (no separators, no parent
+/// or self references, no backslash even where the platform would treat
+/// it as a plain character).
+fn admit_ledger_file_id(file_id: &str) -> Result<(), OperatorError> {
+    use std::path::Component;
+    let mut components = std::path::Path::new(file_id).components();
+    let single_normal = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    if file_id.is_empty() || file_id.contains('\\') || !single_normal {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            format!("ledger file id escapes staging: {file_id:?}"),
+        ));
+    }
+    Ok(())
+}
+
+/// F03: truncate a refusal diagnostic to the caller's own byte ceiling so
+/// error construction cannot fail (and panic) under small-but-admitted
+/// limits.
+fn fit_diagnostic(diagnostic: &[u8], limits: &RunLimits) -> Vec<u8> {
+    let max = usize::try_from(limits.diagnostic_bytes()).unwrap_or(usize::MAX);
+    diagnostic.iter().take(max).copied().collect()
+}
+
+/// F03: fit completed steps to the caller's step ceiling, deduplicated:
+/// the step bound and the uniqueness rule both hold by construction.
+fn fit_steps(completed: Vec<Label>, limits: &RunLimits) -> Vec<Label> {
+    let max = usize::try_from(limits.steps_per_invocation()).unwrap_or(usize::MAX);
+    let mut out = Vec::new();
+    for step in completed {
+        if out.len() >= max {
+            break;
+        }
+        if !out.contains(&step) {
+            out.push(step);
+        }
+    }
+    out
 }
 
 impl ConformanceAdapter for DeliveryAdapter {
@@ -449,6 +493,33 @@ pub struct RunOutcome {
 #[allow(clippy::too_many_lines)]
 pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError> {
     check_mapping_policy(&request.mapping_policy)?;
+    // F11: fresh-run discipline. Cleanup deletes the whole run dir once a
+    // run manifest marks it, so delivery only runs into a missing or empty
+    // directory: everything under it is then run-owned, and a second run
+    // can neither inherit nor orphan another run's files.
+    match std::fs::read_dir(&request.output_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(OperatorError::new(
+                OperatorErrorKind::MissingInput,
+                format!(
+                    "cannot inspect output dir {}: {error}",
+                    request.output_dir.display()
+                ),
+            ));
+        }
+        Ok(mut entries) => {
+            if entries.next().is_some() {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::Usage,
+                    format!(
+                        "output dir is not empty (clean it up first): {}",
+                        request.output_dir.display()
+                    ),
+                ));
+            }
+        }
+    }
     let catalog_bytes = std::fs::read(&request.catalog_path).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
@@ -488,19 +559,20 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
         .clone()
         .unwrap_or_else(|| request.fixture_root.join(MANIFEST_FILE));
     let closure = closure::verify_closure(&request.fixture_root, &manifest_path)?;
-    let template_path = request
-        .template_path
-        .clone()
-        .unwrap_or_else(|| request.fixture_root.join(TEMPLATE_FILE));
-    let template_bytes = std::fs::read(&template_path).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!(
-                "cannot read contract template {}: {e}",
-                template_path.display()
-            ),
-        )
-    })?;
+    // F31: the default template is manifest-pinned, so read it through the
+    // verified closure: the bytes are re-checked against the pin at use,
+    // not just at verification time. An explicit override is caller-chosen
+    // outside the closure; its bytes still bind the run because the staged
+    // contract (hashed into the receipt) is derived from them.
+    let template_bytes = match &request.template_path {
+        None => closure.read(TEMPLATE_FILE)?,
+        Some(path) => std::fs::read(path).map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::MissingInput,
+                format!("cannot read contract template {}: {e}", path.display()),
+            )
+        })?,
+    };
     let template: serde_json::Value = serde_json::from_slice(&template_bytes).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::BrokenPackage,
@@ -555,6 +627,7 @@ pub fn run_delivery(request: RunRequest<'_>) -> Result<RunOutcome, OperatorError
     let mut generated: std::collections::BTreeMap<String, (PathBuf, u64, String)> =
         std::collections::BTreeMap::new();
     for (file_id, path_value) in ledger_templates.as_object().cloned().unwrap_or_default() {
+        admit_ledger_file_id(&file_id)?;
         let rel = path_value.as_str().ok_or_else(|| {
             OperatorError::new(
                 OperatorErrorKind::BrokenPackage,

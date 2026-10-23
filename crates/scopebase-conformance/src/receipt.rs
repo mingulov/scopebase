@@ -225,6 +225,30 @@ pub fn verify_receipt_with_catalog(
             "re-admitted qualification differs from the envelope",
         ));
     }
+    // F30: the seal is unkeyed, so recomputing it over altered outer
+    // bindings is trivial. The bindings must equal the independently
+    // admitted catalog and staged contract, not merely be self-consistent.
+    let envelope_catalog = envelope
+        .get("catalog_sha256")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    invalid_if(
+        envelope_catalog != catalog.source_sha256().as_str(),
+        "receipt catalog binding differs from the supplied catalog",
+    )?;
+    let envelope_contract = envelope
+        .get("run_contract_sha256")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    invalid_if(
+        envelope_contract != contract.sha256().as_str(),
+        "receipt contract binding differs from the staged contract",
+    )?;
+    let expected_subject = serde_json::to_value(contract.expected_subject()).unwrap();
+    invalid_if(
+        envelope.get("subject") != Some(&expected_subject),
+        "receipt subject binding differs from the staged contract",
+    )?;
     Ok(shallow)
 }
 

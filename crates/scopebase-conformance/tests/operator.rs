@@ -436,6 +436,59 @@ fn cli_refusal_exit_and_effects() {
     assert!(leftovers.is_empty(), "refusals must not write effects");
 }
 
+// F33: flag arity is strict. A value-less trailing option and a flag
+// followed by another flag are usage errors (exit 2), never a silent
+// default or a misread of the next flag; no effects are written.
+#[test]
+fn cli_flag_arity_is_strict() {
+    let work = scratch("cli-arity");
+    let argv = |tail: &[&str]| {
+        let mut v = vec!["scopebase-conformance".to_string()];
+        v.extend(tail.iter().map(|s| s.to_string()));
+        v
+    };
+    // Trailing option without a value.
+    assert_eq!(
+        commands::run_argv(&argv(&[
+            "plan",
+            "--catalog",
+            "c.json",
+            "--profile",
+            "p",
+            "--fixture-root",
+            "r",
+            "--mapping-policy"
+        ])),
+        EXIT_USAGE
+    );
+    // Required flag followed by another flag: missing value, not "--profile".
+    assert_eq!(
+        commands::run_argv(&argv(&[
+            "plan",
+            "--catalog",
+            "--profile",
+            "p",
+            "--fixture-root",
+            "r"
+        ])),
+        EXIT_USAGE
+    );
+    // Trailing required flag.
+    assert_eq!(
+        commands::run_argv(&argv(&["cleanup", "--run"])),
+        EXIT_USAGE
+    );
+    // Explicit `--flag=value` still works (flag-like values allowed there).
+    let missing = work.join("no-such-catalog.json");
+    let code = commands::run_argv(&argv(&[
+        "describe",
+        &format!("--catalog={}", missing.to_string_lossy()),
+    ]));
+    assert_eq!(code, EXIT_INCOMPLETE);
+    let leftovers: Vec<_> = std::fs::read_dir(&work).unwrap().collect();
+    assert!(leftovers.is_empty(), "arity refusals must not write effects");
+}
+
 // Read-only fixture roots still run; writes stay in the output dir.
 #[test]
 fn offline_read_only_prefix() {
@@ -587,4 +640,207 @@ fn template_pins_delivery_coordinates() {
     );
     // The per-build measurement is bound at runtime, never frozen.
     assert_eq!(pinned["provenance"]["measurement_sha256"], "@MEASUREMENT@");
+}
+
+// F10: a ledger file id escaping staging refuses before any write, and no
+// file appears outside the staging dir. The override path is used because
+// overrides are caller-chosen outside closure pins.
+#[test]
+fn ledger_file_id_traversal_is_refused() {
+    let root = copy_closure("traversal");
+    let mut template: serde_json::Value = read_json(&root.join("contract-template.json"));
+    // The malicious key reuses a real ledger template (with a run-id slot)
+    // so only the file-id guard stands between it and the write.
+    template["ledger_templates"]["../escaped"] =
+        serde_json::Value::String("vectors/ledger-closure.json.tmpl".into());
+    let override_path = root.join("evil-template.json");
+    std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let out = scratch("traversal-out");
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(override_path),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    // staging.join("../escaped.json") would land here without the guard.
+    assert!(
+        !out.join("run").join("escaped.json").exists(),
+        "traversal must not write outside staging"
+    );
+    assert!(
+        !out.join("escaped.json").exists(),
+        "traversal must not write anywhere unexpected"
+    );
+}
+
+// F31: the default template is manifest-pinned; a tampered copy refuses as
+// a broken package. (verify_closure pins every file up front; the F31 fix
+// additionally re-checks the bytes at use through closure.read, closing
+// the verify-then-reopen window.)
+#[test]
+fn tampered_default_template_is_refused() {
+    let root = copy_closure("tampered-template");
+    let path = root.join("contract-template.json");
+    let mut template: serde_json::Value = read_json(&path);
+    template["tampered"] = serde_json::Value::Bool(true);
+    std::fs::write(&path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let out = scratch("tampered-template-out");
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+}
+
+// F11: a second run into an occupied output dir refuses (usage error) and
+// leaves the first run's receipt intact.
+#[test]
+fn second_run_into_occupied_output_dir_refuses() {
+    let root = delivery_root();
+    let out = scratch("occupied-out");
+    let run = || {
+        delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: out.join("run"),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+    };
+    let first = run().unwrap();
+    assert_eq!(first.qualification, Qualification::Qualified);
+    let before = std::fs::read(out.join("run").join("receipt.json")).unwrap();
+    let err = run().unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::Usage);
+    let after = std::fs::read(out.join("run").join("receipt.json")).unwrap();
+    assert_eq!(before, after, "refused rerun must not touch the first run");
+}
+
+// F30: outer bindings are compared against the admitted catalog and staged
+// contract; a resealed receipt with a swapped subject still fails, while
+// the untouched receipt verifies.
+#[test]
+fn resealed_subject_swap_fails_catalog_verification() {
+    let root = delivery_root();
+    let out = scratch("reseal");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let catalog_bytes = std::fs::read(root.join("catalog.json")).unwrap();
+    let receipt_path = out.join("run").join("receipt.json");
+    let report = receipt::verify_receipt_with_catalog(&receipt_path, &catalog_bytes).unwrap();
+    assert_eq!(report.qualification, Qualification::Qualified);
+    // Evil twin: same staged contract, subject swapped, seal recomputed.
+    let evil = out.join("run-evil");
+    copy_dir(&out.join("run"), &evil);
+    let evil_receipt = evil.join("receipt.json");
+    let mut envelope: serde_json::Value = read_json(&evil_receipt);
+    envelope["subject"]["package_name"] =
+        serde_json::Value::String("conformance-evil-fork".into());
+    envelope.as_object_mut().unwrap().remove("envelope_sha256");
+    let digest =
+        scopebase_testkit::Digest256::of_bytes(&serde_json::to_vec(&envelope).unwrap()).as_str();
+    envelope["envelope_sha256"] = digest.into();
+    std::fs::write(&evil_receipt, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    let err = receipt::verify_receipt_with_catalog(&evil_receipt, &catalog_bytes).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
+}
+
+// F03: minimal-but-admitted limits still deliver the schema refusal (no
+// panic): the diagnostic is truncated to the caller's own ceiling.
+#[test]
+fn tiny_limits_still_deliver_schema_refusal() {
+    use scopebase_testkit::{
+        CaseErrorCategory, CaseId, CaseInvocation, CaseInvocationValues, CaseKey, CaseKeyValues,
+        EffectBatch, FixtureAccess, InvocationKey, InvocationKeyValues, Label, OperationScript,
+        RunId, RunLimits, SchemaBinding, SchemaBindingValues,
+    };
+    let mut values = RunLimits::default().values();
+    values.diagnostic_bytes = 1;
+    values.steps_per_invocation = 1;
+    values.observation_bytes = 1;
+    let limits = RunLimits::new(values).unwrap();
+    let label = |text: &str| Label::parse(text).unwrap();
+    let script = serde_json::json!({
+        "schema_version": 1,
+        "kind": "steps-v1",
+        "schema_id": "alien-schema-v9",
+        "steps": [{"step_id": "only", "operation": "nope", "inputs": [], "parameters": []}],
+    });
+    let key = InvocationKey::new(
+        InvocationKeyValues {
+            run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+            case_key: CaseKey::new(
+                CaseKeyValues {
+                    case_id: CaseId::parse("TT07.tiny-limits").unwrap(),
+                    case_version: 1,
+                    cell_id: "tiny".into(),
+                },
+                &limits,
+            )
+            .unwrap(),
+            attempt: 1,
+            operation_id: 1,
+        },
+        &limits,
+    )
+    .unwrap();
+    let binding = |id: &str| {
+        SchemaBinding::new(
+            SchemaBindingValues { id: label(id), revision: 1 },
+            &limits,
+        )
+        .unwrap()
+    };
+    let invocation = CaseInvocation::new(
+        CaseInvocationValues {
+            key,
+            observation_schema: binding("tt07-observation"),
+            fixture_schema: binding("tt07-fixture"),
+            script: OperationScript::load(&serde_json::to_vec(&script).unwrap(), &limits).unwrap(),
+            limits: limits.clone(),
+        },
+        &limits,
+    )
+    .unwrap();
+    let access =
+        FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).unwrap();
+    let mut adapter = delivery::DeliveryAdapter::new().unwrap();
+    let error = adapter
+        .execute(&invocation, &access)
+        .expect_err("alien schema must refuse");
+    assert_eq!(*error.category(), CaseErrorCategory::UnsupportedSchema);
+    assert!(
+        error.diagnostic_bytes().len() <= 1,
+        "diagnostic must fit the caller ceiling"
+    );
 }

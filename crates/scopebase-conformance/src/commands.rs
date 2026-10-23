@@ -208,7 +208,14 @@ fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == name {
-            return iter.next().map(String::as_str);
+            // F33: a following option is not a value (values starting
+            // with `--` use the `--flag=value` form). The arity error is
+            // reported by reject_unknown; lookup yields nothing here so a
+            // missing value can never be misread as the next flag.
+            return iter
+                .next()
+                .filter(|next| !next.starts_with("--"))
+                .map(String::as_str);
         }
         if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
             return Some(value);
@@ -232,9 +239,24 @@ fn reject_unknown(args: &[String], known: &[&str], forms: &[&str]) -> Result<(),
                     format!("unknown option {name}; expected {}", forms.join(" | ")),
                 ));
             }
-            // Skip the flag value unless it was `--flag=value`.
+            // F33: space-form options require a non-option value. A
+            // missing value or a following option is a usage error, never
+            // a silent default.
             if !arg.contains('=') {
-                iter.next();
+                match iter.peek() {
+                    Some(next) if !next.starts_with("--") => {
+                        iter.next();
+                    }
+                    _ => {
+                        return Err(OperatorError::new(
+                            OperatorErrorKind::Usage,
+                            format!(
+                                "option {name} needs a value; expected {}",
+                                forms.join(" | ")
+                            ),
+                        ));
+                    }
+                }
             }
         }
     }
