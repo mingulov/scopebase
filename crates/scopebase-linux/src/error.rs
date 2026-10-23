@@ -25,6 +25,10 @@ pub enum Stage {
     CheckProcessNamespace,
     PollPidfd,
     VerifyBirth,
+    ConfigureMapping,
+    ObserveMapping,
+    MapCalibration,
+    RetireMapping,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -59,12 +63,15 @@ pub enum LimitKind {
     OpenFds,
     StatCalls,
     MetadataBytes,
+    Mappings,
+    MappedBytes,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CleanupDisposition {
     NotNeeded,
     Complete,
+    Unresolved,
 }
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -212,6 +219,7 @@ pub enum ProcOperation {
     VerifyBirth,
     ReadMaps,
     ReadMountinfo,
+    ReadMapFiles,
 }
 /// Namespace domain of an authenticated handle: PID or mount only.
 #[cfg(feature = "process")]
@@ -240,6 +248,7 @@ pub enum ProcMember {
     TargetMountNamespace,
     Maps,
     Mountinfo,
+    MapFiles,
 }
 /// Raw pidfd poll evidence: ready count and revents, no invented errno.
 #[cfg(feature = "process")]

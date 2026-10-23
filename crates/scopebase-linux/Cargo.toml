@@ -14,7 +14,7 @@ include = ["Cargo.toml", "README.md", "src/**", "tests/**", "LICENSE-APACHE", "T
 [features]
 default = []
 process = ["rustix/process", "rustix/event"]
-mapping = ["process"]
+mapping = ["process", "rustix/mm", "rustix/param"]
 supervision = ["process"]
 walk = []
 
@@ -33,3 +33,8 @@ path = "tests/proc_parsers.rs"
 name = "process_observation"
 path = "tests/process_observation.rs"
 required-features = ["process"]
+
+[[test]]
+name = "mapping_contract"
+path = "tests/mapping_contract.rs"
+required-features = ["mapping"]

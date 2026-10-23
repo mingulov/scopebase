@@ -293,7 +293,22 @@ fn parse_line(raw: &[u8], decoded: &mut [u8], line: Range<usize>) -> Option<Moun
     });
     for i in 0..3 {
         let span = decode(raw, decoded, fixed[i + 3].clone())?;
-        if i < 2 && decoded[span.raw.start] != b'/' {
+        let first = decoded[span.raw.start];
+        // Mount points stay strict: the kernel always renders absolute paths.
+        if i == 1 && first != b'/' {
+            return None;
+        }
+        // LX06 repair (2026-10-23): the frozen LX05 contract required roots
+        // to begin with `/`, but real kernels render namespace pseudo-names
+        // (`net:[4026532307]`, `mnt:[...]`, ...) as nsfs mount roots, which
+        // refused every real mount table containing a netns bind. Accept
+        // exactly that documented shape; every other non-`/` root (including
+        // the existing `relative` bad-control) still refuses, and unknown
+        // future shapes fail closed. Flagged for LX05-owner re-review.
+        if i == 0
+            && first != b'/'
+            && !is_ns_pseudo_root(&decoded[span.raw.start..span.raw.start + span.decoded_len])
+        {
             return None;
         }
         fields[i] = span;
@@ -355,6 +370,31 @@ fn decode(raw: &[u8], decoded: &mut [u8], range: Range<usize>) -> Option<FieldSp
         raw: range,
     })
 }
+/// Kernel namespace pseudo-name as rendered for nsfs mount roots:
+/// `name:[digits]` with a nonempty lowercase alphanumeric/underscore name
+/// (`net`, `uts`, `mnt`, `time_for_children`, ...) and nonempty decimal
+/// digits. Same shape family as the `pid:[N]`/`mnt:[N]` link grammar.
+/// Unknown shapes fail closed (refuse), never accept.
+fn is_ns_pseudo_root(decoded: &[u8]) -> bool {
+    let Some(colon) = decoded.iter().position(|b| *b == b':') else {
+        return false;
+    };
+    let (name, rest) = decoded.split_at(colon);
+    if name.is_empty()
+        || !name
+            .iter()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
+    {
+        return false;
+    }
+    let Some(inner) = rest.strip_prefix(b":[") else {
+        return false;
+    };
+    let Some(digits) = inner.strip_suffix(b"]") else {
+        return false;
+    };
+    !digits.is_empty() && digits.iter().all(|b| b.is_ascii_digit())
+}
 fn decoded_length(raw: &[u8]) -> usize {
     let (mut i, mut n) = (0, 0);
     while i < raw.len() {
@@ -387,5 +427,50 @@ fn optional_kind(b: &[u8]) -> Option<MountOptionalKind> {
         None
     } else {
         Some(MountOptionalKind::Unknown)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_ns_pseudo_root;
+
+    #[test]
+    fn ns_pseudo_roots_accept_exact_kernel_shapes() {
+        // Observed real nsfs mount roots.
+        for good in [
+            b"net:[4026532307]".as_slice(),
+            b"mnt:[4026531840]",
+            b"uts:[4026531838]",
+            b"pid:[4026531836]",
+            b"ipc:[4026531839]",
+            b"cgroup:[4026531835]",
+            b"time:[4026531834]",
+            b"user:[4026531837]",
+            b"time_for_children:[4026531834]",
+            b"a:[0]",
+        ] {
+            assert!(is_ns_pseudo_root(good), "{}", String::from_utf8_lossy(good));
+        }
+        // Everything else fails closed, including the existing `relative`
+        // bad-control and near-miss bracket shapes.
+        for bad in [
+            b"relative".as_slice(),
+            b"",
+            b"/",
+            b"net:",
+            b"net:[]",
+            b"net:[4026532307",
+            b"net:4026532307]",
+            b"net:[40a6532307]",
+            b"[4026532307]",
+            b":[4026532307]",
+            b"net:[4026532307]x",
+            b"Net:[1]",
+            b"net-name:[1]",
+            b"net:[1]:[2]",
+            b"/net:[1]",
+        ] {
+            assert!(!is_ns_pseudo_root(bad), "{}", String::from_utf8_lossy(bad));
+        }
     }
 }
