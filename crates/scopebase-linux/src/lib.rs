@@ -2,9 +2,11 @@
 //! Retained file acquisition, bounded positional reads and cooperative controls.
 //!
 //! Descriptor observations and read results do not prove immutable snapshots.
-//! Mappings, processes and conformance profiles remain later work. Host target
-//! x86_64-unknown-linux-gnu, edition 2021, MSRV 1.88.0. No BPF tools or implicit
-//! policy changes are required.
+//! Additive features extend the base: `mapping` (LX06 mapping relations),
+//! `process` (LX08 strict process observation slice) and `walk` (LX10 bounded
+//! directory discovery). Supervision and supported conformance profiles remain
+//! later work. Host target x86_64-unknown-linux-gnu, edition 2021, MSRV 1.88.0.
+//! No BPF tools or implicit policy changes are required.
 //!
 //! ```
 //! use scopebase_linux::file::ProcFdResolver;
