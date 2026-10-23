@@ -1,0 +1,10 @@
+{
+  "schema": "tt04-mmap-ledger-v1",
+  "about": "Golden format vector: a clean NoNew phase shows allocator mmaps and no target-backed maps.",
+  "target": {"dev": 37, "ino": 101216118, "path": "/run/tt04/target.bin"},
+  "events": [
+    {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 135168, "result": 139975124910080},
+    {"syscall": "mmap", "fd": -1, "anonymous": true, "dev": null, "ino": null, "path": null, "addr": 0, "len": 266240, "result": 139975124643840},
+    {"syscall": "munmap", "fd": -2, "anonymous": false, "dev": null, "ino": null, "path": null, "addr": 139975124643840, "len": 266240, "result": 0}
+  ]
+}

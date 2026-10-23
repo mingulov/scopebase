@@ -15,7 +15,7 @@ bpf-host = ["dep:scopebase-bpf"]
 object = ["dep:scopebase-bpf", "scopebase-bpf/btf"]
 toolchain = ["object", "dep:libc"]
 bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
-linux-fixtures = ["dep:scopebase-linux", "dep:rustix", "dep:libc"]
+linux-fixtures = ["dep:scopebase-linux", "scopebase-linux/mapping", "dep:rustix", "dep:libc"]
 [dependencies]
 scopebase-bpf = { version = "=0.1.0", path = "../scopebase-bpf", default-features = false, optional = true }
 scopebase-linux = { version = "=0.1.0", path = "../scopebase-linux", default-features = false, optional = true }
@@ -81,6 +81,11 @@ path = "tests/linux_fixture.rs"
 required-features = ["linux-fixtures"]
 
 [[test]]
+name = "filesystem_cells"
+path = "tests/filesystem_cells.rs"
+required-features = ["linux-fixtures"]
+
+[[test]]
 name = "select_cli"
 path = "tests/select_cli.rs"
 
@@ -92,6 +97,11 @@ harness = false
 [[bin]]
 name = "scopebase-tt03-worker"
 path = "src/bin/scopebase-tt03-worker.rs"
+required-features = ["linux-fixtures"]
+
+[[bin]]
+name = "scopebase-tt04-audit-subject"
+path = "src/bin/scopebase-tt04-audit-subject.rs"
 required-features = ["linux-fixtures"]
 
 [[bin]]
