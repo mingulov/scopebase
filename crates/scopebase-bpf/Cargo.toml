@@ -9,22 +9,29 @@ publish = false
 build = false
 readme = "README.md"
 description = "ScopeBase host BPF error and budget contracts"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**", "fixtures/btf-v1/**"]
 autotests = false
 autoexamples = false
 
 [features]
 default = []
 json = ["dep:serde", "dep:serde_json"]
+btf = ["dep:btf-rs"]
 
 [dependencies]
 serde = { version = "=1.0.229", default-features = false, features = ["std"], optional = true }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
+# BP09 locked parser: retis-org/btf-rs at the SB02-probed revision (v2.0.0).
+# default-features = false keeps elf/elf-compression/regex disabled; only the
+# byte-slice constructors are used, never file/mmap backends.
+btf-rs = { git = "https://github.com/retis-org/btf-rs", rev = "0a5838f8dad54b6da9a7b0539f1e2d7aeeb009a0", default-features = false, optional = true }
+# Portable domain hashing for scopebase-bpf::btf (same admitted pin as before;
+# moved from the x86_64-Linux-only section so pure BTF parsing stays host-only).
+sha2 = { version = "=0.11.0", default-features = false }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu", target_pointer_width = "64", target_endian = "little"))'.dependencies]
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process", "thread", "linux_4_11"] }
 libc = { version = "=0.2.191", default-features = false, features = ["std"] }
-sha2 = { version = "=0.11.0", default-features = false }
 
 [[test]]
 name="api_contract"
@@ -86,3 +93,8 @@ path = "tests/attach.rs"
 [[test]]
 name = "ring"
 path = "tests/ring.rs"
+
+[[test]]
+name = "btf"
+path = "tests/btf.rs"
+required-features = ["btf"]

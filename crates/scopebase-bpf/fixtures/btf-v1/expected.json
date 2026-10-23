@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "base_rivals": {
+    "dup_ids": [
+      1,
+      2
+    ],
+    "int1": {
+      "bits": 32,
+      "signed": true,
+      "size": 4
+    },
+    "int2": {
+      "bits": 64,
+      "signed": false,
+      "size": 8
+    },
+    "ptr_to": 1
+  },
+  "split_extra": {
+    "global_id": 4,
+    "name": "split",
+    "bits": 64,
+    "signed": false,
+    "size": 8
+  },
+  "shapes": {
+    "my_u32_canon": 1,
+    "volatile_canon": 1,
+    "array": {
+      "element": 1,
+      "count": 4,
+      "size": 16
+    },
+    "point_size": 16,
+    "point_x": {
+      "byte": 0,
+      "bit": 0,
+      "width": null,
+      "size": 4,
+      "ty": 1
+    },
+    "point_y": {
+      "byte": 8,
+      "bit": 0,
+      "width": null,
+      "size": 8,
+      "ty": 2
+    },
+    "outer_flags": {
+      "byte": 16,
+      "bit": 0,
+      "width": null,
+      "size": 4,
+      "ty": 1
+    },
+    "nested_pt_y": {
+      "byte": 8,
+      "bit": 0,
+      "width": null,
+      "size": 8,
+      "ty": 2
+    },
+    "union_b": {
+      "byte": 0,
+      "bit": 0,
+      "width": null,
+      "size": 8,
+      "ty": 2
+    },
+    "enum": {
+      "bits": 32,
+      "signed": true,
+      "size": 4
+    },
+    "func": {
+      "result": 1,
+      "params": [
+        1,
+        2
+      ],
+      "variadic": false
+    },
+    "void_func": {
+      "result": 0,
+      "params": [
+        5
+      ],
+      "variadic": true
+    },
+    "bitfield_f": {
+      "byte": 0,
+      "bit": 4,
+      "width": 3,
+      "size": 4,
+      "ty": 1
+    },
+    "bitfield_g": {
+      "byte": 1,
+      "bit": 0,
+      "width": 8,
+      "size": 4,
+      "ty": 1
+    },
+    "anon_direct": {
+      "byte": 4,
+      "bit": 0,
+      "width": null,
+      "size": 4,
+      "ty": 1
+    },
+    "anon_descend": {
+      "byte": 0,
+      "bit": 0,
+      "width": null,
+      "size": 4,
+      "ty": 1
+    },
+    "narrow": {
+      "bits": 12,
+      "signed": false,
+      "size": 4
+    },
+    "rival_ids": [
+      24,
+      25
+    ],
+    "rival_first_x": {
+      "byte": 0,
+      "bit": 0,
+      "width": null,
+      "size": 4,
+      "ty": 1
+    },
+    "rival_second_x": {
+      "byte": 0,
+      "bit": 0,
+      "width": null,
+      "size": 8,
+      "ty": 2
+    },
+    "alias_canon": 7
+  },
+  "maps": {
+    "my_map": [
+      1,
+      2
+    ]
+  }
+}

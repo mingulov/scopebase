@@ -1,0 +1,34 @@
+{
+  "generator": "generate_vectors.py",
+  "layout": "BTF v1 little-endian, hdr_len 24",
+  "files": {
+    "images/base-rivals.bin": {
+      "sha256": "ec80b90d63e6b7a352e0c0c8166e8e01ea098a88b5942cd8f4b5ede89d1991a2",
+      "size": 73
+    },
+    "images/split-extra.bin": {
+      "sha256": "c206f14e4bfaeba57521c05b8ac2343e3952e3ecbc97067da7c11d740fd22706",
+      "size": 47
+    },
+    "images/shapes.bin": {
+      "sha256": "5b20f04da4740213b4bc6e564d46b0fce20de28b9111450c2e58943f20d31bb6",
+      "size": 719
+    },
+    "images/maps.bin": {
+      "sha256": "4f1a9d86ac26363d9b7d09dc43c5a07e0b8188a72a2bd4ce378aeae637c8752d",
+      "size": 342
+    },
+    "images/cycle.bin": {
+      "sha256": "11707d6b4664841e8c4a55a281ebdb0b628d9765091bcfa69c8f23c5b0892769",
+      "size": 82
+    },
+    "graphs.json": {
+      "sha256": "84a5d51a22d60ae3995337311069830adaaeb877c34f4cd1f714ff12631acde6",
+      "size": 10154
+    },
+    "expected.json": {
+      "sha256": "4bb2e502c0a544ba6df367ee5d4b0a3a3dfc6889b31e5396054de1a643a08f96",
+      "size": 2263
+    }
+  }
+}

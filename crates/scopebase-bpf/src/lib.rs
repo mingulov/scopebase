@@ -67,3 +67,11 @@ pub use ring::{
     frame_step, BoundaryState, BoundedRingSource, DrainBudget, DrainResult, FrameStep,
     RecordHeader, RingPositions, StageStats, StagedRecord, STAGE_FRAMING_VERSION,
 };
+
+#[cfg(feature = "btf")]
+pub mod btf;
+#[cfg(feature = "btf")]
+pub use btf::{
+    BtfDomainId, BtfImages, BtfLimits, BtfView, ByteOrder, FunctionShape, MemberExtent, TypeKind,
+    TypeRef, TypeShape, BTF_PROFILE_MAX_IMAGE_BYTES,
+};
