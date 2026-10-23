@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_toolchain_inventory",
+  "tools": [
+    {
+      "id": "ubuntu-clang-18.1.8",
+      "role": "frontend",
+      "name": "clang",
+      "version": "18.1.8",
+      "version_detail": "Ubuntu clang version 18.1.8 (20ubuntu8); x86_64-pc-linux-gnu",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-atomic-load-repro/versions.json",
+      "used_for": "C reproducer frontend; BPF-only LLVM bootstrap compiler"
+    },
+    {
+      "id": "ubuntu-llc-18.1.8",
+      "role": "backend",
+      "name": "llc",
+      "version": "18.1.8",
+      "version_detail": "Ubuntu LLVM version 18.1.8",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-toolchain-experiment.md result matrix",
+      "used_for": "v3 baseline backend: RMW/CAS controls pass, 4 load cases refuse compilation"
+    },
+    {
+      "id": "ubuntu-llc-21.1.8",
+      "role": "backend",
+      "name": "llc",
+      "version": "21.1.8",
+      "version_detail": "Ubuntu LLVM version 21.1.8; optimized build; host znver5",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-atomic-load-repro/versions.json (llc21 --version)",
+      "used_for": "Affected RMW backend (7 wrong old-value cases); v4 ordinary-load success control"
+    },
+    {
+      "id": "llvm-23.1.2-source",
+      "role": "source-archive",
+      "name": "llvm-project",
+      "version": "23.1.2",
+      "version_detail": "llvmorg-23.1.2 official release archive (171 MB; unpacked 2.6 GB)",
+      "sha256": "c98bbef08a2b4c2613cd50e9aa9ae7b69b1fe6c16b2c40373bc0ab6116fdf78a",
+      "hash_status": "recorded",
+      "origin": "pinned-archive",
+      "origin_ref": "evidence EXCLUDED-large-files.sha256; llvm-bpf-toolchain-experiment.md",
+      "used_for": "Pristine and PR-210371 BPF-only Release+asserts builds"
+    },
+    {
+      "id": "llvm-23.1.2-pristine-llc",
+      "role": "backend",
+      "name": "llc",
+      "version": "23.1.2",
+      "version_detail": "Private BPF-only Release build with assertions; lib/libLLVM.so.23.1 920651f3ff7a1b430a36cf04bf66e60299812558f0fc3b3ba7ceb34121d18bc5; bin/llc 5d10644f3f7fb4d0e24253ba02c541ffd99d62911f4513c017c3d9f8e2aa04b1",
+      "sha256": "920651f3ff7a1b430a36cf04bf66e60299812558f0fc3b3ba7ceb34121d18bc5",
+      "hash_status": "recorded",
+      "origin": "preserved-binary",
+      "origin_ref": "baseline-23.1.2/sha256.json (lib/libLLVM.so.23.1: loaded backend identity)",
+      "used_for": "Pristine baseline: same 7 wrong old-value cases as LLVM 21; v4 ordinary-load success"
+    },
+    {
+      "id": "llvm-23.1.2-pr210371-llc",
+      "role": "backend",
+      "name": "llc",
+      "version": "23.1.2+pr210371@2554c9fc",
+      "version_detail": "Private build with PR 210371 head 2554c9fc1635e4a880a681de87b6e16c538245a4 (five-commit patch 8f50e85d6cba0155c55ab5f8230b875c656f0e77e0215108d05d464a37115ee2); lib/libLLVM.so.23.1 58fcbd9d2c53ae2d4269b38823abded1214d8ed0bc9c567a33bb61345ba6e997; bin/llc unchanged (shared-lib build)",
+      "sha256": "58fcbd9d2c53ae2d4269b38823abded1214d8ed0bc9c567a33bb61345ba6e997",
+      "hash_status": "recorded",
+      "origin": "preserved-binary",
+      "origin_ref": "patched23-gates/tool-hashes.json (lib/libLLVM.so.23.1: loaded backend identity)",
+      "used_for": "Fixed backend: all 24 v3 + 28 v4 compiled cases pass; upstream FileCheck gates pass"
+    },
+    {
+      "id": "rustc-nightly-2026-05-20",
+      "role": "rust",
+      "name": "rustc",
+      "version": "1.97.0-nightly",
+      "version_detail": "rustc 1.97.0-nightly (e50aa6fba 2026-05-19); commit e50aa6fba4e63ab34c72bf9acfd2c307c1155d1a; host x86_64-unknown-linux-gnu",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-atomic-load-repro/versions.json (rustc -vV)",
+      "used_for": "Rust BPF frontend embedding LLVM 22.1.4"
+    },
+    {
+      "id": "rust-llvm-22.1.4",
+      "role": "backend",
+      "name": "libLLVM",
+      "version": "22.1.4",
+      "version_detail": "libLLVM.so.22.1-rust-1.97.0-nightly; LLVMGetVersion 22.1.4; must not be conflated with native Clang 18.1.8",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-atomic-load-report.md (LLVMGetVersion triple 22.1.4)",
+      "used_for": "Loaded backend behind rustc and bpf-linker 0.10.4; v3 atomic-load crash observed through it"
+    },
+    {
+      "id": "bpf-linker-0.10.4",
+      "role": "linker",
+      "name": "bpf-linker",
+      "version": "0.10.4",
+      "version_detail": "bpf-linker 0.10.4; CLI rejects --cpu v4",
+      "sha256": null,
+      "hash_status": "unrecorded",
+      "origin": "system-observed",
+      "origin_ref": "llvm-bpf-atomic-load-repro/versions.json (bpf-linker --version)",
+      "used_for": "Product Rust/C link step using Rust LLVM 22"
+    },
+    {
+      "id": "bpf-linker-0.11.1-unrepaired",
+      "role": "linker",
+      "name": "bpf-linker",
+      "version": "0.11.1@24ccdfd4",
+      "version_detail": "bpf-linker 0.11.1 source 24ccdfd47d0627f2dd88066e26a51526dac14cc4 with private LLVM 23.1.2 + PR 210371",
+      "sha256": "182eb32581dd2e92b6b7686f11cb968806b916008cfc95fcfc99e6f2bd7a7587",
+      "hash_status": "recorded",
+      "origin": "preserved-binary",
+      "origin_ref": "bpf-linker-repair/toolchain-binaries.sha256 (bin/bpf-linker)",
+      "used_for": "Pre-repair pipeline binary: debug assertion RED on Detailed codegen"
+    },
+    {
+      "id": "bpf-linker-0.11.1-repaired",
+      "role": "linker",
+      "name": "bpf-linker",
+      "version": "0.11.1@4727b15",
+      "version_detail": "Repair commit 4727b154a014dd74b9cceb038c365b058f48a53a on 24ccdfd47d0627f2dd88066e26a51526dac14cc4; assertions retained",
+      "sha256": "641463407742214a45e8326b8dddc08958dfbdad1d65f13a5a918063a1eee262",
+      "hash_status": "recorded",
+      "origin": "preserved-binary",
+      "origin_ref": "llvm-bpf-toolchain-experiment.md (repaired linker SHA256)",
+      "used_for": "Repaired pipeline binary: both full Rust/native BPF variants build (Detailed 22 maps/13 programs; Inventory 13 maps/12 programs)"
+    }
+  ]
+}

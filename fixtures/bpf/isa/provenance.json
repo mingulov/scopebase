@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_issue_provenance",
+  "area": "isa",
+  "status": "PROVENANCE_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "frozen_tree": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree",
+    "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r000.git"
+  },
+  "selected_sources": [
+    {
+      "path": "llvm-bpf-toolchain-experiment.md",
+      "sha256": "486a12c8894a305b75c576fe8435eef94c30bb2071bcf8d18616ef4a946f0e94",
+      "lines": 216,
+      "role": "v4 preset expansion across LLVM releases; 6.9/6.15/6.19 kernel boundaries; preset-name warning."
+    }
+  ],
+  "toolchain_refs": ["ubuntu-llc-18.1.8", "ubuntu-llc-21.1.8", "llvm-23.1.2-pristine-llc"],
+  "patch_refs": [],
+  "patch_note": "No patch: ISA admission is an explicit effective-CPU/feature contract (TC03), not a workaround.",
+  "issue_ids": ["H30"],
+  "backlog_ids": ["C02"],
+  "defect": "BPF v4 is a compiler preset, not a kernel promise, and its meaning expanded across LLVM releases: LLVM 18 v4 is the original bundle (signed loads/moves, byte swap, signed div/rem, long jumps, imm stores); acquire/release and indirect jumps joined later. Linux 6.9 implements only the original bundle, so unrestricted LLVM 23 v4 output is not 6.9-compatible.",
+  "tier": "historical-donor-evidence",
+  "tier_note": "Pinned source/ancestry observations plus compile matrices; no runtime qualification on 6.9/6.15/6.19.",
+  "cells": [
+    {
+      "id": "kernel-5.15-baseline-subset",
+      "kernel": "5.15 (exact build unbound)",
+      "basis": "source-ancestry",
+      "expected": "Eligibility only: baseline-subset verifier lane. No support asserted.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "kernel-6.9-original-v4",
+      "kernel": "6.9 (exact build unbound)",
+      "basis": "source-ancestry",
+      "expected": "Eligibility only: original LLVM 18 v4 bundle. Newer v4 features excluded.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "kernel-6.15-acqrel",
+      "kernel": "6.15 (exact build unbound)",
+      "basis": "source-ancestry",
+      "expected": "Eligibility only: acquire/release lane. Actual decode/load determines verdicts.",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "kernel-6.19-indirect-jump",
+      "kernel": "6.19 (exact build unbound)",
+      "basis": "source-ancestry",
+      "expected": "Eligibility only: indirect-jump lane (x86 entry 493d9e0d6083).",
+      "status": "NOT_RUN"
+    }
+  ],
+  "historical_license": {
+    "observation": "No SPDX header observed in this workspace file; workspace root carries no LICENSE file. Sibling product directory p11scope/ declares GPL-2.0-only/GPL-2.0-or-later texts, not asserted to govern this workspace file.",
+    "destination_license": "Apache-2.0",
+    "authorization": "OWNER-2026-10-23"
+  }
+}

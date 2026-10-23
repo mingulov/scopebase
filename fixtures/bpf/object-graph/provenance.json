@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "kind": "tc01_issue_provenance",
+  "area": "object-graph",
+  "status": "PROVENANCE_ONLY",
+  "qualification": "NOT_EVALUATED",
+  "donor": {
+    "workspace": "p11scope-ws/p11scope",
+    "worktree": "w001",
+    "commit": "7f8ca02bf926a5cbd4345180bbe7367c4f1abdf4",
+    "frozen_tree": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/tree/p11scope",
+    "history": "/home/user/src/m/bpfscope/.scopebase/donor-snapshots/2026-10-18/p11scope-ws/history/r001.git"
+  },
+  "selected_sources": [
+    {
+      "path": "third-party/patches/aya-obj-0.3.0/aya-obj-map-relocation.patch",
+      "sha256": "bedbd0cb12675c4c4e8c923d6d22eaa15b8eeb74e5911e4f23801ef29eb6e488",
+      "lines": 256,
+      "role": "Patch identity only (208 insertions user-owned, 1 deletion upstream). Cited for register metadata; body not copied."
+    }
+  ],
+  "toolchain_refs": [],
+  "toolchain_note": "Loader-side patch; no compiler pin applies. Upstream base aya-obj 0.3.0 is recorded in patches.json.",
+  "patch_refs": ["aya-obj-map-relocation"],
+  "issue_ids": ["H07"],
+  "backlog_ids": ["C04", "B05", "B06"],
+  "defect": "Map relocation must resolve the exact map definition at a section offset: two definitions at distinct offsets resolve distinct sentinels, while interior, ambiguous, missing or signed-confused references refuse. A forced same-FD alias is the bad control.",
+  "tier": "historical-donor-evidence",
+  "tier_note": "Register-level provenance only. Emitted/translated-image checks are TC05 work; live map-ID checks need an advertised loader backend (BP10/BP11).",
+  "cells": [
+    {
+      "id": "object-map-relocation-exact",
+      "kernel": "n/a (object-only)",
+      "basis": "unbound",
+      "expected": "Two section-symbol/addend definitions resolve distinct sentinel FDs; malformed offsets refuse.",
+      "status": "NOT_RUN"
+    }
+  ],
+  "historical_license": {
+    "observation": "No SPDX header in the patch file; product third-party license texts observed but not copied. Only patch identity and preimage hashes are recorded; no upstream context/deletion lines copied.",
+    "destination_license": "Apache-2.0",
+    "authorization": "OWNER-2026-10-23"
+  }
+}
