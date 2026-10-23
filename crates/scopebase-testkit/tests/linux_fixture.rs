@@ -3,11 +3,18 @@
 //! worker driven through the developer driver. Wire/manifest/creator internals
 //! are covered by unit tests inside their private modules.
 use scopebase_testkit::fixture::linux::{
-    launch_pair, Control, DriverErrorKind, LaunchConfig, LinuxFixtureFiles, LinuxFixtureSession,
-    LinuxOuterCleanupAdmissionErrorKind, LinuxOuterCleanupBudget, LinuxProcessFixture,
-    Scenario, TRICKY_COMM,
+    clean_shutdown_gate, launch_pair, verify_retirement_exactly_once, verify_unknown_sticky,
+    Control, CustodyClaim, DriverErrorKind, LaunchConfig, LinuxFixtureFiles, LinuxFixtureSession,
+    LinuxOuterCleanupAdmissionErrorKind, LinuxOuterCleanupBudget, LinuxProcessFixture, Scenario,
+    TRICKY_COMM,
 };
-use scopebase_testkit::{CaseInvocationValues, FixtureErrorCategory, FixtureSession, Label};
+use scopebase_testkit::{
+    CaseErrorCategory, CaseInvocationValues, CleanupCallStatus, CleanupScope, CleanupState,
+    ConformanceAdapter, Digest256, EffectBatch, EffectRegistration, EffectTransition,
+    EffectTransitionValues, FixtureAccess, FixtureErrorCategory, FixtureSession, Label,
+    Observation, Owner, PendingEffectRef, PendingEffectRefValues, RetireRequest, RetirementReport,
+    RetirementReportValues, RunLimits, TransitionTo,
+};
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -1496,6 +1503,198 @@ fn prepare_reports_parent_failure_typed() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+fn tt03_runner_contract() -> (
+    scopebase_testkit::ProfilePlan,
+    scopebase_testkit::RunContract,
+) {
+    let catalog = scopebase_testkit::CaseCatalog::load(
+        &std::fs::read(support::root().join("catalog.json")).unwrap(),
+        scopebase_testkit::CatalogLimits::default(),
+    )
+    .unwrap();
+    let plan = scopebase_testkit::ProfilePlan::select(
+        &catalog,
+        &scopebase_testkit::ProfileId::parse("tt02-harness-v1").unwrap(),
+    )
+    .unwrap();
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tt03/contract.json"),
+    )
+    .unwrap();
+    let contract =
+        scopebase_testkit::RunContract::load(&catalog, &plan, &bytes, RunLimits::default())
+            .unwrap();
+    assert_eq!(contract.schedule().len(), 1, "one scheduled invocation");
+    (plan, contract)
+}
+
+fn manifest_bytes_full(
+    run_hex: &str,
+    scenario: &str,
+    operation_id: u64,
+    control: Option<(&str, &str, &str)>,
+    blobs: Option<(&str, &str, &str)>,
+) -> Vec<u8> {
+    let steps: Vec<serde_json::Value> = Scenario::parse(scenario)
+        .unwrap()
+        .steps()
+        .iter()
+        .map(|s| {
+            serde_json::json!({"id": s.id, "action": s.action.as_str(), "actor": s.actor.as_str()})
+        })
+        .collect();
+    let control_value = match control {
+        Some((kind, step_id, point)) => {
+            serde_json::json!({"kind": kind, "step_id": step_id, "point": point})
+        }
+        None => serde_json::Value::Null,
+    };
+    let (hex_a, hex_b, hex_m) = match blobs {
+        Some((a, b, m)) => (
+            serde_json::Value::String(a.to_string()),
+            serde_json::Value::String(b.to_string()),
+            serde_json::Value::String(m.to_string()),
+        ),
+        None => (
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
+    };
+    serde_json::json!({
+        "schema_version": 1,
+        "kind": "tt03-linux-fixture",
+        "run_id": run_hex,
+        "image_a_artifact": "tt03-worker-a",
+        "image_b_artifact": "tt03-worker-b",
+        "limits": {"datagrams": 568, "payload_bytes": 65536},
+        "invocations": [{
+            "key": {
+                "run_id": run_hex,
+                "case_key": {"case_id": "TT03.first", "case_version": 1, "cell_id": "host"},
+                "attempt": 1,
+                "operation_id": operation_id.to_string(),
+            },
+            "scenario": scenario,
+            "steps": steps,
+            "control": control_value,
+            "expected_file_a_hex": hex_a,
+            "expected_file_b_hex": hex_b,
+            "mutation_hex": hex_m,
+            "driver_schedule": null,
+        }],
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn tt03_session(
+    dir: &std::path::Path,
+    contract: &scopebase_testkit::RunContract,
+    scenario: &str,
+    control: Option<(&str, &str, &str)>,
+    blobs: Option<(&str, &str, &str)>,
+) -> (LinuxFixtureSession, scopebase_testkit::CaseInvocation) {
+    let invocation = invocation_for(contract);
+    let op = *invocation.key().operation_id();
+    let root = File::open(dir).unwrap();
+    let files = make_files(dir, root);
+    let manifest = manifest_bytes_full(contract.run_id().as_str(), scenario, op, control, blobs);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let session = LinuxFixtureSession::new(
+        contract.clone(),
+        files,
+        &manifest,
+        Instant::now() + Duration::from_secs(60),
+        cancel,
+    )
+    .unwrap();
+    (session, invocation)
+}
+
+fn case_path_run(dir: &std::path::Path, run_hex: &str, op: u64) -> PathBuf {
+    dir.join(format!("tt03-{run_hex}-{op}"))
+}
+
+/// Runner vehicle for retire: optionally advances the prepared Linux
+/// process through scripted steps (reaching retire-relevant advance
+/// effects such as descriptor inventory), optionally injects foreign
+/// filesystem interference, then cancels so Collect/Judge (other
+/// owners' contracts) are skipped. Retirement still runs through the
+/// real engine and ledger.
+struct Tt03RetireAdapter {
+    subject: scopebase_testkit::SubjectBinding,
+    advance_steps: Vec<String>,
+    interfere_remove: Option<PathBuf>,
+    calls: usize,
+}
+
+impl ConformanceAdapter for Tt03RetireAdapter {
+    fn subject(&self) -> scopebase_testkit::SubjectBinding {
+        self.subject.clone()
+    }
+    fn execute(
+        &mut self,
+        invocation: &scopebase_testkit::CaseInvocation,
+        fixture: &FixtureAccess<'_>,
+    ) -> Result<Observation, scopebase_testkit::CaseError> {
+        self.calls += 1;
+        if !self.advance_steps.is_empty() {
+            let proc = fixture
+                .resource::<LinuxProcessFixture>(&Label::parse("linux.process").unwrap())
+                .expect("linux.process resource for scripted advance");
+            for step in &self.advance_steps {
+                proc.advance(&Label::parse(step).unwrap())
+                    .expect("scripted advance reaches its trigger");
+            }
+        }
+        if let Some(path) = &self.interfere_remove {
+            assert!(path.exists(), "interference reaches a live case dir");
+            std::fs::remove_dir_all(path).expect("foreign actor removes the case dir");
+        }
+        Err(support::adapter::operation_error(
+            invocation,
+            CaseErrorCategory::Cancelled,
+            None,
+            vec![],
+            None,
+            b"tt03 retire vehicle: adapter cancels after fixture advance",
+        ))
+    }
+    fn retire(&mut self, request: &RetireRequest) -> RetirementReport {
+        RetirementReport::new(
+            RetirementReportValues {
+                call_id: request.call_id(),
+                owner: request.owner(),
+                scope: request.scope().clone(),
+                discovered: vec![],
+                transitions: vec![],
+                pending_snapshot: request.known_pending().to_vec(),
+                complete: true,
+                diagnostic: None,
+            },
+            &RunLimits::default(),
+        )
+        .unwrap()
+    }
+}
+
+fn tt03_oracle(contract: &scopebase_testkit::RunContract) -> support::oracle::ArithmeticOracle {
+    support::oracle::ArithmeticOracle {
+        binding: contract.expected_oracle().clone(),
+    }
+}
+
+fn fixture_records(report: &scopebase_testkit::RunReport) -> Vec<usize> {
+    report
+        .cleanup_records()
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| *r.owner() == Owner::Fixture)
+        .map(|(i, _)| i)
+        .collect()
+}
+
 #[test]
 fn dag_grammar_152_rows_not_run() {
     let dag = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1514,4 +1713,724 @@ fn dag_grammar_152_rows_not_run() {
             row["id"].as_str().unwrap_or("?")
         );
     }
+}
+
+fn transition_resource_ids(report: &RetirementReport) -> Vec<String> {
+    report
+        .transitions()
+        .iter()
+        .map(|t| t.effect().resource_id().as_str().to_string())
+        .collect()
+}
+
+#[test]
+fn retire_case_scope_transitions_prepared_pair() {
+    let (dir, _root) = temp_root("retire-case");
+    let (plan, contract) = tt03_runner_contract();
+    let (mut session, _) = tt03_session(&dir, &contract, "leader-lifecycle", None, None);
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec![],
+        interfere_remove: None,
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("retire vehicle run completes");
+    assert_eq!(adapter.calls, 1);
+    assert_eq!(report.cleanup_records().len(), 4);
+    let fixture = fixture_records(&report);
+    assert_eq!(fixture.len(), 2);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    assert_eq!(*case_record.call_id(), 2);
+    assert!(matches!(case_record.scope(), CleanupScope::Case(_)));
+    assert_eq!(*case_record.status(), CleanupCallStatus::Called);
+    assert!(case_record.error().is_none());
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    assert_eq!(
+        transition_resource_ids(case_response),
+        vec![
+            "linux.case-root".to_string(),
+            "linux.child-a".to_string(),
+            "linux.child-b".to_string(),
+        ]
+    );
+    assert!(case_response.discovered().is_empty());
+    assert!(case_response.pending_snapshot().is_empty());
+    assert!(*case_response.complete());
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Complete
+    );
+    let run_record = &report.cleanup_records()[fixture[1]];
+    assert_eq!(*run_record.call_id(), 4);
+    assert!(matches!(run_record.scope(), CleanupScope::Run(_)));
+    let run_response = run_record.response().as_ref().expect("run retire response");
+    assert!(
+        run_response.transitions().is_empty(),
+        "run retire has nothing left"
+    );
+    assert!(*run_response.complete());
+    assert_eq!(*run_record.state_at_run_end(), CleanupState::Complete);
+    // Exactly-once across prepare (recorded), collect (omitted: empty) and retire.
+    let batches = report.case_results()[0].effect_batches();
+    assert_eq!(batches.len(), 2, "prepare + adapter-execute batches");
+    let empty = EffectBatch::empty(contract.limits());
+    let discovered: Vec<EffectRegistration> = case_response
+        .discovered()
+        .iter()
+        .chain(run_response.discovered().iter())
+        .cloned()
+        .collect();
+    let transitions = case_response
+        .transitions()
+        .iter()
+        .chain(run_response.transitions().iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    verify_retirement_exactly_once(&batches[0], &empty, &discovered, &transitions).unwrap();
+    // The clean-shutdown gate passes on the retired custody.
+    let claim = CustodyClaim {
+        retired_report: true,
+        exit_status_only: false,
+        original_root: true,
+        original_owners: true,
+        registered: batches[0]
+            .registrations()
+            .iter()
+            .map(|r| r.resource_id().clone())
+            .collect(),
+        transitioned: transition_resource_ids(case_response)
+            .iter()
+            .map(|s| Label::parse(s).unwrap())
+            .collect(),
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    clean_shutdown_gate(&claim).unwrap();
+    // Retired pairs are gone before the finalizer; it stays clean.
+    session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(4),
+            max_native_attempts: 512,
+            max_records: 64,
+            max_retained_bytes: 262144,
+        })
+        .unwrap();
+    let v: serde_json::Value =
+        serde_json::from_slice(session.outer_cleanup_report().unwrap().as_bytes()).unwrap();
+    assert_eq!(v["kind"], "clean");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn retire_discovers_inventory_children_exactly_once() {
+    let (dir, _root) = temp_root("retire-inventory");
+    let (plan, contract) = tt03_runner_contract();
+    let blob_a = hex_of(b"alpha-content-001");
+    let blob_b = hex_of(b"beta--content-002");
+    let mutation = hex_of(b"ALPHA-CONTENT-001");
+    let (mut session, _) = tt03_session(
+        &dir,
+        &contract,
+        "descriptor-inventory",
+        None,
+        Some((&blob_a, &blob_b, &mutation)),
+    );
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec!["s04-inventory".to_string(), "s05-responding-ab".to_string()],
+        interfere_remove: None,
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("inventory retire run completes");
+    let fixture = fixture_records(&report);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    let discovered: Vec<String> = case_response
+        .discovered()
+        .iter()
+        .map(|r| r.resource_id().as_str().to_string())
+        .collect();
+    assert_eq!(
+        discovered,
+        vec![
+            "linux.inventory-negative".to_string(),
+            "linux.inventory-positive".to_string(),
+        ],
+        "advance-made inventory children are discovered by retire"
+    );
+    let mut transitioned = transition_resource_ids(case_response);
+    transitioned.sort();
+    assert_eq!(
+        transitioned,
+        vec![
+            "linux.case-root".to_string(),
+            "linux.child-a".to_string(),
+            "linux.child-b".to_string(),
+            "linux.file-a".to_string(),
+            "linux.file-b".to_string(),
+            "linux.inventory-negative".to_string(),
+            "linux.inventory-positive".to_string(),
+        ]
+    );
+    assert!(*case_response.complete());
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Complete
+    );
+    let batches = report.case_results()[0].effect_batches();
+    assert_eq!(
+        batches[0].registrations().len(),
+        5,
+        "prepare registers five"
+    );
+    let empty = EffectBatch::empty(contract.limits());
+    verify_retirement_exactly_once(
+        &batches[0],
+        &empty,
+        case_response.discovered(),
+        case_response.transitions(),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn retire_after_worker_death_settles_known_prefix() {
+    let (dir, _root) = temp_root("retire-death");
+    let (plan, contract) = tt03_runner_contract();
+    let (mut session, _) = tt03_session(
+        &dir,
+        &contract,
+        "leader-lifecycle",
+        Some(("worker_exit", "s01-ready", "after_root_grant")),
+        None,
+    );
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec![],
+        interfere_remove: None,
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("death retire run completes");
+    assert_eq!(adapter.calls, 0, "prepare failure skips execute");
+    assert!(report.case_results()[0].fixture_failure().is_some());
+    let fixture = fixture_records(&report);
+    assert_eq!(fixture.len(), 2);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    assert_eq!(*case_record.status(), CleanupCallStatus::Called);
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    assert_eq!(
+        transition_resource_ids(case_response),
+        vec![
+            "linux.case-root".to_string(),
+            "linux.child-a".to_string(),
+            "linux.child-b".to_string(),
+        ]
+    );
+    assert_eq!(
+        case_response.discovered().len(),
+        3,
+        "failed prefix is discovered"
+    );
+    assert!(*case_response.complete());
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Complete
+    );
+    let batches = report.case_results()[0].effect_batches();
+    assert_eq!(batches.len(), 1, "only the failed-prepare batch");
+    assert!(batches[0].registrations().is_empty());
+    let empty = EffectBatch::empty(contract.limits());
+    let run_response = report.cleanup_records()[fixture[1]]
+        .response()
+        .as_ref()
+        .expect("run retire response");
+    let transitions = case_response
+        .transitions()
+        .iter()
+        .chain(run_response.transitions().iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    verify_retirement_exactly_once(
+        &batches[0],
+        &empty,
+        case_response.discovered(),
+        &transitions,
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn retire_after_file_death_keeps_file_a_unknown_sticky() {
+    let (dir, _root) = temp_root("retire-file-unknown");
+    let (plan, contract) = tt03_runner_contract();
+    let blob_a = hex_of(b"alpha-content-001");
+    let blob_b = hex_of(b"beta--content-002");
+    let mutation = hex_of(b"ALPHA-CONTENT-001");
+    let (mut session, _) = tt03_session(
+        &dir,
+        &contract,
+        "file-replacement",
+        Some(("worker_exit", "s02-create-files", "after_file_register")),
+        Some((&blob_a, &blob_b, &mutation)),
+    );
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec![],
+        interfere_remove: None,
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("file-death retire run completes");
+    let fixture = fixture_records(&report);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    assert_eq!(
+        transition_resource_ids(case_response),
+        vec![
+            "linux.case-root".to_string(),
+            "linux.child-a".to_string(),
+            "linux.child-b".to_string(),
+        ]
+    );
+    assert!(
+        !*case_response.complete(),
+        "sampled-but-unrecoverable file-a blocks clean"
+    );
+    let diagnostic = case_response
+        .diagnostic()
+        .as_ref()
+        .expect("retire diagnostic");
+    assert!(
+        diagnostic.contains("linux.file-a"),
+        "unknown names file-a: {diagnostic}"
+    );
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Unresolved
+    );
+    assert!(
+        !case_record.uncertainty_ids().is_empty(),
+        "incomplete retire records uncertainty"
+    );
+    // Stickiness: the run-scope call repeats the unknown, never clears it.
+    let run_response = report.cleanup_records()[fixture[1]]
+        .response()
+        .as_ref()
+        .expect("run retire response");
+    assert!(!*run_response.complete());
+    let run_diagnostic = run_response.diagnostic().as_ref().expect("run diagnostic");
+    assert!(
+        run_diagnostic.contains("linux.file-a"),
+        "unknown survives: {run_diagnostic}"
+    );
+    assert!(
+        run_response.transitions().is_empty(),
+        "no double transition on retry"
+    );
+    verify_unknown_sticky(
+        &[Label::parse("linux.file-a").unwrap()],
+        &[Label::parse("linux.file-a").unwrap()],
+    )
+    .unwrap();
+    // The gate fails on the sticky unknown, not on setup or transitions.
+    let claim = CustodyClaim {
+        retired_report: true,
+        exit_status_only: false,
+        original_root: true,
+        original_owners: true,
+        registered: transition_resource_ids(case_response)
+            .iter()
+            .map(|s| Label::parse(s).unwrap())
+            .collect(),
+        transitioned: transition_resource_ids(case_response)
+            .iter()
+            .map(|s| Label::parse(s).unwrap())
+            .collect(),
+        unknown: vec![Label::parse("linux.file-a").unwrap()],
+        cleanup_errors: vec![],
+    };
+    let err = clean_shutdown_gate(&claim).unwrap_err();
+    assert!(
+        err.detail().contains("unknown inventory"),
+        "{}",
+        err.detail()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn retire_after_parent_failure_discovers_prefix() {
+    let (dir, _root) = temp_root("retire-parent-fail");
+    let (plan, contract) = tt03_runner_contract();
+    let (mut session, _) = tt03_session(
+        &dir,
+        &contract,
+        "leader-lifecycle",
+        Some((
+            "parent_failure_after_register",
+            "s01-ready",
+            "after_child_register",
+        )),
+        None,
+    );
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec![],
+        interfere_remove: None,
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("parent-failure retire run completes");
+    let fixture = fixture_records(&report);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    assert_eq!(
+        transition_resource_ids(case_response),
+        vec!["linux.case-root".to_string(), "linux.child-a".to_string(),]
+    );
+    assert!(
+        !transition_resource_ids(case_response).contains(&"linux.child-b".to_string()),
+        "B never spawned"
+    );
+    assert!(*case_response.complete());
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Complete
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ambient_removal_is_not_custody() {
+    let (dir, _root) = temp_root("retire-interfere");
+    let (plan, contract) = tt03_runner_contract();
+    let op = *invocation_for(&contract).key().operation_id();
+    let target = case_path_run(&dir, contract.run_id().as_str(), op);
+    let (mut session, _) = tt03_session(&dir, &contract, "leader-lifecycle", None, None);
+    let mut adapter = Tt03RetireAdapter {
+        subject: contract.expected_subject().clone(),
+        advance_steps: vec![],
+        interfere_remove: Some(target),
+        calls: 0,
+    };
+    let oracle = tt03_oracle(&contract);
+    let report = scopebase_testkit::run_profile(&plan, &mut adapter, &mut session, &oracle)
+        .expect("interference retire run completes");
+    let fixture = fixture_records(&report);
+    let case_record = &report.cleanup_records()[fixture[0]];
+    let case_response = case_record
+        .response()
+        .as_ref()
+        .expect("case retire response");
+    assert_eq!(
+        transition_resource_ids(case_response),
+        vec!["linux.child-a".to_string(), "linux.child-b".to_string(),]
+    );
+    assert!(
+        !*case_response.complete(),
+        "foreign-removed root is unknown, never retired"
+    );
+    let diagnostic = case_response
+        .diagnostic()
+        .as_ref()
+        .expect("retire diagnostic");
+    assert!(
+        diagnostic.contains("linux.case-root"),
+        "unknown names case-root: {diagnostic}"
+    );
+    assert_eq!(
+        case_response.pending_snapshot().len(),
+        1,
+        "case-root stays pending"
+    );
+    assert_eq!(
+        case_response.pending_snapshot()[0].resource_id().as_str(),
+        "linux.case-root"
+    );
+    assert_eq!(
+        *case_record.state_at_case_end().as_ref().unwrap(),
+        CleanupState::Unresolved
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn drop_without_retire_is_failed_shutdown() {
+    let (dir, _root) = temp_root("drop-only");
+    let (mut session, _, invocation) = native_session(&dir, "leader-lifecycle");
+    let access = session
+        .prepare(&invocation)
+        .expect("native prepare succeeds");
+    let pid = access
+        .resource::<LinuxProcessFixture>(&Label::parse("linux.process").unwrap())
+        .expect("linux.process")
+        .pid();
+    let registrations = access.effects().registrations().to_vec();
+    assert_eq!(registrations.len(), 3);
+    drop(access);
+    assert!(
+        PathBuf::from(format!("/proc/{pid}")).exists(),
+        "child is live before drop"
+    );
+    drop(session);
+    // Best-effort Drop ran, but it proves nothing: no retirement report exists.
+    let claim = CustodyClaim {
+        retired_report: false,
+        exit_status_only: false,
+        original_root: true,
+        original_owners: true,
+        registered: registrations
+            .iter()
+            .map(|r| r.resource_id().clone())
+            .collect(),
+        transitioned: vec![],
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    let err = clean_shutdown_gate(&claim).unwrap_err();
+    assert!(
+        err.detail().contains("no retirement report"),
+        "drop-only fails custody: {}",
+        err.detail()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn skip_cleanup_leaves_live_owners_unresolved() {
+    let (dir, _root) = temp_root("skip-cleanup");
+    let (mut session, _, invocation) = native_session(&dir, "leader-lifecycle");
+    let access = session
+        .prepare(&invocation)
+        .expect("native prepare succeeds");
+    let pid_a = access
+        .resource::<LinuxProcessFixture>(&Label::parse("linux.process").unwrap())
+        .expect("linux.process")
+        .pid();
+    let pid_b = access
+        .resource::<LinuxProcessFixture>(&Label::parse("linux.excluded-process").unwrap())
+        .expect("linux.excluded-process")
+        .pid();
+    drop(access);
+    // Zero native attempts: the guard cannot be charged, pairs stay live.
+    session
+        .finalize(LinuxOuterCleanupBudget {
+            deadline: Instant::now() + Duration::from_secs(2),
+            max_native_attempts: 0,
+            max_records: 8,
+            max_retained_bytes: 65536,
+        })
+        .expect("exhausted budget seals unresolved");
+    let report = session
+        .outer_cleanup_report()
+        .expect("sealed report")
+        .as_bytes()
+        .to_vec();
+    let v: serde_json::Value = serde_json::from_slice(&report).unwrap();
+    assert_eq!(v["kind"], "unresolved");
+    let unresolved = v["unresolved_owners"].as_array().unwrap();
+    assert!(unresolved
+        .iter()
+        .any(|o| o.as_str().unwrap_or("").starts_with("prepared-pair-")));
+    assert!(
+        PathBuf::from(format!("/proc/{pid_a}")).exists(),
+        "A stays live without cleanup"
+    );
+    assert!(
+        PathBuf::from(format!("/proc/{pid_b}")).exists(),
+        "B stays live without cleanup"
+    );
+    drop(session);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn substituted_owner_identity_fails_retirement_oracle() {
+    let (dir, _root) = temp_root("substituted-owner");
+    let (mut session, _, invocation) = native_session(&dir, "leader-lifecycle");
+    let access = session
+        .prepare(&invocation)
+        .expect("native prepare succeeds");
+    let prepare = access.effects().clone();
+    drop(access);
+    let limits = RunLimits::default();
+    let original = prepare
+        .registrations()
+        .iter()
+        .find(|r| r.resource_id().as_str() == "linux.child-a")
+        .expect("child-a registration");
+    // Mutant: same resource id and origin, reopened-substitute identity.
+    let substituted = PendingEffectRef::new(
+        PendingEffectRefValues {
+            resource_id: original.resource_id().clone(),
+            owner: *original.owner(),
+            origin: original.origin().clone(),
+            identity_sha256: Digest256::of_bytes(b"reopened-substitute"),
+        },
+        &limits,
+    )
+    .unwrap();
+    let mutant = EffectTransition::new(
+        EffectTransitionValues {
+            transition_id: Label::parse("linux.retire.1.child-a").unwrap(),
+            effect: substituted,
+            to: TransitionTo::Retired,
+            evidence_ids: vec![Label::parse("linux.proof.1.child-a").unwrap()],
+        },
+        &limits,
+    )
+    .unwrap();
+    let empty = EffectBatch::empty(&limits);
+    let err = verify_retirement_exactly_once(&prepare, &empty, &[], &[mutant]).unwrap_err();
+    assert!(
+        err.detail().contains("identity mismatch"),
+        "substituted identity fails its assertion: {}",
+        err.detail()
+    );
+    // Valid twin: the exact registered ref transitions cleanly.
+    let exact = PendingEffectRef::new(
+        PendingEffectRefValues {
+            resource_id: original.resource_id().clone(),
+            owner: *original.owner(),
+            origin: original.origin().clone(),
+            identity_sha256: *original.identity_sha256(),
+        },
+        &limits,
+    )
+    .unwrap();
+    let valid = EffectTransition::new(
+        EffectTransitionValues {
+            transition_id: Label::parse("linux.retire.1.child-a").unwrap(),
+            effect: exact,
+            to: TransitionTo::Retired,
+            evidence_ids: vec![Label::parse("linux.proof.1.child-a").unwrap()],
+        },
+        &limits,
+    )
+    .unwrap();
+    verify_retirement_exactly_once(&prepare, &empty, &[], &[valid]).unwrap();
+    // And the gate refuses substituted owners as a custody claim.
+    let claim = CustodyClaim {
+        retired_report: true,
+        exit_status_only: false,
+        original_root: true,
+        original_owners: false,
+        registered: vec![Label::parse("linux.child-a").unwrap()],
+        transitioned: vec![Label::parse("linux.child-a").unwrap()],
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    let err = clean_shutdown_gate(&claim).unwrap_err();
+    assert!(
+        err.detail().contains("substituted owner"),
+        "{}",
+        err.detail()
+    );
+    drop(session);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn foreign_root_proof_fails_custody_gate() {
+    let (dir, _root) = temp_root("foreign-root");
+    let (mut session, contract, invocation) = native_session(&dir, "leader-lifecycle");
+    let op = *invocation.key().operation_id();
+    let access = session
+        .prepare(&invocation)
+        .expect("native prepare succeeds");
+    let registrations = access.effects().registrations().to_vec();
+    drop(access);
+    // The ambient path resolves to the same live directory, yet proof by
+    // ambient path is foreign: only the original retained root counts.
+    let ambient = case_path_run(&dir, contract.run_id().as_str(), op);
+    assert!(ambient.is_dir(), "ambient path reaches the live case dir");
+    let ids: Vec<Label> = registrations
+        .iter()
+        .map(|r| r.resource_id().clone())
+        .collect();
+    let mutant = CustodyClaim {
+        retired_report: true,
+        exit_status_only: false,
+        original_root: false,
+        original_owners: true,
+        registered: ids.clone(),
+        transitioned: ids.clone(),
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    let err = clean_shutdown_gate(&mutant).unwrap_err();
+    assert!(
+        err.detail().contains("foreign root"),
+        "foreign root fails its assertion: {}",
+        err.detail()
+    );
+    let valid = CustodyClaim {
+        retired_report: true,
+        exit_status_only: false,
+        original_root: true,
+        original_owners: true,
+        registered: ids.clone(),
+        transitioned: ids,
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    clean_shutdown_gate(&valid).unwrap();
+    drop(session);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn exit_status_only_is_not_custody() {
+    let (pair, dir) = live_pair(Scenario::LeaderLifecycle, 41);
+    let a = pair.a_process();
+    a.advance(&label("s01-ready")).unwrap();
+    let shutdown = pair.shutdown();
+    assert_eq!(
+        shutdown.b_exit.map(|e| e.code),
+        Some(Some(0)),
+        "real exit 0 observed"
+    );
+    // Mutant: the claim rests only on that exit status, without per-owner proof.
+    let mutant = CustodyClaim {
+        retired_report: true,
+        exit_status_only: true,
+        original_root: true,
+        original_owners: true,
+        registered: vec![Label::parse("linux.child-b").unwrap()],
+        transitioned: vec![Label::parse("linux.child-b").unwrap()],
+        unknown: vec![],
+        cleanup_errors: vec![],
+    };
+    let err = clean_shutdown_gate(&mutant).unwrap_err();
+    assert!(
+        err.detail().contains("exit status is not custody proof"),
+        "exit0-only fails its assertion: {}",
+        err.detail()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

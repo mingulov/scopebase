@@ -85,6 +85,14 @@ pub struct CleanupProof {
     pub spawned: bool,
     pub a_reaped: bool,
     pub b_reaped: bool,
+    /// Registered PIDs when a child actually spawned; `None` proves nothing.
+    pub a_pid: Option<u32>,
+    pub b_pid: Option<u32>,
+    /// Observed wait statuses; a reap without an observed status is unsettled.
+    pub a_exit: Option<ReapedExit>,
+    pub b_exit: Option<ReapedExit>,
+    /// Whether the created case directory was actually removed again.
+    pub case_root_removed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +114,11 @@ impl DriverError {
                 spawned: false,
                 a_reaped: false,
                 b_reaped: false,
+                a_pid: None,
+                b_pid: None,
+                a_exit: None,
+                b_exit: None,
+                case_root_removed: false,
             },
         }
     }
@@ -191,6 +204,17 @@ pub struct DrainedRecord {
     pub record_index: u32,
     pub kind: String,
     pub bytes: Vec<u8>,
+}
+
+/// One recorded third-slot inventory child: its registered PID, which
+/// population it served, and whether it was exactly reaped. Recorded at
+/// spawn; `reaped` flips only after the exact wait succeeds, so a failed
+/// reap stays visible as unsettled instead of vanishing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InventoryRecord {
+    pub pid: u32,
+    pub positive: bool,
+    pub reaped: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -563,6 +587,7 @@ pub(crate) struct PairInner {
     file_a: Option<OwnedFd>,
     file_b: Option<OwnedFd>,
     tid: Option<u32>,
+    inventory: Vec<InventoryRecord>,
     invocation: serde_json::Value,
     images: Vec<ImageExpectation>,
     image_shas: [[u8; 32]; 2],
@@ -771,10 +796,10 @@ fn open_pidfd(pid: u32) -> Option<OwnedFd> {
 
 /// Best-effort case-dir removal with an honest outcome note for the
 /// setup-failure diagnostic: success is claimed only when observed.
-fn dir_retirement_note(case_dir: &std::path::Path) -> String {
+fn dir_retirement_note(case_dir: &std::path::Path) -> (String, bool) {
     match std::fs::remove_dir_all(case_dir) {
-        Ok(()) => "case dir retired".to_string(),
-        Err(e) => format!("case dir removal FAILED ({e})"),
+        Ok(()) => ("case dir retired".to_string(), true),
+        Err(e) => (format!("case dir removal FAILED ({e})"), false),
     }
 }
 
@@ -834,10 +859,17 @@ fn cleanup_children(a: &mut Channel, b: &mut Channel) -> CleanupProof {
             }
         }
     }
+    let a_pid = a.child.pid;
+    let b_pid = b.child.pid;
     CleanupProof {
         spawned: true,
         a_reaped: a.child.reaped,
         b_reaped: b.child.reaped,
+        a_pid: Some(a_pid),
+        b_pid: Some(b_pid),
+        a_exit: a.child.exit,
+        b_exit: b.child.exit,
+        case_root_removed: false,
     }
 }
 
@@ -949,7 +981,7 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         _ => None,
     };
     if parent_failure.as_deref() == Some("after_case_root_register") {
-        let dir_note = dir_retirement_note(&case_dir_owned);
+        let (dir_note, dir_removed) = dir_retirement_note(&case_dir_owned);
         return Err(setup_failure(
             Some("s01-ready"),
             format!(
@@ -957,13 +989,23 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                  (parent_failure_after_register/after_case_root_register at s01-ready): \
                  registered [case-root]; no child ever spawned; {dir_note}"
             ),
-        ));
+        )
+        .with_cleanup(CleanupProof {
+            spawned: false,
+            a_reaped: false,
+            b_reaped: false,
+            a_pid: None,
+            b_pid: None,
+            a_exit: None,
+            b_exit: None,
+            case_root_removed: dir_removed,
+        }));
     }
     let mut channel_a = spawn_channel(&config.image_a, "a", run_id, config.operation_id, None)?;
     if parent_failure.as_deref() == Some("after_child_register") {
         let pid = channel_a.child.pid;
         kill_and_reap_setup(&mut channel_a);
-        let dir_note = dir_retirement_note(&case_dir_owned);
+        let (dir_note, dir_removed) = dir_retirement_note(&case_dir_owned);
         return Err(setup_failure(
             Some("s01-ready"),
             format!(
@@ -977,6 +1019,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
             spawned: true,
             a_reaped: true,
             b_reaped: false,
+            a_pid: Some(pid),
+            b_pid: None,
+            a_exit: channel_a.child.exit,
+            b_exit: None,
+            case_root_removed: dir_removed,
         }));
     }
     channel_a.child.pidfd = open_pidfd(channel_a.child.pid);
@@ -984,7 +1031,7 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         let pid = channel_a.child.pid;
         let pidfd_state = if channel_a.child.pidfd.is_some() { "held" } else { "missing" };
         kill_and_reap_setup(&mut channel_a);
-        let dir_note = dir_retirement_note(&case_dir_owned);
+        let (dir_note, dir_removed) = dir_retirement_note(&case_dir_owned);
         if channel_a.child.pidfd.is_some() {
             return Err(setup_failure(
                 Some("s01-ready"),
@@ -999,6 +1046,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
                 spawned: true,
                 a_reaped: true,
                 b_reaped: false,
+                a_pid: Some(pid),
+                b_pid: None,
+                a_exit: channel_a.child.exit,
+                b_exit: None,
+                case_root_removed: dir_removed,
             }));
         }
         return Err(DriverError::new(
@@ -1013,6 +1065,11 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
             spawned: true,
             a_reaped: true,
             b_reaped: false,
+            a_pid: Some(pid),
+            b_pid: None,
+            a_exit: channel_a.child.exit,
+            b_exit: None,
+            case_root_removed: dir_removed,
         }));
     }
     let mut channel_b = spawn_channel(&config.image_b, "b", run_id, config.operation_id, None)?;
@@ -1031,6 +1088,7 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         file_a: None,
         file_b: None,
         tid: None,
+        inventory: Vec::new(),
         invocation,
         images: vec![
             ImageExpectation {
@@ -1128,8 +1186,8 @@ pub fn launch_pair(config: &LaunchConfig) -> Result<LivePair, DriverError> {
         }
     }
     if let Some(error) = failed {
-        let proof = cleanup_children(&mut inner.a, &mut inner.b);
-        let _ = std::fs::remove_dir_all(&inner.case_dir);
+        let mut proof = cleanup_children(&mut inner.a, &mut inner.b);
+        proof.case_root_removed = std::fs::remove_dir_all(&inner.case_dir).is_ok();
         return Err(error.with_cleanup(proof));
     }
     let a_pid = inner.a.child.pid;
@@ -1520,11 +1578,33 @@ fn run_inventory(inner: &mut PairInner, step_id: &str) -> Result<(), DriverError
     let positive = spawn_inventory_child(&worker_path, Some(&canary_write), step_id)?;
     wait_for_exec(positive.pid, &worker_path, step_id)?;
     let positive_hit = scan_child_for_canary(positive.pid, &want_link, step_id)?;
+    let positive_pid = positive.pid;
+    inner.inventory.push(InventoryRecord {
+        pid: positive_pid,
+        positive: true,
+        reaped: false,
+    });
     kill_and_reap_inventory(positive.child, step_id)?;
+    inner
+        .inventory
+        .last_mut()
+        .expect("just pushed positive")
+        .reaped = true;
     let negative = spawn_inventory_child(&worker_path, None, step_id)?;
     wait_for_exec(negative.pid, &worker_path, step_id)?;
     let negative_hit = scan_child_for_canary(negative.pid, &want_link, step_id)?;
+    let negative_pid = negative.pid;
+    inner.inventory.push(InventoryRecord {
+        pid: negative_pid,
+        positive: false,
+        reaped: false,
+    });
     kill_and_reap_inventory(negative.child, step_id)?;
+    inner
+        .inventory
+        .last_mut()
+        .expect("just pushed negative")
+        .reaped = true;
 
     let Some((fd_no, dev, ino, fdinfo_hex)) = positive_hit else {
         return Err(protocol(Some(step_id), "positive child lacks the canary FD"));
@@ -2219,6 +2299,9 @@ impl LivePair {
     }
     pub fn drained_raw(&self) -> Vec<DrainedRecord> {
         self.inner.lock().expect("pair lock").raw.clone()
+    }
+    pub fn inventory_children(&self) -> Vec<InventoryRecord> {
+        self.inner.lock().expect("pair lock").inventory.clone()
     }
     pub fn terminate_a(&self) -> Result<(), DriverError> {
         let mut inner = self.inner.lock().expect("pair lock");

@@ -13,6 +13,13 @@
 //! SF-07 lifecycle order (P `src/process.rs:2381-2384,2388-2392,2396-2400,2404-2410`)
 //! and SF-14 no-control (O `tests/target_lifecycle.rs:359-375` @ `4bcb24ce2ad23faf3db7c95bf05fb9e85ce4c59a`)
 //! are preserved through the driver schedule and integration tests; see driver.rs.
+//!
+//! The collect/retire oracles below (`verify_retirement_exactly_once`,
+//! `verify_unknown_sticky`, `clean_shutdown_gate`) are NEW: no donor
+//! mechanism models TT02 Pending → Retired transitions, and the P
+//! `ReapOnDrop` destructor is explicitly REFERENCE_ONLY (never copied).
+//! They encode frozen r4 `Native ownership, errors and retirement` §280-375.
+use crate::{EffectBatch, EffectRegistration, EffectTransition, Label, PendingEffectRef};
 use std::fmt;
 use std::io;
 
@@ -186,10 +193,274 @@ pub fn stat_is_zombie(stat: &[u8]) -> Result<bool, OracleError> {
     Ok(parse_stat_comm_state_starttime(stat)?.1 == b'Z')
 }
 
+/// Exactly-once retirement accounting across Prepare/Collect/Retire.
+///
+/// Every registration id may be returned exactly once across the three
+/// sources; every transition must reference a registered id with an
+/// exactly matching [`PendingEffectRef`] (owner, origin and identity),
+/// and no resource may transition twice. Mirrors the runner ledger's
+/// `response` checks without requiring a live run.
+pub fn verify_retirement_exactly_once(
+    prepare: &EffectBatch,
+    collect: &EffectBatch,
+    discovered: &[EffectRegistration],
+    transitions: &[EffectTransition],
+) -> Result<(), OracleError> {
+    let mut seen: Vec<(&Label, &EffectRegistration)> = Vec::new();
+    for registration in prepare
+        .registrations()
+        .iter()
+        .chain(collect.registrations().iter())
+        .chain(discovered.iter())
+    {
+        if seen.iter().any(|(id, _)| *id == registration.resource_id()) {
+            return Err(OracleError::new(format!(
+                "registration {} returned more than once",
+                registration.resource_id().as_str()
+            )));
+        }
+        seen.push((registration.resource_id(), registration));
+    }
+    let mut transitioned: Vec<&Label> = Vec::new();
+    for transition in transitions {
+        let pending = transition.effect();
+        let Some((_, original)) = seen.iter().find(|(id, _)| *id == pending.resource_id()) else {
+            return Err(OracleError::new(format!(
+                "transition {} references unregistered {}",
+                transition.transition_id().as_str(),
+                pending.resource_id().as_str()
+            )));
+        };
+        if PendingEffectRef::registration(original) != *pending {
+            return Err(OracleError::new(format!(
+                "transition {} identity mismatch for {}",
+                transition.transition_id().as_str(),
+                pending.resource_id().as_str()
+            )));
+        }
+        if transitioned.contains(&pending.resource_id()) {
+            return Err(OracleError::new(format!(
+                "resource {} transitioned more than once",
+                pending.resource_id().as_str()
+            )));
+        }
+        transitioned.push(pending.resource_id());
+    }
+    Ok(())
+}
+
+/// Unknown inventory is sticky: later reports may add labels but must
+/// never clear an earlier unknown, even after known owners settle.
+pub fn verify_unknown_sticky(prior: &[Label], next: &[Label]) -> Result<(), OracleError> {
+    let cleared: Vec<&str> = prior
+        .iter()
+        .filter(|id| !next.contains(id))
+        .map(Label::as_str)
+        .collect();
+    if cleared.is_empty() {
+        Ok(())
+    } else {
+        Err(OracleError::new(format!(
+            "unknown inventory cleared: {}",
+            cleared.join(",")
+        )))
+    }
+}
+
+/// A claimed shutdown custody outcome for the clean-shutdown gate.
+#[derive(Clone, Debug)]
+pub struct CustodyClaim {
+    /// An actual retirement report exists (not Drop-only silence).
+    pub retired_report: bool,
+    /// The claim rests only on an exit status, without per-owner proof.
+    pub exit_status_only: bool,
+    /// Removal proof is relative to the original retained root.
+    pub original_root: bool,
+    /// Owners are the original retained owners, not reopened substitutes.
+    pub original_owners: bool,
+    /// Registered resource ids.
+    pub registered: Vec<Label>,
+    /// Transitioned (Pending → Retired) resource ids.
+    pub transitioned: Vec<Label>,
+    /// Sticky unknown inventory labels.
+    pub unknown: Vec<Label>,
+    /// Retained (owner, errno) cleanup errors.
+    pub cleanup_errors: Vec<(String, i32)>,
+}
+
+/// The frozen clean-shutdown gate: all original owners/created names
+/// settled, no cleanup errors and no sticky unknown inventory. Each
+/// custody-fail mutant violates exactly one predicate and fails with
+/// its own diagnostic.
+pub fn clean_shutdown_gate(claim: &CustodyClaim) -> Result<(), OracleError> {
+    if claim.exit_status_only {
+        return Err(OracleError::new(
+            "exit status is not custody proof".to_string(),
+        ));
+    }
+    if !claim.retired_report {
+        return Err(OracleError::new(
+            "no retirement report: Drop-only is failed shutdown".to_string(),
+        ));
+    }
+    if !claim.original_root {
+        return Err(OracleError::new(
+            "foreign root: removal proof is not relative to the original retained root".to_string(),
+        ));
+    }
+    if !claim.original_owners {
+        return Err(OracleError::new(
+            "substituted owner: original retained owner required".to_string(),
+        ));
+    }
+    if !claim.cleanup_errors.is_empty() {
+        let names: Vec<String> = claim
+            .cleanup_errors
+            .iter()
+            .map(|(owner, errno)| format!("{owner}:{errno}"))
+            .collect();
+        return Err(OracleError::new(format!(
+            "cleanup errors retained: {}",
+            names.join(",")
+        )));
+    }
+    if !claim.unknown.is_empty() {
+        let names: Vec<&str> = claim.unknown.iter().map(Label::as_str).collect();
+        return Err(OracleError::new(format!(
+            "sticky unknown inventory: {}",
+            names.join(",")
+        )));
+    }
+    let unsettled: Vec<&str> = claim
+        .registered
+        .iter()
+        .filter(|id| !claim.transitioned.contains(id))
+        .map(Label::as_str)
+        .collect();
+    if claim.transitioned.is_empty() && !claim.registered.is_empty() {
+        return Err(OracleError::new(format!(
+            "cleanup skipped: {} registered owners, zero transitioned",
+            claim.registered.len()
+        )));
+    }
+    if !unsettled.is_empty() {
+        return Err(OracleError::new(format!(
+            "unsettled owners: {}",
+            unsettled.join(",")
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        CaseKey, CaseKeyValues, Digest256, EffectBatch, EffectBatchValues, EffectRegistration,
+        EffectRegistrationValues, EffectTransition, EffectTransitionValues, InvocationKey,
+        InvocationKeyValues, Label, Owner, PendingEffectRef, PendingEffectRefValues, RunId,
+        RunLimits, TransitionTo,
+    };
     use std::cell::Cell;
+
+    fn test_key(operation_id: u64) -> InvocationKey {
+        let limits = RunLimits::default();
+        InvocationKey::new(
+            InvocationKeyValues {
+                run_id: RunId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+                case_key: CaseKey::new(
+                    CaseKeyValues {
+                        case_id: crate::CaseId::parse("TT03.retire").unwrap(),
+                        case_version: 1,
+                        cell_id: "host".to_string(),
+                    },
+                    &limits,
+                )
+                .unwrap(),
+                attempt: 1,
+                operation_id,
+            },
+            &limits,
+        )
+        .unwrap()
+    }
+
+    fn test_reg(id: &str, origin: &InvocationKey, identity: &[u8]) -> EffectRegistration {
+        let limits = RunLimits::default();
+        EffectRegistration::new(
+            EffectRegistrationValues {
+                resource_id: Label::parse(id).unwrap(),
+                owner: Owner::Fixture,
+                origin: origin.clone(),
+                kind: Label::parse("linux-test").unwrap(),
+                identity_sha256: Digest256::of_bytes(identity),
+                recovery_evidence_id: None,
+            },
+            &limits,
+        )
+        .unwrap()
+    }
+
+    fn test_batch(ids: &[(&str, &InvocationKey, &[u8])]) -> EffectBatch {
+        let limits = RunLimits::default();
+        let mut registrations: Vec<EffectRegistration> = ids
+            .iter()
+            .map(|(id, origin, identity)| test_reg(id, origin, identity))
+            .collect();
+        registrations.sort_by(|a, b| a.resource_id().cmp(b.resource_id()));
+        EffectBatch::new(
+            EffectBatchValues {
+                registrations,
+                complete: true,
+            },
+            &limits,
+        )
+        .unwrap()
+    }
+
+    fn test_ref_of(registration: &EffectRegistration) -> PendingEffectRef {
+        let limits = RunLimits::default();
+        PendingEffectRef::new(
+            PendingEffectRefValues {
+                resource_id: registration.resource_id().clone(),
+                owner: *registration.owner(),
+                origin: registration.origin().clone(),
+                identity_sha256: *registration.identity_sha256(),
+            },
+            &limits,
+        )
+        .unwrap()
+    }
+
+    fn test_transition(tid: &str, effect: PendingEffectRef, evidence: &[&str]) -> EffectTransition {
+        let limits = RunLimits::default();
+        let mut evidence_ids: Vec<Label> =
+            evidence.iter().map(|e| Label::parse(e).unwrap()).collect();
+        evidence_ids.sort();
+        EffectTransition::new(
+            EffectTransitionValues {
+                transition_id: Label::parse(tid).unwrap(),
+                effect,
+                to: TransitionTo::Retired,
+                evidence_ids,
+            },
+            &limits,
+        )
+        .unwrap()
+    }
+
+    fn clean_claim() -> CustodyClaim {
+        CustodyClaim {
+            retired_report: true,
+            exit_status_only: false,
+            original_root: true,
+            original_owners: true,
+            registered: vec![Label::parse("linux.case-root").unwrap()],
+            transitioned: vec![Label::parse("linux.case-root").unwrap()],
+            unknown: vec![],
+            cleanup_errors: vec![],
+        }
+    }
 
     #[test]
     fn tricky_literal_bytes() {
@@ -314,6 +585,253 @@ mod tests {
         assert_eq!(
             exited_unreaped_owned(u32::MAX, 4).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn retirement_exactly_once_accepts_split_batches() {
+        let key = test_key(1);
+        let prepare = test_batch(&[
+            ("linux.case-root", &key, b"root"),
+            ("linux.child-a", &key, b"a"),
+        ]);
+        let collect = test_batch(&[]);
+        let extra = test_reg("linux.inventory-positive", &key, b"inv");
+        let transitions = vec![
+            test_transition(
+                "linux.retire.1.case-root",
+                test_ref_of(&prepare.registrations()[0]),
+                &["linux.proof.1.case-root"],
+            ),
+            test_transition(
+                "linux.retire.1.child-a",
+                test_ref_of(&prepare.registrations()[1]),
+                &["linux.proof.1.child-a"],
+            ),
+            test_transition(
+                "linux.retire.1.inventory-positive",
+                test_ref_of(&extra),
+                &["linux.proof.1.inventory-positive"],
+            ),
+        ];
+        verify_retirement_exactly_once(&prepare, &collect, &[extra], &transitions).unwrap();
+    }
+
+    #[test]
+    fn retirement_exactly_once_rejects_duplicate_registration() {
+        let key = test_key(1);
+        let prepare = test_batch(&[("linux.child-a", &key, b"a")]);
+        let collect = test_batch(&[("linux.child-a", &key, b"a")]);
+        let err = verify_retirement_exactly_once(&prepare, &collect, &[], &[]).unwrap_err();
+        assert!(
+            err.detail().contains("more than once") && err.detail().contains("linux.child-a"),
+            "duplicate registration fails exactly-once: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn retirement_exactly_once_rejects_rediscovered_registration() {
+        let key = test_key(1);
+        let prepare = test_batch(&[("linux.child-a", &key, b"a")]);
+        let collect = test_batch(&[]);
+        let dup = test_reg("linux.child-a", &key, b"a");
+        let err = verify_retirement_exactly_once(&prepare, &collect, &[dup], &[]).unwrap_err();
+        assert!(
+            err.detail().contains("more than once"),
+            "rediscovery of a prepared id fails: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn retirement_exactly_once_rejects_unknown_transition() {
+        let key = test_key(1);
+        let prepare = test_batch(&[("linux.child-a", &key, b"a")]);
+        let collect = test_batch(&[]);
+        let ghost = test_reg("linux.ghost", &key, b"g");
+        let transition = test_transition(
+            "linux.retire.1.ghost",
+            test_ref_of(&ghost),
+            &["linux.proof.1.ghost"],
+        );
+        let err =
+            verify_retirement_exactly_once(&prepare, &collect, &[], &[transition]).unwrap_err();
+        assert!(
+            err.detail().contains("unregistered"),
+            "unknown transition resource fails: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn retirement_exactly_once_rejects_substituted_identity() {
+        let key = test_key(1);
+        let prepare = test_batch(&[("linux.child-a", &key, b"a")]);
+        let collect = test_batch(&[]);
+        let limits = RunLimits::default();
+        let substituted = PendingEffectRef::new(
+            PendingEffectRefValues {
+                resource_id: Label::parse("linux.child-a").unwrap(),
+                owner: Owner::Fixture,
+                origin: key.clone(),
+                identity_sha256: Digest256::of_bytes(b"reopened-substitute"),
+            },
+            &limits,
+        )
+        .unwrap();
+        let transition = test_transition(
+            "linux.retire.1.child-a",
+            substituted,
+            &["linux.proof.1.child-a"],
+        );
+        let err =
+            verify_retirement_exactly_once(&prepare, &collect, &[], &[transition]).unwrap_err();
+        assert!(
+            err.detail().contains("identity mismatch"),
+            "substituted identity fails: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn retirement_exactly_once_rejects_double_transition() {
+        let key = test_key(1);
+        let prepare = test_batch(&[("linux.child-a", &key, b"a")]);
+        let collect = test_batch(&[]);
+        let first = test_transition(
+            "linux.retire.1.child-a",
+            test_ref_of(&prepare.registrations()[0]),
+            &["linux.proof.1.child-a"],
+        );
+        let second = test_transition(
+            "linux.retire.1.child-a.again",
+            test_ref_of(&prepare.registrations()[0]),
+            &["linux.proof.1.child-a"],
+        );
+        let err =
+            verify_retirement_exactly_once(&prepare, &collect, &[], &[first, second]).unwrap_err();
+        assert!(
+            err.detail().contains("more than once"),
+            "double transition fails: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn unknown_inventory_is_sticky() {
+        let prior = vec![Label::parse("linux.file-a").unwrap()];
+        let grown = vec![
+            Label::parse("linux.case-root").unwrap(),
+            Label::parse("linux.file-a").unwrap(),
+        ];
+        verify_unknown_sticky(&[], &prior).unwrap();
+        verify_unknown_sticky(&prior, &grown).unwrap();
+        verify_unknown_sticky(&prior, &prior).unwrap();
+        let err = verify_unknown_sticky(&prior, &[]).unwrap_err();
+        assert!(
+            err.detail().contains("cleared") && err.detail().contains("linux.file-a"),
+            "cleared unknown fails stickiness: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_accepts_settled_custody() {
+        clean_shutdown_gate(&clean_claim()).unwrap();
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_drop_only() {
+        let mut claim = clean_claim();
+        claim.retired_report = false;
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("no retirement report"),
+            "drop-only fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_exit_status_only() {
+        let mut claim = clean_claim();
+        claim.exit_status_only = true;
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("exit status is not custody proof"),
+            "exit0-only fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_skipped_cleanup() {
+        let mut claim = clean_claim();
+        claim.transitioned.clear();
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("cleanup skipped"),
+            "skip-cleanup fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_partial_cleanup() {
+        let mut claim = clean_claim();
+        claim
+            .registered
+            .push(Label::parse("linux.child-a").unwrap());
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("unsettled owners"),
+            "partial cleanup fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_substituted_owner() {
+        let mut claim = clean_claim();
+        claim.original_owners = false;
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("substituted owner"),
+            "substituted owner fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_foreign_root() {
+        let mut claim = clean_claim();
+        claim.original_root = false;
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("foreign root"),
+            "foreign root fails custody: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_gate_rejects_unknown_and_errors() {
+        let mut claim = clean_claim();
+        claim.unknown.push(Label::parse("linux.file-a").unwrap());
+        let err = clean_shutdown_gate(&claim).unwrap_err();
+        assert!(
+            err.detail().contains("unknown inventory"),
+            "sticky unknown fails the gate: {}",
+            err.detail()
+        );
+        let mut errors = clean_claim();
+        errors.cleanup_errors.push(("linux.child-a".to_string(), 5));
+        let err = clean_shutdown_gate(&errors).unwrap_err();
+        assert!(
+            err.detail().contains("cleanup errors"),
+            "cleanup errors fail the gate: {}",
+            err.detail()
         );
     }
 }
