@@ -26,6 +26,7 @@ pub mod atomic;
 pub mod graph;
 pub mod inspect;
 pub mod manifest;
+pub mod prune;
 pub mod rules;
 
 pub use atomic::{
@@ -36,6 +37,10 @@ pub use atomic::{
 };
 pub use inspect::{inspect_final_object, FamilySpan, ObjectInspection, RuleViolation};
 pub use manifest::{AdmittedObject, ArtifactId, FinalObjectManifest, ObjectEntry, ObjectKind};
+pub use prune::{
+    check_verifier_rules, prune_dead_code, prune_dead_code_with_report, PruneAllowlist,
+    PruneReport, VerifierRules, FROZEN_DEAD_BUILTINS,
+};
 pub use rules::{admit_profile, check_object, contract_families, IsaProfile};
 
 /// Admitted profile/register/inventory schema version. Only 1 exists.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "kind": "tc06_rule_manifest",
+  "name": "linkage",
+  "version": "1",
+  "rules": [
+    {
+      "rule": "linkage.global-required",
+      "symbol": "p11_link_current_identity",
+      "section": ".text"
+    }
+  ]
+}
