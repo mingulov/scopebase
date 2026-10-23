@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::ids::{CaseId, Label, ProfileId};
 
 pub mod atomic;
+pub mod graph;
 pub mod inspect;
 pub mod manifest;
 pub mod rules;
