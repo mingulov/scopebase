@@ -4,4 +4,6 @@
 pub mod context;
 pub mod diagnostic;
 pub mod limits;
+#[cfg(feature = "linux")]
+pub mod observer;
 pub mod profile;
