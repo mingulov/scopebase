@@ -23,6 +23,8 @@ pub struct PlannedCell {
 /// A run plan: selection, closure status and declared effects (none).
 #[derive(Clone, Debug, Serialize)]
 pub struct PlanDoc {
+    /// Always `not_evaluated`: planning claims no behavioral support.
+    pub qualification: String,
     /// Requested profile identifier.
     pub profile: String,
     /// Expanded profile closure.
@@ -123,6 +125,7 @@ pub fn plan(
         }
     }
     Ok(PlanDoc {
+        qualification: crate::error::NO_QUALIFICATION.to_string(),
         profile: profile.to_string(),
         profiles: selected
             .profiles()

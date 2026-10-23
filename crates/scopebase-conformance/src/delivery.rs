@@ -15,7 +15,7 @@ use crate::receipt;
 use scopebase_testkit::{
     ArtifactMeasurer, ArtifactRole, AssertionCheck, AssertionCheckValues, AssertionVerdict,
     AssertionVerdictValues, BindingProvenance, CapabilityEvidence, CapabilityEvidenceValues,
-    CapabilityState, CaseCatalog, CaseError, CaseErrorCategory, CaseErrorValues, CaseId,
+    CapabilityState, CaseCatalog, CaseError, CaseErrorCategory, CaseErrorValues,
     CaseInvocation, CaseOracle, CaseOutcome, CaseSpec, CatalogLimits, CheckStatus, ConformanceAdapter,
     ConsumerBinding, ConsumerBindingValues, Digest256, EffectBatch, EvidenceTier, ExpectedEvidence,
     FixtureAccess, HarnessValidity, Label, Observation, ObservationValues,
@@ -917,10 +917,4 @@ pub fn exit_for_qualification(qualification: Qualification) -> i32 {
         Qualification::Failed | Qualification::Invalid => crate::error::EXIT_FAILURE,
         Qualification::Incomplete => crate::error::EXIT_INCOMPLETE,
     }
-}
-
-/// Convenience accessor for tests matching on case identity.
-#[allow(dead_code)]
-pub fn case_id_of(spec: &CaseSpec) -> CaseId {
-    spec.id().clone()
 }

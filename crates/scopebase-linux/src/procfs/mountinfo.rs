@@ -298,13 +298,14 @@ fn parse_line(raw: &[u8], decoded: &mut [u8], line: Range<usize>) -> Option<Moun
         if i == 1 && first != b'/' {
             return None;
         }
-        // LX06 repair (2026-10-23): the frozen LX05 contract required roots
-        // to begin with `/`, but real kernels render namespace pseudo-names
-        // (`net:[4026532307]`, `mnt:[...]`, ...) as nsfs mount roots, which
-        // refused every real mount table containing a netns bind. Accept
-        // exactly that documented shape; every other non-`/` root (including
-        // the existing `relative` bad-control) still refuses, and unknown
-        // future shapes fail closed. Flagged for LX05-owner re-review.
+        // LX06 repair (2026-10-23), ratified by controller ruling
+        // RATIFY-2026-10-23-LX05-NSFS: the frozen LX05 contract required
+        // roots to begin with `/`, but real kernels render namespace
+        // pseudo-names (`net:[4026532307]`, `mnt:[...]`, ...) as nsfs mount
+        // roots, which refused every real mount table containing a netns
+        // bind. Accept exactly that documented shape; every other non-`/`
+        // root (including the existing `relative` bad-control) still
+        // refuses, and unknown future shapes fail closed.
         if i == 0
             && first != b'/'
             && !is_ns_pseudo_root(&decoded[span.raw.start..span.raw.start + span.decoded_len])

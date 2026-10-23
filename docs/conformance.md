@@ -20,11 +20,12 @@ scopebase-conformance cleanup --run PATH [--expect-run-id ID]
 ```
 
 - `describe` lists the profiles and cases in a catalog. Pure: reads only the
-  catalog bytes and creates no files.
+  catalog bytes and creates no files. Its JSON carries
+  `"qualification": "not_evaluated"`: describing claims no support.
 - `plan` expands a profile selection and accounts the fixture-root closure
   (present, missing and mismatched files). It performs no active setup and
   its effects list is always empty; an incomplete closure is reported, not
-  executed.
+  executed. Its JSON likewise carries `"qualification": "not_evaluated".
 - `run` verifies the closure, checks the linked subject against the frozen
   template coordinates, binds a fresh run contract plus vector manifest, and
   executes the profile through the testkit engine. Output goes only to

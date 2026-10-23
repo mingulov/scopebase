@@ -23,6 +23,9 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_INCOMPLETE: i32 = 3;
 /// Broken package: tampered bytes, missing notices or mismatched subject.
 pub const EXIT_BROKEN_PACKAGE: i32 = 64;
+/// Marker carried by `describe`/`plan` outputs: they perform no evaluation
+/// and claim no behavioral support.
+pub const NO_QUALIFICATION: &str = "not_evaluated";
 
 /// Machine-stable operator failure kinds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

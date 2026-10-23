@@ -20,4 +20,6 @@ pub mod plan;
 pub mod receipt;
 
 pub use error::{exit_for_kind, OperatorError, OperatorErrorKind};
-pub use error::{EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_OK, EXIT_USAGE};
+pub use error::{
+    EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_OK, EXIT_USAGE, NO_QUALIFICATION,
+};

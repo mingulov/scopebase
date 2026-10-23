@@ -939,6 +939,29 @@ mod tests {
     }
 
     #[test]
+    fn byte_exhaustion_refuses_with_mapped_bytes() {
+        // Mappings headroom remains but the byte budget is spent: the
+        // pool.rs:570 path refuses with LimitKind::MappedBytes, and a
+        // checked retire reopens admission.
+        let pool = test_pool(8, page());
+        let (path, held) = test_held("mapped-bytes");
+        let (permit, addr) = activate_one(&pool, &held);
+        let refused = Reservation::reserve(&pool.shared, page()).unwrap_err();
+        assert_eq!(refused.stage(), Stage::MapCalibration);
+        assert_eq!(
+            refused.reason(),
+            Reason::LimitExceeded(LimitKind::MappedBytes)
+        );
+        unsafe { rustix::mm::munmap(addr, page()) }.unwrap();
+        permit.retire();
+        // The refusal was capacity, not terminal: admission reopens.
+        let reopened = Reservation::reserve(&pool.shared, page()).unwrap();
+        drop(reopened);
+        pool.close(&OperationControl::unlimited()).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn repeated_unmap_fail_drop_then_admit_refuses() {
         let _table = crate::FD_TABLE.lock().unwrap();
         super::super::custody::inject_unmap_failures(0);

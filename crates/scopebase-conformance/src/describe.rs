@@ -32,6 +32,8 @@ pub struct CaseEntry {
 /// A pure catalog description.
 #[derive(Clone, Debug, Serialize)]
 pub struct Description {
+    /// Always `not_evaluated`: describing claims no behavioral support.
+    pub qualification: String,
     /// Catalog revision.
     pub catalog_revision: u32,
     /// Catalog source digest.
@@ -124,6 +126,7 @@ pub fn describe(catalog_bytes: &[u8]) -> Result<Description, OperatorError> {
         });
     }
     Ok(Description {
+        qualification: crate::error::NO_QUALIFICATION.to_string(),
         catalog_revision: catalog.revision(),
         catalog_sha256: catalog.source_sha256().as_str(),
         profiles,

@@ -6,7 +6,7 @@
 //! outside-checkout route is covered by tools/qualification/test_installed.py.
 use scopebase_conformance::{
     commands, cleanup, closure, delivery, describe, plan, receipt, OperatorErrorKind,
-    EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_OK, EXIT_USAGE,
+    EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_USAGE,
 };
 use scopebase_testkit::{CaseOracle, ConformanceAdapter, Qualification};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,31 @@ fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
+/// An adapter that serves delivery behavior under a substituted subject.
+struct Resubjected {
+    inner: delivery::DeliveryAdapter,
+    subject: scopebase_testkit::SubjectBinding,
+}
+
+impl scopebase_testkit::ConformanceAdapter for Resubjected {
+    fn subject(&self) -> scopebase_testkit::SubjectBinding {
+        self.subject.clone()
+    }
+    fn execute(
+        &mut self,
+        i: &scopebase_testkit::CaseInvocation,
+        f: &scopebase_testkit::FixtureAccess<'_>,
+    ) -> Result<scopebase_testkit::Observation, scopebase_testkit::CaseError> {
+        self.inner.execute(i, f)
+    }
+    fn retire(
+        &mut self,
+        r: &scopebase_testkit::RetireRequest,
+    ) -> scopebase_testkit::RetirementReport {
+        self.inner.retire(r)
+    }
+}
+
 // Plan case: missing fixture input is typed Incomplete, never silent success.
 #[test]
 fn missing_fixture_is_incomplete() {
@@ -83,28 +108,6 @@ fn missing_fixture_is_incomplete() {
 // Plan case: a differently resolved downstream library is not certified.
 #[test]
 fn different_resolved_library_is_not_certified() {
-    struct Renamed {
-        inner: delivery::DeliveryAdapter,
-        subject: scopebase_testkit::SubjectBinding,
-    }
-    impl scopebase_testkit::ConformanceAdapter for Renamed {
-        fn subject(&self) -> scopebase_testkit::SubjectBinding {
-            self.subject.clone()
-        }
-        fn execute(
-            &mut self,
-            i: &scopebase_testkit::CaseInvocation,
-            f: &scopebase_testkit::FixtureAccess<'_>,
-        ) -> Result<scopebase_testkit::Observation, scopebase_testkit::CaseError> {
-            self.inner.execute(i, f)
-        }
-        fn retire(
-            &mut self,
-            r: &scopebase_testkit::RetireRequest,
-        ) -> scopebase_testkit::RetirementReport {
-            self.inner.retire(r)
-        }
-    }
     let root = delivery_root();
     let adapter = delivery::DeliveryAdapter::new().unwrap();
     let values = scopebase_testkit::SubjectBindingValues {
@@ -125,7 +128,7 @@ fn different_resolved_library_is_not_certified() {
     let renamed_subject =
         scopebase_testkit::SubjectBinding::new(values, &scopebase_testkit::RunLimits::default())
             .unwrap();
-    let mut renamed = Renamed {
+    let mut renamed = Resubjected {
         inner: adapter,
         subject: renamed_subject,
     };
@@ -147,6 +150,54 @@ fn different_resolved_library_is_not_certified() {
     assert!(
         !out.join("run").join("receipt.json").exists(),
         "mismatched subject must not be certified"
+    );
+}
+
+// A mutated source digest is refused even when every name/version matches.
+#[test]
+fn mutated_source_sha256_is_not_certified() {
+    let root = delivery_root();
+    let adapter = delivery::DeliveryAdapter::new().unwrap();
+    let values = scopebase_testkit::SubjectBindingValues {
+        package_name: adapter.subject().package_name().clone(),
+        package_version: adapter.subject().package_version().clone(),
+        source_sha256: scopebase_testkit::Digest256::of_bytes(b"mutated source bytes"),
+        build_inputs_sha256: *adapter.subject().build_inputs_sha256(),
+        features: vec![],
+        backend: None,
+        host: adapter.subject().host().clone(),
+        target: adapter.subject().target().clone(),
+        consumer: adapter.subject().consumer().clone(),
+        objects: vec![],
+        provenance: scopebase_testkit::BindingProvenance::SelfReported {
+            reason: "tt07 source-hash negative control".into(),
+        },
+    };
+    let mutated_subject =
+        scopebase_testkit::SubjectBinding::new(values, &scopebase_testkit::RunLimits::default())
+            .unwrap();
+    let mut mutated = Resubjected {
+        inner: adapter,
+        subject: mutated_subject,
+    };
+    let out = scratch("evil-source-out");
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut mutated,
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::SubjectMismatch);
+    assert_eq!(err.exit_code(), EXIT_BROKEN_PACKAGE);
+    assert!(
+        !out.join("run").join("receipt.json").exists(),
+        "mutated source must not be certified"
     );
 }
 
@@ -295,6 +346,58 @@ fn describe_and_plan_have_no_effects() {
     .unwrap();
     assert!(!doc.closure_complete);
     assert!(!doc.missing.is_empty());
+}
+
+// Box3b: describe/plan emit the no-qualification marker, never a verdict.
+#[test]
+fn describe_and_plan_report_not_evaluated() {
+    let catalog = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    let description = describe::describe(&catalog).unwrap();
+    let value = serde_json::to_value(&description).unwrap();
+    assert_eq!(
+        value.get("qualification").and_then(|q| q.as_str()),
+        Some("not_evaluated")
+    );
+    let doc = plan::plan(
+        &catalog,
+        "operator-delivery-v1",
+        &delivery_root(),
+        "no-new-target-mappings",
+    )
+    .unwrap();
+    let value = serde_json::to_value(&doc).unwrap();
+    assert_eq!(
+        value.get("qualification").and_then(|q| q.as_str()),
+        Some("not_evaluated")
+    );
+}
+
+// Box3b: structural verify-receipt exits 0 reporting the recorded verdict.
+#[test]
+fn cli_verify_receipt_exits_zero_with_recorded_qualification() {
+    let root = delivery_root();
+    let out = scratch("cli-verify");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    let receipt_path = out.join("run").join("receipt.json");
+    let report = receipt::verify_receipt(&receipt_path).unwrap();
+    assert_eq!(report.qualification, outcome.qualification);
+    let code = commands::run_argv(&[
+        "scopebase-conformance".into(),
+        "verify-receipt".into(),
+        receipt_path.to_string_lossy().into(),
+    ]);
+    assert_eq!(code, 0);
 }
 
 // Plan case: CLI refusals carry stable exits and leave no effects.
