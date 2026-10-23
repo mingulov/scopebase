@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "tc03_isa_mutants",
+  "_note": "Each mutant names its base object, byte surgery and intended refusal rule. Surgeries run in-test on copies; shipped objects stay valid twins. IDs are asserted against the test file's exercised list.",
+  "mutants": [
+    {"id": "unknown-opcode", "base": "objects/base.o", "surgery": "socket insn1 first byte -> 0xf5 (JMP class, undefined op 0xf0)", "expected_rule": "isa.unknown-opcode", "conforms": false},
+    {"id": "truncated-stream", "base": "objects/base.o", "surgery": "socket insn2 (exit) first byte -> 0x18 (LDDW occupies the final slot; second half missing)", "expected_rule": "isa.truncated-stream", "conforms": false},
+    {"id": "wrong-machine", "base": "objects/base.o", "surgery": "e_machine EM_BPF(247) -> EM_X86_64(62)", "expected_refusal": "Incompatible@Admission", "conforms": false},
+    {"id": "truncated-file", "base": "objects/base.o", "surgery": "keep first half of the bytes", "expected_refusal": "Malformed@Admission", "conforms": false},
+    {"id": "license-truncated", "base": "objects/lic.o", "surgery": "license bytes 'GPL\\0' -> 'GPLX' (no NUL terminator)", "expected_rule": "license.truncated", "conforms": false},
+    {"id": "license-duplicated", "base": "objects/lic.o", "surgery": "license bytes 'GPL\\0' -> 'G\\0PL' (NUL before end)", "expected_rule": "license.duplicated", "conforms": false},
+    {"id": "license-incompatible", "base": "objects/lic.o", "surgery": "license bytes 'GPL\\0' -> 'MIT\\0' under a profile admitting only GPL", "expected_rule": "license.incompatible", "conforms": false},
+    {"id": "hash-mismatch", "base": "objects/base.o", "surgery": "manifest entry keeps id tc03-base but carries the sha256 of objects/sdiv.o", "expected_refusal": "Incompatible@Admission", "conforms": false},
+    {"id": "uninventoried", "base": "objects/base.o", "surgery": "admit bytes under id 'tc03-not-inventoried'", "expected_refusal": "InvalidInput@Admission", "conforms": false},
+    {"id": "unknown-profile-name", "base": null, "surgery": "admit_profile('no-such-isa', '1')", "expected_refusal": "InvalidInput@Admission", "conforms": false},
+    {"id": "unknown-profile-version", "base": null, "surgery": "admit_profile('tc03-baseline', '9.9')", "expected_refusal": "InvalidInput@Admission", "conforms": false},
+    {"id": "preset-drift", "base": "objects/sdiv.o", "surgery": "contract (v4, []) checked against profile pinning (v4, [signed-div])", "expected_rule": "isa.profile-drift", "conforms": false},
+    {"id": "forbidden-family", "base": "objects/jmp32.o", "surgery": "effective jump32 checked against a base-only profile (generic preset, no features)", "expected_rule": "isa.forbidden-family", "conforms": false},
+    {"id": "contract-forbidden-family", "base": "objects/alu32.o", "surgery": "effective alu32 checked against a generic/no-feature contract (LLVM never emits ALU32 below v3)", "expected_rule": "isa.contract-forbidden-family", "conforms": false},
+    {"id": "missing-required-family", "base": "objects/base.o", "surgery": "base-only object checked against a profile requiring [base, signed-div]", "expected_rule": "isa.missing-required-family", "conforms": false},
+    {"id": "license-missing", "base": "objects/base.o", "surgery": "unlicensed object checked against a profile with requires_license=true", "expected_rule": "license.missing", "conforms": false}
+  ]
+}

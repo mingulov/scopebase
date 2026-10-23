@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "kind": "tc03_isa_vectors",
+  "emitter": {
+    "id": "ubuntu-llc-21.1.8",
+    "name": "llc",
+    "version": "21.1.8",
+    "version_detail": "Ubuntu LLVM version 21.1.8; optimized build; default target x86_64-pc-linux-gnu; host znver5",
+    "sha256": "935bdae46915daba23b279efebc04400c085c56a8536dea633f1f5a96c9fd382",
+    "origin": "system-observed",
+    "origin_ref": "tools/bpf-compat/toolchains.json pin ubuntu-llc-21.1.8; local /usr/bin/llc hashed 2026-10-23",
+    "argv_pattern": "llc -march=<bpfel|bpfeb> -mcpu=<cpu> -filetype=obj -o objects/<name>.o sources/<name>.ll",
+    "determinism": "re-emission of base.o reproduces byte-identical output (verified 2026-10-23)"
+  },
+  "uapi_pins": {
+    "bpf_h": {
+      "path": "/usr/include/linux/bpf.h",
+      "sha256": "b75746f43d7f29c8ca5bd3abc2242e9f777dd5dc0ef4abc7d568a1e1fc63361e",
+      "lines": "16-62",
+      "facts": "BPF_JMP32/ALU64/DW/MEMSX/ATOMIC/MOV/ARSH/END/JNE/JLT/JLE/JSGT/JSGE/JSLT/JSLE/JCOND/CALL/EXIT, BPF_LOAD_ACQ/BPF_STORE_REL in immediate"
+    },
+    "bpf_common_h": {
+      "path": "/usr/include/linux/bpf_common.h",
+      "sha256": "7475540d7fb41f7da5987d78532403d47ee493aba277694df6fa9025b9a767aa",
+      "lines": "8-60",
+      "facts": "LD/LDX/ST/STX/ALU/JMP classes, W/H/B sizes, IMM/ABS/IND/MEM modes, ADD..XOR/JA..JSET ops, K/X source"
+    },
+    "elf_em_h": {
+      "path": "/usr/include/linux/elf-em.h",
+      "line": 52,
+      "facts": "EM_BPF 247"
+    },
+    "note": "Hash/pin reference only. No third-party lines copied; numeric opcode facts cited in decoder docs."
+  },
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "file": "llvm-bpf-toolchain-experiment.md",
+    "lines": "77-100",
+    "lesson": "BPF v4 is a compiler preset, not a kernel promise; LLVM 18 original bundle is signed loads/moves, byte swap, signed div/rem, long jumps, immediate stores; acqrel in 6.15, indirect jumps in 6.19 (493d9e0d6083); LLVM 23 v4 enables both newer groups."
+  },
+  "family_order": ["base", "alu32", "jump32", "ext-jumps", "signed-load-move", "byte-swap", "signed-div", "long-jump", "imm-store", "acqrel", "indirect-jumps"],
+  "cpu_bundles": {
+    "_note": "Families llc 21.1.8 was observed to emit at each -mcpu without explicit -mattr. Preset names never admit families by themselves; the decoder reports effective families and the ISA profile pins the exact expected subset.",
+    "none": ["base"],
+    "generic": ["base", "byte-swap", "ext-jumps", "jump32"],
+    "v3": ["alu32", "base", "byte-swap", "ext-jumps", "jump32"],
+    "v4": ["acqrel", "alu32", "base", "byte-swap", "ext-jumps", "jump32", "signed-div", "signed-load-move"]
+  },
+  "probe_matrix": {
+    "_note": "ok = emitted and disassembled; FAIL = clean selection error; HANG = llc did not finish within 10s (killed by timeout).",
+    "base": {"generic": "ok", "v1": "ok", "v2": "ok", "v3": "ok", "v4": "ok"},
+    "alu32": {"generic": "ok-fallback-no-alu32", "v1": "ok-fallback-no-alu32", "v2": "ok-fallback-no-alu32", "v3": "ok", "v4": "ok-unprobed-content"},
+    "jmp32": {"generic": "ok", "v1": "ok", "v2": "ok", "v3": "ok", "v4": "ok"},
+    "extjumps": {"generic": "ok", "v1": "ok", "v2": "ok", "v3": "ok", "v4": "ok"},
+    "memsx": {"generic": "ok-fallback-no-memsx", "v1": "ok-fallback-no-memsx", "v2": "ok-fallback-no-memsx", "v3": "ok-fallback-no-memsx", "v4": "ok"},
+    "movsx": {"generic": "ok-fallback-no-movsx", "v1": "ok-fallback-no-movsx", "v2": "ok-fallback-no-movsx", "v3": "ok-fallback-no-movsx", "v4": "ok"},
+    "byteswap": {"generic": "ok", "v1": "ok", "v2": "ok", "v3": "ok", "v4": "ok"},
+    "sdiv": {"generic": "FAIL", "v1": "FAIL", "v2": "FAIL", "v3": "FAIL", "v4": "ok"},
+    "smod": {"generic": "FAIL", "v1": "FAIL", "v2": "FAIL", "v3": "FAIL", "v4": "ok"},
+    "acq": {"generic": "HANG", "v1": "HANG", "v2": "HANG", "v3": "HANG", "v4": "ok"},
+    "imm-store": {"generic": "never-emitted", "v1": "never-emitted", "v2": "never-emitted", "v3": "never-emitted", "v4": "never-emitted"},
+    "long-jump": {"generic": "never-emitted", "v1": "never-emitted", "v2": "never-emitted", "v3": "never-emitted", "v4": "never-emitted"},
+    "indirect-jumps": {"generic": "never-emitted", "v1": "never-emitted", "v2": "never-emitted", "v3": "never-emitted", "v4": "never-emitted"}
+  },
+  "objects": [
+    {"file": "objects/base.o", "source": "sources/base.ll", "march": "bpfel", "cpu": "generic", "sha256": "98db7702fa43d55c83f6f6966f4f1a0002ca9a636fd600cef719c8eeb34c7757", "kind": "rel", "families": ["base"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/alu32.o", "source": "sources/alu32.ll", "march": "bpfel", "cpu": "v3", "sha256": "4fc4a0d0dc7339730557bc6c2b4207b929c7298f0eaec33a92a27c9be60166e5", "kind": "rel", "families": ["alu32", "base"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/jmp32.o", "source": "sources/jmp32.ll", "march": "bpfel", "cpu": "v3", "sha256": "f890ba5ff152efc42d7fedcdc9455e1cf89ab582f6624e9e5e5ad9aef41abc54", "kind": "rel", "families": ["base", "jump32"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/extjumps.o", "source": "sources/extjumps.ll", "march": "bpfel", "cpu": "v3", "sha256": "05c62f81d6a4018d7cba5b87e6e452caed48633835876ea6109d48e035c88499", "kind": "rel", "families": ["base", "ext-jumps"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/memsx.o", "source": "sources/memsx.ll", "march": "bpfel", "cpu": "v4", "sha256": "60dfb7ccfeb7fd31e1097f30fbf3c3cfb3636f5b76e2343e230edd708a3c5cb8", "kind": "rel", "families": ["base", "signed-load-move"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/movsx.o", "source": "sources/movsx.ll", "march": "bpfel", "cpu": "v4", "sha256": "dd895f7dcbf2ee5d79608353133d74f7891820b0f7a97237447f6f6d82cfd41e", "kind": "rel", "families": ["base", "signed-load-move"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/byteswap.o", "source": "sources/byteswap.ll", "march": "bpfel", "cpu": "v3", "sha256": "ea8b9ec8d5631353c1ae397490c1f397a8c33c48f19da8012eb0323abd6b4501", "kind": "rel", "families": ["base", "byte-swap"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/sdiv.o", "source": "sources/sdiv.ll", "march": "bpfel", "cpu": "v4", "sha256": "ac66177b755e4ef8fdaadb056670844b1863690b44442d36ec6c019df606b7bc", "kind": "rel", "families": ["base", "signed-div"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/smod.o", "source": "sources/smod.ll", "march": "bpfel", "cpu": "v4", "sha256": "9c81813da2ff88dad4d4a537eba69ae2046fc6adbc5ea6801eca80dc3f4cba48", "kind": "rel", "families": ["base", "signed-div"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/acq.o", "source": "sources/acq.ll", "march": "bpfel", "cpu": "v4", "sha256": "206ca9ad65ac2949dea055d4a9998159e791ac7f3c0747010bb7c208d9292f5d", "kind": "rel", "families": ["acqrel", "base"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/lic.o", "source": "sources/lic.ll", "march": "bpfel", "cpu": "generic", "sha256": "247fbf4ae8219916b6c3f0ec69c72a04e505326fd418b495356807c60aa55f24", "kind": "rel", "families": ["base"], "license": "GPL", "provenance": "llc-emitted"},
+    {"file": "objects/base-be.o", "source": "sources/base.ll", "march": "bpfeb", "cpu": "generic", "sha256": "daf36a1901d54b82533cba96cdad388ef589fca42efeb1a157900cfcfc2fbe71", "kind": "rel", "families": ["base"], "license": null, "provenance": "llc-emitted"},
+    {"file": "objects/stimm.o", "source": null, "march": "bpfel", "cpu": null, "sha256": "d93fe3459632fa290af00a4853a1813f95378e6987721de3e63e84fb22874b70", "kind": "rel", "families": ["base", "imm-store"], "license": null, "provenance": "derived: base.o socket insn0 replaced with ST DW [r1-4] = 0x12345678 (7a 10 fc ff 78 56 34 12); encoding confirmed by llvm-objdump disassembly"},
+    {"file": "objects/longjmp.o", "source": null, "march": "bpfel", "cpu": null, "sha256": "bcf9539eb01e46b4a9bbd1f3376a5c8cf438b58f03a9e3e04665efc9dec548e7", "kind": "rel", "families": ["base", "long-jump"], "license": null, "provenance": "derived: base.o socket insn1 replaced with JMP32 JA +0 (06 00 00 00 00 00 00 00); disassembles as gotol"},
+    {"file": "objects/indjmp.o", "source": null, "march": "bpfel", "cpu": null, "sha256": "95bad771c0885dd8d7d0f3f0dffe90594e8fd4723c7bffa50969335276d76008", "kind": "rel", "families": ["base", "indirect-jumps"], "license": null, "provenance": "derived: base.o socket insn1 replaced with JMP JA|X src=r2 (0d 20 00 00 00 00 00 00); design-frozen classification, TC07 live gate pending; LLVM 21 disassembler reports <unknown>"},
+    {"file": "objects/exec-twin.o", "source": null, "march": "bpfel", "cpu": null, "sha256": "f898f4bf20e92d695c9126813c93181919adb6b55ee6a503d79c344ebfb28082", "kind": "exec", "families": ["base"], "license": null, "provenance": "derived: base.o with e_type flipped REL(1) -> EXEC(2) only; exercises the exec admission path, not a linked artifact; TC07 owns real linked .elf"}
+  ],
+  "notes": [
+    "No BPF compiler runs during tests; these bytes are the frozen emission record.",
+    "acq.ll hangs llc 21.1.8 below -mcpu=v4 (selection loop, killed by timeout 2026-10-23); recorded, not re-probed per run.",
+    "LLVM 21 emits jump32, signed jumps and byte-swap even at -mcpu=generic: preset names cannot admit baseline-only objects. Profiles pin exact effective subsets.",
+    "llvm-objdump confirms ST-IMM (0x7a) and JMP32-JA/gotol (0x06) encodings; JMP-JA|X (0x0d) is <unknown> to LLVM 21 and stays a design-frozen rule until the TC07 live gate.",
+    "SDIV/SMOD use DIV/MOD opcodes with off=1; MOVSX uses MOV with off=source-width; load-acquire uses STX/BPF_ATOMIC with imm=0x100 (BPF_LOAD_ACQ): all confirmed in emitted bytes."
+  ]
+}

@@ -52,6 +52,11 @@ path = "tests/toolchain_executor.rs"
 required-features = ["toolchain"]
 
 [[test]]
+name = "object_isa"
+path = "tests/object_isa.rs"
+required-features = ["object"]
+
+[[test]]
 name = "selection"
 path = "tests/selection.rs"
 
