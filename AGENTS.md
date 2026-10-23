@@ -23,6 +23,17 @@ transferred is re-implemented. Effective immediately:
 - Ask the owner only about: real third-party license calls, and real
   either/or technical choices. Never about citations, pins, paperwork, or
   anything answerable from the tree.
+- External review (owner-directed 2026-10-23): after internal reviews pass
+  for each big task, run Codex as external reviewer (max effort, `--json`,
+  resume sessions); triage every finding, fix all confirmed ones, re-review
+  via resume until ZERO findings remain. No big task is done with open
+  external findings. Model policy (owner-directed): `gpt-6.1-sol` is
+  primary (smarter). CLI launcher error "Daybreak unavailable" is NOT a
+  fallback trigger — relaunch 6.1-sol with `-c daybreak=false`. Fall back
+  to `gpt-6-sol` with Daybreak ENABLED ONLY if the 6.1-sol MODEL itself
+  reports a daybreak issue in its output. Each model/effort level keeps
+  its OWN session (registry: `.scopebase/codex-sessions.json`); never
+  resume a session across models.
 - Decisions in force: TT03 execution authorized; BP09 = locked btf-rs with
   bounded narrow preflight (no upstreaming); CI target = GitHub Actions;
   BP04 O:src/plan.rs citation = already-admitted preview pin (b).
