@@ -36,6 +36,13 @@ REQUIRED_DELIVERY = [
     "delivery/fixture-manifest.json",
     "delivery/THIRD-PARTY-NOTICES.md",
     "delivery/LICENSE-APACHE",
+    "delivery/notices/LICENSE-APACHE.516b24e0",
+    "delivery/notices/LICENSE-APACHE.62c7a1e3",
+    "delivery/notices/LICENSE-APACHE.a60eea81",
+    "delivery/notices/LICENSE-APACHE.a9040321",
+    "delivery/notices/LICENSE-MIT.0f96a838",
+    "delivery/notices/LICENSE-MIT.23f18e03",
+    "delivery/notices/LICENSE-UNICODE.f7db8105",
     "delivery/vectors/closure-input.txt",
 ]
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_revision": 1,
+  "catalog_revision": 2,
   "tasks": [
     "BP01",
     "BP02",
@@ -3785,7 +3785,7 @@
       "id": "H33.source-closure",
       "family": "H33",
       "version": 1,
-      "implementation_status": "UNIMPLEMENTED",
+      "implementation_status": "REGISTERED_EXECUTABLE",
       "owners": [
         "SB01",
         "SB02",
@@ -3844,13 +3844,44 @@
       "required_cells": [
         "h33-source-closure"
       ],
-      "registration": null
+      "registration": {
+        "executable": {
+          "id": "h33.check",
+          "revision": 1,
+          "path": "tools/qualification/check_h33.py",
+          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "entrypoint": "source-closure"
+        },
+        "fixture": {
+          "id": "h33.source.fixture",
+          "revision": 1,
+          "path": "fixtures/h33/source-closure.json",
+          "sha256": "7b4981db64c24971d541af39aa19d19448d77d590b2b4a7613fb3cd0e30374f1",
+          "entrypoint": "closure"
+        },
+        "oracle": {
+          "id": "h33.oracle",
+          "revision": 1,
+          "path": "tools/qualification/h33_oracle.py",
+          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "entrypoint": "source-closure"
+        },
+        "bad_control": {
+          "id": "h33.source.bad",
+          "revision": 1,
+          "path": "tools/qualification/tests/vectors/h33_source_bad.json",
+          "sha256": "1347ba26fee00ae1d79b6821cb31e2c79cf1b56eee4f7a897045bd78b9740111",
+          "entrypoint": "vectors"
+        },
+        "oracle_basis": "Independent minimal re-derivation (normalize-and-split expressions, section-sliced manifest license, scandir walk, bytes.find markers); agreement with the checker asserted on the real tree and every mutant.",
+        "control_assertion": "Each of the ten source mutants fails its named rule (S1/S2/S3/S4) in both implementations; buried SPDX literals and listed third-party grants pass."
+      }
     },
     {
       "id": "H33.final-object-license",
       "family": "H33",
       "version": 1,
-      "implementation_status": "UNIMPLEMENTED",
+      "implementation_status": "REGISTERED_EXECUTABLE",
       "owners": [
         "TC03",
         "TC06"
@@ -3908,7 +3939,38 @@
       "required_cells": [
         "h33-final-object-license"
       ],
-      "registration": null
+      "registration": {
+        "executable": {
+          "id": "h33.check",
+          "revision": 1,
+          "path": "tools/qualification/check_h33.py",
+          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "entrypoint": "final-object-license"
+        },
+        "fixture": {
+          "id": "h33.object.fixture",
+          "revision": 1,
+          "path": "fixtures/bpf/isa/objects/lic.o",
+          "sha256": "247fbf4ae8219916b6c3f0ec69c72a04e505326fd418b495356807c60aa55f24",
+          "entrypoint": "license-section"
+        },
+        "oracle": {
+          "id": "h33.oracle",
+          "revision": 1,
+          "path": "tools/qualification/h33_oracle.py",
+          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "entrypoint": "final-object-license"
+        },
+        "bad_control": {
+          "id": "h33.object.bad",
+          "revision": 1,
+          "path": "tools/qualification/tests/vectors/h33_object_bad.json",
+          "sha256": "c28ddd0a28316c91d69084bff253c1396db91d41f781b91161f56c967aac8258",
+          "entrypoint": "vectors"
+        },
+        "oracle_basis": "Independent single-pass ELF walk (only needed fields unpacked) bound to the same object manifest; agreement asserted on the real emitted object and every mutant.",
+        "control_assertion": "Each of the seven object mutants fails its named rule (O1/O2/O3/O4/O5) in both implementations; the pinned llc-emitted lic.o decodes to GPL and binds."
+      }
     },
     {
       "id": "H33.license-admission",
@@ -3980,7 +4042,7 @@
       "id": "H33.installed-notices",
       "family": "H33",
       "version": 1,
-      "implementation_status": "UNIMPLEMENTED",
+      "implementation_status": "REGISTERED_EXECUTABLE",
       "owners": [
         "TT07",
         "TC08",
@@ -4039,7 +4101,38 @@
       "required_cells": [
         "h33-installed-notices"
       ],
-      "registration": null
+      "registration": {
+        "executable": {
+          "id": "h33.check",
+          "revision": 1,
+          "path": "tools/qualification/check_h33.py",
+          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "entrypoint": "installed-notices"
+        },
+        "fixture": {
+          "id": "h33.notices.fixture",
+          "revision": 1,
+          "path": "crates/scopebase-conformance/delivery/fixture-manifest.json",
+          "sha256": "1e2379ea1f44f87c3cccf7f732e3819dfc3688406fa24dd1e04276ee45555cc8",
+          "entrypoint": "closure"
+        },
+        "oracle": {
+          "id": "h33.oracle",
+          "revision": 1,
+          "path": "tools/qualification/h33_oracle.py",
+          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "entrypoint": "installed-notices"
+        },
+        "bad_control": {
+          "id": "h33.notices.bad",
+          "revision": 1,
+          "path": "tools/qualification/tests/vectors/h33_notices_bad.json",
+          "sha256": "648207018197fdc7e0158f0f745134694ed41de4ff8da0d1c7601742e825fd19",
+          "entrypoint": "vectors"
+        },
+        "oracle_basis": "Independent closure re-verification and per-entry byte-coverage loops; agreement asserted on the real shippable bundle and every mutant.",
+        "control_assertion": "Each of the eight bundle mutants fails its named rule (N1/N2/N3/N4/N5) in both implementations; the real bundle covers every entry and option."
+      }
     }
   ],
   "profiles": [
