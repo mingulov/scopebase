@@ -19,6 +19,7 @@
 //! let _ = Count::<Events>::new(2).checked_add(Count::<Records>::new(3));
 //! ```
 pub mod provenance;
+pub mod holder;
 pub mod bounds;
 pub mod closure;
 pub mod conservation;
