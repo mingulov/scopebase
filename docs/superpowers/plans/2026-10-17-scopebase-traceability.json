@@ -4488,6 +4488,11 @@
       "title": "Ring frame arithmetic, bounded reader and copied staging"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-bp07-writer.md",
+        "reviewed_candidate_commit": "0e055c9c7dc6fff536fdaf43974e4110097d8029",
+        "subject_commit": "0e055c9c7dc6fff536fdaf43974e4110097d8029"
+      },
       "anchor": "bp07-programcpu-writer-ownership-insertion-provenance-and-full-map-diagnostics",
       "depends_on": [
         "BP02",
@@ -4503,7 +4508,7 @@
         "BP-R08",
         "BP-R09"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Program/CPU writer ownership, insertion provenance and full-map diagnostics"
     },
     {
@@ -4811,6 +4816,11 @@
       "title": "ELF/BTF relocation, call graph and metadata preservation"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tc06-prune.md",
+        "reviewed_candidate_commit": "f1bb43f358d80c8e089ff9dbf1ebe82a6c6927ee",
+        "subject_commit": "f1bb43f358d80c8e089ff9dbf1ebe82a6c6927ee"
+      },
       "anchor": "tc06-restricted-dead-code-repair-and-verifier-sensitive-rule-manifests",
       "depends_on": [
         "TC05"
@@ -4823,7 +4833,7 @@
       "requirements": [
         "TC-R06"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Restricted dead-code repair and verifier-sensitive rule manifests"
     },
     {
@@ -5367,6 +5377,11 @@
       "title": "Strict bounded maps/mount observations"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-lx06-mapping.md",
+        "reviewed_candidate_commit": "72c749584c708aea1a8aa04198c2e204844a9935",
+        "subject_commit": "72c749584c708aea1a8aa04198c2e204844a9935"
+      },
       "anchor": "lx06-mapping-relations-explicit-calibration-and-retained-custody",
       "depends_on": [
         "LX02",
@@ -5391,7 +5406,7 @@
         "LX-R11",
         "LX-R14"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Mapping relations, explicit calibration and retained custody"
     },
     {
@@ -6335,6 +6350,11 @@
       "title": "Fault schedules, property/model/fuzz and sanitizer campaigns"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tt07-operator.md",
+        "reviewed_candidate_commit": "9279426138d176ee37df3c3dec0115d7b0c21cad",
+        "subject_commit": "9279426138d176ee37df3c3dec0115d7b0c21cad"
+      },
       "anchor": "tt07-installed-operator-command-and-downstream-package-delivery",
       "depends_on": [
         "TT01",
@@ -6358,7 +6378,7 @@
         "TT-R14",
         "TC-R10"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Installed operator command and downstream package delivery"
     },
     {

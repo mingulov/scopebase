@@ -189,6 +189,7 @@ all_edges={}
 PREREQ_EXCEPTIONS={
     'SDK04': {'TT03': 'observer uses SDK02/SDK03 context only, zero testkit refs'},
     'TT09': {'TT03': 'harness complete; tt03_pair_launch baseline honestly UNBUILT'},
+    'TT07': {'TT03': 'operator runs on worker increments (14/14 P, collect/retire); domain profiles honestly NoBoundAdapter'},
 }
 for task in tasks:
     state=task.get('status')
