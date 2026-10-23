@@ -259,6 +259,20 @@
       "code": "E0308",
       "contains": "mismatched types",
       "line": 4
+    },
+    {
+      "id": "observe_no_signal",
+      "source": "tests/ui/observe_no_signal.rs",
+      "code": "E0599",
+      "contains": "no method named",
+      "line": 4
+    },
+    {
+      "id": "observe_epoch_private",
+      "source": "tests/ui/observe_epoch_private.rs",
+      "code": "E0616",
+      "contains": "private",
+      "line": 4
     }
   ]
 }

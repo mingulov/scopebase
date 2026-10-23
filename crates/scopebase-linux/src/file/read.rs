@@ -189,6 +189,8 @@ impl ReadOps {
             acquired: 0,
             peak: 0,
             read: Some(self.read),
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
     fn error(&self, reason: Reason, source: Option<std::io::Error>) -> LinuxError {
@@ -199,6 +201,8 @@ impl ReadOps {
             source,
             effect: self.effect(),
             charges: self.charges(),
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
     fn semantic(&self, reason: Reason) -> LinuxError {

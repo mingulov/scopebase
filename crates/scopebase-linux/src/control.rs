@@ -88,7 +88,11 @@ fn deadline_after_at(start: Instant, duration: Duration) -> Result<MonotonicDead
                 acquired: 0,
                 peak: 0,
                 read: None,
+                #[cfg(feature = "process")]
+                process: None,
             },
+            #[cfg(feature = "process")]
+            process: None,
         })
 }
 
@@ -157,6 +161,8 @@ impl ControlStop {
             source: None,
             effect,
             charges,
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
 }

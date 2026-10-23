@@ -210,7 +210,11 @@ fn open_error(errno: Errno, refined: Option<Reason>, attempted: u64, completed: 
             acquired: 0,
             peak: 0,
             read: None,
+            #[cfg(feature = "process")]
+            process: None,
         },
+        #[cfg(feature = "process")]
+        process: None,
     }
 }
 
@@ -232,7 +236,11 @@ fn zero_error(stage: Stage, reason: Reason) -> LinuxError {
             acquired: 0,
             peak: 0,
             read: None,
+            #[cfg(feature = "process")]
+            process: None,
         },
+        #[cfg(feature = "process")]
+        process: None,
     }
 }
 
@@ -643,6 +651,8 @@ impl WalkBudget {
             acquired: self.spent.open_fds,
             peak: self.spent.peak_open_fds,
             read: None,
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
 
@@ -654,6 +664,8 @@ impl WalkBudget {
             source,
             effect: self.effect(),
             charges: self.charges(),
+            #[cfg(feature = "process")]
+            process: None,
         }
     }
 

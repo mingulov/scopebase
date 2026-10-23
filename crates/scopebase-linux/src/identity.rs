@@ -162,3 +162,128 @@ impl fmt::Debug for MountDevice {
         f.write_str("MountDevice")
     }
 }
+
+/// Descriptive FD-free marker for one acquired proc view. Retains only the
+/// epoch marker provenance, never authority or target FDs. Distinct markers
+/// never compare equal, even for identical raw PID/tick/namespace values.
+#[cfg(feature = "process")]
+#[derive(Clone)]
+pub struct ProcViewId {
+    // Retained provenance only: keeps the epoch marker alive, never read.
+    #[allow(dead_code)]
+    pub(crate) epoch: std::sync::Arc<()>,
+    pub(crate) view: std::sync::Arc<()>,
+}
+#[cfg(feature = "process")]
+impl ProcViewId {
+    pub(crate) fn fresh(epoch: &std::sync::Arc<()>) -> Self {
+        Self {
+            epoch: std::sync::Arc::clone(epoch),
+            view: std::sync::Arc::new(()),
+        }
+    }
+}
+#[cfg(feature = "process")]
+impl PartialEq for ProcViewId {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.view, &other.view)
+    }
+}
+#[cfg(feature = "process")]
+impl Eq for ProcViewId {}
+#[cfg(feature = "process")]
+impl fmt::Debug for ProcViewId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ProcViewId")
+    }
+}
+/// Descriptive FD-free marker for retained mount-namespace provenance of one
+/// view. Not a mount-table version; retains no authority or FDs.
+#[cfg(feature = "process")]
+#[derive(Clone)]
+pub struct MountViewId {
+    // Retained provenance only: keeps the proc view alive, never read.
+    #[allow(dead_code)]
+    pub(crate) proc_view: ProcViewId,
+    pub(crate) mount: std::sync::Arc<()>,
+}
+#[cfg(feature = "process")]
+impl MountViewId {
+    pub(crate) fn fresh(proc_view: &ProcViewId) -> Self {
+        Self {
+            proc_view: proc_view.clone(),
+            mount: std::sync::Arc::new(()),
+        }
+    }
+}
+#[cfg(feature = "process")]
+impl PartialEq for MountViewId {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.mount, &other.mount)
+    }
+}
+#[cfg(feature = "process")]
+impl Eq for MountViewId {}
+#[cfg(feature = "process")]
+impl fmt::Debug for MountViewId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MountViewId")
+    }
+}
+/// Descriptive birth sample: PID, start ticks, retained proc-view marker. No
+/// image/mm identity; ticks alone are never a task key.
+#[cfg(feature = "process")]
+#[derive(Clone)]
+pub struct TaskBirthObservation {
+    pub(crate) pid: crate::process::Pid,
+    pub(crate) ticks: u64,
+    pub(crate) view: ProcViewId,
+}
+#[cfg(feature = "process")]
+impl TaskBirthObservation {
+    pub(crate) fn new(pid: crate::process::Pid, ticks: u64, view: ProcViewId) -> Self {
+        Self { pid, ticks, view }
+    }
+    pub fn pid(&self) -> crate::process::Pid {
+        self.pid
+    }
+    pub fn start_ticks(&self) -> u64 {
+        self.ticks
+    }
+    pub fn proc_view(&self) -> &ProcViewId {
+        &self.view
+    }
+}
+#[cfg(feature = "process")]
+impl PartialEq for TaskBirthObservation {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid == other.pid && self.ticks == other.ticks && self.view == other.view
+    }
+}
+#[cfg(feature = "process")]
+impl Eq for TaskBirthObservation {}
+#[cfg(feature = "process")]
+impl fmt::Debug for TaskBirthObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TaskBirthObservation")
+    }
+}
+/// Operation chronology only; never event authority.
+#[cfg(feature = "process")]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ObservationInterval {
+    pub(crate) started: std::time::Instant,
+    pub(crate) finished: std::time::Instant,
+}
+#[cfg(feature = "process")]
+impl ObservationInterval {
+    pub(crate) fn new(started: std::time::Instant, finished: std::time::Instant) -> Self {
+        Self { started, finished }
+    }
+    pub fn started_at(&self) -> std::time::Instant {
+        self.started
+    }
+    pub fn finished_at(&self) -> std::time::Instant {
+        self.finished
+    }
+}

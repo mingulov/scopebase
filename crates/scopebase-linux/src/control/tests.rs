@@ -31,6 +31,8 @@ fn charges(syscalls: u64) -> ResourceCharges {
         acquired: 0,
         peak: 0,
         read: None,
+        #[cfg(feature = "process")]
+        process: None,
     }
 }
 fn control_at(start: Instant, after: Duration, token: CancelToken) -> OperationControl {
@@ -209,6 +211,8 @@ fn cancel_after_success_preserves_metadata() {
             acquired: 2,
             peak: 2,
             read: None,
+            #[cfg(feature = "process")]
+            process: None,
         },
     );
     assert_eq!(
@@ -291,6 +295,8 @@ fn fixture_write(
             source: Some(source),
             effect: effect(1, 0),
             charges: charges(1),
+            #[cfg(feature = "process")]
+            process: None,
         }),
         Ok(n) => {
             post.map_err(|s| s.into_error(Stage::ValidateFile, effect(1, 1), charges(1)))?;
@@ -458,6 +464,8 @@ fn one_read(
             source: Some(source),
             effect: effect(1, completed),
             charges: charges(1),
+            #[cfg(feature = "process")]
+            process: None,
         }),
         Ok(n) => {
             post.map_err(|s| s.into_error(Stage::ValidateFile, effect(1, completed), charges(1)))?;
