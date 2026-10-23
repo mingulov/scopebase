@@ -8,7 +8,7 @@
 //! APIs; no consumer-only helper is shared any other way.
 //! NEW (LX11): reference-only; no donor lines copied.
 use crate::error::LinuxError;
-use rustix::fs::{self as rfs, Mode, OFlags};
+use rustix::fs::{self as rfs, AtFlags, Mode, OFlags};
 use std::{
     ffi::CString,
     io::{self, Write as _},
@@ -66,9 +66,22 @@ impl ExpectedLedger {
 /// files written only underneath it, cleanup only through [`FixtureRoot::close`].
 /// There is no `Drop` cleanup: a forgotten root stays visible in the parent,
 /// never silently retired.
+///
+/// R14: the root retains pinned authority from creation — an open fd to
+/// the parent, the single-component name, and an open fd to the root
+/// directory itself. Writes resolve descriptor-relative from the pinned
+/// root fd, and retirement clears the tree through that fd and unlinks
+/// the name through the pinned parent fd. Replacing an ancestor, or
+/// swapping another directory in at the root path, redirects neither
+/// writes nor cleanup: both stay bound to the created directory.
+/// [`FixtureRoot::path`] is advisory (display, `HeldFile` opens) and is
+/// never resolved for an effect.
 #[derive(Debug)]
 pub struct FixtureRoot {
     path: PathBuf,
+    parent: OwnedFd,
+    name: CString,
+    root: OwnedFd,
 }
 
 impl FixtureRoot {
@@ -83,9 +96,32 @@ impl FixtureRoot {
             (Some(Component::Normal(_)), None) => {}
             _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad root name")),
         }
-        let path = parent.join(name);
-        std::fs::create_dir(&path)?;
-        Ok(Self { path })
+        // Pin the parent first: the path resolves exactly once, at
+        // creation; every later effect is descriptor-relative.
+        let parent_fd = rfs::open(
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let cname = CString::new(name)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad root name"))?;
+        // mkdirat, not create_dir: fails (EEXIST) when present, like before.
+        rfs::mkdirat(&parent_fd, &cname, Mode::from_bits_truncate(0o777))
+            .map_err(io::Error::from)?;
+        let root_fd = rfs::openat(
+            &parent_fd,
+            &cname,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        Ok(Self {
+            path: parent.join(name),
+            parent: parent_fd,
+            name: cname,
+            root: root_fd,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -146,8 +182,42 @@ impl FixtureRoot {
     }
 
     /// Remove the whole tree. Consumes the root so cleanup runs exactly once.
+    ///
+    /// R14: retirement is descriptor-bound. The tree is cleared through
+    /// the pinned root fd; the name is then verified to still address
+    /// our own directory before it is unlinked through the pinned
+    /// parent fd. A final link-count check on the held fd proves OUR
+    /// directory lost its name (a swap-and-replace between verify and
+    /// unlink leaves our fd linked and fails instead of silently
+    /// deleting the replacement).
     pub fn close(self) -> io::Result<()> {
-        std::fs::remove_dir_all(&self.path)
+        clear_dir(self.root.as_fd())?;
+        // Refuse a planted replacement BEFORE unlinking: the name
+        // must still address our own directory.
+        let live = rfs::openat(
+            &self.parent,
+            &self.name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let want = rfs::fstat(&self.root).map_err(io::Error::from)?;
+        let got = rfs::fstat(&live).map_err(io::Error::from)?;
+        if (got.st_dev, got.st_ino) != (want.st_dev, want.st_ino) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture root replaced before close",
+            ));
+        }
+        drop(live);
+        rfs::unlinkat(&self.parent, &self.name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
+        if rfs::fstat(&self.root).map_err(io::Error::from)?.st_nlink != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture root replaced during close",
+            ));
+        }
+        Ok(())
     }
 
     fn join(&self, rel: &str) -> io::Result<PathBuf> {
@@ -193,18 +263,48 @@ impl FixtureRoot {
     /// Open the directory holding the final piece, creating missing
     /// intermediate directories. Every level resolves with symlinks
     /// refused; held directory fds pin each level against renames.
+    /// R14: the walk starts from the pinned root fd, never from the
+    /// advisory path, so ancestor swaps cannot redirect writes.
     fn open_parent_dir(&self, pieces: &[&std::ffi::OsStr]) -> io::Result<OwnedFd> {
-        let mut dir = rfs::open(
-            &self.path,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(io::Error::from)?;
+        let mut dir = self.root.try_clone()?;
         for piece in &pieces[..pieces.len() - 1] {
             dir = open_child_dir(dir.as_fd(), &piece_cstr(piece)?)?;
         }
         Ok(dir)
     }
+}
+
+/// Recursively remove every entry under `dir` (fd-relative; never
+/// resolves a path). Each entry is opened as a directory first:
+/// `NOFOLLOW` refuses symlinks with `ELOOP` and files with `ENOTDIR`,
+/// and either falls through to a plain unlink, which never follows a
+/// link. A swap between listing and open fails closed instead of
+/// mis-removing.
+fn clear_dir(dir: BorrowedFd<'_>) -> io::Result<()> {
+    let entries = rfs::Dir::read_from(dir).map_err(io::Error::from)?;
+    for entry in entries {
+        let entry = entry.map_err(io::Error::from)?;
+        let name = entry.file_name();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        match rfs::openat(
+            dir,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(child) => {
+                clear_dir(child.as_fd())?;
+                rfs::unlinkat(dir, name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
+            }
+            Err(rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
+                rfs::unlinkat(dir, name, AtFlags::empty()).map_err(io::Error::from)?;
+            }
+            Err(errno) => return Err(io::Error::from(errno)),
+        }
+    }
+    Ok(())
 }
 
 /// One path piece as a `CString` (NUL was already rejected, so this

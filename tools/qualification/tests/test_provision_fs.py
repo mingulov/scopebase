@@ -367,28 +367,57 @@ class ReplacementCustodyTests(unittest.TestCase):
 
     def test_cleanup_loop_device_refuses_reused_name(self):
         from unittest import mock
-        with mock.patch.object(provision, "read_loop_backing",
-                               return_value="/tmp/other.img"):
-            with mock.patch.object(provision, "run_sudo") as sudo:
-                failure = provision.cleanup_loop_device(
-                    "/dev/loop7", "/tmp/run/ext4.img")
-        self.assertIn("refusing detach", failure)
-        sudo.assert_not_called()
-        # Matching backing detaches; a gone device is a no-op.
-        with mock.patch.object(provision, "read_loop_backing",
-                               return_value="/tmp/run/ext4.img"):
-            with mock.patch.object(provision, "run_sudo",
-                                   return_value=(0, "", "")) as sudo:
-                self.assertIsNone(provision.cleanup_loop_device(
-                    "/dev/loop7", "/tmp/run/ext4.img"))
-                sudo.assert_called_once_with(["losetup", "-d",
-                                              "/dev/loop7"])
-        with mock.patch.object(provision, "read_loop_backing",
-                               return_value=None):
-            with mock.patch.object(provision, "run_sudo") as sudo:
-                self.assertIsNone(provision.cleanup_loop_device(
-                    "/dev/loop7", "/tmp/run/ext4.img"))
-                sudo.assert_not_called()
+        with tempfile.TemporaryDirectory() as tmp:
+            img = str(Path(tmp) / "ext4.img")
+            Path(img).write_bytes(b"image-bytes")
+            st = os.stat(img)
+            backing = {"path": img, "dev": st.st_dev, "ino": st.st_ino}
+            other = str(Path(tmp) / "other.img")
+            Path(other).write_bytes(b"other-bytes")
+            # Different backing pathname: reused loop name refuses.
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=other):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_loop_device(
+                        "/dev/loop7", backing)
+            self.assertIn("refusing detach", failure)
+            sudo.assert_not_called()
+            # R19: same pathname, DIFFERENT inode (fresh image at the
+            # reused path) refuses by identity, never detaches.
+            os.unlink(img)
+            Path(img).write_bytes(b"fresh-image-bytes")
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=img):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_loop_device(
+                        "/dev/loop7", backing)
+            self.assertIn("identity changed", failure)
+            sudo.assert_not_called()
+            # Matching path AND identity detaches; a gone device is
+            # a no-op; a stale string-form record fails closed.
+            st2 = os.stat(img)
+            backing2 = {"path": img, "dev": st2.st_dev, "ino": st2.st_ino}
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=img):
+                with mock.patch.object(provision, "run_sudo",
+                                       return_value=(0, "", "")) as sudo:
+                    self.assertIsNone(provision.cleanup_loop_device(
+                        "/dev/loop7", backing2))
+                    sudo.assert_called_once_with(["losetup", "-d",
+                                                  "/dev/loop7"])
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=None):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    self.assertIsNone(provision.cleanup_loop_device(
+                        "/dev/loop7", backing2))
+                    sudo.assert_not_called()
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=img):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_loop_device(
+                        "/dev/loop7", img)
+            self.assertIn("no recorded backing", failure)
+            sudo.assert_not_called()
 
     def test_cleanup_refuses_dotdot_subvolume(self):
         tmp, run_root, manifest = self.fresh_paths()
@@ -501,13 +530,16 @@ class MountinfoPredicateTests(unittest.TestCase):
             with self.assertRaises(provision.AdmissionError, msg=bad):
                 provision.parse_mountinfo_row(bad)
 
-    def test_find_mount_matches_exact_target(self):
+    def test_find_mounts_returns_every_row_at_target(self):
         table = [provision.parse_mountinfo_row(self.ROW)]
-        hit = provision.find_mount(table, "/")
-        self.assertIsNotNone(hit)
-        self.assertIsNone(provision.find_mount(table, "/etc"))
+        hits = provision.find_mounts(table, "/")
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["mnt_id"], 45)
+        self.assertEqual(provision.find_mounts(table, "/etc"), [])
         # Prefix matches are not mount matches.
-        self.assertIsNone(provision.find_mount([], "/"))
+        self.assertEqual(provision.find_mounts([], "/"), [])
+        stacked = table + [dict(table[0], mnt_id=99)]
+        self.assertEqual(len(provision.find_mounts(stacked, "/")), 2)
 
     def test_contained_rejects_escapes(self):
         self.assertTrue(provision.contained("/tmp/run/a", "/tmp/run"))
@@ -527,6 +559,587 @@ class MountinfoPredicateTests(unittest.TestCase):
             provision.admit_mount({**record, "fstype": "ext4"}, table, "/")
         with self.assertRaises(provision.AdmissionError):
             provision.admit_mount({**record, "target": "/etc"}, table, "/")
+
+
+class RereviewCustodyTests(unittest.TestCase):
+    """R14-R24/R42: descriptor-bound retirement, stacked-mount and
+    reuse refusal, timeout custody, shell-free wrappers, exclusive
+    manifest updates, decoded mount paths, denial-vs-absence."""
+
+    def fresh_paths(self):
+        tmp = Path(tempfile.mkdtemp(prefix="provision-rb7-"))
+        self.addCleanup(
+            shutil.rmtree, tmp, ignore_errors=True)
+        return tmp, str(tmp / "run"), str(tmp / "manifest.json")
+
+    # R24: mountinfo escapes decode before any containment check.
+    def test_unescape_decodes_octal_escapes(self):
+        row = provision.parse_mountinfo_row(
+            "45 1 0:35 /@/a\\040b /mnt/x\\040y rw shared:1 - ext4 "
+            "/dev/sda\\0401 rw")
+        self.assertEqual(row["target"], "/mnt/x y")
+        self.assertEqual(row["source"], "/dev/sda 1")
+        self.assertEqual(provision.unescape_mountinfo("a\\134b"), "a\\b")
+        self.assertEqual(provision.unescape_mountinfo("a\\011b"), "a\tb")
+        self.assertEqual(provision.unescape_mountinfo("a\\012b"), "a\nb")
+
+    def test_unescape_refuses_unknown_escape(self):
+        for bad in ("a\\099b", "a\\", "a\\04", "\\777"):
+            with self.assertRaises(provision.AdmissionError, msg=bad):
+                provision.unescape_mountinfo(bad)
+
+    def test_escaped_space_mount_stays_inside_guard(self):
+        # A space-bearing run-root with a foreign descendant mount:
+        # the escaped row must decode to a contained target, or the
+        # foreign-mount guard would miss it.
+        row = provision.parse_mountinfo_row(
+            "77 1 0:41 / /tmp/run\\040x/foreign rw shared:1 - "
+            "tmpfs tmpfs rw")
+        self.assertTrue(
+            provision.contained(row["target"], "/tmp/run x"),
+            f"escaped mount evades guard: {row['target']!r}")
+
+    # R17: stacked mounts refuse; the lower row never stands in
+    # for the mount a pathname umount would remove.
+    def test_admit_mount_refuses_stacked_targets(self):
+        from unittest import mock
+        run_root = "/tmp/provision-stacked-case"
+        target = f"{run_root}/mnt"
+        record = {"target": target, "mnt_id": 111, "fstype": "ext4",
+                  "source": "/dev/loop9", "expect_super": []}
+        stacked = [
+            {"target": target, "mnt_id": 111, "fstype": "ext4",
+             "source": "/dev/loop9", "super": "rw|"},
+            {"target": target, "mnt_id": 222, "fstype": "tmpfs",
+             "source": "tmpfs", "super": "rw|"},
+        ]
+        with self.assertRaisesRegex(provision.AdmissionError,
+                                    "ambiguous stacked mount"):
+            provision.admit_mount(record, stacked, run_root)
+        with mock.patch.object(provision, "run_sudo") as sudo:
+            failure = provision.cleanup_one_mount(
+                record, stacked, run_root)
+        self.assertIn("ambiguous stacked mount", failure)
+        sudo.assert_not_called()
+
+    # R18: churn teardown only retires the recorded payload bind.
+    def churn_record(self, tmp):
+        run_root = str(tmp / "run")
+        point = os.path.join(run_root, "churn", "point")
+        payload = os.path.join(run_root, "churn", "payload-b")
+        os.makedirs(os.path.dirname(point), exist_ok=True)
+        Path(payload).write_bytes(b"payload-b")
+        Path(point).write_bytes(b"point")
+        st = os.stat(payload)
+        churn = {"fifo": os.path.join(run_root, "churn", "cmd.fifo"),
+                 "ack": os.path.join(run_root, "churn", "ack.txt"),
+                 "ledger": os.path.join(run_root, "churn", "ledger.log"),
+                 "point": point, "bind_source": payload,
+                 "bind_source_dev": st.st_dev,
+                 "bind_source_ino": st.st_ino}
+        return run_root, churn
+
+    def test_churn_point_absent_is_noop(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root, churn = self.churn_record(Path(tmp))
+            with mock.patch.object(provision, "read_mount_table",
+                                   return_value=[]):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    self.assertIsNone(provision.cleanup_churn_point(
+                        churn, run_root))
+                    sudo.assert_not_called()
+
+    def test_churn_point_refuses_foreign_occupant(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root, churn = self.churn_record(Path(tmp))
+            live = [{"target": churn["point"], "mnt_id": 9,
+                     "fstype": "tmpfs", "source": "/foreign",
+                     "super": "rw|"}]
+            with mock.patch.object(provision, "read_mount_table",
+                                   return_value=live):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_churn_point(
+                        churn, run_root)
+            self.assertIn("foreign mount", failure)
+            sudo.assert_not_called()
+
+    def test_churn_point_refuses_stacked_mounts(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root, churn = self.churn_record(Path(tmp))
+            row = {"target": churn["point"], "mnt_id": 9,
+                   "fstype": "ext4", "source": churn["bind_source"],
+                   "super": "rw|"}
+            live = [row, dict(row, mnt_id=10)]
+            with mock.patch.object(provision, "read_mount_table",
+                                   return_value=live):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_churn_point(
+                        churn, run_root)
+            self.assertIn("stacked mounts", failure)
+            sudo.assert_not_called()
+
+    def test_churn_point_refuses_resourced_source(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root, churn = self.churn_record(Path(tmp))
+            # Same source pathname, fresh inode: not our bind.
+            os.unlink(churn["bind_source"])
+            Path(churn["bind_source"]).write_bytes(b"fresh")
+            live = [{"target": churn["point"], "mnt_id": 9,
+                     "fstype": "ext4", "source": churn["bind_source"],
+                     "super": "rw|"}]
+            with mock.patch.object(provision, "read_mount_table",
+                                   return_value=live):
+                with mock.patch.object(provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_churn_point(
+                        churn, run_root)
+            self.assertIn("source identity changed", failure)
+            sudo.assert_not_called()
+
+    def test_churn_point_unmounts_owned_bind(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root, churn = self.churn_record(Path(tmp))
+            live = [{"target": churn["point"], "mnt_id": 9,
+                     "fstype": "ext4", "source": churn["bind_source"],
+                     "super": "rw|"}]
+            with mock.patch.object(provision, "read_mount_table",
+                                   return_value=live):
+                with mock.patch.object(
+                        provision, "run_sudo",
+                        return_value=(0, "", "")) as sudo:
+                    self.assertIsNone(provision.cleanup_churn_point(
+                        churn, run_root))
+                    sudo.assert_called_once_with(
+                        ["umount", churn["point"]])
+
+    def test_driver_restore_gate_checks_owned_bind(self):
+        import ast
+        from unittest import mock
+        # Exercise the SHIPPED driver gate: extract owned_bind_only
+        # from the driver source and run it against fake tables.
+        tree = ast.parse(provision.CHURN_DRIVER_PY)
+        wanted = [node for node in tree.body
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name == "owned_bind_only"]
+        self.assertEqual(len(wanted), 1)
+        module = ast.Module(body=wanted, type_ignores=[])
+        namespace = {"os": os}
+        exec(compile(module, "<driver>", "exec"), namespace)  # noqa: S102
+        gate = namespace["owned_bind_only"]
+        point, payload = "/run/churn/point", "/run/churn/payload-b"
+        owned = (f"90 1 0:50 / {point} rw shared:1 - ext4 "
+                 f"{payload} rw\n")
+        foreign = (f"90 1 0:50 / {point} rw shared:1 - tmpfs "
+                 f"/foreign rw\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            table = Path(tmp) / "mountinfo"
+            table.write_text(owned)
+            with mock.patch.dict(os.environ,
+                                 {"TT04_MOUNTINFO": str(table)}):
+                self.assertTrue(gate(point, payload))
+            table.write_text(foreign)
+            with mock.patch.dict(os.environ,
+                                 {"TT04_MOUNTINFO": str(table)}):
+                self.assertFalse(gate(point, payload))
+            table.write_text(owned + owned.replace("90 1 ", "91 1 "))
+            with mock.patch.dict(os.environ,
+                                 {"TT04_MOUNTINFO": str(table)}):
+                self.assertFalse(gate(point, payload))
+            with mock.patch.dict(os.environ, {"TT04_MOUNTINFO": str(
+                    Path(tmp) / "no-such-table")}):
+                self.assertFalse(gate(point, payload))
+
+    # R20: aux roots are identity-bound at acquisition.
+    def test_cleanup_aux_root_retires_owned_tree(self):
+        if not (os.path.isdir("/dev/shm")
+                and os.access("/dev/shm", os.W_OK)):
+            self.skipTest("/dev/shm not writable here")
+        aux = tempfile.mkdtemp(prefix="tt04-", dir="/dev/shm")
+        self.addCleanup(shutil.rmtree, aux, ignore_errors=True)
+        os.makedirs(os.path.join(aux, "lower"))
+        Path(aux, "lower", "shared.txt").write_text("shared")
+        st = os.stat(aux)
+        record = {"path": aux, "dev": st.st_dev, "ino": st.st_ino}
+        self.assertIsNone(provision.cleanup_aux_root(record))
+        self.assertFalse(os.path.exists(aux))
+
+    def test_cleanup_aux_root_unlinks_links_without_following(self):
+        if not (os.path.isdir("/dev/shm")
+                and os.access("/dev/shm", os.W_OK)):
+            self.skipTest("/dev/shm not writable here")
+        with tempfile.TemporaryDirectory() as tmp:
+            canary = Path(tmp) / "canary.txt"
+            canary.write_text("canary")
+            aux = tempfile.mkdtemp(prefix="tt04-", dir="/dev/shm")
+            self.addCleanup(shutil.rmtree, aux, ignore_errors=True)
+            os.symlink(str(canary), os.path.join(aux, "file-link"))
+            os.symlink(tmp, os.path.join(aux, "dir-link"))
+            st = os.stat(aux)
+            record = {"path": aux, "dev": st.st_dev, "ino": st.st_ino}
+            self.assertIsNone(provision.cleanup_aux_root(record))
+            self.assertFalse(os.path.exists(aux))
+            self.assertEqual(canary.read_text(), "canary")
+
+    def test_cleanup_aux_root_refuses_replacement(self):
+        if not (os.path.isdir("/dev/shm")
+                and os.access("/dev/shm", os.W_OK)):
+            self.skipTest("/dev/shm not writable here")
+        aux = tempfile.mkdtemp(prefix="tt04-", dir="/dev/shm")
+        self.addCleanup(shutil.rmtree, aux, ignore_errors=True)
+        st = os.stat(aux)
+        record = {"path": aux, "dev": st.st_dev, "ino": st.st_ino}
+        moved = aux + "-orig"
+        os.rename(aux, moved)
+        self.addCleanup(shutil.rmtree, moved, ignore_errors=True)
+        os.makedirs(aux)
+        canary = os.path.join(aux, "canary.txt")
+        Path(canary).write_text("canary")
+        failure = provision.cleanup_aux_root(record)
+        self.assertIn("replacement refused", failure)
+        self.assertEqual(Path(canary).read_text(), "canary")
+        self.assertTrue(os.path.isdir(moved))
+
+    def test_cleanup_aux_root_missing_is_noop(self):
+        record = {"path": "/dev/shm/tt04-no-such-aux-abcdef",
+                  "dev": 1, "ino": 2}
+        self.assertIsNone(provision.cleanup_aux_root(record))
+        self.assertIn("malformed",
+                      provision.cleanup_aux_root("/dev/shm/tt04-x"))
+        self.assertIn("foreign", provision.cleanup_aux_root(
+            {"path": "/tmp/tt04-x", "dev": 1, "ino": 2}))
+
+    # R21: timeouts are custody-preserving failures, never escapes;
+    # unrecorded sleepers are killed, never orphaned.
+    def test_run_sudo_reports_timeout(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(
+                    ["sudo", "-n", "true"], 120)):
+            rc, _, err = provision.run_sudo(["true"], timeout=120)
+        self.assertEqual(rc, 124)
+        self.assertIn("timed out", err)
+
+    def test_ext4_mount_timeout_detaches_loop_and_persists(self):
+        import types
+        from unittest import mock
+        tmp, run_root, manifest = self.fresh_paths()
+        calls = []
+
+        def fake_sudo(argv, timeout=120):
+            calls.append(list(argv))
+            if argv[0] == "mkfs.ext4":
+                return (0, "", "")
+            if argv[0] == "losetup" and argv[1] == "--find":
+                return (0, "/dev/loop9\n", "")
+            if argv[0] == "losetup" and argv[1] == "-d":
+                return (0, "", "")
+            if argv[0] == "mount":
+                return (124, "", "sudo timed out after 120s: mount")
+            raise AssertionError(f"unexpected sudo: {argv}")
+
+        doc = provision.fresh_manifest(run_root, True)
+        provision._PERSIST = manifest
+        try:
+            with mock.patch.object(provision, "run_sudo",
+                                   side_effect=fake_sudo):
+                with mock.patch.object(provision.shutil, "which",
+                                       return_value="/sbin/x"):
+                    provision.provision_ext4(doc, run_root)
+        finally:
+            provision._PERSIST = None
+        # The attached loop is detached on the mount timeout: no
+        # orphan. Custody was persisted BEFORE the mount call.
+        self.assertIn(["losetup", "-d", "/dev/loop9"], calls)
+        self.assertIn("timed out", doc["cells"]["FS01"]["reason"])
+        persisted = json.loads(Path(manifest).read_text())
+        self.assertEqual(persisted["evidence"]["ext4_loop"],
+                         "/dev/loop9")
+        backing = persisted["evidence"]["ext4_loop_backing"]
+        self.assertEqual(backing["path"],
+                         os.path.join(run_root, "ext4", "fs01.img"))
+        self.assertIn("dev", backing)
+        self.assertIn("ino", backing)
+
+    def test_spawn_sleeper_kills_tree_when_leaf_missing(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            report = str(Path(tmp) / "sleeper.report")
+            stdout = mock.Mock()
+            stdout.readline.return_value = b"ready\n"
+            child = mock.Mock()
+            child.pid = 424242
+            child.stdout = stdout
+            with mock.patch.object(provision.subprocess, "Popen",
+                                   return_value=child):
+                with mock.patch.object(
+                        provision, "resolve_leaf",
+                        side_effect=provision.AdmissionError(
+                            "no stable leaf")):
+                    with mock.patch.object(
+                            provision, "kill_tree",
+                            return_value=True) as killer:
+                        with self.assertRaises(
+                                provision.AdmissionError):
+                            provision.spawn_sleeper(
+                                Path(tmp) / "helper.py",
+                                str(Path(tmp) / "target.bin"),
+                                report, ["wrapper"])
+            killer.assert_called_once_with("sleeper-wrapper", 424242)
+
+    def test_kill_tree_kills_wrapper_and_descendants(self):
+        child = subprocess.Popen(
+            ["sh", "-c", "sleep 60"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            import time as _time
+            deadline = _time.time() + 10
+            while (_time.time() < deadline
+                   and not provision.child_pids(child.pid)):
+                _time.sleep(0.05)
+            self.assertTrue(provision.child_pids(child.pid),
+                            "fixture produced no child to kill")
+            self.assertTrue(provision.kill_tree("test-tree",
+                                                child.pid, timeout=5))
+            child.wait(timeout=10)
+            self.assertEqual(provision.child_pids(child.pid), [])
+        finally:
+            try:
+                child.kill()
+            except OSError:
+                pass
+            child.wait()
+        # An already-dead root is vacuously gone.
+        self.assertTrue(provision.kill_tree("test-dead", child.pid))
+
+    # R22: run-root text never becomes privileged shell code.
+    def test_bind_wrapper_treats_paths_as_argv(self):
+        evil_alt = "/tmp/tt04; touch CANARY; #"
+        evil_view = "/tmp/with space/view"
+        wrapper = provision.bind_view_wrapper(evil_alt, evil_view)
+        script = wrapper[wrapper.index("-c") + 1]
+        self.assertNotIn(evil_alt, script)
+        self.assertNotIn(evil_view, script)
+        self.assertIn(evil_alt, wrapper)
+        self.assertIn(evil_view, wrapper)
+        # LIVE: run the shipped script with a stub mount; the
+        # metacharacters must arrive as inert argv and no canary
+        # may appear outside.
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp) / "bin"
+            stub.mkdir()
+            log = Path(tmp) / "mount-args.txt"
+            (stub / "mount").write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$@" > '
+                f"{log}\n")
+            (stub / "mount").chmod(0o755)
+            canary = Path(tmp) / "CANARY"
+            env = dict(os.environ)
+            env["PATH"] = f"{stub}{os.pathsep}{env['PATH']}"
+            proc = subprocess.run(
+                ["sh", "-c", script, "tt04-view",
+                 evil_alt, evil_view, "/bin/true"],
+                capture_output=True, text=True, env=env,
+                cwd=tmp, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertFalse(canary.exists(),
+                             "shell metacharacters executed")
+            self.assertEqual(
+                log.read_text().splitlines(),
+                ["--bind", evil_alt, evil_view])
+
+    # R23: manifest updates use exclusive unpredictable temp files.
+    def test_save_manifest_ignores_predictable_tmp_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = str(Path(tmp) / "manifest.json")
+            victim = Path(tmp) / "victim.txt"
+            victim.write_text("victim")
+            # The OLD predictable name, preplanted as a symlink.
+            os.symlink(str(victim),
+                       f"{manifest}.tmp-{os.getpid()}")
+            provision.save_manifest({"k": "v"}, manifest)
+            self.assertEqual(victim.read_text(), "victim")
+            self.assertEqual(
+                json.loads(Path(manifest).read_text()), {"k": "v"})
+            self.assertTrue(os.path.islink(
+                f"{manifest}.tmp-{os.getpid()}"))
+
+    def test_save_manifest_replaces_manifest_symlink_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = str(Path(tmp) / "manifest.json")
+            victim = Path(tmp) / "victim.txt"
+            victim.write_text("victim")
+            os.symlink(str(victim), manifest)
+            provision.save_manifest({"k": "v"}, manifest)
+            self.assertFalse(os.path.islink(manifest))
+            self.assertEqual(
+                json.loads(Path(manifest).read_text()), {"k": "v"})
+            self.assertEqual(victim.read_text(), "victim")
+
+    def test_save_manifest_cleans_temp_on_replace_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # A directory AT the manifest path: os.replace fails.
+            manifest = str(Path(tmp) / "adir")
+            os.makedirs(manifest)
+            with self.assertRaises(OSError):
+                provision.save_manifest({"k": "v"}, manifest)
+            leftovers = [p.name for p in Path(tmp).iterdir()
+                         if p.name.startswith(".tt04-manifest-")]
+            self.assertEqual(leftovers, [])
+
+    # R42: denial is unresolved cleanup, never a false retire.
+    def test_denied_run_root_fails_not_retired(self):
+        tmp, _, manifest = self.fresh_paths()
+        sub = tmp / "sub"
+        sub.mkdir()
+        run_root = str(sub / "run")
+        created = run_tool("create", "--manifest", manifest,
+                           "--run-root", run_root)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        os.chmod(sub, 0)
+        try:
+            proc = run_tool("cleanup", "--manifest", manifest,
+                            "--run-root", run_root)
+        finally:
+            os.chmod(sub, 0o755)
+        self.assertEqual(proc.returncode, 1,
+                         proc.stdout + proc.stderr)
+        self.assertIn("not provably absent",
+                      proc.stdout + proc.stderr)
+        self.assertTrue(os.path.isdir(run_root),
+                        "denied root must survive, never report retired")
+        proc = run_tool("cleanup", "--manifest", manifest,
+                        "--run-root", run_root)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stdout + proc.stderr)
+        self.assertFalse(os.path.exists(run_root))
+
+    def test_loop_backing_denial_raises_not_detached(self):
+        from unittest import mock
+        with mock.patch("builtins.open",
+                        side_effect=PermissionError("denied")):
+            with self.assertRaises(provision.AdmissionError):
+                provision.read_loop_backing("/dev/loop7")
+        with mock.patch("builtins.open",
+                        side_effect=FileNotFoundError("gone")):
+            self.assertIsNone(
+                provision.read_loop_backing("/dev/loop7"))
+
+    # R15/R16: descriptor-relative retirement, no sudo for plain
+    # fixtures, privileged re-exec only on denial.
+    def test_plain_fixture_cleanup_never_calls_sudo(self):
+        import types
+        from unittest import mock
+        tmp, run_root, manifest = self.fresh_paths()
+        # Hide btrfs(8) from create: subvolume teardown
+        # legitimately needs privilege, and this test pins the
+        # plain-file path (R15: no sudo chmod/chown/rm fallback).
+        emptybin = tmp / "emptybin"
+        emptybin.mkdir()
+        created = run_tool("create", "--manifest", manifest,
+                           "--run-root", run_root,
+                           env={"PATH": str(emptybin)})
+        self.assertEqual(created.returncode, 0, created.stderr)
+        args = types.SimpleNamespace(run_root=run_root,
+                                     manifest=manifest)
+        with mock.patch.object(
+                provision, "run_sudo",
+                side_effect=AssertionError("sudo must not run")):
+            self.assertEqual(provision.cleanup_command(args), 0)
+        self.assertFalse(os.path.exists(run_root))
+
+    def test_remove_pinned_tree_clears_nested_and_links(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+            tree = base / "tree"
+            (tree / "sub" / "deep").mkdir(parents=True)
+            (tree / "sub" / "deep" / "f.txt").write_text("f")
+            (tree / "top.txt").write_text("top")
+            canary = Path(tmp) / "canary.txt"
+            canary.write_text("canary")
+            os.symlink(str(canary), tree / "file-link")
+            os.symlink(tmp, tree / "dir-link")
+            st = os.stat(tree)
+            parent_fd = os.open(
+                base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                self.assertIsNone(provision.remove_pinned_tree(
+                    parent_fd, "tree", (st.st_dev, st.st_ino)))
+            finally:
+                os.close(parent_fd)
+            self.assertFalse(os.path.exists(tree))
+            self.assertEqual(canary.read_text(), "canary")
+
+    def test_remove_pinned_tree_refuses_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+            tree = base / "tree"
+            tree.mkdir()
+            (tree / "owned.txt").write_text("owned")
+            st = os.stat(tree)
+            expected = (st.st_dev, st.st_ino)
+            os.rename(tree, base / "orig")
+            tree.mkdir()
+            canary = tree / "canary.txt"
+            canary.write_text("canary")
+            parent_fd = os.open(
+                base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                failure = provision.remove_pinned_tree(
+                    parent_fd, "tree", expected)
+            finally:
+                os.close(parent_fd)
+            self.assertIn("replacement refused", failure)
+            self.assertEqual(canary.read_text(), "canary")
+            self.assertTrue((base / "orig").is_dir())
+
+    def test_retire_helper_roundtrip_and_refusal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+            tree = base / "tree"
+            (tree / "sub").mkdir(parents=True)
+            (tree / "sub" / "f.txt").write_text("f")
+            st = os.stat(tree)
+            # Unprivileged end-to-end of the helper sudo would run.
+            proc = run_tool(
+                "retire-helper", "--parent", str(base),
+                "--name", "tree", "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino))
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("retired tree", proc.stdout)
+            self.assertFalse(os.path.exists(tree))
+            # Wrong identity refuses with the tree standing.
+            tree.mkdir()
+            (tree / "canary.txt").write_text("canary")
+            proc = run_tool(
+                "retire-helper", "--parent", str(base),
+                "--name", "tree", "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino + 1000000))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertEqual((tree / "canary.txt").read_text(),
+                             "canary")
+
+    def test_retire_helper_rejects_bad_spellings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ("../x", "a/b", "", ".", ".."):
+                proc = run_tool(
+                    "retire-helper", "--parent", str(tmp),
+                    "--name", bad, "--dev", "1", "--ino", "2")
+                self.assertEqual(proc.returncode, 1, bad)
+                self.assertIn("bad helper name", proc.stdout)
+            proc = run_tool(
+                "retire-helper", "--parent", "relative",
+                "--name", "x", "--dev", "1", "--ino", "2")
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("not absolute", proc.stdout)
 
 
 if __name__ == "__main__":

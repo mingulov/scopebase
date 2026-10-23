@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """TT04 real filesystem provisioner: plan|create|inspect|cleanup.
 
+``retire-helper`` is privileged-internal (cleanup re-execs this file
+under sudo for fd-bound removal); it is never invoked by hand.
+
 Only operates on named owned disposable resources under an explicitly
 supplied run-root. Privileged mounts/sleepers are created solely under
 ``create --privileged`` with working ``sudo -n``; the default create
@@ -18,6 +21,7 @@ no donor implements a filesystem provisioner.
 """
 import argparse
 import datetime
+import errno
 import hashlib
 import json
 import os
@@ -119,6 +123,35 @@ def check_run_root(raw):
     return None
 
 
+def unescape_mountinfo(field):
+    """Decode kernel mountinfo octal escapes (space \\040, tab \\011,
+    newline \\012, backslash \\134). Unknown escapes refuse: a path
+    the kernel spelled in a way we cannot decode must never be
+    compared containment-style against the run-root. (R24)"""
+    out = []
+    i = 0
+    while i < len(field):
+        char = field[i]
+        if char != "\\":
+            out.append(char)
+            i += 1
+            continue
+        esc = field[i + 1:i + 4]
+        if esc == "040":
+            out.append(" ")
+        elif esc == "011":
+            out.append("\t")
+        elif esc == "012":
+            out.append("\n")
+        elif esc == "134":
+            out.append("\\")
+        else:
+            raise AdmissionError(
+                f"undecodable mountinfo escape: {field[:80]!r}")
+        i += 4
+    return "".join(out)
+
+
 def parse_mountinfo_row(line):
     parts = line.split(" - ")
     if len(parts) != 2:
@@ -130,11 +163,13 @@ def parse_mountinfo_row(line):
         mnt_id = int(pre[0])
     except ValueError:
         raise AdmissionError(f"non-numeric mnt_id: {line[:80]!r}")
+    # R24: decode BEFORE any containment comparison, or an escaped
+    # foreign mount under a space-bearing run-root evades the guard.
     return {
         "mnt_id": mnt_id,
-        "target": pre[4],
+        "target": unescape_mountinfo(pre[4]),
         "fstype": post[0],
-        "source": post[1],
+        "source": unescape_mountinfo(post[1]),
         "super": post[2],
     }
 
@@ -149,20 +184,28 @@ def read_mount_table():
     return rows
 
 
-def find_mount(table, target):
-    for row in table:
-        if row["target"] == target:
-            return row
-    return None
+def find_mounts(table, target):
+    """Every row mounted at `target`, in table order (lower mounts
+    first). Callers must refuse ambiguity: with stacked mounts the
+    first row is NOT the mount a pathname umount would remove."""
+    return [row for row in table if row["target"] == target]
 
 
 def admit_mount(record, table, run_root):
     target = record.get("target", "")
     if not target or len(target) > MAX_PATH or not contained(target, run_root):
         raise AdmissionError(f"foreign mount target: {target[:80]!r}")
-    row = find_mount(table, target)
-    if row is None:
+    rows = find_mounts(table, target)
+    if not rows:
         raise AdmissionError(f"mount not present: {target}")
+    if len(rows) > 1:
+        # R17: stacked mounts at one target. Validating the lower
+        # row while cleanup unmounts the top one would retire a
+        # foreign mount, so ambiguity refuses outright.
+        raise AdmissionError(
+            f"ambiguous stacked mount at {target}: "
+            f"{len(rows)} rows, refusing")
+    row = rows[0]
     if row["mnt_id"] != record.get("mnt_id"):
         raise AdmissionError(
             f"mnt_id changed for {target}: live={row['mnt_id']} "
@@ -229,7 +272,7 @@ def host_capabilities():
                 timeout=30,
             )
             caps["sudo_n"] = proc.returncode == 0
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             caps["sudo_n"] = False
     if shutil.which("btrfs") is not None:
         try:
@@ -238,7 +281,7 @@ def host_capabilities():
                 text=True, timeout=30,
             )
             caps["btrfs_version"] = (proc.stdout or proc.stderr or "").strip()[:80]
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             pass
     clone = read_text_capped("/proc/sys/kernel/unprivileged_userns_clone", 64)
     if clone is not None:
@@ -313,6 +356,13 @@ def run_sudo(argv, timeout=120):
         )
     except OSError as exc:
         return (127, "", f"sudo exec failed: {exc}")
+    except subprocess.TimeoutExpired:
+        # R21: TimeoutExpired is NOT an OSError; without this arm a
+        # hung privileged call bypasses every OSError handler and
+        # orphans custody (e.g. an attached loop before its mount).
+        return (124, "",
+                f"sudo timed out after {timeout}s: "
+                f"{' '.join(argv)[:120]}")
     return (proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
@@ -325,13 +375,28 @@ _PERSIST = None
 
 
 def save_manifest(manifest, path):
-    """Atomically replace the manifest (tmp write, fsync, rename)."""
-    tmp = f"{path}.tmp-{os.getpid()}"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps(manifest, indent=2) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    """Atomically replace the manifest (tmp write, fsync, rename).
+
+    R23: the temp file is created exclusively under an
+    unpredictable name in the manifest's own directory — a
+    preplanted symlink at a predictable tmp name is never
+    followed, and ``os.replace`` swaps (not follows) a link at
+    the manifest path itself.
+    """
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".tt04-manifest-", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(manifest, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _persist_now(manifest):
@@ -341,9 +406,13 @@ def _persist_now(manifest):
 
 def record_mount(manifest, run_root, role, target, expect_super=()):
     table = read_mount_table()
-    row = find_mount(table, target)
-    if row is None:
+    rows = find_mounts(table, target)
+    if not rows:
         raise AdmissionError(f"mount missing after create: {target}")
+    if len(rows) > 1:
+        raise AdmissionError(
+            f"ambiguous stacked mount at {target}: refusing record")
+    row = rows[0]
     if len(manifest["mounts"]) >= MAX_MOUNTS:
         raise AdmissionError("mount cap exceeded")
     manifest["mounts"].append({
@@ -451,7 +520,7 @@ def provision_btrfs(manifest, run_root):
             "status": "provisioned", "needs_privilege": False,
             "detail": "snapshot-pinned svA-f/snapA-f collision pair",
         }
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         skip(f"btrfs provisioning I/O failed: {exc}")
 
 
@@ -478,9 +547,19 @@ def provision_ext4(manifest, run_root):
             return
         loop = out.strip().split()[0]
         manifest["evidence"]["ext4_loop"] = loop
-        # F08: the backing image identity, so cleanup detaches only
-        # the loop it attached (never a reused /dev/loopN name).
-        manifest["evidence"]["ext4_loop_backing"] = str(image)
+        # F08/R19: the backing image identity, so cleanup detaches
+        # only the loop it attached (never a reused /dev/loopN
+        # name). The (dev, ino) binding defeats same-pathname
+        # different-inode reuse; the path pins the spelling.
+        backing_st = os.stat(image)
+        manifest["evidence"]["ext4_loop_backing"] = {
+            "path": str(image),
+            "dev": backing_st.st_dev,
+            "ino": backing_st.st_ino,
+        }
+        # R21: persist custody BEFORE the fallible mount below, so
+        # a timeout between attach and mount cannot orphan the loop.
+        _persist_now(manifest)
         mnt = base / "mnt"
         mnt.mkdir(exist_ok=True)
         rc, _, err = run_sudo(["mount", "-t", "ext4", loop, str(mnt)])
@@ -594,7 +673,13 @@ def provision_overlays(manifest, run_root):
     aux = None
     try:
         aux = tempfile.mkdtemp(prefix="tt04-", dir="/dev/shm")
-        manifest.setdefault("aux_roots", []).append(aux)
+        aux_st = os.stat(aux)
+        # R20: bind the aux identity at acquisition; cleanup
+        # refuses a replacement at the recorded name.
+        manifest.setdefault("aux_roots", []).append({
+            "path": aux, "dev": aux_st.st_dev, "ino": aux_st.st_ino,
+        })
+        _persist_now(manifest)
     except OSError as exc:
         manifest["cells"]["FS05"]["reason"] = (
             f"tmpfs aux root unavailable: {exc}")
@@ -737,18 +822,50 @@ def spawn_sleeper(helper, target_file, report, wrapper):
     except OSError:
         log.close()
         raise
+    # The child holds its own copy; ours would leak one fd per spawn.
+    log.close()
     try:
         line = child.stdout.readline()
     except OSError:
         line = b""
     child.stdout.close()
     if line.strip() != b"ready":
-        child.kill()
-        child.wait()
+        # R21: kill the whole tree, not just the wrapper — a
+        # half-spawned leaf would otherwise run on unrecorded.
+        kill_tree("sleeper-wrapper", child.pid)
+        try:
+            child.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         raise AdmissionError(
             f"sleeper for {target_file} never became ready")
-    sleeper = resolve_leaf(child.pid)
+    try:
+        sleeper = resolve_leaf(child.pid)
+    except (OSError, AdmissionError):
+        # R21: ready but no stable leaf to record — guard the
+        # sleeper by killing the tree before refusing.
+        kill_tree("sleeper-wrapper", child.pid)
+        try:
+            child.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        raise
     return (child.pid, sleeper)
+
+
+def bind_view_wrapper(alt, view):
+    """Argv prefix mounting the foreign-view bind before the sleeper.
+
+    R22: paths travel as positional parameters ($1/$2), never
+    interpolated into the shell program — a run-root bearing
+    spaces, semicolons or comment markers stays inert data.
+    ``spawn_sleeper`` appends the interpreter argv after these, so
+    the script shifts the two paths off and execs the rest.
+    """
+    return ["sudo", "-n", "unshare", "-m", "--propagation", "private",
+            "sh", "-c",
+            'mount --bind "$1" "$2" && shift 2 && exec "$@"',
+            "tt04-view", str(alt), str(view)]
 
 
 def provision_sleepers(manifest, run_root):
@@ -773,10 +890,7 @@ def provision_sleepers(manifest, run_root):
         mnt_wrap, mnt_sleep = spawn_sleeper(
             helper, base / "view" / "data.txt",
             str(base / "mnt.report"),
-            ["sudo", "-n", "unshare", "-m", "--propagation", "private",
-             "sh", "-c",
-             f"mount --bind {alt} {view} && exec \"$@\"",
-             "tt04-view"])
+            bind_view_wrapper(alt, view))
         record_proc(manifest, "mnt-sleeper-wrapper", mnt_wrap)
         record_proc(manifest, "mnt-sleeper", mnt_sleep)
         time_wait_report(base / "mnt.report")
@@ -871,6 +985,64 @@ def signal_owned(pid, signum):
     run_sudo(["kill", f"-{name}", str(pid)])
 
 
+def _stat_state_start(pid):
+    """(state, starttime) from /proc/pid/stat, or None when unreadable."""
+    try:
+        with open(f"/proc/{pid}/stat", "r") as handle:
+            after = handle.read().rsplit(")", 1)[1].split()
+        return (after[0], int(after[19]))
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def kill_tree(role, root_pid, timeout=10):
+    """SIGTERM then SIGKILL a wrapper and every descendant (R21).
+
+    Used when a spawn produced live processes but no stable leaf
+    to record: killing the wrapper alone would orphan the leaf.
+    Each pid is snapshot with its starttime and re-verified before
+    every signal, so pid reuse cannot redirect the kill. Returns
+    True when the whole tree is gone.
+    """
+    import signal as _signal
+    import time as _time
+    snap = {}
+    stack = [root_pid]
+    seen = set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        got = _stat_state_start(pid)
+        if got is None:
+            continue
+        state, start = got
+        if state == "Z":
+            # Zombie: already dead; reaping is its parent's job.
+            continue
+        snap[pid] = start
+        stack.extend(child_pids(pid))
+
+    def still(pid):
+        got = _stat_state_start(pid)
+        if got is None:
+            return False
+        state, start = got
+        return state != "Z" and start == snap[pid]
+
+    for signum in (_signal.SIGTERM, _signal.SIGKILL):
+        for pid in snap:
+            if still(pid):
+                signal_owned(pid, signum)
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            if not any(still(pid) for pid in snap):
+                return True
+            _time.sleep(0.05)
+    return not any(still(pid) for pid in snap)
+
+
 def kill_owned(role, pid, starttime, timeout=10):
     """SIGTERM then SIGKILL an owned PID after a starttime identity check."""
     import signal as _signal
@@ -921,6 +1093,26 @@ def run(argv):
     ledger.write(f"run={' '.join(argv)} rc={proc.returncode} "
                  f"err={proc.stderr.strip()[-200:]}\n")
     return proc.returncode
+def owned_bind_only(target, expect_source):
+    # R18: the driver unmounts only our own recorded bind. Any
+    # other occupant (foreign mount, stacked mount, re-sourced
+    # bind, unreadable table) refuses and stays put.
+    # TT04_MOUNTINFO overrides the table path for tests only.
+    table_path = os.environ.get("TT04_MOUNTINFO", "/proc/self/mountinfo")
+    try:
+        with open(table_path) as handle:
+            text = handle.read()
+    except OSError:
+        return False
+    hits = []
+    for line in text.splitlines():
+        parts = line.split(" - ")
+        if len(parts) != 2:
+            continue
+        pre, post = parts[0].split(), parts[1].split()
+        if len(pre) >= 6 and len(post) == 3 and pre[4] == target:
+            hits.append(post[1])
+    return len(hits) == 1 and hits[0] == expect_source
 ledger.write("driver-ready\n")
 # Self-held RDWR descriptor: writers come and go per command, and
 # without it the first writer close delivers EOF and ends the loop.
@@ -933,7 +1125,11 @@ with open(fifo, "r") as commands:
             rc = run(["mount", "--bind", payload_b, point])
             open(ack, "w").write(f"bind-b rc={rc}\n")
         elif cmd == "restore":
-            rc = run(["umount", point])
+            if owned_bind_only(point, payload_b):
+                rc = run(["umount", point])
+            else:
+                ledger.write("restore-refused: foreign occupant\n")
+                rc = 77
             open(ack, "w").write(f"restore rc={rc}\n")
         elif cmd == "quit":
             open(ack, "w").write("quit rc=0\n")
@@ -971,6 +1167,8 @@ def provision_churn(manifest, run_root, base):
     except OSError as exc:
         log.close()
         raise AdmissionError(f"churn driver spawn failed: {exc}")
+    # The driver holds its own copies; ours would leak one fd per run.
+    log.close()
     import time as _time
     deadline = _time.time() + 15
     ready = False
@@ -988,9 +1186,15 @@ def provision_churn(manifest, run_root, base):
         child.wait()
         raise AdmissionError("churn driver never became ready")
     record_proc(manifest, "churn-driver", child.pid)
+    payload_st = os.stat(churn / "payload-b")
     manifest["evidence"]["churn"] = {
         "fifo": str(fifo), "ack": str(ack),
         "ledger": str(ledger), "point": str(point),
+        # R18: the only mount this point may ever host is our own
+        # payload-b bind; teardown refuses anything else.
+        "bind_source": str(churn / "payload-b"),
+        "bind_source_dev": payload_st.st_dev,
+        "bind_source_ino": payload_st.st_ino,
     }
 
 
@@ -1004,7 +1208,7 @@ def is_static_elf(path):
             ["file", "-b", path], capture_output=True,
             text=True, timeout=30)
         return "statically linked" in (proc.stdout or "")
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
@@ -1041,6 +1245,19 @@ def provision_chroot(manifest, base):
     import time as _time
     try:
         sleeper = resolve_leaf(child.pid)
+    except (OSError, AdmissionError):
+        # R21: spawned but no stable leaf to record — kill the
+        # tree so no unrecorded sleeper survives.
+        kill_tree("chroot-wrapper", child.pid)
+        try:
+            child.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        manifest["evidence"]["chroot"] = (
+            "unsupported: chroot leaf never stabilized; "
+            "wrapper tree killed")
+        return
+    try:
         deadline = _time.time() + 15
         seen = None
         while _time.time() < deadline:
@@ -1173,7 +1390,7 @@ def create_command(args):
         except OSError:
             pass
         return fail2(f"provisioning refused: {exc}")
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         manifest["status"] = "failed"
         manifest["error"] = f"I/O failure: {exc}"
         try:
@@ -1256,11 +1473,25 @@ def inspect_command(args):
         for entry in manifest["files"]:
             admit_file(entry, run_root)
         for aux in manifest.get("aux_roots", []):
-            norm = os.path.normpath(aux)
+            if not isinstance(aux, dict):
+                raise AdmissionError(
+                    f"aux root record malformed: {str(aux)[:60]!r}")
+            norm = os.path.normpath(aux.get("path", ""))
             if not norm.startswith("/dev/shm/tt04-") or ".." in norm:
-                raise AdmissionError(f"foreign aux root: {aux[:60]!r}")
-            if not os.path.isdir(norm):
-                raise AdmissionError(f"aux root missing: {norm[:60]!r}")
+                raise AdmissionError(
+                    f"foreign aux root: {aux.get('path', '')[:60]!r}")
+            try:
+                lst = os.lstat(norm)
+            except OSError as exc:
+                raise AdmissionError(
+                    f"aux root missing: {norm[:60]!r} ({exc})")
+            if stat.S_ISLNK(lst.st_mode):
+                raise AdmissionError(
+                    f"aux root replaced by symlink: {norm[:60]!r}")
+            if ((lst.st_dev, lst.st_ino)
+                    != (aux.get("dev"), aux.get("ino"))):
+                raise AdmissionError(
+                    f"aux root identity changed: {norm[:60]!r}")
         for name, cell in manifest["cells"].items():
             if cell.get("status") not in (
                     "provisioned", "skipped", "unsupported"):
@@ -1283,11 +1514,17 @@ def admit_run_root_identity(manifest, run_root):
     different (dev, ino) — including a symlink swapped in for the
     recorded directory — must never be destroyed by a repeated
     cleanup. Manifests predating the identity record fail closed.
+    R42: only proven absence (ENOENT) reads as retired; denial or
+    I/O failure raises, so residue behind an unreadable parent
+    never reports success.
     """
     try:
         st = os.stat(run_root)
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError as exc:
+        raise AdmissionError(
+            f"run-root not provably absent at {run_root}: {exc}")
     rec = manifest.get("run_root_identity") or {}
     if (st.st_dev, st.st_ino) != (rec.get("dev"), rec.get("ino")):
         raise AdmissionError(
@@ -1306,7 +1543,7 @@ def cleanup_one_mount(entry, table, run_root):
     target = entry.get("target", "")
     if not target or not contained(target, run_root):
         return f"foreign mount target refused: {target[:60]!r}"
-    if find_mount(table, target) is None:
+    if not find_mounts(table, target):
         return None
     try:
         admit_mount(entry, table, run_root)
@@ -1320,35 +1557,228 @@ def cleanup_one_mount(entry, table, run_root):
 
 def read_loop_backing(loop):
     """Live backing file of a /dev/loopN device, or None when the
-    device is gone (already detached)."""
+    device is gone (already detached). Only proven absence (ENOENT)
+    reads as detached; any other read failure raises, so a denial
+    or I/O error never masquerades as a retired loop. (R42)"""
     name = os.path.basename(str(loop))
     try:
         with open(f"/sys/block/{name}/loop/backing_file",
                   "r", encoding="utf-8", errors="replace") as handle:
             return handle.read().strip()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise AdmissionError(
+            f"loop {loop} backing unreadable (not provably detached): "
+            f"{exc}")
 
 
 def cleanup_loop_device(loop, backing):
     """Detach one recorded loop device. Returns None on success (or
     when already detached), else a failure string. A device whose
     live backing differs from the recorded image is a reused name:
-    it is refused, never detached. (F08)"""
+    it is refused, never detached. Identity is the backing
+    (dev, ino) binding, not the pathname spelling: same-path
+    different-inode reuse refuses. (F08, R19)"""
     if not loop or not str(loop).startswith("/dev/loop"):
         return None
-    live = read_loop_backing(loop)
+    try:
+        live = read_loop_backing(loop)
+    except AdmissionError as exc:
+        return str(exc)
     if live is None:
         return None
-    if not backing:
+    if not isinstance(backing, dict) or not backing.get("path"):
         return (f"loop {loop} has no recorded backing; refusing detach "
                 f"(live={live[:60]!r})")
-    if live != backing:
+    if os.path.normpath(live) != os.path.normpath(backing["path"]):
         return (f"loop {loop} backing changed (live={live[:60]!r}); "
                 f"refusing detach")
+    try:
+        st = os.stat(live)
+    except OSError as exc:
+        return (f"loop {loop} backing unverifiable ({exc}); "
+                f"refusing detach")
+    if (st.st_dev, st.st_ino) != (backing.get("dev"), backing.get("ino")):
+        return (f"loop {loop} backing identity changed "
+                f"(live=({st.st_dev},{st.st_ino})); refusing detach")
     rc, _, err = run_sudo(["losetup", "-d", loop])
     if rc != 0 and "No such device" not in tail(err):
         return f"losetup -d {loop} refused: {tail(err)}"
+    return None
+
+
+def cleanup_churn_point(churn, run_root):
+    """Retire the driver-managed churn bind point. Returns None when
+    nothing is mounted (or no churn was recorded), else a failure
+    string. The live mount must be exactly our recorded payload-b
+    bind: stacked, foreign, or re-sourced mounts are refused and
+    left in place, never unmounted. (R18)"""
+    churn = churn or {}
+    point = churn.get("point", "")
+    if not point or not contained(point, run_root):
+        return None
+    try:
+        table = read_mount_table()
+    except AdmissionError as exc:
+        # F08: an unreadable table must not silently skip this
+        # umount (the point would stay mounted under the retire).
+        return f"churn point table unreadable: {exc}"
+    rows = find_mounts(table, point)
+    if not rows:
+        return None
+    if len(rows) > 1:
+        return (f"churn point {point} has stacked mounts; "
+                f"refusing umount, left in place")
+    row = rows[0]
+    want_source = churn.get("bind_source", "")
+    if not want_source or row["source"] != os.path.normpath(want_source):
+        return (f"churn point {point} hosts foreign mount "
+                f"(source={row['source'][:60]!r}); refusing umount, "
+                f"left in place")
+    try:
+        st = os.stat(row["source"])
+    except OSError as exc:
+        return (f"churn bind source unverifiable: {exc}; "
+                f"refusing umount, left in place")
+    if ((st.st_dev, st.st_ino)
+            != (churn.get("bind_source_dev"), churn.get("bind_source_ino"))):
+        return (f"churn point {point} source identity changed; "
+                f"refusing umount, left in place")
+    rc, _, err = run_sudo(["umount", point])
+    if rc != 0:
+        return f"churn point umount refused: {tail(err)}"
+    return None
+
+
+def fd_clear_dir(fd):
+    """Recursively remove every entry under open dir fd `fd`
+    (fd-relative; never resolves a path). Each entry is opened as
+    a directory first: NOFOLLOW refuses symlinks with ELOOP and
+    files with ENOTDIR, and either falls through to a plain
+    unlink, which never follows a link. (R15)"""
+    for name in os.listdir(fd):
+        try:
+            child = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=fd)
+        except NotADirectoryError:
+            # File, fifo, socket, device: plain unlink.
+            os.unlink(name, dir_fd=fd)
+            continue
+        except OSError as exc:
+            if exc.errno != errno.ELOOP:
+                raise
+            # Symlink (real dirs never raise ELOOP here): unlink,
+            # never follow.
+            os.unlink(name, dir_fd=fd)
+            continue
+        try:
+            fd_clear_dir(child)
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=fd)
+
+
+def remove_pinned_tree(parent_fd, name, expected):
+    """Remove directory `name` under pinned `parent_fd`. (R15, R16)
+
+    The root is opened through the parent fd, verified against the
+    recorded (dev, ino), cleared through the held fd, and its name
+    unlinked through the pinned parent — with a final link-count
+    check on the held fd proving OUR directory lost its name.
+    Returns None on success (or when already gone), else a failure
+    string; permission failures carry a "denied: " prefix so the
+    caller can retry privileged, while replacements refuse.
+    """
+    try:
+        root_fd = os.open(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return f"denied: pinned open failed: {exc}"
+        return f"pinned open failed: {exc}"
+    try:
+        st = os.fstat(root_fd)
+        if (st.st_dev, st.st_ino) != expected:
+            return (f"identity changed: live=({st.st_dev},{st.st_ino}) "
+                    f"expected={expected}; replacement refused")
+        try:
+            fd_clear_dir(root_fd)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                return f"denied: clear failed: {exc}"
+            return f"clear failed: {exc}"
+        # Re-verify the name still addresses our inode before unlink.
+        try:
+            live = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd)
+        except OSError as exc:
+            return f"pre-unlink verify failed: {exc}"
+        try:
+            got = os.fstat(live)
+        finally:
+            os.close(live)
+        if (got.st_dev, got.st_ino) != expected:
+            return (f"identity changed before unlink: "
+                    f"live=({got.st_dev},{got.st_ino}); "
+                    f"replacement refused")
+        try:
+            os.rmdir(name, dir_fd=parent_fd)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                return f"denied: unlink failed: {exc}"
+            return f"unlink failed: {exc}"
+        if os.fstat(root_fd).st_nlink != 0:
+            return ("replaced during unlink: our directory still "
+                    "linked; refusing (original cleared, name kept)")
+    finally:
+        os.close(root_fd)
+    return None
+
+
+def cleanup_aux_root(aux):
+    """Retire one recorded auxiliary root. None on success (or
+    already gone), else a failure string. Identity-bound: a
+    replacement at the recorded name is refused, never deleted;
+    removal is fd-relative under the pinned parent. (R20)"""
+    if not isinstance(aux, dict):
+        return f"aux root record malformed: {str(aux)[:60]!r}"
+    norm = os.path.normpath(aux.get("path", ""))
+    if (not norm.startswith("/dev/shm/tt04-") or "/" in
+            norm[len("/dev/shm/tt04-"):] or ".." in norm):
+        return f"foreign aux root refused: {aux.get('path', '')[:60]!r}"
+    try:
+        lst = os.lstat(norm)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"aux root {norm} unverifiable: {exc}"
+    if stat.S_ISLNK(lst.st_mode):
+        return f"aux root {norm} replaced by symlink; refused"
+    expected = (aux.get("dev"), aux.get("ino"))
+    if (lst.st_dev, lst.st_ino) != expected:
+        return (f"aux root {norm} identity changed; "
+                f"replacement refused")
+    parent = os.path.dirname(norm)
+    name = os.path.basename(norm)
+    try:
+        parent_fd = os.open(
+            parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        return f"aux root parent not openable: {exc}"
+    try:
+        failure = remove_pinned_tree(parent_fd, name, expected)
+    finally:
+        os.close(parent_fd)
+    if failure is not None:
+        # Aux roots are caller-owned tmpfs dirs; a denial is
+        # reported, never silently escalated to sudo.
+        return f"aux root {norm}: {failure}"
     return None
 
 
@@ -1449,28 +1879,24 @@ def cleanup_command(args):
             continue
         if not os.path.exists(path):
             continue
-        proc = subprocess.run(
-            ["btrfs", "subvolume", "delete", path],
-            capture_output=True, text=True, timeout=60)
-        if proc.returncode != 0:
+        try:
+            proc = subprocess.run(
+                ["btrfs", "subvolume", "delete", path],
+                capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            # R21: a hung unprivileged delete falls through to the
+            # sudo attempt (which caps at 120s) instead of escaping
+            # as a traceback with the subvolume unrecorded.
+            proc = None
+        if proc is None or proc.returncode != 0:
             rc, _, err = run_sudo(["btrfs", "subvolume", "delete", path])
             if rc != 0:
                 failures.append(f"subvolume delete {sv} refused: {tail(err)}")
     # The churn bind point is driver-managed, not a recorded mount:
-    # unmount it explicitly (it is always inside the owned run-root).
-    if point and contained(point, run_root):
-        try:
-            live = read_mount_table()
-        except AdmissionError as exc:
-            # F08: an unreadable table must not silently skip this
-            # umount (the point would stay mounted under the rmtree).
-            failures.append(f"churn point table unreadable: {exc}")
-            live = []
-        if find_mount(live, point) is not None:
-            rc, _, err = run_sudo(["umount", point])
-            if rc != 0:
-                failures.append(
-                    f"churn point umount refused: {tail(err)}")
+    # retire it only when it still hosts our own bind (R18).
+    failure = cleanup_churn_point(churn, run_root)
+    if failure is not None:
+        failures.append(failure)
     # Never remove a run-root that still hosts a recorded live mount,
     # or any other mount at or under it. F08: no exemptions — an
     # unexpected mount AT the run-root itself, or a lingering churn
@@ -1483,7 +1909,7 @@ def cleanup_command(args):
         failures.append(f"mount table unreadable before retire: {exc}")
         table = []
     for entry in manifest["mounts"]:
-        if find_mount(table, entry.get("target", "")) is not None:
+        if find_mounts(table, entry.get("target", "")):
             failures.append(f"mount still live: {entry.get('target')}")
     recorded = {e.get("target") for e in manifest["mounts"]}
     for row in table:
@@ -1496,23 +1922,33 @@ def cleanup_command(args):
             print(f"  - {item}")
         return 1
     for aux in manifest.get("aux_roots", []):
-        norm = os.path.normpath(aux)
-        if (not norm.startswith("/dev/shm/tt04-") or "/" in
-                norm[len("/dev/shm/tt04-"):] or ".." in norm):
-            failures.append(f"foreign aux root refused: {aux[:60]!r}")
-            continue
-        if os.path.exists(norm):
-            try:
-                shutil.rmtree(norm, ignore_errors=False)
-            except OSError as exc:
-                failures.append(f"aux root {norm} not removed: {exc}")
+        failure = cleanup_aux_root(aux)
+        if failure is not None:
+            failures.append(failure)
     if failures:
         print("cleanup: FAILED")
         for item in failures:
             print(f"  - {item}")
         return 1
+    return _retire_pinned_root(manifest, run_root)
+
+
+def _retire_pinned_root(manifest, run_root):
+    """Destroy the admitted run-root; return the cleanup exit code.
+
+    R15/R16: removal is descriptor-relative end to end. The parent
+    is pinned once, the root is opened through it, verified against
+    the recorded (dev, ino), cleared through the held fd, and its
+    name unlinked through the pinned parent — with a final
+    link-count check proving OUR directory lost its name. The
+    privileged path re-execs this same file under sudo with the
+    recorded identity as argv (no shell, no chmod/chown/rm
+    fallbacks), so verification and destruction share one process
+    and no caller-side check-then-use gap remains.
+    """
     # F08: re-verify immediately before destruction: the root may
-    # have been replaced after the entry gate.
+    # have been replaced after the entry gate. R42: denial raises
+    # (REFUSED); only proven absence retires idempotently.
     try:
         if not admit_run_root_identity(manifest, run_root):
             print(f"cleanup: already retired {run_root}")
@@ -1520,106 +1956,85 @@ def cleanup_command(args):
     except AdmissionError as exc:
         print(f"cleanup: REFUSED {exc}")
         return 1
-    # Pin the verified directory: the unprivileged retire below
-    # resolves through this fd, immune to path swaps entirely.
-    try:
-        root_fd = os.open(
-            run_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    except OSError as exc:
-        if not os.path.exists(run_root):
-            print(f"cleanup: already retired {run_root}")
-            return 0
-        print(f"cleanup: FAILED\n  - run-root not openable: {exc}")
-        return 1
-    try:
-        retire_rc = _retire_pinned_root(
-            manifest, run_root, f"/proc/self/fd/{root_fd}")
-    finally:
-        os.close(root_fd)
-    return retire_rc
-
-
-def _live_root_ok(manifest, run_root):
-    """Re-verify the live root is the recorded directory (not a
-    symlink, not a replacement). True/False; False only when already
-    gone. Raises on replacement. Used immediately before each
-    path-based privileged fallback, which cannot cross the sudo
-    boundary on a pinned fd. (F08)"""
-    try:
-        lst = os.lstat(run_root)
-    except OSError:
-        return False
-    if stat.S_ISLNK(lst.st_mode):
-        raise AdmissionError(
-            f"run-root replaced by symlink at {run_root}; refused")
-    try:
-        st = os.stat(run_root)
-    except OSError:
-        return False
     rec = manifest.get("run_root_identity") or {}
-    if (st.st_dev, st.st_ino) != (rec.get("dev"), rec.get("ino")):
-        raise AdmissionError(
-            f"run-root identity changed at {run_root}: "
-            f"live=({st.st_dev},{st.st_ino}) "
-            f"manifest=({rec.get('dev')},{rec.get('ino')}); "
-            f"replacement refused")
-    return True
-
-
-def _retire_pinned_root(manifest, run_root, fd_path):
-    # Overlay workdirs contain root-owned restricted entries; reclaim
-    # ownership of the owned run-root, then retry, then remove via sudo
-    # as a last resort. All mounts are already verified gone and the
-    # root is containment-checked.
-    first_error = ""
+    expected = (rec.get("dev"), rec.get("ino"))
+    parent = os.path.dirname(run_root)
+    name = os.path.basename(run_root)
     try:
-        shutil.rmtree(fd_path, ignore_errors=False)
+        parent_fd = os.open(
+            parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as exc:
-        first_error = str(exc)
-        try:
-            if not _live_root_ok(manifest, run_root):
-                print(f"cleanup: retired {run_root}")
-                return 0
-        except AdmissionError as refuse:
-            print(f"cleanup: REFUSED {refuse}")
-            return 1
-        run_sudo(["chmod", "-R", "u+rwX", run_root])
-        try:
-            if not _live_root_ok(manifest, run_root):
-                print(f"cleanup: retired {run_root}")
-                return 0
-        except AdmissionError as refuse:
-            print(f"cleanup: REFUSED {refuse}")
-            return 1
-        rc, _, err = run_sudo(
-            ["chown", "-R", f"{os.geteuid()}:{os.getegid()}", run_root])
-        if rc == 0:
-            try:
-                shutil.rmtree(fd_path, ignore_errors=False)
-            except OSError as exc2:
-                first_error = f"{first_error}; retry: {exc2}"
-        else:
-            first_error = f"{first_error}; chown refused: {tail(err)}"
-        try:
-            if not _live_root_ok(manifest, run_root):
-                print(f"cleanup: retired {run_root}")
-                return 0
-        except AdmissionError as refuse:
-            print(f"cleanup: REFUSED {refuse}")
-            return 1
-        if os.path.exists(run_root):
-            rc2, _, err2 = run_sudo(["rm", "-rf", run_root])
-            if rc2 != 0 or os.path.exists(run_root):
-                print(f"cleanup: FAILED\n  - run-root not removed: "
-                      f"{first_error}; sudo rm rc={rc2} {tail(err2)}")
-                return 1
-            print(f"cleanup: retired {run_root} via sudo rm "
-                  f"(first error: {first_error})")
-            return 0
-    if os.path.exists(run_root):
-        print(f"cleanup: FAILED\n  - run-root survives: {first_error}")
+        print(f"cleanup: FAILED\n  - run-root parent not openable: {exc}")
         return 1
-    print(f"cleanup: retired {run_root}")
+    try:
+        failure = remove_pinned_tree(parent_fd, name, expected)
+    finally:
+        os.close(parent_fd)
+    if failure is None:
+        print(f"cleanup: retired {run_root}")
+        return 0
+    if failure.startswith("denied: "):
+        # Root-owned entries (overlay workdirs) defeat the
+        # unprivileged pass; one privileged fd-bound removal.
+        failure = _retire_via_sudo(parent, name, expected)
+        if failure is None:
+            print(f"cleanup: retired {run_root} via sudo "
+                  f"(unprivileged pass denied)")
+            return 0
+    print(f"cleanup: FAILED\n  - run-root not removed: {failure}")
+    return 1
+
+
+def _retire_via_sudo(parent, name, expected):
+    """One privileged fd-bound removal via this same file (R16).
+
+    The helper re-verifies the recorded identity itself, in the
+    same process that destroys, so no caller-side validation can
+    go stale. Returns None on success, else a failure string.
+    """
+    dev, ino = expected
+    helper = os.path.abspath(__file__)
+    rc, out, err = run_sudo(
+        [sys.executable, helper, "retire-helper",
+         "--parent", parent, "--name", name,
+         "--dev", str(dev), "--ino", str(ino)],
+        timeout=300)
+    if rc == 0 and out.startswith("retired "):
+        return None
+    return f"sudo retire refused: rc={rc} {tail(out or err)}"
+
+
+def retire_helper_command(args):
+    """Privileged-internal: fd-bound removal of one admitted dir.
+
+    Never invoked by hand: cleanup re-execs this file under sudo
+    so the privileged removal verifies identity itself, in the
+    same process that destroys. Prints `retired <name>` or
+    `FAILED: <reason>`; exit 0/1.
+    """
+    name = args.name
+    if (not name or "/" in name or name in (".", "..")
+            or "\x00" in name or len(name) > 255):
+        print(f"FAILED: bad helper name: {name[:60]!r}")
+        return 1
+    if not os.path.isabs(args.parent):
+        print(f"FAILED: helper parent not absolute: {args.parent[:80]!r}")
+        return 1
+    try:
+        parent_fd = os.open(
+            args.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        print(f"FAILED: helper parent not openable: {exc}")
+        return 1
+    try:
+        failure = remove_pinned_tree(
+            parent_fd, name, (args.dev, args.ino))
+    finally:
+        os.close(parent_fd)
+    if failure is not None:
+        print(f"FAILED: {failure}")
+        return 1
+    print(f"retired {name}")
     return 0
 
 
@@ -1632,6 +2047,14 @@ def main(argv=None):
         cmd.add_argument("--run-root", required=True)
         if name == "create":
             cmd.add_argument("--privileged", action="store_true")
+    helper_cmd = sub.add_parser(
+        "retire-helper",
+        help="privileged-internal fd-bound removal (invoked via sudo "
+             "by cleanup, never by hand)")
+    helper_cmd.add_argument("--parent", required=True)
+    helper_cmd.add_argument("--name", required=True)
+    helper_cmd.add_argument("--dev", required=True, type=int)
+    helper_cmd.add_argument("--ino", required=True, type=int)
     args = parser.parse_args(argv)
     if args.command == "plan":
         return plan_command(args)
@@ -1639,6 +2062,8 @@ def main(argv=None):
         return create_command(args)
     if args.command == "inspect":
         return inspect_command(args)
+    if args.command == "retire-helper":
+        return retire_helper_command(args)
     return cleanup_command(args)
 
 

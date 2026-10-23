@@ -178,3 +178,127 @@ fn fixture_root_refuses_symlinks_at_every_level() {
     root.close().expect("cleanup");
     parent.close().expect("parent cleanup");
 }
+
+/// R14: replacing an ancestor redirects neither writes nor cleanup.
+/// The root is created under grand/a; grand/a is then renamed away
+/// and a FRESH grand/a/root planted. Writes must land in the moved
+/// original, and close must retire it while the plant stands.
+#[test]
+fn fixture_root_survives_ancestor_replacement() {
+    let tag = format!("lx11-conformance-{}-anc", std::process::id());
+    let grand = std::env::temp_dir().join(&tag);
+    let old = grand.join("a");
+    let moved = grand.join("b");
+    std::fs::create_dir_all(&old).expect("grand/a");
+    let root = FixtureRoot::create(&old, "root").expect("root");
+    root.write_file("before.txt", b"before")
+        .expect("pre-move write");
+    std::fs::rename(&old, &moved).expect("rename ancestor away");
+    // Attacker's fresh tree at the advisory path.
+    std::fs::create_dir_all(old.join("root")).expect("plant fresh root");
+    std::fs::write(old.join("root").join("plant.txt"), b"plant").expect("plant canary");
+
+    let file = root
+        .write_file("after.txt", b"after")
+        .expect("post-move write");
+    assert!(
+        !old.join("root").join("after.txt").exists(),
+        "write landed in the planted ancestor tree"
+    );
+    assert_eq!(
+        std::fs::read(moved.join("root").join("after.txt")).expect("read moved"),
+        b"after",
+        "write did not stay with the pinned root"
+    );
+    assert_eq!(
+        std::fs::read(moved.join("root").join("before.txt")).expect("read moved old"),
+        b"before"
+    );
+    drop(file);
+    root.close().expect("close retires the pinned original");
+    assert!(!moved.join("root").exists(), "pinned original not retired");
+    assert_eq!(
+        std::fs::read(old.join("root").join("plant.txt")).expect("plant reads"),
+        b"plant",
+        "close deleted the planted replacement"
+    );
+    std::fs::remove_dir_all(&grand).expect("grand cleanup");
+}
+
+/// R14: swapping another directory in at the root path is refused by
+/// close: the replacement (with its canary) stands and close reports
+/// an error instead of deleting it.
+#[test]
+fn fixture_root_close_refuses_root_replacement() {
+    let tag = format!("lx11-conformance-{}-swap", std::process::id());
+    let base = std::env::temp_dir().join(&tag);
+    std::fs::create_dir_all(&base).expect("base");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("owned.txt", b"owned").expect("owned write");
+    std::fs::rename(base.join("root"), base.join("orig")).expect("move original away");
+    // Attacker's replacement: non-empty, so even a path-based rmdir
+    // could not take it — but close must refuse by IDENTITY, before
+    // any unlink attempt.
+    std::fs::create_dir(base.join("root")).expect("plant replacement");
+    std::fs::write(base.join("root").join("canary.txt"), b"canary").expect("plant canary");
+
+    let err = root.close().expect_err("close refuses the replacement");
+    assert_eq!(
+        std::fs::read(base.join("root").join("canary.txt")).expect("canary reads"),
+        b"canary",
+        "close deleted the replacement: {err}"
+    );
+    assert!(
+        err.to_string().contains("replaced"),
+        "unexpected error: {err}"
+    );
+    // Our original tree was cleared (we own it) but its name stands —
+    // the unlink never ran against the wrong inode.
+    assert!(base.join("orig").is_dir(), "original dir entry vanished");
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}
+
+/// R14: an EMPTY directory planted at the root path is likewise
+/// refused — the pre-unlink identity check fires before the name is
+/// removed, so the plant survives and the error names replacement.
+#[test]
+fn fixture_root_close_refuses_empty_replacement() {
+    let tag = format!("lx11-conformance-{}-empty", std::process::id());
+    let base = std::env::temp_dir().join(&tag);
+    std::fs::create_dir_all(&base).expect("base");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    std::fs::rename(base.join("root"), base.join("orig")).expect("move original away");
+    std::fs::create_dir(base.join("root")).expect("plant empty replacement");
+
+    let err = root.close().expect_err("close refuses the empty plant");
+    assert!(base.join("root").is_dir(), "empty plant was unlinked");
+    assert!(
+        err.to_string().contains("replaced"),
+        "unexpected error: {err}"
+    );
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}
+
+/// R14: `clear_dir` unlinks symlinks (even ones pointing at
+/// directories) instead of following them: the outside canary tree
+/// survives close.
+#[test]
+fn fixture_root_close_unlinks_symlinks_without_following() {
+    use std::os::unix::fs::symlink;
+    let tag = format!("lx11-conformance-{}-links", std::process::id());
+    let base = std::env::temp_dir().join(&tag);
+    std::fs::create_dir_all(base.join("outside")).expect("base");
+    std::fs::write(base.join("outside").join("canary.txt"), b"canary").expect("canary");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("sub/deep.txt", b"deep").expect("nested");
+    symlink("../outside/canary.txt", base.join("root").join("file-link")).expect("plant file link");
+    symlink("../outside", base.join("root").join("dir-link")).expect("plant dir link");
+    root.close().expect("close clears links");
+    assert!(!base.join("root").exists(), "root not retired");
+    assert_eq!(
+        std::fs::read(base.join("outside").join("canary.txt")).expect("canary reads"),
+        b"canary",
+        "close followed a symlink out of the root"
+    );
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}
