@@ -70,6 +70,17 @@ pub use ring::{
     RecordHeader, RingPositions, StageStats, StagedRecord, STAGE_FRAMING_VERSION,
 };
 
+pub mod loss;
+pub mod writer;
+pub use loss::{
+    fold_degradation_255, DiagnosticFlag, FullMap, LossEpoch, LossGrid, DEGRADATION_CAP,
+};
+pub use writer::{
+    fold_insertion, guard_admit, insertion_owner, insertion_total, writer_slot, GuardKind,
+    IdentityLane, Insertion, MissLedger, WriterArch, WriterDeclaration, WriterPartition,
+    IDENTITY_PRESENT,
+};
+
 #[cfg(feature = "btf")]
 pub mod btf;
 #[cfg(feature = "btf")]

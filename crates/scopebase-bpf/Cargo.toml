@@ -9,7 +9,7 @@ publish = false
 build = false
 readme = "README.md"
 description = "ScopeBase host BPF error and budget contracts"
-include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**", "fixtures/btf-v1/**"]
+include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md", "src/**", "tests/**", "examples/**", "fixtures/capability-v1/**", "fixtures/attach-v1/**", "fixtures/ring-v1/**", "fixtures/btf-v1/**", "fixtures/writer-v1/**"]
 autotests = false
 autoexamples = false
 
@@ -107,3 +107,7 @@ path = "tests/ring.rs"
 name = "btf"
 path = "tests/btf.rs"
 required-features = ["btf"]
+
+[[test]]
+name = "writer_identity"
+path = "tests/writer_identity.rs"
