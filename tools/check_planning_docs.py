@@ -191,6 +191,9 @@ PREREQ_EXCEPTIONS={
     'TT09': {'TT03': 'harness complete; tt03_pair_launch baseline honestly UNBUILT'},
     'TT07': {'TT03': 'operator runs on worker increments (14/14 P, collect/retire); domain profiles honestly NoBoundAdapter'},
     'LX06': {'LX08': 'LX08 epoch/authority slice merged and used; TT04-cell parts deferred with bindings'},
+    'TT04': {'TT03': 'cells + audit run on worker increments (14/14 P, collect/retire modeled)'},
+    'BP08': {'TT05': 'host increment only; Step-4 live/object cells NOT_RUN with exact binding'},
+    'LX11': {'TT03': 'consumers run on accepted libs + worker increments; TT07 closure is LX12 work'},
 }
 for task in tasks:
     state=task.get('status')

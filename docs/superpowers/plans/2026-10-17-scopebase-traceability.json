@@ -4512,6 +4512,11 @@
       "title": "Program/CPU writer ownership, insertion provenance and full-map diagnostics"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-bp08-identity.md",
+        "reviewed_candidate_commit": "9641a17bf32468ba072bc54f3ca55135dd29fa0e",
+        "subject_commit": "9641a17bf32468ba072bc54f3ca55135dd29fa0e"
+      },
       "anchor": "bp08-optional-producer-taskexec-identity-protocol",
       "depends_on": [
         "BP03",
@@ -4529,7 +4534,7 @@
         "SB-R09",
         "BP-R10"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Optional producer task/exec identity protocol"
     },
     {
@@ -5505,6 +5510,11 @@
       "title": "Explicit bounded descriptor-relative discovery"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-lx11-clients.md",
+        "reviewed_candidate_commit": "bdfc3d0f66c31b46cb140d1f93050e2b6620594b",
+        "subject_commit": "bdfc3d0f66c31b46cb140d1f93050e2b6620594b"
+      },
       "anchor": "lx11-two-independently-wired-real-clients-and-developer-conformance",
       "depends_on": [
         "LX02",
@@ -5573,7 +5583,7 @@
         "LX-R21",
         "LX-R22"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Two independently wired real clients and developer conformance"
     },
     {
@@ -6280,6 +6290,11 @@
       "title": "Owned Linux fixture worker and independent raw truth"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-tt04-cells.md",
+        "reviewed_candidate_commit": "fbd4ec7eb762cf1bfab3ff9ede723971e3c7d29d",
+        "subject_commit": "fbd4ec7eb762cf1bfab3ff9ede723971e3c7d29d"
+      },
       "anchor": "tt04-real-filesystem-cells-and-mapping-policy-audit",
       "depends_on": [
         "TT03",
@@ -6297,7 +6312,7 @@
         "TT-R06",
         "TT-R12"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Real filesystem cells and mapping-policy audit"
     },
     {
@@ -6529,6 +6544,11 @@
       "title": "Versioning, support and documentation contracts"
     },
     {
+      "acceptance": {
+        "evidence_record": "docs/reviews/2026-10-23-rl01-review.md",
+        "reviewed_candidate_commit": "99b5b1ca002eb82311f96a4a92c01c178eb97dbd",
+        "subject_commit": "99b5b1ca002eb82311f96a4a92c01c178eb97dbd"
+      },
       "anchor": "rl01-cross-package-api-and-adversarial-integration-review",
       "depends_on": [
         "SB03",
@@ -6775,7 +6795,7 @@
         "SB-R15",
         "SB-R16"
       ],
-      "status": "PLANNED",
+      "status": "ACCEPTED",
       "title": "Cross-package API and adversarial integration review"
     },
     {
