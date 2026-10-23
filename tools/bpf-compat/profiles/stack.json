@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "tc06_rule_manifest",
+  "name": "stack",
+  "version": "1",
+  "rules": [
+    {
+      "rule": "stack.per-frame-minimum",
+      "min_frame_bytes": 64,
+      "max_total_bytes": 512
+    },
+    {
+      "rule": "call.max-params",
+      "function": "classify_direct_interface",
+      "max_params": 5
+    },
+    {
+      "rule": "call.bundled-replacement",
+      "function": "classify_direct_interface_bundled",
+      "params": [
+        {
+          "pointer": true
+        },
+        {
+          "pointer": true
+        }
+      ]
+    },
+    {
+      "rule": "init.path-guard",
+      "path": "emit",
+      "forbidden": "memset"
+    }
+  ]
+}

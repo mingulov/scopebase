@@ -67,6 +67,11 @@ path = "tests/object_graph.rs"
 required-features = ["object"]
 
 [[test]]
+name = "object_rules"
+path = "tests/object_rules.rs"
+required-features = ["object"]
+
+[[test]]
 name = "selection"
 path = "tests/selection.rs"
 

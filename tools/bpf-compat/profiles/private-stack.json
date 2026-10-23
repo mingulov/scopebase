@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "tc06_rule_manifest",
+  "name": "private-stack",
+  "version": "1",
+  "rules": [
+    {
+      "rule": "private-stack.opt-out-required",
+      "sections": [
+        "uprobe",
+        "uretprobe"
+      ],
+      "arrays": [
+        {
+          "name": "TAIL_CALLS"
+        },
+        {
+          "name": "STACK_GUARD"
+        },
+        {
+          "name": "PAIR_CALLS"
+        }
+      ],
+      "opt_out_index": 4294967295,
+      "continuations": [
+        {
+          "array": "TAIL_CALLS",
+          "slot": 0
+        },
+        {
+          "array": "PAIR_CALLS",
+          "slot": 0
+        }
+      ],
+      "multi_loaded": [
+        "p11_entry",
+        "p11_entry_template_second"
+      ],
+      "pair": "p11_entry_template_pair",
+      "pair_array": "PAIR_CALLS",
+      "plain_array": "TAIL_CALLS",
+      "multi_array": "STACK_GUARD"
+    }
+  ]
+}
