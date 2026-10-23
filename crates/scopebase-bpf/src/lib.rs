@@ -81,6 +81,13 @@ pub use writer::{
     IDENTITY_PRESENT,
 };
 
+pub mod identity;
+pub use identity::{
+    advance_exec, plan_exec_read, same_execution, Admission, ExecAdvance, ExecGeneration,
+    ExecReadPlan, ExecShapeProbe, IdentityRegistry, IdentityWire, ProducerDomain, ProducerIdentity,
+    TaskCookie,
+};
+
 #[cfg(feature = "btf")]
 pub mod btf;
 #[cfg(feature = "btf")]
