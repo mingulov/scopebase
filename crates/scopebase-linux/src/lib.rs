@@ -18,6 +18,9 @@ pub mod error;
 /// Retained file authority and bounded positional reads with observation-only results.
 pub mod file;
 pub mod identity;
+/// Mapping relations, explicit calibration and retained custody (LX06).
+#[cfg(feature = "mapping")]
+pub mod mapping;
 /// Strict process observation authority, task birth and observer epochs (LX08).
 #[cfg(feature = "process")]
 pub mod process;

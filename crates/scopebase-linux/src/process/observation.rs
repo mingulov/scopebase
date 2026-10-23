@@ -7,6 +7,8 @@ use super::{
     map_errno, namespace_sample, native, parse_stat, parse_target_status, pid_name, poll_pidfd,
     read_metadata_eof, transport_vec, validate_limits, NsKey, Pid, PollClass, ProcLimits, ProcOps,
 };
+#[cfg(feature = "mapping")]
+use super::{map_files_name, MAP_FILES_NAME_LEN};
 use crate::{
     control::OperationControl,
     error::{
@@ -16,6 +18,8 @@ use crate::{
     identity::{MountViewId, ObservationInterval, ProcViewId, TaskBirthObservation},
     procfs::{parse_maps, parse_mountinfo, MapsSnapshot, MountTableSnapshot},
 };
+#[cfg(feature = "mapping")]
+use rustix::fs::AtFlags;
 use std::{
     fmt,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
@@ -585,6 +589,143 @@ impl MountObservation {
 impl fmt::Debug for MountObservation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("MountObservation")
+    }
+}
+
+/// Physical identity of one mapped file as `stat` through its
+/// `/proc/<pid>/map_files/<start>-<end>` link reports it (ADAPT P
+/// src/discovery/instances.rs `MappedFileIdentity` @2c2713e6, lines 144-148).
+/// Compares like-for-like with a held descriptor's fstat `(st_dev, st_ino)`,
+/// never with a maps-device tuple.
+#[cfg(feature = "mapping")]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct MapFilesIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(feature = "mapping")]
+impl MapFilesIdentity {
+    pub fn device(&self) -> u64 {
+        self.device
+    }
+    pub fn inode(&self) -> u64 {
+        self.inode
+    }
+}
+
+#[cfg(feature = "mapping")]
+impl fmt::Debug for MapFilesIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MapFilesIdentity")
+    }
+}
+
+/// One bracketed map_files stat plus its interval and charges. Values only.
+#[cfg(feature = "mapping")]
+pub struct MapFilesObservation {
+    identity: MapFilesIdentity,
+    interval: ObservationInterval,
+    charges: ResourceCharges,
+    effects: EffectSummary,
+}
+
+#[cfg(feature = "mapping")]
+impl MapFilesObservation {
+    pub fn identity(&self) -> MapFilesIdentity {
+        self.identity
+    }
+    pub fn interval(&self) -> &ObservationInterval {
+        &self.interval
+    }
+    pub fn charges(&self) -> &ResourceCharges {
+        &self.charges
+    }
+    pub fn effects(&self) -> &EffectSummary {
+        &self.effects
+    }
+}
+
+#[cfg(feature = "mapping")]
+impl fmt::Debug for MapFilesObservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MapFilesObservation")
+    }
+}
+
+#[cfg(feature = "mapping")]
+impl ProcessObservation {
+    /// Stat one map_files entry relative to the retained target directory:
+    /// retained-root creator guard, full target view guard, held map_files
+    /// directory open, one following `statat` of the rendered
+    /// `{start:x}-{end:x}` name (ADAPT P src/discovery/identity.rs
+    /// `MapFilesDir::identity` @2c2713e6), then a final nonterminal pidfd
+    /// poll. A missing entry (changed VMA) is Disappeared; denial keeps its
+    /// actual errno; a terminal final poll is Exited, never an identity.
+    pub fn read_map_files_identity(
+        &self,
+        start: u64,
+        end: u64,
+        limits: ProcLimits,
+        control: &OperationControl,
+    ) -> Result<MapFilesObservation, LinuxError> {
+        let started = Instant::now();
+        let mut ops = ProcOps::new(ProcOperation::ReadMapFiles, limits);
+        ops.check(control, Stage::ConfigureProcess)?;
+        validate_limits(limits)?;
+        let mut meta = transport_vec(&mut ops, limits.max_metadata_bytes, Stage::ConfigureProcess)?;
+        guard_retained(&self.epoch, self.root.as_fd(), &mut ops, control, &mut meta)?;
+        view_guard(
+            &mut ops,
+            control,
+            self.dir.as_fd(),
+            self.pidfd.as_fd(),
+            self.pid,
+            self.birth.start_ticks(),
+            &self.pid_key,
+            &self.mnt_key,
+            &mut meta,
+        )?;
+        ops.member = Some(ProcMember::MapFiles);
+        let dir = checked_open_at2(
+            &mut ops,
+            control,
+            self.dir.as_fd(),
+            c"map_files",
+            true,
+            Stage::OpenProcMember,
+        )?;
+        ops.check(control, Stage::ReadProc)?;
+        let mut scratch = [0u8; MAP_FILES_NAME_LEN];
+        let name = map_files_name(start, end, &mut scratch);
+        let stat = ops.syscall(|| rustix::fs::statat(dir.as_fd(), name, AtFlags::empty()));
+        let stat = match stat {
+            Ok(stat) => stat,
+            Err(errno) => {
+                ops.fd_released(1);
+                return Err(ops.fail(Stage::ReadProc, map_errno(errno), Some(errno.into())));
+            }
+        };
+        ops.post(control, Stage::ReadProc)?;
+        ops.fd_released(1);
+        drop(dir);
+        let last = poll_pidfd(&mut ops, control, self.pidfd.as_fd(), ProcMember::Pidfd)?;
+        if last.class == PollClass::Terminal {
+            return Err(exited_error(&ops, None));
+        }
+        let device = u64::try_from(stat.st_dev as i128)
+            .map_err(|_| ops.fail(Stage::ReadProc, Reason::Malformed, None))?;
+        let inode = u64::try_from(stat.st_ino as i128)
+            .map_err(|_| ops.fail(Stage::ReadProc, Reason::Malformed, None))?;
+        ops.post(control, Stage::VerifyBirth)?;
+        let finished = Instant::now();
+        drop(meta);
+        Ok(MapFilesObservation {
+            identity: MapFilesIdentity { device, inode },
+            interval: ObservationInterval::new(started, finished),
+            charges: ops.charges(),
+            effects: ops.effects(),
+        })
     }
 }
 

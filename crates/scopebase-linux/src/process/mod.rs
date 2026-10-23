@@ -46,6 +46,8 @@ pub use epoch::ObserverEpoch;
 pub use observation::{
     BirthStatus, BirthVerification, MapsObservation, MountObservation, ProcessObservation,
 };
+#[cfg(feature = "mapping")]
+pub use observation::{MapFilesIdentity, MapFilesObservation};
 
 /// Checked positive process ID. Accepts exactly 1..=i32::MAX in all modes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -304,6 +306,44 @@ impl ProcOps {
         }
         Ok(())
     }
+}
+
+/// `{start:x}-{end:x}` plus NUL: 16 hex digits per bound, no padding.
+pub(crate) const MAP_FILES_NAME_LEN: usize = 16 + 1 + 16 + 1;
+
+/// Render a map_files entry name into caller scratch (ADAPT P
+/// src/discovery/identity.rs write_map_files_name @2c2713e6): exactly what
+/// `format!("{start:x}-{end:x}")` produces, NUL-terminated, no allocation.
+pub(crate) fn map_files_name(
+    start: u64,
+    end: u64,
+    scratch: &mut [u8; MAP_FILES_NAME_LEN],
+) -> &CStr {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut len = 0usize;
+    for (index, bound) in [start, end].into_iter().enumerate() {
+        if index == 1 {
+            scratch[len] = b'-';
+            len += 1;
+        }
+        let mut digits = [0u8; 16];
+        let mut count = 0usize;
+        let mut rest = bound;
+        loop {
+            digits[count] = HEX[(rest & 0xf) as usize];
+            count += 1;
+            rest >>= 4;
+            if rest == 0 {
+                break;
+            }
+        }
+        for position in (0..count).rev() {
+            scratch[len] = digits[position];
+            len += 1;
+        }
+    }
+    scratch[len] = 0;
+    CStr::from_bytes_with_nul(&scratch[..len + 1]).expect("rendered map_files name")
 }
 
 /// Positive-PID decimal scratch: at most 10 digits plus NUL.
@@ -1152,5 +1192,20 @@ mod tests {
             pid_name(Pid::new(i32::MAX).unwrap(), &mut scratch).to_bytes(),
             b"2147483647"
         );
+    }
+
+    #[test]
+    fn map_files_name_matches_format_without_alloc() {
+        // Byte-identical to format!("{start:x}-{end:x}") across widths.
+        let mut scratch = [0u8; MAP_FILES_NAME_LEN];
+        for (start, end) in [
+            (0u64, 0x1000u64),
+            (0x7f00_0000_1000u64, 0x7f00_0000_2000u64),
+            (0xffff_ffff_ffff_f000u64, u64::MAX),
+            (0u64, u64::MAX),
+        ] {
+            let rendered = map_files_name(start, end, &mut scratch).to_bytes();
+            assert_eq!(rendered, format!("{start:x}-{end:x}").as_bytes());
+        }
     }
 }
