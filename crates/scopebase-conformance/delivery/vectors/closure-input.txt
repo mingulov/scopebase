@@ -1,0 +1,2 @@
+TT07 delivery closure input v1
+These pinned bytes feed the sha256-hex step; the expected vector pins their digest.

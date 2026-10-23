@@ -1,0 +1,85 @@
+{
+ "schema_version": 1,
+ "kind": "tt07-fixture-manifest-v1",
+ "profile": "operator-delivery-v1",
+ "files": [
+  {
+   "path": "catalog.json",
+   "length": "3025",
+   "sha256": "b6683cf248fb13cf3f032a792ce6fc1a3bc93d7549aed1449751bad2554561f0"
+  },
+  {
+   "path": "contract-template.json",
+   "length": "6992",
+   "sha256": "f9ff325b81696b0450343ae1bb27213963777ace69b560763a1a9e1d1113c0d1"
+  },
+  {
+   "path": "adapter-spec.md",
+   "length": "680",
+   "sha256": "dbab223bf54cb9e2cd791624ec58966dbcb2f6af4b91faf5be908575e8abb85f"
+  },
+  {
+   "path": "oracle-spec.md",
+   "length": "543",
+   "sha256": "912d34a2214e26068ff78238016a2465263993ad6e7b0653adb654c4048d0637"
+  },
+  {
+   "path": "fixture-spec.md",
+   "length": "470",
+   "sha256": "baaf0c41b541a7b6759e2c875dc03749ccbd5875f00475e285be1234be477523"
+  },
+  {
+   "path": "control-spec.md",
+   "length": "528",
+   "sha256": "0c7bb9b859572373bb7caeb081bd3c18b32760b741796b8e157e9c9f2f71f958"
+  },
+  {
+   "path": "THIRD-PARTY-NOTICES.md",
+   "length": "7871",
+   "sha256": "dec708fb5e9740d0aa7faefa993f14318b6b42a546131b8e0bd71cf737f28e46"
+  },
+  {
+   "path": "LICENSE-APACHE",
+   "length": "11358",
+   "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+   "path": "vectors/closure-input.txt",
+   "length": "115",
+   "sha256": "d3577a3ae37c06d8da7facd59dbdc06ea795f9de0dc02155b6a66146c4af07e7",
+   "file_id": "closure-input"
+  },
+  {
+   "path": "vectors/closure-expected.json",
+   "length": "170",
+   "sha256": "f17751f9afcd90dc5eb9b1e35f99ea51d6c9b37db1b3c88d33fe23b48961790c",
+   "file_id": "closure-expected"
+  },
+  {
+   "path": "vectors/binding-input.txt",
+   "length": "27",
+   "sha256": "15aaf652edca291dd17d6ea2ccd019a1ec69c94db7d6cb4ee756d49e482785ae",
+   "file_id": "binding-input"
+  },
+  {
+   "path": "vectors/binding-expected.json",
+   "length": "133",
+   "sha256": "100b4f3eb7f86d8fcbca3734310aacca6f52efb0e1270150bfac3e1bf48c1241",
+   "file_id": "binding-expected"
+  },
+  {
+   "path": "vectors/ledger-closure.json.tmpl",
+   "length": "521",
+   "sha256": "9a3e10e92ab85cd5abb0a886860df38f5a83026606f51e0fbd89021e02957d41"
+  },
+  {
+   "path": "vectors/ledger-binding.json.tmpl",
+   "length": "521",
+   "sha256": "c6c0bebce71b43c643e36587c2c7d9a2bc99a23b4b2817e3d69086bebdf2ae6e"
+  }
+ ],
+ "notices": [
+  "THIRD-PARTY-NOTICES.md",
+  "LICENSE-APACHE"
+ ]
+}

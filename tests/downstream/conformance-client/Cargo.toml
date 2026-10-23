@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "conformance-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88.0"
+license = "Apache-2.0"
+publish = false
+
+# Standalone downstream consumer: detached from the parent workspace so the
+# root Cargo.lock and member set stay untouched. Run with:
+# cargo test --offline --locked --manifest-path tests/downstream/conformance-client/Cargo.toml
+[workspace]
+
+[lib]
+name = "conformance_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "conformance-client"
+path = "src/main.rs"
+
+[dependencies]
+scopebase-conformance = { version = "=0.1.0", path = "../../../crates/scopebase-conformance" }
+scopebase-testkit = { version = "=0.1.0", path = "../../../crates/scopebase-testkit" }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
