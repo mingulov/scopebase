@@ -75,6 +75,8 @@ KNOWN_ATOMS = frozenset(
         "MIT",
         "Unlicense",
         "Unicode-3.0",
+        # SPDX zlib license id; registry-only dep (foldhash via aya).
+        "Zlib",
         "GPL-2.0-only",
         "GPL-3.0-or-later",
         "LGPL-2.1-only",
@@ -112,7 +114,9 @@ SPDX_RE = re.compile(
 CARRIER_NEEDLES = (b'SEC("license")', b'section "license"')
 GRANT_EXTENSIONS = {".rs", ".py", ".c", ".h", ".ll", ".sh"}
 CARRIER_EXTENSIONS = {".c", ".h", ".ll"}
-SKIP_DIRS = {"target", ".git", ".scopebase", "__pycache__"}
+# .superpowers holds gitignored preparation artifacts (including vendored
+# reference inputs); never shipped source, same class as target/.
+SKIP_DIRS = {"target", ".git", ".scopebase", "__pycache__", ".superpowers"}
 # Attributed upstream notice texts: expected third-party bytes, covered by the
 # installed-notices gate instead of the source scan.
 SKIP_PREFIXES = ("crates/scopebase-conformance/delivery/notices/",)

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_revision": 2,
+  "catalog_revision": 3,
   "tasks": [
     "BP01",
     "BP02",
@@ -3849,7 +3849,7 @@
           "id": "h33.check",
           "revision": 1,
           "path": "tools/qualification/check_h33.py",
-          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "sha256": "854e5bf576c1f71df3c7cb869590e7ff7d505cd116c5808fb441eee1799868a7",
           "entrypoint": "source-closure"
         },
         "fixture": {
@@ -3863,7 +3863,7 @@
           "id": "h33.oracle",
           "revision": 1,
           "path": "tools/qualification/h33_oracle.py",
-          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "sha256": "2b2eaf4e1c9da905cf47efc4d0ca728fdd7534c0aea13e92b0b27f1bf24e1b04",
           "entrypoint": "source-closure"
         },
         "bad_control": {
@@ -3944,7 +3944,7 @@
           "id": "h33.check",
           "revision": 1,
           "path": "tools/qualification/check_h33.py",
-          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "sha256": "854e5bf576c1f71df3c7cb869590e7ff7d505cd116c5808fb441eee1799868a7",
           "entrypoint": "final-object-license"
         },
         "fixture": {
@@ -3958,7 +3958,7 @@
           "id": "h33.oracle",
           "revision": 1,
           "path": "tools/qualification/h33_oracle.py",
-          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "sha256": "2b2eaf4e1c9da905cf47efc4d0ca728fdd7534c0aea13e92b0b27f1bf24e1b04",
           "entrypoint": "final-object-license"
         },
         "bad_control": {
@@ -4106,7 +4106,7 @@
           "id": "h33.check",
           "revision": 1,
           "path": "tools/qualification/check_h33.py",
-          "sha256": "1e339872ff0906dbcefe15a480aceeea9d23d7e714385cabda1406bc514f73a7",
+          "sha256": "854e5bf576c1f71df3c7cb869590e7ff7d505cd116c5808fb441eee1799868a7",
           "entrypoint": "installed-notices"
         },
         "fixture": {
@@ -4120,7 +4120,7 @@
           "id": "h33.oracle",
           "revision": 1,
           "path": "tools/qualification/h33_oracle.py",
-          "sha256": "419a3efa3bca985c47ee5666787dbfaef60236a228443677934d19f198811d22",
+          "sha256": "2b2eaf4e1c9da905cf47efc4d0ca728fdd7534c0aea13e92b0b27f1bf24e1b04",
           "entrypoint": "installed-notices"
         },
         "bad_control": {

@@ -29,6 +29,8 @@ KNOWN = {
     "MIT",
     "Unlicense",
     "Unicode-3.0",
+    # SPDX zlib license id; registry-only dep (foldhash via aya).
+    "Zlib",
     "GPL-2.0-only",
     "GPL-3.0-or-later",
     "LGPL-2.1-only",
@@ -285,7 +287,14 @@ def walk(root):
                 if entry.is_symlink():
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name in ("target", ".git", ".scopebase", "__pycache__"):
+                    # Gitignored preparation artifacts are never shipped.
+                    if entry.name in (
+                        "target",
+                        ".git",
+                        ".scopebase",
+                        "__pycache__",
+                        ".superpowers",
+                    ):
                         continue
                     visit(entry.path)
                 elif entry.is_file(follow_symlinks=False):
