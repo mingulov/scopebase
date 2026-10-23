@@ -905,6 +905,56 @@ fn zero_fd_ceiling_refuses_before_effects() {
     pool.close(&control()).unwrap();
 }
 
+// R11: a positive-but-insufficient FD budget (4 < birth's worst case 5)
+// refuses at the birth preflight with zero acquisitions recorded. The
+// old fully-spent-only preflight ran the sub-operation and
+// over-acquired transiently before rejecting.
+#[test]
+fn insufficient_fd_ceiling_refuses_at_birth_preflight() {
+    let epoch = epoch();
+    let process = ProcessObservation::acquire(me(), &epoch, proc_limits(), &control()).unwrap();
+    let temp = TempFile::create(8192);
+    let held = temp.hold();
+    let pool = pool_for(&MappingPolicy::NoNewTargetMappings);
+    let maps = process.read_maps(proc_limits(), &control()).unwrap();
+    let line = maps.snapshot().entries().next().unwrap();
+    let range = MapRange::new(line.start(), line.end()).unwrap();
+    let failure = scopebase_linux::mapping::observe_mapping(
+        MappingRequest {
+            pool: &pool,
+            held,
+            process: &process,
+            range,
+            policy: MappingPolicy::NoNewTargetMappings,
+            retained: None,
+            limits: MappingLimits {
+                proc: proc_limits(),
+                max_mount_refreshes: 1,
+                max_open_fds: 4,
+                max_live_mappings: 0,
+            },
+        },
+        &control(),
+    )
+    .expect_err("4-FD ceiling cannot admit birth's 5");
+    assert_eq!(
+        failure.error().reason(),
+        Reason::LimitExceeded(LimitKind::OpenFds)
+    );
+    let staged: u64 = failure
+        .stage_charges()
+        .iter()
+        .map(|charges| charges.fd_acquisitions())
+        .sum();
+    assert_eq!(staged, 0, "preflight refusal must acquire nothing");
+    assert_eq!(
+        failure.error().charges().fd_acquisitions(),
+        0,
+        "refusal error must carry no acquisitions"
+    );
+    pool.close(&control()).unwrap();
+}
+
 #[test]
 fn pool_close_blocks_stale_clones() {
     let pool = MappingPool::new(MappingPoolLimits {

@@ -222,17 +222,43 @@ impl OpCtx<'_> {
         Ok(())
     }
 
-    /// Absorb whole sub-operation charge lists (calibration, mount lookup).
-    fn absorb(&mut self, charges: &[ResourceCharges]) -> Result<(), LinuxError> {
-        for charges in charges {
-            self.spend(charges)?;
-        }
-        Ok(())
+    /// Record charges that already happened, without a ceiling check.
+    /// Failure paths use this so an over-ceiling ledger never replaces
+    /// the real error with a second ceiling refusal.
+    fn record(&mut self, charges: &ResourceCharges) {
+        self.charges.push(charges.clone());
+        self.fd_spent += charges.fd_acquisitions();
     }
 
-    /// Honest mini-charges for direct syscalls outside a sub-operation.
-    fn spend_direct(&mut self, syscalls: u64, acquired: u64) -> Result<(), LinuxError> {
-        self.spend(&ResourceCharges {
+    /// Absorb whole sub-operation charge lists (calibration, mount lookup).
+    /// R12: record-all-then-first-error. Every batch member is recorded
+    /// (the acquisitions happened); the ceiling is then reported once,
+    /// for the first breach. The old fail-fast loop dropped the
+    /// post-breach members from the ledger.
+    fn absorb(&mut self, charges: &[ResourceCharges]) -> Result<(), LinuxError> {
+        let mut first_breach = None;
+        for charges in charges {
+            self.charges.push(charges.clone());
+            self.fd_spent += charges.fd_acquisitions();
+            if first_breach.is_none() && self.fd_spent > self.max_open_fds as u64 {
+                first_breach = Some(pool::pool_error(
+                    Stage::ObserveMapping,
+                    Reason::LimitExceeded(LimitKind::OpenFds),
+                    CleanupDisposition::Complete,
+                ));
+            }
+        }
+        match first_breach {
+            None => Ok(()),
+            Some(error) => Err(error),
+        }
+    }
+
+    /// Honest mini-charges without a ceiling check (see `record`).
+    /// R12: fdinfo pre-admits its single FD up front, so every path
+    /// records; the old checked post-success spend is gone with it.
+    fn record_direct(&mut self, syscalls: u64, acquired: u64) {
+        self.record(&ResourceCharges {
             syscalls,
             acquired,
             peak: acquired,
@@ -240,7 +266,7 @@ impl OpCtx<'_> {
             parse: None,
             #[cfg(feature = "process")]
             process: None,
-        })
+        });
     }
 
     fn take_charges(&mut self) -> Vec<ResourceCharges> {
@@ -283,23 +309,41 @@ impl OpCtx<'_> {
 /// ceiling replaces the sub-operation's own result: the operation is over
 /// budget regardless of what the sub-operation reports.
 ///
-/// F13: the sub-operation runs as a thunk behind an exhausted-budget
-/// preflight. Every tracked sub-operation acquires at least one FD, so
-/// when the budget is already spent, running it could only acquire past
-/// the ceiling; refusing first means a zero-FD budget performs zero
-/// acquisitions instead of opening transiently and rejecting after.
-fn tracked<T>(
-    ctx: &mut OpCtx,
-    run: impl FnOnce() -> Result<T, LinuxError>,
-    project: fn(&T) -> &ResourceCharges,
-) -> Result<T, LinuxError> {
-    if ctx.fd_spent >= ctx.max_open_fds as u64 {
+/// R11: worst-case FD acquisitions per tracked sub-operation, counted
+/// from the success path (every open on it; error paths return early
+/// and acquire fewer). Locked by exact-acquisition tests; update
+/// deliberately if a sub-operation gains an open.
+const BIRTH_WORST_FDS: u64 = 5;
+const MAPS_WORST_FDS: u64 = 15;
+const MAP_FILES_WORST_FDS: u64 = 11;
+const MOUNTINFO_WORST_FDS: u64 = 15;
+
+/// R11: refuse before running unless the sub-operation's whole worst
+/// case fits the remaining budget. Acquisitions happen inside `run`,
+/// so the check must cover all of them, not just the first.
+fn preadmit_fds(ctx: &OpCtx, worst_case_fds: u64) -> Result<(), LinuxError> {
+    if ctx.fd_spent.saturating_add(worst_case_fds) > ctx.max_open_fds as u64 {
         return Err(pool::pool_error(
             Stage::ObserveMapping,
             Reason::LimitExceeded(LimitKind::OpenFds),
             CleanupDisposition::Complete,
         ));
     }
+    Ok(())
+}
+
+/// F13: the sub-operation runs as a thunk behind an exhausted-budget
+/// preflight. R11 strengthens it to worst-case pre-admission: a
+/// positive-but-insufficient budget used to run a multi-FD sub-op and
+/// over-acquire transiently before rejecting; now the whole worst case
+/// must fit, so a refused sub-operation performs zero acquisitions.
+fn tracked<T>(
+    ctx: &mut OpCtx,
+    worst_case_fds: u64,
+    run: impl FnOnce() -> Result<T, LinuxError>,
+    project: fn(&T) -> &ResourceCharges,
+) -> Result<T, LinuxError> {
+    preadmit_fds(ctx, worst_case_fds)?;
     match run() {
         Ok(value) => {
             let charges = project(&value).clone();
@@ -437,6 +481,7 @@ fn run_observation(
     // Birth bracket: only a live same-birth target proceeds.
     let birth = match tracked(
         ctx,
+        BIRTH_WORST_FDS,
         || request.process.verify_birth(control),
         crate::process::BirthVerification::charges,
     ) {
@@ -457,6 +502,7 @@ fn run_observation(
     // Before maps read: the named range must render.
     let maps_before = match tracked(
         ctx,
+        MAPS_WORST_FDS,
         || request.process.read_maps(proc, control),
         crate::process::MapsObservation::charges,
     ) {
@@ -475,6 +521,7 @@ fn run_observation(
     // Independent per-range association with both descriptors alive.
     let assoc = match tracked(
         ctx,
+        MAP_FILES_WORST_FDS,
         || {
             request.process.read_map_files_identity(
                 range.start(),
@@ -575,6 +622,7 @@ fn run_observation(
     // After maps read: the named range, offset and permissions must retain.
     let maps_after = match tracked(
         ctx,
+        MAPS_WORST_FDS,
         || request.process.read_maps(proc, control),
         crate::process::MapsObservation::charges,
     ) {
@@ -722,17 +770,20 @@ fn mount_resolve_key(
     proc: ProcLimits,
     ctx: &mut OpCtx,
 ) -> MountKey {
-    let mnt_id = match read_fdinfo_mnt_id(held_fd, held_stat) {
+    // R12/R13: the fdinfo read charges itself on every path (open,
+    // each read attempt, close, cross-check stat) against the caller's
+    // own read ceiling; the old fixed post-success (3, 1) undercounted
+    // the stat and dropped failure-path charges.
+    let control = ctx.control;
+    let mnt_id = match read_fdinfo_mnt_id(held_fd, held_stat, ctx, control, proc.max_read_calls) {
         Ok(id) => id,
         Err(error) => return MountKey::Failed(error),
     };
-    if let Err(error) = ctx.spend_direct(3, 1) {
-        return MountKey::Failed(error);
-    }
     let mut used = 0u8;
     loop {
         let table = match tracked(
             ctx,
+            MOUNTINFO_WORST_FDS,
             || process.read_mountinfo(proc, ctx.control),
             crate::process::MountObservation::charges,
         ) {
@@ -770,9 +821,20 @@ fn lookup_mount_key(
 /// Read this held FD's mount ID from its own fdinfo, cross-checked against
 /// the held stat key so a recycled descriptor number can never resolve a
 /// foreign mount. One bounded single read: fdinfo never fills 4 KiB.
+///
+/// R12: charges are recorded on every path that issues syscalls,
+/// including failures after the open. The old code only charged
+/// success: a later failure dropped the successful open's charge, and
+/// the cross-check stat was never counted at all. R13: every read
+/// attempt checkpoints control and counts against `max_read_attempts`
+/// (the caller's own read ceiling), so an INTR storm cannot spin past
+/// cancel/deadline or past the budget.
 fn read_fdinfo_mnt_id(
     fd: std::os::fd::BorrowedFd<'_>,
     held: &StatObservation,
+    ctx: &mut OpCtx,
+    control: &OperationControl,
+    max_read_attempts: u64,
 ) -> Result<u64, LinuxError> {
     use std::os::fd::AsRawFd;
     let raw = fd.as_raw_fd();
@@ -790,47 +852,99 @@ fn read_fdinfo_mnt_id(
     let fd_path = render_proc_path("/proc/self/fd/", raw, &mut fd_storage)?;
     let map_err =
         |errno: rustix::io::Errno| pool::pool_error_with_source(Stage::ObserveMapping, errno);
-    let file = rustix::fs::open(
+    // R11: pre-admit the one fdinfo FD before opening: a spent budget
+    // refuses without touching the kernel. Every path below records
+    // (never spends), so failure charges can never mask the real error.
+    preadmit_fds(ctx, 1)?;
+    let mut syscalls = 0u64;
+    let file = match rustix::fs::open(
         info_path,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
-    )
-    .map_err(map_err)?;
+    ) {
+        Err(errno) => {
+            ctx.record_direct(1, 0);
+            return Err(map_err(errno));
+        }
+        Ok(file) => {
+            syscalls += 1;
+            file
+        }
+    };
     let mut buf = [0u8; 4096];
+    let mut attempts = 0u64;
     let count = loop {
+        if attempts >= max_read_attempts {
+            ctx.record_direct(syscalls, 1);
+            return Err(pool::pool_error(
+                Stage::ObserveMapping,
+                Reason::LimitExceeded(LimitKind::ReadCalls),
+                CleanupDisposition::Complete,
+            ));
+        }
+        if let Err(stop) = control.checkpoint() {
+            ctx.record_direct(syscalls, 1);
+            return Err(pool::pool_error(
+                Stage::ObserveMapping,
+                match stop {
+                    crate::control::ControlStop::Cancelled => Reason::Cancelled,
+                    crate::control::ControlStop::Deadline => Reason::Deadline,
+                },
+                CleanupDisposition::Complete,
+            ));
+        }
+        attempts += 1;
+        syscalls += 1;
         match rustix::io::read(&file, &mut buf) {
             Err(rustix::io::Errno::INTR) => continue,
-            Err(errno) => return Err(map_err(errno)),
+            Err(errno) => {
+                ctx.record_direct(syscalls, 1);
+                return Err(map_err(errno));
+            }
             Ok(count) => break count,
         }
     };
+    syscalls += 1; // close
     drop(file);
     if count == buf.len() {
+        ctx.record_direct(syscalls, 1);
         return Err(pool::pool_error(
             Stage::ObserveMapping,
             Reason::Malformed,
-            CleanupDisposition::NotNeeded,
+            CleanupDisposition::Complete,
         ));
     }
-    let mnt_id = parse_fdinfo_mnt_id(&buf[..count]).ok_or_else(|| {
-        pool::pool_error(
-            Stage::ObserveMapping,
-            Reason::Malformed,
-            CleanupDisposition::NotNeeded,
-        )
-    })?;
+    let mnt_id = match parse_fdinfo_mnt_id(&buf[..count]) {
+        Some(id) => id,
+        None => {
+            ctx.record_direct(syscalls, 1);
+            return Err(pool::pool_error(
+                Stage::ObserveMapping,
+                Reason::Malformed,
+                CleanupDisposition::Complete,
+            ));
+        }
+    };
     // Cross-check: the numbered FD still names the held object.
-    let stat = rustix::fs::statat(rustix::fs::CWD, fd_path, rustix::fs::AtFlags::empty())
-        .map_err(map_err)?;
+    syscalls += 1; // statat
+    let stat = match rustix::fs::statat(rustix::fs::CWD, fd_path, rustix::fs::AtFlags::empty()) {
+        Err(errno) => {
+            ctx.record_direct(syscalls, 1);
+            return Err(map_err(errno));
+        }
+        Ok(stat) => stat,
+    };
     let device = u64::try_from(stat.st_dev as i128).unwrap_or(u64::MAX);
     let inode = u64::try_from(stat.st_ino as i128).unwrap_or(u64::MAX);
     if device != held.key().device_raw() || inode != held.key().inode() {
+        ctx.record_direct(syscalls, 1);
         return Err(pool::pool_error(
             Stage::ObserveMapping,
             Reason::WrongContext,
-            CleanupDisposition::NotNeeded,
+            CleanupDisposition::Complete,
         ));
     }
+    ctx.record_direct(syscalls, 1);
     Ok(mnt_id)
 }
 
@@ -1088,5 +1202,288 @@ mod tests {
         assert_eq!(err.reason(), Reason::LimitExceeded(LimitKind::OpenFds));
         // Reached charges stay recorded on the refusal path.
         assert_eq!(ctx.charges.len(), 3);
+    }
+
+    fn proc_limits() -> ProcLimits {
+        ProcLimits {
+            parse: ParseLimits {
+                max_bytes: 1 << 20,
+                max_entries: 1 << 16,
+                max_line_bytes: 1 << 16,
+            },
+            max_read_calls: 4096,
+            max_metadata_bytes: 1 << 20,
+        }
+    }
+
+    fn self_observation(control: &OperationControl) -> ProcessObservation {
+        use crate::process::{ObserverEpoch, Pid};
+        let epoch = ObserverEpoch::new(proc_limits(), control).expect("epoch on own process");
+        let pid = Pid::new(std::process::id() as i32).expect("own pid");
+        ProcessObservation::acquire(pid, &epoch, proc_limits(), control).expect("acquire self")
+    }
+
+    /// R11: the worst-case constants match the success path exactly, so a
+    /// sub-operation that gains an open fails here until its constant is
+    /// deliberately updated. Error paths return early and acquire fewer.
+    #[test]
+    fn worst_case_constants_match_success_acquisitions() {
+        let control = OperationControl::unlimited();
+        let process = self_observation(&control);
+        let birth = process.verify_birth(&control).expect("birth on live self");
+        assert_eq!(
+            birth.charges().fd_acquisitions(),
+            BIRTH_WORST_FDS,
+            "guard 4 + stat 1"
+        );
+        let maps = process.read_maps(proc_limits(), &control).expect("maps");
+        assert_eq!(
+            maps.charges().fd_acquisitions(),
+            MAPS_WORST_FDS,
+            "guard 4 + view 5 + member 1 + view 5"
+        );
+        let mounts = process
+            .read_mountinfo(proc_limits(), &control)
+            .expect("mountinfo");
+        assert_eq!(
+            mounts.charges().fd_acquisitions(),
+            MOUNTINFO_WORST_FDS,
+            "same shape as maps"
+        );
+        // map_files needs a live mapped range; environments that deny its
+        // stat (EPERM even for self here) take the denial path instead.
+        use std::os::fd::AsFd;
+        let (map_path, map_held) = fdinfo_held("mapfiles");
+        let page = rustix::param::page_size();
+        let addr = unsafe {
+            rustix::mm::mmap(
+                std::ptr::null_mut(),
+                page,
+                rustix::mm::ProtFlags::READ,
+                rustix::mm::MapFlags::PRIVATE,
+                map_held.as_fd(),
+                0,
+            )
+        }
+        .expect("probe mapping");
+        let start = addr as u64;
+        let observed =
+            process.read_map_files_identity(start, start + page as u64, proc_limits(), &control);
+        unsafe { rustix::mm::munmap(addr, page) }.expect("unmap probe page");
+        std::fs::remove_file(map_path).unwrap();
+        match observed {
+            Ok(assoc) => assert_eq!(
+                assoc.charges().fd_acquisitions(),
+                MAP_FILES_WORST_FDS,
+                "guard 4 + view 5 + dir 1 + object 1"
+            ),
+            Err(error) if error.reason() == Reason::Denied => assert_eq!(
+                error.charges().fd_acquisitions(),
+                MAP_FILES_WORST_FDS - 1,
+                "denied object open: all but the last acquisition"
+            ),
+            Err(error) => panic!("unexpected map_files outcome: {:?}", error.reason()),
+        }
+    }
+
+    fn identity_charges(charges: &ResourceCharges) -> &ResourceCharges {
+        charges
+    }
+
+    /// R11: a positive-but-insufficient budget refuses WITHOUT executing
+    /// the thunk (the executed flag is the hook counter: zero runs, zero
+    /// acquisitions), while an exact fit runs. The old fully-spent-only
+    /// preflight ran the first case and over-acquired transiently.
+    #[test]
+    fn tracked_preflight_refuses_without_executing() {
+        use std::cell::Cell;
+        let control = OperationControl::unlimited();
+        let mut ctx = OpCtx {
+            control: &control,
+            max_open_fds: 10,
+            fd_spent: 6,
+            charges: Vec::new(),
+        };
+        let executed = Cell::new(false);
+        let err = tracked(
+            &mut ctx,
+            5,
+            || {
+                executed.set(true);
+                Ok(pool::zero_charges())
+            },
+            identity_charges,
+        )
+        .unwrap_err();
+        assert_eq!(err.reason(), Reason::LimitExceeded(LimitKind::OpenFds));
+        assert!(!executed.get(), "refused thunk must not execute");
+        assert!(ctx.charges.is_empty(), "zero runs, zero charges");
+        // Exact-fit twin: spent 5 + worst 5 fits 10, so the thunk runs.
+        ctx.fd_spent = 5;
+        let value = tracked(
+            &mut ctx,
+            5,
+            || {
+                executed.set(true);
+                Ok(pool::zero_charges())
+            },
+            identity_charges,
+        )
+        .expect("exact fit runs");
+        assert!(executed.get());
+        assert_eq!(value.fd_acquisitions(), 0);
+        assert_eq!(ctx.charges.len(), 1);
+    }
+
+    /// R12: absorb records every batch member, then reports the first
+    /// breach once. Post-breach members used to vanish from the ledger.
+    #[test]
+    fn absorb_records_all_before_first_breach() {
+        let control = OperationControl::unlimited();
+        let mut ctx = OpCtx {
+            control: &control,
+            max_open_fds: 2,
+            fd_spent: 0,
+            charges: Vec::new(),
+        };
+        let one = ResourceCharges {
+            syscalls: 1,
+            acquired: 1,
+            peak: 1,
+            read: None,
+            parse: None,
+            #[cfg(feature = "process")]
+            process: None,
+        };
+        let err = ctx
+            .absorb(&[one.clone(), one.clone(), one.clone()])
+            .unwrap_err();
+        assert_eq!(err.reason(), Reason::LimitExceeded(LimitKind::OpenFds));
+        assert_eq!(ctx.charges.len(), 3, "all members recorded");
+        assert_eq!(ctx.fd_spent, 3, "honest over-ceiling total");
+        // All-fit batches still succeed.
+        let mut ctx = OpCtx {
+            control: &control,
+            max_open_fds: 2,
+            fd_spent: 0,
+            charges: Vec::new(),
+        };
+        assert!(ctx.absorb(&[one.clone(), one]).is_ok());
+        assert_eq!(ctx.charges.len(), 2);
+    }
+
+    static FDINFO_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn fdinfo_held(tag: &str) -> (std::path::PathBuf, std::sync::Arc<HeldFile>) {
+        use crate::file::{ProcFdResolver, SymlinkPolicy};
+        use std::sync::atomic::Ordering;
+        let id = FDINFO_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "r12-fdinfo-{}-{}-{}.dat",
+            std::process::id(),
+            id,
+            tag
+        ));
+        std::fs::write(&path, b"fdinfo probe").expect("write probe file");
+        let resolver = ProcFdResolver::open_self().expect("resolver");
+        let held = std::sync::Arc::new(
+            HeldFile::open(&path, &resolver, SymlinkPolicy::Follow).expect("hold probe file"),
+        );
+        (path, held)
+    }
+
+    fn op_ctx(control: &OperationControl, max_open_fds: usize) -> OpCtx<'_> {
+        OpCtx {
+            control,
+            max_open_fds,
+            fd_spent: 0,
+            charges: Vec::new(),
+        }
+    }
+
+    /// R12: a successful fdinfo read charges open + read + close +
+    /// cross-check stat (4 syscalls, 1 acquisition). The old fixed
+    /// post-success (3, 1) never counted the stat.
+    #[test]
+    fn fdinfo_success_charges_every_syscall() {
+        use std::os::fd::AsFd;
+        let control = OperationControl::unlimited();
+        let mut ctx = op_ctx(&control, 1024);
+        let (path, held) = fdinfo_held("ok");
+        let stat = held.stat().expect("stat probe file");
+        let _mnt_id = read_fdinfo_mnt_id(held.as_fd(), &stat, &mut ctx, &control, 4096)
+            .expect("fdinfo resolves");
+        assert_eq!(ctx.charges.len(), 1);
+        assert_eq!(ctx.charges[0].syscalls, 4, "open + read + close + statat");
+        assert_eq!(ctx.charges[0].fd_acquisitions(), 1);
+        assert_eq!(ctx.fd_spent, 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// R12: a cross-check failure still records the successful open and
+    /// every syscall (the old code charged nothing on this path).
+    #[test]
+    fn fdinfo_mismatch_records_open_before_refusing() {
+        use std::os::fd::AsFd;
+        let control = OperationControl::unlimited();
+        let mut ctx = op_ctx(&control, 1024);
+        let (path_a, held_a) = fdinfo_held("a");
+        let (path_b, held_b) = fdinfo_held("b");
+        let stat_b = held_b.stat().expect("stat other file");
+        let err = read_fdinfo_mnt_id(held_a.as_fd(), &stat_b, &mut ctx, &control, 4096)
+            .expect_err("foreign stat must refuse");
+        assert_eq!(err.reason(), Reason::WrongContext);
+        assert_eq!(ctx.charges.len(), 1);
+        assert_eq!(ctx.charges[0].syscalls, 4, "open + read + close + statat");
+        assert_eq!(ctx.charges[0].fd_acquisitions(), 1, "the open is kept");
+        assert_eq!(ctx.fd_spent, 1);
+        std::fs::remove_file(path_a).unwrap();
+        std::fs::remove_file(path_b).unwrap();
+    }
+
+    /// R11: a spent FD budget refuses the fdinfo read before opening:
+    /// zero new charges, zero acquisitions.
+    #[test]
+    fn fdinfo_preadmits_before_opening() {
+        use std::os::fd::AsFd;
+        let control = OperationControl::unlimited();
+        let mut ctx = op_ctx(&control, 0);
+        let (path, held) = fdinfo_held("spent");
+        let stat = held.stat().expect("stat probe file");
+        let err = read_fdinfo_mnt_id(held.as_fd(), &stat, &mut ctx, &control, 4096)
+            .expect_err("spent budget refuses");
+        assert_eq!(err.reason(), Reason::LimitExceeded(LimitKind::OpenFds));
+        assert!(ctx.charges.is_empty(), "refused before any syscall");
+        assert_eq!(ctx.fd_spent, 0);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// R13: a zero read-attempt budget refuses before the first read
+    /// (the open issued, the read never did), and a cancelled control
+    /// refuses at the checkpoint with the open's charges recorded.
+    #[test]
+    fn fdinfo_read_cap_and_cancel_gate_issuance() {
+        use crate::control::CancelToken;
+        use std::os::fd::AsFd;
+        let control = OperationControl::unlimited();
+        let (path, held) = fdinfo_held("cap");
+        let stat = held.stat().expect("stat probe file");
+        let mut ctx = op_ctx(&control, 1024);
+        let err = read_fdinfo_mnt_id(held.as_fd(), &stat, &mut ctx, &control, 0)
+            .expect_err("zero attempts refuses");
+        assert_eq!(err.reason(), Reason::LimitExceeded(LimitKind::ReadCalls));
+        assert_eq!(ctx.charges.len(), 1);
+        assert_eq!(ctx.charges[0].syscalls, 1, "open issued, read never");
+        assert_eq!(ctx.charges[0].fd_acquisitions(), 1);
+        let token = CancelToken::new();
+        token.cancel();
+        let cancelled = OperationControl::new(None, token);
+        let mut ctx = op_ctx(&cancelled, 1024);
+        let err = read_fdinfo_mnt_id(held.as_fd(), &stat, &mut ctx, &cancelled, 4096)
+            .expect_err("cancelled control refuses");
+        assert_eq!(err.reason(), Reason::Cancelled);
+        assert_eq!(ctx.charges.len(), 1);
+        assert_eq!(ctx.charges[0].fd_acquisitions(), 1, "open recorded");
+        std::fs::remove_file(path).unwrap();
     }
 }
