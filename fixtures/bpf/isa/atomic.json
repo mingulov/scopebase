@@ -1,0 +1,835 @@
+{
+  "schema_version": 1,
+  "kind": "tc04_atomic_vectors",
+  "emitter": {
+    "id": "ubuntu-llc-21.1.8",
+    "name": "llc",
+    "version": "21.1.8",
+    "version_detail": "Ubuntu LLVM version 21.1.8; optimized build; default target x86_64-pc-linux-gnu; host znver5",
+    "sha256": "935bdae46915daba23b279efebc04400c085c56a8536dea633f1f5a96c9fd382",
+    "origin": "system-observed",
+    "origin_ref": "tools/bpf-compat/toolchains.json pin ubuntu-llc-21.1.8; local /usr/bin/llc hashed 2026-10-23 (same binary as TC03)",
+    "argv_pattern": "timeout 30 llc -march=bpfel -mcpu=<cpu> -O2 -filetype=obj -o objects-atomic/<name>.o sources-atomic/<name>.ll"
+  },
+  "donor": {
+    "workspace": "p11scope-ws",
+    "worktree": "w000",
+    "commit": "6f97aa47171147fb2aea58bce5a50aa4c34a8173",
+    "slices": [
+      {
+        "file": "evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py",
+        "lines": "15-25",
+        "lesson": "Per-width initial/operand: i32 53/13, i64 0x100000035/0x10000000D; wrapping update arithmetic."
+      },
+      {
+        "file": "evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py",
+        "lines": "26-40",
+        "lesson": "Live body checks old (bit 0) and new (bit 1), retval 3; dead body checks new only, retval 2."
+      },
+      {
+        "file": "evidence/llvm-toolchain-review-20260922/kernel-oracle/prepare.py",
+        "lines": "41-59",
+        "lesson": "CAS comparator initial on hit / initial+1 on miss, retval 3; load rows retval 1."
+      },
+      {
+        "file": "evidence/llvm-toolchain-review-20260922/kernel-oracle/cases.json",
+        "lines": "1-142",
+        "lesson": "28-case op/width/live-dead/CAS/load matrix names and expected retval bits."
+      },
+      {
+        "file": "llvm-bpf-toolchain-experiment.md",
+        "lines": "55-70",
+        "lesson": "Seven wrong-old-value cases: live 32-bit add/sub/and/or/xor plus live 64-bit add/sub; stored value correct, verifier accepts."
+      },
+      {
+        "file": "llvm-bpf-atomic-load-report.md",
+        "lines": "62-73",
+        "lesson": "9-row AtomicLoad selection matrix across LLVM 18/21/22/23 and bpf-linker; v4 lowers relaxed loads to ordinary u64 loads."
+      }
+    ]
+  },
+  "_widths": "initial/operand/expected_old/expected_new are decimal u64; _hex forms audit the same value.",
+  "rmw_cases": [
+    {
+      "name": "add-32-live",
+      "op": "add",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 66,
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "add-32-dead",
+      "op": "add",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 66,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "sub-32-live",
+      "op": "sub",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 40,
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "sub-32-dead",
+      "op": "sub",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 40,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "and-32-live",
+      "op": "and",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 5,
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "and-32-dead",
+      "op": "and",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 5,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "or-32-live",
+      "op": "or",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 61,
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "or-32-dead",
+      "op": "or",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 61,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "xor-32-live",
+      "op": "xor",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 56,
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "xor-32-dead",
+      "op": "xor",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 56,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "add-64-live",
+      "op": "add",
+      "width": 64,
+      "initial": 4294967349,
+      "initial_hex": "0x100000035",
+      "operand": 4294967309,
+      "operand_hex": "0x10000000d",
+      "expected_old": 4294967349,
+      "expected_new": 8589934658,
+      "expected_new_hex": "0x200000042",
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "add-64-dead",
+      "op": "add",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 8589934658,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "sub-64-live",
+      "op": "sub",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 40,
+      "expected_new_hex": "0x28",
+      "live": true,
+      "retval": 3,
+      "h29": true
+    },
+    {
+      "name": "sub-64-dead",
+      "op": "sub",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 40,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "and-64-live",
+      "op": "and",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 4294967301,
+      "expected_new_hex": "0x100000005",
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "and-64-dead",
+      "op": "and",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 4294967301,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "or-64-live",
+      "op": "or",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 4294967357,
+      "expected_new_hex": "0x10000003d",
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "or-64-dead",
+      "op": "or",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 4294967357,
+      "live": false,
+      "retval": 2,
+      "h29": false
+    },
+    {
+      "name": "xor-64-live",
+      "op": "xor",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 56,
+      "expected_new_hex": "0x38",
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "xor-64-dead",
+      "op": "xor",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 56,
+      "live": false,
+      "retval": 2,
+      "h29": false,
+      "expected_new_hex": "0x38"
+    },
+    {
+      "name": "xchg-32-live",
+      "op": "xchg",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "expected_old": 53,
+      "expected_new": 13,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "xchg-64-live",
+      "op": "xchg",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "expected_old": 4294967349,
+      "expected_new": 4294967309,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "cas-32-hit",
+      "op": "cas",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "comparator": 53,
+      "expected_old": 53,
+      "expected_new": 13,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "cas-32-miss",
+      "op": "cas",
+      "width": 32,
+      "initial": 53,
+      "operand": 13,
+      "comparator": 54,
+      "expected_old": 53,
+      "expected_new": 53,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "cas-64-hit",
+      "op": "cas",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "comparator": 4294967349,
+      "expected_old": 4294967349,
+      "expected_new": 4294967309,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    },
+    {
+      "name": "cas-64-miss",
+      "op": "cas",
+      "width": 64,
+      "initial": 4294967349,
+      "operand": 4294967309,
+      "comparator": 4294967350,
+      "expected_old": 4294967349,
+      "expected_new": 4294967349,
+      "live": true,
+      "retval": 3,
+      "h29": false
+    }
+  ],
+  "load_cases": [
+    {
+      "name": "load-32-monotonic",
+      "width": 32,
+      "ordering": "monotonic",
+      "initial": 53,
+      "retval": 1
+    },
+    {
+      "name": "load-32-acquire",
+      "width": 32,
+      "ordering": "acquire",
+      "initial": 53,
+      "retval": 1
+    },
+    {
+      "name": "load-64-monotonic",
+      "width": 64,
+      "ordering": "monotonic",
+      "initial": 4294967349,
+      "retval": 1
+    },
+    {
+      "name": "load-64-acquire",
+      "width": 64,
+      "ordering": "acquire",
+      "initial": 4294967349,
+      "retval": 1
+    }
+  ],
+  "selector_rows": [
+    {
+      "id": "llvm18-any",
+      "backend": "ubuntu-llc-18.1.8",
+      "cpu": [
+        "generic",
+        "v3",
+        "v4"
+      ],
+      "acqrel": null,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "backend-generation",
+      "note": "LLVM 18 refuses AtomicLoad even at v4 (donor report row 1)."
+    },
+    {
+      "id": "llvm21-below-v4",
+      "backend": "ubuntu-llc-21.1.8",
+      "cpu": [
+        "generic",
+        "v3"
+      ],
+      "acqrel": false,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "llvm-selection",
+      "note": "Cannot select AtomicLoad; on this Ubuntu build the crash handler then stalls (exit 124 under timeout, re-observed 2026-10-23)."
+    },
+    {
+      "id": "llvm21-v4-mono",
+      "backend": "ubuntu-llc-21.1.8",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": true,
+      "ordering": [
+        "monotonic"
+      ],
+      "outcome": "ordinary-load",
+      "note": "Lowers to r0 = *(u64 *)(r1+0) plus exit; frozen as objects-atomic/ld-mono64.o."
+    },
+    {
+      "id": "llvm21-v4-acquire",
+      "backend": "ubuntu-llc-21.1.8",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": true,
+      "ordering": [
+        "acquire"
+      ],
+      "outcome": "acquire-load",
+      "note": "Lowers to STX/BPF_ATOMIC imm=0x100; frozen by TC03 as objects/acq.o."
+    },
+    {
+      "id": "llvm21-v4-noacqrel",
+      "backend": "ubuntu-llc-21.1.8",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": false,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "llvm-selection",
+      "note": "-disable-load-acq-store-rel removes even the relaxed lowering (donor report row 4)."
+    },
+    {
+      "id": "llvm23-below-v4",
+      "backend": "llvm-23.1.2-pristine-llc",
+      "cpu": [
+        "generic",
+        "v3"
+      ],
+      "acqrel": false,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "llvm-selection",
+      "note": "Pristine BPF-only build reproduces the generic/v3 failure (donor report row 5)."
+    },
+    {
+      "id": "llvm23-v4-mono",
+      "backend": "llvm-23.1.2-pristine-llc",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": true,
+      "ordering": [
+        "monotonic"
+      ],
+      "outcome": "ordinary-load",
+      "note": "Ordinary u64 load plus exit (donor report row 6)."
+    },
+    {
+      "id": "llvm23-v4-noacqrel",
+      "backend": "llvm-23.1.2-pristine-llc",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": false,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "llvm-selection",
+      "note": "Disabled acqrel/gotox features refuse (donor report row 7)."
+    },
+    {
+      "id": "rustllvm22-linker",
+      "backend": "bpf-linker-0.10.4",
+      "cpu": [
+        "generic",
+        "v3"
+      ],
+      "acqrel": false,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "llvm-selection",
+      "note": "Rust LLVM 22.1.4 inside the linker aborts selection (donor report row 8)."
+    },
+    {
+      "id": "linker-v4-cli",
+      "backend": "bpf-linker-0.10.4",
+      "cpu": [
+        "v4"
+      ],
+      "acqrel": null,
+      "ordering": [
+        "monotonic",
+        "acquire"
+      ],
+      "outcome": "compile-refusal",
+      "reason": "linker-cli",
+      "note": "--cpu v4 rejected by the linker CLI parser before LLVM runs (donor report row 9)."
+    }
+  ],
+  "probe_matrix": {
+    "_note": "ok = emitted exit 0 under timeout 30. HANG-DIAG = selection diagnostic printed, then the crash handler stalled; killed by timeout (exit 124). Recorded 2026-10-23, never re-probed per run.",
+    "rmw-add32-live": {
+      "v3": "ok",
+      "v4": "ok"
+    },
+    "rmw-add64-live": {
+      "v3": "ok",
+      "v4": "ok"
+    },
+    "rmw-add32-dead": {
+      "v3": "ok",
+      "v4": "ok"
+    },
+    "rmw-xchg64": {
+      "v3": "ok",
+      "v4": "ok"
+    },
+    "rmw-cas64-hit": {
+      "v3": "ok",
+      "v4": "ok"
+    },
+    "ld-mono64": {
+      "v4": "ok",
+      "v3": "HANG-DIAG",
+      "generic": "HANG-DIAG"
+    }
+  },
+  "objects": [
+    {
+      "file": "objects-atomic/rmw-add32-live.o",
+      "source": "sources-atomic/rmw-add32-live.ll",
+      "march": "bpfel",
+      "cpu": "v3",
+      "sha256": "8c0c2c256a6c647c2a31e9d9f85520c738cc6beb927c7a3d91e399202a77cfea",
+      "kind": "rel",
+      "families": [
+        "alu32",
+        "base",
+        "jump32"
+      ],
+      "license": null,
+      "slots": 13,
+      "case": "add-32-live",
+      "atomic": {
+        "slot": 3,
+        "code": "0xc3",
+        "width": 32,
+        "op": "add",
+        "fetch": false,
+        "dst": 10,
+        "src": 1,
+        "off": -4,
+        "imm": 0
+      },
+      "plains": [
+        {
+          "slot": 1,
+          "base": 10,
+          "off": -4,
+          "width": 4,
+          "write": true
+        },
+        {
+          "slot": 8,
+          "base": 10,
+          "off": -4,
+          "width": 4,
+          "write": false
+        }
+      ],
+      "provenance": "llc-emitted"
+    },
+    {
+      "file": "objects-atomic/rmw-add64-live.o",
+      "source": "sources-atomic/rmw-add64-live.ll",
+      "march": "bpfel",
+      "cpu": "v3",
+      "sha256": "aa5b5085124154ba3913ff3b217a3d5236dfbcdfc5ed12748e530241c70c79cf",
+      "kind": "rel",
+      "families": [
+        "alu32",
+        "base"
+      ],
+      "license": null,
+      "slots": 14,
+      "case": "add-64-live",
+      "atomic": {
+        "slot": 5,
+        "code": "0xdb",
+        "width": 64,
+        "op": "add",
+        "fetch": false,
+        "dst": 10,
+        "src": 2,
+        "off": -8,
+        "imm": 0
+      },
+      "plains": [
+        {
+          "slot": 2,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": true
+        },
+        {
+          "slot": 12,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": false
+        }
+      ],
+      "provenance": "llc-emitted"
+    },
+    {
+      "file": "objects-atomic/rmw-add32-dead.o",
+      "source": "sources-atomic/rmw-add32-dead.ll",
+      "march": "bpfel",
+      "cpu": "v3",
+      "sha256": "34cd0ef0f8a434c2f9341167a8750a088722f0d83613a216af77c14acf0f85aa",
+      "kind": "rel",
+      "families": [
+        "alu32",
+        "base",
+        "jump32"
+      ],
+      "license": null,
+      "slots": 9,
+      "case": "add-32-dead",
+      "atomic": {
+        "slot": 3,
+        "code": "0xc3",
+        "width": 32,
+        "op": "add",
+        "fetch": false,
+        "dst": 10,
+        "src": 1,
+        "off": -4,
+        "imm": 0
+      },
+      "plains": [
+        {
+          "slot": 1,
+          "base": 10,
+          "off": -4,
+          "width": 4,
+          "write": true
+        },
+        {
+          "slot": 5,
+          "base": 10,
+          "off": -4,
+          "width": 4,
+          "write": false
+        }
+      ],
+      "provenance": "llc-emitted"
+    },
+    {
+      "file": "objects-atomic/rmw-xchg64.o",
+      "source": "sources-atomic/rmw-xchg64.ll",
+      "march": "bpfel",
+      "cpu": "v3",
+      "sha256": "5f7e4c2ecd900b4488fd64ed2d808c694665db491fd712dd197f16394537f3ce",
+      "kind": "rel",
+      "families": [
+        "alu32",
+        "base"
+      ],
+      "license": null,
+      "slots": 14,
+      "case": "xchg-64-live",
+      "atomic": {
+        "slot": 7,
+        "code": "0xdb",
+        "width": 64,
+        "op": "xchg",
+        "fetch": true,
+        "dst": 10,
+        "src": 3,
+        "off": -8,
+        "imm": 225
+      },
+      "plains": [
+        {
+          "slot": 2,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": true
+        },
+        {
+          "slot": 12,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": false
+        }
+      ],
+      "provenance": "llc-emitted"
+    },
+    {
+      "file": "objects-atomic/rmw-cas64-hit.o",
+      "source": "sources-atomic/rmw-cas64-hit.ll",
+      "march": "bpfel",
+      "cpu": "v3",
+      "sha256": "b07bf9d4a42d9bae42fe9f0484cc5d3456b7ae112130f67edd815921e9f5b1c4",
+      "kind": "rel",
+      "families": [
+        "alu32",
+        "base"
+      ],
+      "license": null,
+      "slots": 15,
+      "case": "cas-64-hit",
+      "atomic": {
+        "slot": 7,
+        "code": "0xdb",
+        "width": 64,
+        "op": "cas",
+        "fetch": true,
+        "dst": 10,
+        "src": 1,
+        "off": -8,
+        "imm": 241
+      },
+      "plains": [
+        {
+          "slot": 2,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": true
+        },
+        {
+          "slot": 9,
+          "base": 10,
+          "off": -8,
+          "width": 8,
+          "write": false
+        }
+      ],
+      "provenance": "llc-emitted"
+    },
+    {
+      "file": "objects-atomic/ld-mono64.o",
+      "source": "sources-atomic/ld-mono64.ll",
+      "march": "bpfel",
+      "cpu": "v4",
+      "sha256": "c81d41f4435e87dfc199b508a1d71031901e846c4f7476057ca96e22dee51b3a",
+      "kind": "rel",
+      "families": [
+        "base"
+      ],
+      "license": null,
+      "slots": 2,
+      "case": "load-64-monotonic",
+      "atomic": null,
+      "ordinary_load": {
+        "slot": 0,
+        "code": "0x79",
+        "base": 1,
+        "off": 0,
+        "width": 8
+      },
+      "provenance": "llc-emitted"
+    }
+  ],
+  "notes": [
+    "No BPF compiler runs during tests; these bytes are the frozen emission record.",
+    "The two live-add objects carry the H29 accepted-but-wrong shape (non-fetch imm=0x00 with a used result); the oracle/decoder flags it, it is not a passing twin.",
+    "The acquire-load positive is TC03 objects/acq.o (STX imm=0x100); TC04 does not re-emit it.",
+    "Concurrent shared-map RMW/CAS linearization and memory-ordering claims are TC07 work; this file covers stack-memory single-run semantics only."
+  ]
+}

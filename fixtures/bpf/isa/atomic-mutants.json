@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "tc04_atomic_mutants",
+  "_note": "Each mutant names its base object or vector, byte/observation surgery and intended oracle/decoder finding. Byte surgeries run in-test on copies; shipped objects stay valid twins. Manifest/observation surgeries pass narrowed inputs to the checker. IDs are asserted against the test file's exercised list.",
+  "mutants": [
+    {"id": "nonfetch-live-add32", "base": "objects-atomic/rmw-add32-live.o", "surgery": "none: as-emitted non-fetch XADD (imm=0x00) with a used result is the H29 shape", "expected_rule": "atomic.missing-fetch", "conforms": false},
+    {"id": "fetch-restored-twin", "base": "objects-atomic/rmw-add32-live.o", "surgery": "socket insn3 imm 0x00 -> 0x01 (set fetch bit); observed (old=53,new=66) verifies clean", "expected_rule": null, "conforms": true},
+    {"id": "nonfetch-old-fails", "base": "objects-atomic/rmw-add32-live.o", "surgery": "observation surgery: observed (old=13,new=66) against add-32-live reference", "expected_rule": "oracle.old-mismatch", "conforms": false},
+    {"id": "stored-new-fails", "base": "objects-atomic/rmw-add32-live.o", "surgery": "observation surgery: observed (old=53,new=67) against add-32-live reference", "expected_rule": "oracle.new-mismatch", "conforms": false},
+    {"id": "wrong-width-atomic", "base": "objects-atomic/rmw-add64-live.o", "surgery": "socket insn5 code 0xdb -> 0xcb (DW -> H: half-word atomic)", "expected_rule": "atomic.wrong-width", "conforms": false},
+    {"id": "misaligned-atomic", "base": "objects-atomic/rmw-add64-live.o", "surgery": "socket insn5 off -8 -> -7 (u64 cell off-alignment)", "expected_rule": "atomic.misaligned", "conforms": false},
+    {"id": "unknown-atomic-op", "base": "objects-atomic/rmw-add64-live.o", "surgery": "socket insn5 imm 0x00 -> 0x20 (undefined atomic op nibble)", "expected_rule": "atomic.unknown-op", "conforms": false},
+    {"id": "undeclared-cell", "base": "objects-atomic/rmw-add32-live.o", "surgery": "socket insn3 off -4 -> -8 (aligned but outside the declared (r10,-4,4) cell)", "expected_rule": "atomic.undeclared-cell", "conforms": false},
+    {"id": "plain-alias-narrow", "base": "objects-atomic/rmw-add32-live.o", "surgery": "manifest surgery: alias allowances emptied; genuine init store + verify load uncovered", "expected_rule": "atomic.plain-alias", "conforms": false},
+    {"id": "selector-mismatch-acquire", "base": "objects-atomic/ld-mono64.o", "surgery": "expectation surgery: acquire-load expectation against an ordinary-load object", "expected_rule": "atomic-load.unexpected-ordinary", "conforms": false},
+    {"id": "selector-mismatch-ordinary", "base": "objects/acq.o", "surgery": "expectation surgery: ordinary-load expectation against an acquire-opcode object", "expected_rule": "atomic-load.unexpected-acquire", "conforms": false}
+  ]
+}

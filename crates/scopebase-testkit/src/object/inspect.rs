@@ -15,6 +15,10 @@
 //! design-frozen classification pending the TC07 live gate. Donor H30 preset
 //! warning: p11scope-ws w000 @ 6f97aa47, `llvm-bpf-toolchain-experiment.md`
 //! lines 77-100 (user-authored). Grant: OWNER-2026-10-23.
+//!
+//! TC04 appends the raw slot fields ([`FamilySpan::code`], `regs`, `off`,
+//! `imm`) so the atomic checker decodes RMW shapes over this inventory
+//! without re-parsing ELF. Classification behavior is unchanged.
 use scopebase_bpf::{ErrorKind, Limits, OperationError};
 use sha2::{Digest, Sha256};
 
@@ -48,6 +52,14 @@ pub struct FamilySpan {
     pub section: String,
     /// Section-relative byte offset of the 8-byte slot.
     pub offset: u64,
+    /// Raw opcode byte (TC04: atomic/plain shape decode over this inventory).
+    pub code: u8,
+    /// Raw register byte: low nibble dst, high nibble src.
+    pub regs: u8,
+    /// Decoded 16-bit offset in the contract endianness.
+    pub off: i16,
+    /// Decoded 32-bit immediate in the contract endianness.
+    pub imm: i32,
 }
 
 /// Decoded final-object inventory with per-rule results.
@@ -607,11 +619,16 @@ pub fn inspect_final_object(
                 Data::Little => i32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]),
                 Data::Big => i32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]),
             };
+            let regs = raw[1];
             match classify(code, off, imm) {
                 Class::Family(family) => spans.push(FamilySpan {
                     family: family.to_owned(),
                     section: section.label(),
                     offset: (slot - 1) * 8,
+                    code,
+                    regs,
+                    off,
+                    imm,
                 }),
                 Class::Wide => {
                     if slot == slots {
@@ -626,6 +643,10 @@ pub fn inspect_final_object(
                             family: "base".to_owned(),
                             section: section.label(),
                             offset: (slot - 1) * 8,
+                            code,
+                            regs,
+                            off,
+                            imm,
                         });
                         skip_next = true;
                     }
