@@ -98,12 +98,12 @@
   },
   "cell_bindings": {
     "h33-source-closure":
-      {"unavailable": "LOGICAL_ONLY: H33.source-closure is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+      {"gate_id": "h33-source-closure", "argv": ["python3", "tools/qualification/check_h33.py", "source-closure", "--root", "."]},
     "h33-final-object-license":
-      {"unavailable": "LOGICAL_ONLY: H33.final-object-license is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+      {"gate_id": "h33-final-object-license", "argv": ["python3", "tools/qualification/check_h33.py", "final-object-license", "--root", "."]},
     "h33-license-admission":
-      {"unavailable": "LOGICAL_ONLY: H33.license-admission is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"},
+      {"unavailable": "SKIP: H33.license-admission needs a pinned owned kernel cell with BPF_PROG_LOAD privilege leased via TT05; this CI runs unprivileged on unowned hosted kernels, so live GPL-positive/refusal/helper-free assertions are NOT_RUN (cause-separation logic is covered by the H33 source/object gates and scopebase-bpf attach tests)"},
     "h33-installed-notices":
-      {"unavailable": "LOGICAL_ONLY: H33.installed-notices is UNIMPLEMENTED; no executable binding exists (owner: license-boundary TT10 work)"}
+      {"gate_id": "h33-installed-notices", "argv": ["python3", "tools/qualification/check_h33.py", "installed-notices", "--bundle", "crates/scopebase-conformance/delivery"]}
   }
 }

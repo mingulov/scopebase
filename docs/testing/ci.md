@@ -58,17 +58,22 @@ reported as incomplete, never as a quiet pass.
 
 Exit `3` with zero gate failures is the intended narrowed-complete signal,
 not an error: every runnable gate passed, but `full_matrix_complete` is
-false (unavailable required checks or unexecuted cells, e.g. the
-`LOGICAL_ONLY` H33 cells or any narrowed selection). Callers must treat `3`
-as "no failures, qualification still open" — retrying the same selection
-cannot turn it green, and only exit `0` attests the full matrix.
+false (unavailable required checks or unexecuted cells, e.g. the SKIPped
+`h33-license-admission` cell or any narrowed selection). Callers must treat
+`3` as "no failures, qualification still open" — retrying the same selection
+cannot turn it green, and only exit `0` attests the full matrix. Three H33
+cells execute since the TT10 license-boundary lane; see
+[h33-bindings.md](h33-bindings.md) for the per-cell audit.
 
 ## Impact map maintenance
 
 When a case gains an executable registration, add `path_rules` entries for
 its executable, fixture, oracle and bad-control sources, or those paths fall
 through to the default unknown broadening (safe direction: full revalidation
-plus an incomplete verdict until bindings exist). Profile gates run the
+plus an incomplete verdict until bindings exist). The H33 registration paths
+keep that fallback deliberately: the checker/oracle are shared across three
+cases and one changed path yields one change, so exact rules would
+under-select. Profile gates run the
 closest implemented package suite as regression signal; they do not attest
 profile qualification and never mark cells executed. Only an explicit
 `cell_bindings` command evidences a cell.
@@ -77,6 +82,7 @@ profile qualification and never mark cells executed. Only an explicit
 
 Parallel gate fan-out across runners, inherited prior-receipt evidence (the
 `inherited` set is always empty in v1), multi-run retry chains (the gate
-evaluates this run's outcome only), leased live cells, and executable
-bindings for the `LOGICAL_ONLY` H33 cells (license-boundary TT10 work).
-Until those land, any selection touching H33 cells reports incomplete.
+evaluates this run's outcome only), leased live cells, and the remaining
+`h33-license-admission` live-kernel binding (TT05 lease). Until that lands,
+any selection touching the admission cell reports incomplete; the other
+three H33 cells execute.
