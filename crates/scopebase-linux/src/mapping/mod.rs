@@ -860,9 +860,10 @@ fn mount_resolve_key(
     ctx: &mut OpCtx,
 ) -> MountKey {
     // R12/R13: the fdinfo read charges itself on every path (open,
-    // each read attempt, close, cross-check stat) against the caller's
-    // own read ceiling; the old fixed post-success (3, 1) undercounted
-    // the stat and dropped failure-path charges.
+    // each read attempt, cross-check stat) against the caller's own
+    // read ceiling; the RAII close is uncharged (S45). The old fixed
+    // post-success (3, 1) undercounted the stat and dropped
+    // failure-path charges.
     let control = ctx.control;
     let mnt_id = match read_fdinfo_mnt_id(held_fd, held_stat, ctx, control, proc.max_read_calls) {
         Ok(id) => id,

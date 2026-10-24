@@ -408,12 +408,46 @@ mod tests {
     /// evidence and never `Inconclusive` — with the CreatorPidfd
     /// observer origin preserved on the failure, and the mapping
     /// retired (no active mapping left behind).
+    /// S94-round5: private staging for the observer probe. Exclusive
+    /// by construction (the S14 discipline): we create the root
+    /// (exclusive `create_dir`, skipping stale names — never
+    /// removing anything we did not just create), we own it, mode
+    /// 0700, so no other uid can plant or replace names inside.
+    fn staging(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..1024 {
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "lx06-cal-observer-{}-{tag}-{n}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                        .expect("staging mode");
+                    return dir;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("staging: {error}"),
+            }
+        }
+        panic!("staging names exhausted");
+    }
+
     #[test]
     #[cfg(feature = "process")]
     fn post_fork_calibrate_aborts_with_observer_origin() {
-        use crate::file::{HeldFile, ProcFdResolver, SymlinkPolicy};
+        use crate::file::HeldFile;
         use crate::procfs::ParseLimits;
+        use std::io::Write;
         use std::sync::Arc;
+        // S88-round5: serialize on FD_TABLE with the
+        // unmap-injection tests: calibrate/abort reaches
+        // unmap_raw, which consumes the process-global
+        // injected-failure counter.
+        let _table = crate::FD_TABLE.lock().unwrap();
         let control = OperationControl::unlimited();
         let proc = ProcLimits {
             parse: ParseLimits {
@@ -435,17 +469,22 @@ mod tests {
         let me = Pid::new(std::process::id() as i32).expect("own pid");
         assert_ne!(parent, me, "test must not be its own parent");
         let forged = epoch.forge_post_fork_creator(parent);
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!(
-            "cal-observer-{}-{id}.dat",
-            std::process::id()
-        ));
-        std::fs::write(&path, b"calibration observer probe").expect("write probe file");
-        let resolver = ProcFdResolver::open_self().expect("resolver");
-        let held = Arc::new(
-            HeldFile::open(&path, &resolver, SymlinkPolicy::Follow).expect("hold probe file"),
-        );
+        // S94-round5: the probe is exclusively created inside the
+        // private root and its creation descriptor is adopted
+        // directly — no shared-temp pathname is ever re-resolved,
+        // so a preplanted symlink has nothing to redirect.
+        let root = staging("probe");
+        let path = root.join("probe.dat");
+        let mut created = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("exclusive probe");
+        created
+            .write_all(b"calibration observer probe")
+            .expect("write probe file");
+        let held = Arc::new(HeldFile::from_file(created).expect("adopt probe"));
         let page = rustix::param::page_size();
         let pool = super::super::pool::MappingPool::new(super::super::pool::MappingPoolLimits {
             max_mappings: 1,
@@ -477,6 +516,8 @@ mod tests {
         );
         drop(guard);
         pool.close(&control).expect("pool closes");
-        std::fs::remove_file(path).unwrap();
+        drop(held);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&root).unwrap();
     }
 }

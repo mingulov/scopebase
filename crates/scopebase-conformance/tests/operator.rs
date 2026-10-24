@@ -250,6 +250,41 @@ fn missing_notice_is_broken_package() {
     assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
 }
 
+// S82-round5: a `..` that cancels a missing component fails that
+// component (ENOENT) — the operator never silently admits the
+// normalized twin's bytes.
+#[test]
+fn canceled_missing_manifest_component_is_incomplete() {
+    let root = copy_closure("s82-missing");
+    let sneaky = root.join("missing").join("..").join("fixture-manifest.json");
+    let err = closure::verify_closure(&root, &sneaky).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+    assert_eq!(err.exit_code(), EXIT_INCOMPLETE);
+    assert!(
+        err.detail().contains("no such file"),
+        "canceled missing component must fail ENOENT: {}",
+        err.detail()
+    );
+}
+
+// S82-round5: a `..` that cancels a symlink component refuses at
+// the no-follow walk — the canceled leg cannot select bytes from
+// outside the supplied path.
+#[test]
+fn canceled_symlink_manifest_component_is_incomplete() {
+    let root = copy_closure("s82-symlink");
+    std::os::unix::fs::symlink(root.join("vectors"), root.join("link")).unwrap();
+    let sneaky = root.join("link").join("..").join("fixture-manifest.json");
+    let err = closure::verify_closure(&root, &sneaky).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+    assert_eq!(err.exit_code(), EXIT_INCOMPLETE);
+    assert!(
+        err.detail().contains("symlink"),
+        "canceled symlink component must refuse at the walk: {}",
+        err.detail()
+    );
+}
+
 // Unknown profiles have no bound adapter: typed incomplete.
 #[test]
 fn unknown_profile_has_no_bound_adapter() {
@@ -3590,6 +3625,68 @@ fn planted_parent_symlink_gets_no_chmod() {
         b"victim intact",
         "victim content must survive the plant window"
     );
+}
+
+/// S69-round5: a directory substituted after the parent leaf's
+/// successful `mkdirat` is never chmodded. The leaf's container is
+/// shared (0777), so the mkdir/open window is genuinely exposed;
+/// the hook renames the fresh leaf away and plants a caller-owned
+/// 0755 substitute. Fixed code refuses (the opened fd is not
+/// proven-new) and the substitute keeps its mode and marker.
+/// Pre-fix code fchmodded the substitute to 0700.
+#[test]
+fn post_mkdir_parent_substitution_gets_no_chmod() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    let out = scratch("s69-substitute");
+    let shared = out.join("shared");
+    mkexclusive(&shared, 0o777);
+    let leaf = shared.join("leaf");
+    let hidden = shared.join("leaf-hidden-s69");
+    let run = leaf.join("run");
+    let hook = |phase: DeliveryHookPhase| {
+        if phase != DeliveryHookPhase::AfterParentMkdir {
+            return;
+        }
+        std::fs::rename(&leaf, &hidden).unwrap();
+        mkexclusive(&leaf, 0o755);
+        std::fs::write(leaf.join("marker.txt"), b"substitute intact").unwrap();
+    };
+    let err = delivery::run_delivery_with_hook(
+        delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        },
+        Some(&hook),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::Usage);
+    assert!(
+        err.detail().contains("changed after creation"),
+        "substituted leaf must refuse as replaced: {}",
+        err.detail()
+    );
+    assert!(!run.exists(), "refused run must create nothing");
+    let mode = std::fs::metadata(&leaf)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o755, "substitute mode must survive the swap window");
+    assert_eq!(
+        std::fs::read(leaf.join("marker.txt")).unwrap(),
+        b"substitute intact",
+        "substitute content must survive the swap window"
+    );
+    std::fs::remove_dir_all(&out).unwrap();
 }
 
 // S61: DeliveryAdapter preflights the ENTIRE script before its

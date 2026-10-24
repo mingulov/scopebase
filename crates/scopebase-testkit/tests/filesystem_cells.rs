@@ -2096,6 +2096,121 @@ fn preflight_cont_and_signal_denial_reports_unreaped_child() {
     pass("FS10", "CONT+signal denial reports its unreaped child");
 }
 
+/// S52/S68-round5: run a preflight-denial driver mode that must
+/// leave a stopped victim for its whole retirement window. The
+/// victim is observed independently mid-run (state `t`, child of
+/// the driver pid — PPid attribution makes parallel tests'
+/// victims impossible to misattribute); after the driver exits it
+/// resumes and self-exits, so post-run vanish (starttime
+/// verified, so a recycled number is never misread) proves no
+/// pollution. The `expect` words must all appear in the verdict.
+fn preflight_stopped_victim_denial(mode: &str, expect: &[&str]) {
+    use std::time::{Duration, Instant};
+    let mut child = std::process::Command::new(audit_denial_bin())
+        .arg(mode)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("denial driver spawns");
+    let driver_pid = child.id();
+    let mut victim: Option<(u32, u64)> = None;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while victim.is_none() && Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        victim = ptrace_stopped_child(driver_pid);
+        if victim.is_none() {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match child.try_wait().expect("try_wait runs") {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("denial driver hung in {mode} mode");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+    let output = child.wait_with_output().expect("output collected");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for word in expect {
+        assert!(
+            stdout.contains(word),
+            "mode {mode} must fail loud with {word:?}, got: {stdout}"
+        );
+    }
+    let (victim_pid, victim_start) = victim.expect(
+        "a live ptrace-stopped driver child must be observed mid-run (vacuous otherwise)",
+    );
+    let gone_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match proc_starttime(victim_pid) {
+            None => break,
+            Some(start) if start != victim_start => break,
+            Some(_) => {
+                if Instant::now() >= gone_deadline {
+                    // Unexpected linger: identity-verified kill only.
+                    unsafe { libc::kill(victim_pid as i32, libc::SIGKILL) };
+                    panic!("victim {victim_pid} lingered after its tracer exited");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+}
+
+/// S52-round5: with BLOCKING waits denied but WNOHANG allowed,
+/// retirement consumes the queued TRACEME stop — and must NOT
+/// report retired on it. Both kill routes are denied too, so the
+/// stop survives signaling and the verdict must carry the
+/// unresolved-custody note for the independently observed
+/// still-stopped child. Old code returned true on the stop with
+/// no note.
+#[test]
+fn preflight_waitstop_reports_unretired_stop() {
+    preflight_stopped_victim_denial(
+        "preflight-waitstop",
+        &["verdict=err", "preflight wait", "not proven reaped"],
+    );
+    pass(
+        "FS10",
+        "flags-selective wait denial reports its stopped child",
+    );
+}
+
+/// S68-round5: with pidfd authority denied (CONT denied to force a
+/// retirement), signaling must report Uncertain and reap WITHOUT
+/// signaling — never a numeric SIGKILL — so the stopped survivor
+/// reports unresolved custody. The kill(2) syscall stays allowed:
+/// old code used it and returned retired with no note.
+#[test]
+fn preflight_nopidfd_reaps_without_signaling() {
+    preflight_stopped_victim_denial(
+        "preflight-nopidfd",
+        &["verdict=err", "resume", "not proven reaped"],
+    );
+    pass("FS10", "pidfd-less retirement never signals, reports custody");
+}
+
 /// Scan /proc for a ptrace-stopped (state `t`) child of `ppid`.
 /// Returns the pid and its starttime (recycling discriminator).
 fn ptrace_stopped_child(ppid: u32) -> Option<(u32, u64)> {
@@ -2138,13 +2253,13 @@ fn proc_starttime(pid: u32) -> Option<u64> {
     fields.nth(17)?.parse().ok()
 }
 
-/// S68-round4: with the preflight child untraced (TRACEME denied) and
-/// auto-reaped (`SIGCHLD=SIG_IGN`), the probe's wait reports ECHILD
-/// over an unreserved number. Cleanup must classify ECHILD before
-/// signaling: any kill attempt trips the RET_KILL tripwire and dies
-/// with SIGSYS instead of risking a recycled same-UID process.
-/// Driver survival plus the ECHILD refusal is the assertion; an
-/// already-reaped child needs no custody note.
+/// S68-round5: with `SIGCHLD=SIG_IGN` (auto-reap), the probe
+/// refuses BEFORE forking — an exited child would vanish before
+/// any pidfd could pin it, so post-fork authority is unprovable.
+/// No child exists to signal: any kill attempt trips the RET_KILL
+/// tripwire and dies with SIGSYS. Driver survival plus the
+/// loud auto-reap refusal is the assertion; nothing forked needs
+/// no custody note.
 #[test]
 fn preflight_autoreap_never_signals_unreserved_pid() {
     let output = preflight_denial_output("preflight-autoreap");
@@ -2158,18 +2273,20 @@ fn preflight_autoreap_never_signals_unreserved_pid() {
     }
     assert!(
         output.status.success(),
-        "driver must survive its own cleanup (SIGSYS = cleanup signaled); stderr: {}",
+        "driver must survive (SIGSYS = something signaled); stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.starts_with("verdict=err") && stdout.contains("preflight wait"),
-        "auto-reap must fail loud naming the wait, got: {stdout}"
+        stdout.starts_with("verdict=err")
+            && stdout.contains("SIGCHLD=SIG_IGN")
+            && stdout.contains("auto-reap"),
+        "auto-reap must fail loud naming the disposition, got: {stdout}"
     );
     assert!(
         !stdout.contains("not proven reaped"),
-        "an already-reaped child needs no custody note, got: {stdout}"
+        "nothing forked needs no custody note, got: {stdout}"
     );
-    pass("FS10", "auto-reaped ECHILD refuses without signaling");
+    pass("FS10", "auto-reap refuses pre-fork without signaling");
 }
 
 /// S32: with the wait syscall itself denied (EPERM, never ECHILD),

@@ -252,6 +252,56 @@ fn last_errno_is(want: libc::c_int) -> bool {
     unsafe { libc::__errno_location().read() == want }
 }
 
+/// True when a waitpid `status` reports a terminal (reaped) state:
+/// exited or signaled. A stop or continue is a LIVE child — it
+/// keeps custody, never discharges it.
+#[cfg(target_arch = "x86_64")]
+fn wait_status_terminal(status: libc::c_int) -> bool {
+    libc::WIFEXITED(status) || libc::WIFSIGNALED(status)
+}
+
+/// True when SIGCHLD currently disposes to SIG_IGN (auto-reap).
+/// Read-back only; touches no process state.
+#[cfg(target_arch = "x86_64")]
+fn sigchld_auto_reaps() -> bool {
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: sigaction read-back (act NULL) for this process.
+    let rc = unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old) };
+    rc == 0 && old.sa_sigaction == libc::SIG_IGN as usize
+}
+
+/// Owns a preflight pidfd across the probe; closes on drop so every
+/// refusal path releases it. `None` when the birth open failed
+/// environmentally (callers then reap without signaling — never a
+/// numeric kill — and report unresolved custody for survivors).
+#[cfg(target_arch = "x86_64")]
+struct PidfdGuard(Option<libc::c_int>);
+
+#[cfg(target_arch = "x86_64")]
+impl Drop for PidfdGuard {
+    fn drop(&mut self) {
+        if let Some(fd) = self.0 {
+            // SAFETY: fd owned by this guard.
+            unsafe { libc::close(fd) };
+        }
+    }
+}
+
+/// Send `sig` through a held pidfd; returns the raw errno (0 on
+/// success). The fd pins OUR task: ESRCH proves OUR child was
+/// reaped — a recycled number is unaddressable through it.
+#[cfg(target_arch = "x86_64")]
+fn pidfd_signal(fd: libc::c_int, sig: libc::c_int) -> libc::c_int {
+    // SAFETY: pidfd_send_signal(pidfd, sig, NULL, 0).
+    let sent = unsafe { libc::syscall(libc::SYS_pidfd_send_signal, fd, sig, 0, 0) };
+    if sent == 0 {
+        0
+    } else {
+        // SAFETY: errno location for this thread.
+        unsafe { libc::__errno_location().read() }
+    }
+}
+
 /// The outcome of signaling a preflight child exactly once.
 #[cfg(target_arch = "x86_64")]
 enum PreflightSignal {
@@ -261,54 +311,60 @@ enum PreflightSignal {
     /// No such process at signal time (already reaped): nothing to
     /// signal and no custody to report.
     Gone,
+    /// No stable authority and no proof of death: reap without
+    /// signaling, and report unresolved custody for survivors.
+    Uncertain,
 }
 
 /// S68: signal the preflight child through stable process authority.
-/// A pidfd pins the task across number recycling, so the SIGKILL can
-/// never land on a recycled same-UID process; it also survives a
-/// filter that denies only `SYS_kill`. `ESRCH` anywhere means the
-/// child was already reaped (auto-reap or a competing reaper) and
-/// the number is unreserved — never signal it. Numeric kill is only
-/// the environmental pidfd-failure fallback, guarded by a
-/// last-moment ECHILD re-check; every caller classifies ECHILD
-/// before reaching here.
+///
+/// S68-round5: `pidfd` is the birth-opened description — opened
+/// before any observation, while the just-forked child is held
+/// alive — so it pins OUR task across number recycling and the
+/// SIGKILL can never land on a recycled same-UID process. There is
+/// NO numeric fallback: without a pidfd the number is unprovable
+/// (a late open races auto-reap/recycling, and a last-moment
+/// recheck cannot close a reap-then-recycle between the check and
+/// the kill), so ownership reports Uncertain and the caller reaps
+/// without signaling. `ESRCH` through a HELD fd means OUR child
+/// was already reaped — gone, never signaled.
 #[cfg(target_arch = "x86_64")]
-fn signal_preflight_child(pid: libc::pid_t) -> PreflightSignal {
-    // SAFETY: pidfd_open on an owned (not-yet-ECHILD) child number.
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
-    if fd >= 0 {
-        // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
-        let sent = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                fd,
-                libc::SIGKILL,
-                0,
-                0,
-            )
-        };
-        let gone = sent != 0 && last_errno_is(libc::ESRCH);
+fn signal_preflight_child(pid: libc::pid_t, pidfd: Option<libc::c_int>) -> PreflightSignal {
+    // One description to signal through: the birth-held fd when
+    // present, else a single best-effort late open (the child is
+    // alive-or-zombie — auto-reap is refused process-wide, so a
+    // late open cannot misdirect; at worst it reports ESRCH for
+    // a reaped child).
+    let (fd, owned) = match pidfd {
+        Some(fd) => (fd, false),
+        None => match super::seccomp::pidfd_open_raw(pid) {
+            Ok(fd) => (fd, true),
+            Err(errno) => {
+                if errno == libc::ESRCH {
+                    return PreflightSignal::Gone;
+                }
+                // Environmental pidfd failure (e.g. EMFILE):
+                // re-check for proof of death, else admit
+                // uncertainty — never a numeric kill.
+                let mut status = 0;
+                // SAFETY: valid status out-pointer for an owned child.
+                let recheck = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if recheck == pid && wait_status_terminal(status) {
+                    return PreflightSignal::Gone;
+                }
+                if recheck < 0 && last_errno_is(libc::ECHILD) {
+                    return PreflightSignal::Gone;
+                }
+                return PreflightSignal::Uncertain;
+            }
+        },
+    };
+    let errno = pidfd_signal(fd, libc::SIGKILL);
+    if owned {
         // SAFETY: fd owned by this scope.
         unsafe { libc::close(fd) };
-        if gone {
-            return PreflightSignal::Gone;
-        }
-        return PreflightSignal::Pending;
     }
-    if last_errno_is(libc::ESRCH) {
-        return PreflightSignal::Gone;
-    }
-    // Environmental pidfd failure (e.g. EMFILE): re-check ECHILD at
-    // the last moment, then numeric kill. The re-check keeps the
-    // race to a reap landing between these two syscalls.
-    let mut status = 0;
-    // SAFETY: valid status out-pointer for an owned child.
-    let recheck = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-    if recheck == pid || (recheck < 0 && last_errno_is(libc::ECHILD)) {
-        return PreflightSignal::Gone;
-    }
-    // SAFETY: SIGKILL to an owned, still-reserved child number.
-    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 && last_errno_is(libc::ESRCH) {
+    if errno == libc::ESRCH {
         return PreflightSignal::Gone;
     }
     PreflightSignal::Pending
@@ -320,25 +376,32 @@ fn signal_preflight_child(pid: libc::pid_t) -> PreflightSignal {
 /// is proven gone.
 ///
 /// S68-round4: ECHILD classifies BEFORE any signal — the first reap
-/// attempt may already report it (auto-reap under `SIGCHLD=SIG_IGN`
-/// or a competing reaper), and the number is then unreserved.
+/// attempt may already report it (a competing reaper), and the
+/// number is then unreserved.
 /// S52-round4: only `ESRCH` proves absence. Any other existence-probe
 /// failure (`EPERM` under a kill-denying filter, ...) means
 /// present-but-unobservable — never gone. The SIGKILL result is no
 /// longer ignored: `ESRCH` short-circuits to gone.
+/// S52-round5: only TERMINAL wait statuses (exited/signaled) or
+/// proven absence (ECHILD, ESRCH) discharge custody — a stop or
+/// continue is a LIVE child: signal it and keep reaping, never
+/// return retired on the stop itself.
+/// S68-round5: signaling runs through the birth-held pidfd; without
+/// one the child is reaped-but-never-signaled and any survivor
+/// reports unresolved custody after the bounded wait.
 #[cfg(target_arch = "x86_64")]
-fn retire_preflight_child(pid: libc::pid_t) -> bool {
+fn retire_preflight_child(pid: libc::pid_t, pidfd: Option<libc::c_int>) -> bool {
     let mut status = 0;
     // SAFETY: valid status out-pointer for an owned child.
     let first = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-    if first == pid {
+    if first == pid && wait_status_terminal(status) {
         return true;
     }
     if first < 0 && last_errno_is(libc::ECHILD) {
         return true;
     }
     if matches!(
-        signal_preflight_child(pid),
+        signal_preflight_child(pid, pidfd),
         PreflightSignal::Gone
     ) {
         return true;
@@ -348,7 +411,7 @@ fn retire_preflight_child(pid: libc::pid_t) -> bool {
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
         let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if waited == pid {
+        if waited == pid && wait_status_terminal(status) {
             return true;
         }
         if waited < 0 {
@@ -356,8 +419,22 @@ fn retire_preflight_child(pid: libc::pid_t) -> bool {
                 return true;
             }
         } else if waited == 0 {
-            // SAFETY: signal 0 probes existence without effect.
-            if unsafe { libc::kill(pid, 0) } != 0 && last_errno_is(libc::ESRCH) {
+            // No status to collect: probe OUR task for death.
+            // The pidfd probe is exact (ESRCH proves OUR child
+            // reaped); the numeric signum-0 probe below is an
+            // existence OBSERVATION, not a signal delivery — it
+            // cannot affect any process — and ESRCH soundly
+            // proves OUR child gone (a live child, even a
+            // zombie, would occupy the number).
+            let gone = match pidfd {
+                Some(fd) => pidfd_signal(fd, 0) == libc::ESRCH,
+                None => {
+                    // SAFETY: signal 0 probes existence without effect.
+                    let probed = unsafe { libc::kill(pid, 0) };
+                    probed != 0 && last_errno_is(libc::ESRCH)
+                }
+            };
+            if gone {
                 return true;
             }
         }
@@ -370,6 +447,18 @@ fn retire_preflight_child(pid: libc::pid_t) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 fn preflight_x86_64() -> Result<String, AuditError> {
+    // S68-round5: auto-reap makes post-fork authority unprovable —
+    // an exited child vanishes before any pidfd can pin it, so a
+    // late open could address a recycled number. Refuse loudly
+    // instead of forking into unprovable custody. (This also pins
+    // every numeric use below: without auto-reap and without a
+    // competing reaper, our child is alive-or-zombie — never
+    // recycled — at every observation.)
+    if sigchld_auto_reaps() {
+        return Err(AuditError::new(
+            "preflight refused: SIGCHLD=SIG_IGN (auto-reap); cannot retain child custody",
+        ));
+    }
     let mut pipe = [0; 2];
     // SAFETY: valid out-pointer; ends checked below.
     if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
@@ -388,6 +477,11 @@ fn preflight_x86_64() -> Result<String, AuditError> {
         }
         return Err(AuditError::new("preflight fork failed"));
     }
+    // S68-round5: stable authority from birth — opened before the
+    // pipe read, the first blocking wait, and every other
+    // observation, while the just-forked child is held alive.
+    // The guard closes on every path below.
+    let pidfd = PidfdGuard(super::seccomp::pidfd_open_raw(pid).ok());
     // SAFETY: write end owned by this scope; the child holds its own.
     unsafe { libc::close(pipe[1]) };
     let mut code = [1u8; 1];
@@ -410,16 +504,16 @@ fn preflight_x86_64() -> Result<String, AuditError> {
                 continue;
             }
             // S68-round4: ECHILD classifies before any signal: the
-            // child was already reaped (auto-reap under
-            // SIGCHLD=SIG_IGN or a competing reaper) and the number
-            // is unreserved — refuse without signaling it. No
+            // child was already reaped (a competing reaper;
+            // auto-reap is refused above) and the number is
+            // unreserved — refuse without signaling it. No
             // unresolved custody: no child is left to retire.
             if error.raw_os_error() == Some(libc::ECHILD) {
                 return Err(AuditError::new(format!("preflight wait: {error}")));
             }
             // S52: an unwaitable child is not a gone child: kill
             // it before refusing, or a stopped orphan lingers.
-            let retired = retire_preflight_child(pid);
+            let retired = retire_preflight_child(pid, pidfd.0);
             return Err(AuditError::new(format!(
                 "preflight wait: {error}{}",
                 if retired {
@@ -451,7 +545,7 @@ fn preflight_x86_64() -> Result<String, AuditError> {
         let resumed = unsafe { libc::ptrace(libc::PTRACE_CONT, pid, 0, 0) };
         if resumed != 0 {
             let error = std::io::Error::last_os_error();
-            let retired = retire_preflight_child(pid);
+            let retired = retire_preflight_child(pid, pidfd.0);
             return Err(AuditError::new(format!(
                 "preflight resume: {error}{}",
                 if retired {
@@ -1717,6 +1811,210 @@ fn syscall_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// /proc state letter of `pid` (None when unreadable/gone).
+    #[cfg(target_arch = "x86_64")]
+    fn proc_state(pid: libc::pid_t) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat.rsplit_once(") ")?.1.split_whitespace().next()?.chars().next()
+    }
+
+    /// Best-effort SIGKILL + reap on drop, so a failed retirement
+    /// test never leaks a stopped child into the test process.
+    #[cfg(target_arch = "x86_64")]
+    struct ChildGuard(libc::pid_t);
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.0, libc::SIGKILL);
+                let mut status = 0;
+                libc::waitpid(self.0, &mut status, 0);
+            }
+        }
+    }
+
+    /// S52-round5: an exited (zombie) child retires true on its
+    /// terminal status. The zombie is observed via /proc first, so
+    /// retirement is provably the first waiter (the ECHILD path is
+    /// not what answers).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_exited_child_proves_gone() {
+        use std::time::{Duration, Instant};
+        // SAFETY: child calls _exit only (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(42) };
+        }
+        let _guard = ChildGuard(pid);
+        if proc_state(pid).is_none() {
+            eprintln!("skip: /proc unavailable for zombie observation");
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child never reached zombie state"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            retire_preflight_child(pid, None),
+            "a zombie child must retire on its terminal status"
+        );
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(again < 0 && last_errno_is(libc::ECHILD));
+    }
+
+    /// Fork a preflight-shaped child: TRACEME, report the errno
+    /// byte on `w`, stop when traced, exit otherwise. Returns the
+    /// pid to the parent; the child diverges. Locals are visible
+    /// post-fork, so no shared state is needed.
+    #[cfg(target_arch = "x86_64")]
+    fn fork_stop_child(w: libc::c_int) -> libc::pid_t {
+        // SAFETY: child runs syscalls + _exit/pause only.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                let traced = libc::ptrace(libc::PTRACE_TRACEME, 0, 0, 0);
+                let code: u8 = if traced == 0 {
+                    0
+                } else {
+                    libc::__errno_location().read().clamp(1, 127) as u8
+                };
+                libc::write(w, &code as *const u8 as *const _, 1);
+                libc::close(w);
+                if traced == 0 {
+                    libc::raise(libc::SIGSTOP);
+                    loop {
+                        libc::pause();
+                    }
+                } else {
+                    libc::_exit(0);
+                }
+            }
+        }
+        pid
+    }
+
+    /// S52-round5: a TRACEME-stopped child must NOT retire on the
+    /// stop — retirement signals through the held pidfd and reaps
+    /// the signaled death. Afterwards the pid is ECHILD (reaped),
+    /// which a stop-blind retirement (old code) never produces.
+    /// S68-round5: the pidfd here is birth-opened (before any
+    /// observation), mirroring production plumbing.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stopped_child_kills_and_reaps() {
+        use std::time::{Duration, Instant};
+        let mut pipe = [0; 2];
+        // SAFETY: valid out-pointer for the pipe ends.
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let pid = fork_stop_child(pipe[1]);
+        // SAFETY: write end owned by this scope.
+        unsafe { libc::close(pipe[1]) };
+        let _guard = ChildGuard(pid);
+        // S68-round5: birth-opened authority, before any wait.
+        let pidfd = super::super::seccomp::pidfd_open_raw(pid).ok();
+        assert!(pidfd.is_some(), "pidfd must open on a live child");
+        let _held = PidfdGuard(pidfd);
+        let mut code = [1u8; 1];
+        // SAFETY: one byte from the inherited pipe.
+        let got = unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
+        // SAFETY: read end owned by this scope.
+        unsafe { libc::close(pipe[0]) };
+        assert_eq!(got, 1, "child must report its TRACEME errno");
+        if code[0] != 0 {
+            eprintln!("skip: TRACEME refused here; stop path untestable");
+            return;
+        }
+        if proc_state(pid).is_none() {
+            eprintln!("skip: /proc unavailable for stop observation");
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pid) == Some('t') {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child never reached ptrace-stop"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            retire_preflight_child(pid, pidfd),
+            "a stopped child must be signaled and reaped, not retired on its stop"
+        );
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "retirement must reap (old code left the child stopped)"
+        );
+    }
+
+    /// S68-round5: same as above without a birth pidfd — the late
+    /// open still lands on OUR (alive-or-zombie) child because
+    /// auto-reap is refused, so retirement kills and reaps exactly
+    /// as with the held fd.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stopped_child_without_birth_pidfd() {
+        use std::time::{Duration, Instant};
+        let mut pipe = [0; 2];
+        // SAFETY: valid out-pointer for the pipe ends.
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let pid = fork_stop_child(pipe[1]);
+        // SAFETY: write end owned by this scope.
+        unsafe { libc::close(pipe[1]) };
+        let _guard = ChildGuard(pid);
+        let mut code = [1u8; 1];
+        // SAFETY: one byte from the inherited pipe.
+        let got = unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
+        // SAFETY: read end owned by this scope.
+        unsafe { libc::close(pipe[0]) };
+        assert_eq!(got, 1, "child must report its TRACEME errno");
+        if code[0] != 0 {
+            eprintln!("skip: TRACEME refused here; stop path untestable");
+            return;
+        }
+        if proc_state(pid).is_none() {
+            eprintln!("skip: /proc unavailable for stop observation");
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pid) == Some('t') {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child never reached ptrace-stop"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            retire_preflight_child(pid, None),
+            "late-open retirement must still kill and reap our child"
+        );
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(again < 0 && last_errno_is(libc::ECHILD));
+    }
 
     fn laden(path: &str) -> serde_json::Value {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));

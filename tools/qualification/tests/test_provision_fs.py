@@ -116,6 +116,15 @@ def run_tool(*argv, env=None):
     )
 
 
+def real_mnt_id(path):
+    """Live mount ID of a real dir (genuine mnt binding in tests)."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return provision._mnt_id_of(fd)
+    finally:
+        os.close(fd)
+
+
 class PlanTests(unittest.TestCase):
     def test_plan_is_readonly_and_lists_every_cell(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2391,21 +2400,41 @@ class SecondReviewTests(unittest.TestCase):
             ok = {"target": target, "mnt_id": ours, "root": "/",
                   "fstype": "ext4", "source": "/dev/loop9",
                   "super": "rw|"}
+            # S17-round5: move-verify-detach — fixed staging
+            # path, scripted move, four table reads (validate,
+            # effect, staging, post); the detach addresses
+            # staging, never the shared target.
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ok, target=staging)
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ok], [ok], [ok]]):
+                    side_effect=[[ok], [ok], [staged],
+                                 [staged]]):
                 with mock.patch.object(
-                        provision, "_umount2",
-                        return_value=None) as detach:
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=None) as detach:
                     failure = provision.retire_mount_now(
                         target, expected, run_root)
             self.assertIn("still live", failure)
-            detach.assert_called_once_with(target)
+            detach.assert_called_once_with(staging)
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ok], [ok], []]):
-                with mock.patch.object(provision, "_umount2",
-                                       return_value=None):
+                    side_effect=[[ok], [ok], [staged], []]):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=None):
                     self.assertIsNone(provision.retire_mount_now(
                         target, expected, run_root))
 
@@ -2640,8 +2669,12 @@ class SecondReviewTests(unittest.TestCase):
         try:
             _, start = provision.stat_state_start(child.pid)
             with mock.patch("os.kill") as killer:
+                # S21-round5: the refusal is the typed
+                # identity-change outcome (the only outcome a
+                # caller may treat as proven-stale).
                 with self.assertRaisesRegex(
-                        provision.AdmissionError, "starttime changed"):
+                        provision.ProcIdentityChanged,
+                        "starttime changed"):
                     provision.kill_owned("test", child.pid,
                                          start + 10 ** 9)
                 killer.assert_not_called()
@@ -3790,7 +3823,7 @@ class ThirdReviewTests(unittest.TestCase):
                     with mock.patch.object(
                             provision, "retire_fresh_proc",
                             side_effect=[
-                                provision.AdmissionError(
+                                provision.ProcIdentityChanged(
                                     "starttime changed"),
                                 True]) as retire:
                         result = provision.try_nested_pidns(
@@ -3883,7 +3916,7 @@ class ThirdReviewTests(unittest.TestCase):
                                timeout=10):
                 calls.append(role)
                 if role == "nested-pidns-sleeper":
-                    raise provision.AdmissionError(
+                    raise provision.ProcIdentityChanged(
                         "starttime changed")
                 return True
 
@@ -3893,6 +3926,54 @@ class ThirdReviewTests(unittest.TestCase):
                 ["nested-pidns-sleeper",
                  "nested-pidns-sleeper-wrapper"])
             self.assertEqual(doc["pending_procs"], [])
+
+    # S21-round5: a persistence/publication failure inside the
+    # retirement's refresh is NOT an identity change — it
+    # propagates with both spawn pendings retained (pre-fix the
+    # broad `except AdmissionError` dropped them, and a later
+    # successful save durably removed live processes).
+    def test_nested_persist_failure_propagates_with_custody(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+            auth = mock.Mock()
+            auth.abspath.side_effect = lambda p: f"/tmp/{p}"
+            doc["pending_procs"] = [
+                {"role": "nested-pidns-sleeper-wrapper",
+                 "pid": 111, "starttime": 100,
+                 "detail": "sleeper wrapper armed"},
+                {"role": "nested-pidns-sleeper", "pid": 222,
+                 "starttime": 200,
+                 "detail": "sleeper leaf armed"},
+            ]
+            path = os.path.join(tmp, "manifest.json")
+            provision.save_manifest(doc, path)
+            provision._PERSIST = path
+            try:
+                with mock.patch.object(
+                        provision, "spawn_sleeper",
+                        return_value=(111, 222)), \
+                        mock.patch.object(
+                            provision, "proc_identity",
+                            side_effect=provision.
+                            AdmissionError("unreadable")), \
+                        mock.patch.object(
+                            provision, "retire_fresh_proc",
+                            side_effect=provision.
+                            AdmissionError(
+                                "manifest not publishable")):
+                    with self.assertRaises(
+                            provision.AdmissionError):
+                        provision.try_nested_pidns(
+                            doc, auth, "/tmp/helper.py")
+            finally:
+                provision._PERSIST = None
+            kept = {(e["role"], e["pid"])
+                    for e in doc["pending_procs"]}
+            self.assertEqual(kept, {
+                ("nested-pidns-sleeper-wrapper", 111),
+                ("nested-pidns-sleeper", 222)})
 
     # S21-round4: the nested unsupported-depth path keeps both
     # spawn pendings armed across the tree kill — the kill
@@ -3978,9 +4059,16 @@ class ThirdReviewTests(unittest.TestCase):
             for entry in by_role.values():
                 self.assertIn("not proven gone",
                               entry["detail"])
+            # S91-round5: the wrapper's armed starttime 100 is
+            # preserved despite the differing observation 999
+            # (a recycled number), with the conflict noted.
             self.assertEqual(
                 by_role["nested-pidns-sleeper-wrapper"]
-                ["starttime"], 999)
+                ["starttime"], 100)
+            self.assertIn(
+                "identity conflict",
+                by_role["nested-pidns-sleeper-wrapper"]
+                ["detail"])
             self.assertEqual(
                 by_role["nested-pidns-sleeper"]["starttime"],
                 200)
@@ -3994,7 +4082,11 @@ class ThirdReviewTests(unittest.TestCase):
     # S21-round4: pending-proc refresh replaces in memory and
     # persists once — a crash between drop and record can no
     # longer strand a live process without custody. A None
-    # starttime preserves the prior record's.
+    # starttime preserves the prior record's. S91-round5: a
+    # differing observation never replaces a known starttime
+    # (recycled number) — the armed value is kept with the
+    # conflict noted; fresh identity is adopted only when none
+    # was established.
     def test_refresh_pending_proc_persists_once(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
@@ -4026,22 +4118,96 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertEqual(len(saves), 1)
             by_role = {e["role"]: e
                        for e in doc["pending_procs"]}
-            self.assertEqual(by_role["a"]["starttime"], 777)
-            self.assertEqual(by_role["a"]["detail"], "new-a")
+            self.assertEqual(by_role["a"]["starttime"], 100)
+            self.assertIn("identity conflict",
+                          by_role["a"]["detail"])
+            self.assertIn("new-a", by_role["a"]["detail"])
             self.assertEqual(by_role["b"]["detail"], "old-b")
             disk = json.loads(Path(path).read_text())
             self.assertEqual(len(disk["pending_procs"]), 2)
             # None preserves the prior starttime; an absent
-            # record appends.
+            # record appends; an unestablished (None) identity
+            # adopts the fresh observation.
             provision._PERSIST = None
             provision.refresh_pending_proc(
                 doc, "a", 1, None, "newer-a")
             by_role = {e["role"]: e
                        for e in doc["pending_procs"]}
-            self.assertEqual(by_role["a"]["starttime"], 777)
+            self.assertEqual(by_role["a"]["starttime"], 100)
             provision.refresh_pending_proc(
                 doc, "c", 3, 300, "fresh-c")
             self.assertEqual(len(doc["pending_procs"]), 3)
+            doc["pending_procs"].append(
+                {"role": "d", "pid": 4, "starttime": None,
+                 "detail": "unidentified"})
+            provision.refresh_pending_proc(
+                doc, "d", 4, 400, "identified")
+            by_role = {e["role"]: e
+                       for e in doc["pending_procs"]}
+            self.assertEqual(by_role["d"]["starttime"], 400)
+
+    # S91-round5: fallback retirement never signals a recycled
+    # occupant — an armed starttime that disagrees with the
+    # fresh observation refuses the signal, preserves the
+    # armed identity, and leaves the stranger alive. A
+    # matching armed identity still proceeds to the kill.
+    def test_retire_fresh_proc_refuses_recycled_occupant(self):
+        import subprocess
+        from unittest import mock
+        stranger = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        owned = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            _, owned_start = provision.stat_state_start(
+                owned.pid)
+            with tempfile.TemporaryDirectory() as tmp:
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_procs"] = [
+                    {"role": "recycled-role",
+                     "pid": stranger.pid, "starttime": 1,
+                     "detail": "armed"},
+                    {"role": "owned-role", "pid": owned.pid,
+                     "starttime": owned_start,
+                     "detail": "armed"},
+                ]
+                path = os.path.join(tmp, "manifest.json")
+                provision.save_manifest(doc, path)
+                provision._PERSIST = path
+                try:
+                    with mock.patch.object(
+                            provision, "kill_owned",
+                            return_value=True) as kill, \
+                            mock.patch.object(
+                                provision, "signal_owned",
+                                side_effect=AssertionError(
+                                    "signalled stranger")):
+                        refused = provision.retire_fresh_proc(
+                            "recycled-role", stranger.pid, doc)
+                        kill.assert_not_called()
+                        matched = provision.retire_fresh_proc(
+                            "owned-role", owned.pid, doc)
+                finally:
+                    provision._PERSIST = None
+                self.assertFalse(refused)
+                self.assertTrue(matched)
+                kill.assert_called_once_with(
+                    "owned-role", owned.pid, owned_start, 10)
+                by_role = {e["role"]: e
+                           for e in doc["pending_procs"]}
+                self.assertEqual(
+                    by_role["recycled-role"]["starttime"], 1)
+                self.assertIn("identity conflict",
+                              by_role["recycled-role"]["detail"])
+                self.assertIsNone(stranger.poll())
+                self.assertIsNone(owned.poll())
+        finally:
+            stranger.kill()
+            stranger.wait()
+            owned.kill()
+            owned.wait()
 
     # S22-round3: the pin discipline the finding questions is the
     # implemented one — an exit under (or before) the pin converges
@@ -4286,7 +4452,7 @@ class ThirdReviewTests(unittest.TestCase):
                         return_value=(rc, out, err)):
                     return provision.mount_fs_via_helper(
                         tmp, guard, target, 3, 4, "overlay",
-                        layers=[], canary="c")
+                        layers=[])
 
             reported, failure = attempt(
                 1, "FAILED-MOVED: mnt=42 observed=/o2 moved\n",
@@ -4768,10 +4934,12 @@ class ThirdReviewTests(unittest.TestCase):
 
     # S17-round4: interposition alarm — our row is gone after
     # the detach but a foreign row sits at our target that was
-    # not there before the effect. Either a racer stacked
-    # after we detached ours, or ours was unmounted
-    # concurrently and our umount took the foreign top: retain
-    # custody, never report discharged.
+    # not there before the effect: a racer stacked after we
+    # detached ours. Retain custody, never report discharged.
+    # (S17-round5: the detach addresses verified staging, so
+    # the old "our umount took the foreign top" reading is
+    # excluded by construction; the alarm now covers
+    # post-detach stacking at the target.)
     def test_retire_mount_foreign_appeared_alarms(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as run_root:
@@ -4791,23 +4959,39 @@ class ThirdReviewTests(unittest.TestCase):
             foreign = {"target": target, "mnt_id": held + 1000,
                        "root": "/", "fstype": "tmpfs",
                        "source": "tmpfs", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ours, target=staging)
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ours], [ours], [foreign]]):
+                    side_effect=[[ours], [ours], [staged],
+                                 [foreign]]):
                 with mock.patch.object(
-                        provision, "_umount2",
-                        return_value=None) as detach:
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=None) as detach:
                     failure = provision.retire_mount_now(
                         target, record, run_root)
-            detach.assert_called_once_with(target)
+            detach.assert_called_once_with(staging)
             self.assertIn("occupant changed", failure)
             self.assertIn("custody retained", failure)
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ours], [ours], []]):
+                    side_effect=[[ours], [ours], [staged],
+                                 []]):
                 with mock.patch.object(
-                        provision, "_umount2",
-                        return_value=None):
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=None):
                     self.assertIsNone(
                         provision.retire_mount_now(
                             target, record, run_root))
@@ -4866,20 +5050,32 @@ class ThirdReviewTests(unittest.TestCase):
                 {"target": target, "fstype": "ext4",
                  "source": "/dev/loop9", "expect_super": []},
             ]
+            # S17-round5: the detach addresses verified
+            # staging, never the shared target.
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ours, target=staging)
             for record in records:
                 with self.subTest(mnt_id=("manifest"
                                           if "mnt_id" in record
                                           else "rollback")):
                     with mock.patch.object(
                             provision, "read_mount_table",
-                            side_effect=[[ours], [ours], []]):
+                            side_effect=[[ours], [ours],
+                                         [staged], []]):
                         with mock.patch.object(
-                                provision, "_umount2",
-                                return_value=None) as detach:
+                                provision, "_retire_stage_dir",
+                                return_value=staging), \
+                                mock.patch.object(
+                                    provision, "_mount_move",
+                                    return_value=None), \
+                                mock.patch.object(
+                                    provision, "_umount2",
+                                    return_value=None
+                                    ) as detach:
                             self.assertIsNone(
                                 provision.retire_mount_now(
                                     target, record, run_root))
-                    detach.assert_called_once_with(target)
+                    detach.assert_called_once_with(staging)
 
     # S17-round3: our mount moved away after the final
     # observation — the target reads clear but our mount ID is
@@ -4905,12 +5101,24 @@ class ThirdReviewTests(unittest.TestCase):
                     "fstype": "ext4", "source": "/dev/loop9",
                     "super": "rw|"}
             moved = dict(ours, target=elsewhere)
+            # S17-round5: the move to staging verifies, then
+            # ours moves away before the post-proof — the
+            # whole-table proof still retains custody.
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ours, target=staging)
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ours], [ours], [moved]]):
+                    side_effect=[[ours], [ours], [staged],
+                                 [moved]]):
                 with mock.patch.object(
-                        provision, "_umount2",
-                        return_value=errno.ENOENT):
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=errno.ENOENT):
                     failure = provision.retire_mount_now(
                         target, expected, run_root)
             self.assertIsNotNone(failure)
@@ -4918,11 +5126,14 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIn("custody retained", failure)
             self.assertIn("elsewhere", failure)
 
-    # S17-round3: foreign stack landing after the final
-    # observation — the kernel detaches the top (foreign)
-    # mount; ours is still live, so custody is retained. A
-    # failed umount likewise defers to the post-proof: ours
-    # live means retained, never a bare refusal.
+    # S17-round3: foreign stack landing after the move —
+    # ours is still live at staging and a foreign mount
+    # stacks at the (now plain) target; the post-proof
+    # retains custody. A failed umount likewise defers to
+    # the post-proof: ours live means retained, never a
+    # bare refusal. (S17-round5: the detach addresses
+    # staging, so a foreign top at the target can no longer
+    # be detached by our umount.)
     def test_retire_mount_stack_after_final_retains(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as run_root:
@@ -4942,33 +5153,294 @@ class ThirdReviewTests(unittest.TestCase):
             foreign = {"target": target, "mnt_id": held + 1000,
                        "root": "/", "fstype": "tmpfs",
                        "source": "tmpfs", "super": "rw|"}
-            post = [ours]
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ours, target=staging)
+            post = [staged]
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ours], [ours], post]):
-                def detach(target):
-                    # Substitution at the actual final effect
-                    # boundary: the foreign top lands after the
-                    # last observation; the kernel removes it.
+                    side_effect=[[ours], [ours], [staged],
+                                 post]):
+                def detach(where):
+                    # Concurrent stacking at the actual final
+                    # effect boundary: the foreign mount lands
+                    # at the target after our move; ours is
+                    # still live at staging.
                     post.append(foreign)
                     return None
-                with mock.patch.object(provision, "_umount2",
-                                       side_effect=detach):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            side_effect=detach) as unmounter:
                     failure = provision.retire_mount_now(
                         target, expected, run_root)
+            unmounter.assert_called_once_with(staging)
             self.assertIn("still live", failure)
             self.assertIn("custody retained", failure)
             # Failed umount + ours live: post-proof decides.
             with mock.patch.object(
                     provision, "read_mount_table",
-                    side_effect=[[ours], [ours], [ours]]):
+                    side_effect=[[ours], [ours], [staged],
+                                 [staged]]):
                 with mock.patch.object(
-                        provision, "_umount2",
-                        return_value=errno.EBUSY):
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None), \
+                        mock.patch.object(
+                            provision, "_umount2",
+                            return_value=errno.EBUSY):
                     failure = provision.retire_mount_now(
                         target, expected, run_root)
             self.assertIn("still live", failure)
             self.assertIn("custody retained", failure)
+
+    # S17-round5: a swapped-in foreign mount reaches staging —
+    # it is moved BACK to the target and reported loudly; no
+    # detach ever addresses it (the round-5 post-empty
+    # schedule: unmount-ours + mount-B + detach-B + empty
+    # table can no longer return None).
+    def test_retire_mount_staging_foreign_moves_back(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            swapped = {"target": staging,
+                       "mnt_id": held + 1000, "root": "/",
+                       "fstype": "tmpfs", "source": "tmpfs",
+                       "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours],
+                                 [swapped]]):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None) as move, \
+                        mock.patch.object(
+                            provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_not_called()
+            self.assertEqual(
+                move.call_args_list,
+                [mock.call(target, staging),
+                 mock.call(staging, target)])
+            self.assertIn("staging holds foreign", failure)
+            self.assertIn(f"mnt={held + 1000}", failure)
+            self.assertIn("moved back", failure)
+            self.assertIn("custody retained", failure)
+
+    # S17-round5: an empty or stacked staging is left
+    # untouched and loud — no move-back shuffle of an
+    # ambiguous occupant, no detach.
+    def test_retire_mount_staging_surprise_stays_loud(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            staged = dict(ours, target=staging)
+            other = dict(staged, mnt_id=held + 1000)
+
+            def attempt(stage_rows):
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        side_effect=[[ours], [ours],
+                                     stage_rows]):
+                    with mock.patch.object(
+                            provision, "_retire_stage_dir",
+                            return_value=staging), \
+                            mock.patch.object(
+                                provision, "_mount_move",
+                                return_value=None) as move, \
+                            mock.patch.object(
+                                provision, "_umount2"
+                                ) as detach:
+                        failure = provision.retire_mount_now(
+                            target, record, run_root)
+                return (failure, move, detach)
+
+            failure, move, detach = attempt([])
+            detach.assert_not_called()
+            move.assert_called_once_with(target, staging)
+            self.assertIn("staging empty", failure)
+            self.assertIn("custody retained", failure)
+            failure, move, detach = attempt([staged, other])
+            detach.assert_not_called()
+            move.assert_called_once_with(target, staging)
+            self.assertIn("2 stacked", failure)
+            self.assertIn("left untouched", failure)
+
+    # S17-round5: a failed move refuses before any further
+    # observation — no staging read, no detach.
+    def test_retire_mount_move_failure_refuses(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours]]):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=errno.EBUSY), \
+                        mock.patch.object(
+                            provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_not_called()
+            self.assertIn("not moved to staging", failure)
+
+    # S17-round5: a foreign staging occupant the move-back
+    # cannot restore is stranded loudly — the message names
+    # the staging path and the foreign ID for manual
+    # recovery; still no detach.
+    def test_retire_mount_moveback_failure_reports_stranded(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            swapped = {"target": staging,
+                       "mnt_id": held + 1000, "root": "/",
+                       "fstype": "tmpfs", "source": "tmpfs",
+                       "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours],
+                                 [swapped]]):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            side_effect=[None,
+                                         errno.EBUSY]), \
+                        mock.patch.object(
+                            provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_not_called()
+            self.assertIn("move-back failed", failure)
+            self.assertIn(staging, failure)
+            self.assertIn(f"mnt={held + 1000}", failure)
+            self.assertIn("manual recovery required", failure)
+
+    # S17-round5: an unreadable staging table moves back and
+    # stays loud — the unverifiable move is never detached.
+    def test_retire_mount_staging_unverifiable_moves_back(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            staging = os.path.join(run_root, "staging")
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours],
+                                 provision.AdmissionError(
+                                     "denied")]):
+                with mock.patch.object(
+                        provision, "_retire_stage_dir",
+                        return_value=staging), \
+                        mock.patch.object(
+                            provision, "_mount_move",
+                            return_value=None) as move, \
+                        mock.patch.object(
+                            provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_not_called()
+            self.assertEqual(move.call_count, 2)
+            self.assertIn("staging unverifiable", failure)
+            self.assertIn("moved back", failure)
+            self.assertIn("custody retained", failure)
+
+    # S17-round5: staging dirs are exclusive, private, and
+    # unpredictable.
+    def test_retire_stage_dir_is_private_and_unique(self):
+        with tempfile.TemporaryDirectory() as run_root:
+            first = provision._retire_stage_dir(run_root)
+            second = provision._retire_stage_dir(run_root)
+            try:
+                self.assertNotEqual(first, second)
+                for path in (first, second):
+                    st = os.stat(path)
+                    self.assertTrue(stat.S_ISDIR(st.st_mode))
+                    self.assertEqual(
+                        stat.S_IMODE(st.st_mode), 0o700)
+            finally:
+                os.rmdir(first)
+                os.rmdir(second)
 
     # S17-round3: our mount already moved away at the FIRST
     # observation — the target reads clear but the recorded
@@ -5366,48 +5838,97 @@ class ThirdReviewTests(unittest.TestCase):
             entry.st_rdev = rdev
             return entry
 
-        def attempt(target, loop):
-            def fake_stat(path, **kwargs):
+        def attempt(target, loop, mid=42, live=42,
+                    loop_fd=None):
+            fds = iter([101, 102])
+            opened = []
+
+            def fake_open(path, flags, *args, **kwargs):
+                opened.append(path)
                 if path == "/mnt":
                     if isinstance(target, Exception):
                         raise target
-                    return target
+                    self.assertTrue(flags & os.O_NOFOLLOW)
+                    return next(fds)
                 if path == "/dev/loop9":
                     if isinstance(loop, Exception):
                         raise loop
-                    self.assertFalse(
-                        kwargs.get("follow_symlinks", True),
-                        "loop node must not resolve symlinks")
-                    return loop
+                    self.assertTrue(flags & os.O_NOFOLLOW)
+                    return next(fds)
                 raise AssertionError(path)
+
+            def fake_fstat(fd):
+                if fd == 101:
+                    if isinstance(target, Exception):
+                        raise target
+                    return target
+                if isinstance(loop, Exception):
+                    raise loop
+                return loop
+
             with mock.patch.object(
-                    provision.os, "stat",
-                    side_effect=fake_stat):
-                return provision._mount_matches_loop(
-                    "/mnt", "/dev/loop9")
+                    provision.os, "open",
+                    side_effect=fake_open), \
+                    mock.patch.object(
+                        provision.os, "fstat",
+                        side_effect=fake_fstat), \
+                    mock.patch.object(
+                        provision, "_mnt_id_of",
+                        return_value=live), \
+                    mock.patch.object(
+                        provision.os, "stat",
+                        side_effect=AssertionError(
+                            "pathname stat")):
+                got = provision._mount_matches_loop(
+                    "/mnt", "/dev/loop9",
+                    {"mnt_id": mid}, loop_fd)
+            return (got, opened)
 
         loop = stat.S_IFBLK | 0o660
-        self.assertTrue(attempt(
+        got, opened = attempt(
             node(0o40755, dev=0x0709),
-            node(loop, rdev=0x0709)))
+            node(loop, rdev=0x0709))
+        self.assertTrue(got)
+        self.assertEqual(opened, ["/mnt", "/dev/loop9"])
         # Foreign loop B mounted while ours (A) stays bound.
         self.assertFalse(attempt(
             node(0o40755, dev=0x070B),
-            node(loop, rdev=0x0709)))
+            node(loop, rdev=0x0709))[0])
+        # S71-round5: the live mount ID differs from the
+        # selected row's (a swapped-in stranger): refuse even
+        # with matching devices.
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x0709),
+            node(loop, rdev=0x0709),
+            mid=42, live=43)[0])
         # Unreadable target / missing loop / non-block loop /
         # symlinked loop: retain uncertainty.
         self.assertFalse(attempt(
             PermissionError(13, "denied"),
-            node(loop, rdev=0x0709)))
+            node(loop, rdev=0x0709))[0])
         self.assertFalse(attempt(
             node(0o40755, dev=0x0709),
-            FileNotFoundError(2, "gone")))
+            FileNotFoundError(2, "gone"))[0])
         self.assertFalse(attempt(
             node(0o40755, dev=0x0709),
-            node(stat.S_IFREG | 0o644, rdev=0x0709)))
+            node(stat.S_IFREG | 0o644, rdev=0x0709))[0])
         self.assertFalse(attempt(
             node(0o40755, dev=0x0709),
-            node(stat.S_IFLNK | 0o777, rdev=0x0709)))
+            node(stat.S_IFLNK | 0o777, rdev=0x0709))[0])
+        # S81-round5: with a retained loop fd the node is
+        # never re-opened — a device-name substitution (same
+        # spelling, swapped node) decides by the descriptor.
+        got, opened = attempt(
+            node(0o40755, dev=0x0709),
+            node(loop, rdev=0x0709), loop_fd=77)
+        self.assertTrue(got)
+        self.assertEqual(opened, ["/mnt"])
+        # Same spelling, but the HELD description is another
+        # device: refuse (the pathname stat, which would
+        # match, is never consulted — it explodes above).
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x0709),
+            node(loop, rdev=0x0708), loop_fd=77)[0])
 
     # S15-round3: a /dev/fd/N row source matches a recorded
     # loop-device source by shape — but shape alone never
@@ -5498,6 +6019,67 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertEqual(len(doc["pending_acquisitions"]),
                              1)
 
+    # S71-round5: correspondence runs on EVERY loop-backed
+    # adoption — an exact-spelling row (a device-node rename
+    # defeats both the spelling and the current-binding
+    # check) adopts only with the descriptor proof.
+    def test_reconcile_exact_source_requires_correspondence(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            backing = {"path": image, "dev": st.st_dev,
+                       "ino": st.st_ino}
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 9, "root": "/",
+                   "fstype": "ext4", "source": "/dev/loop9",
+                   "super": "rw,relatime"}
+            fingerprint = {"fstype": "ext4",
+                           "source": "/dev/loop9",
+                           "expect_super": []}
+
+            def attempt(correspond):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "mount", "key": mnt,
+                    "target": mnt}]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "read_loop_backing",
+                            return_value=image), \
+                        mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            return_value=(st.st_dev,
+                                          st.st_ino)), \
+                        mock.patch.object(
+                            provision, "_mount_matches_loop",
+                            return_value=correspond) as corr:
+                    got = provision.reconcile_mount_effect(
+                        doc, tmp, "ext4-fs01", mnt,
+                        fingerprint, loop="/dev/loop9",
+                        loop_backing=backing)
+                return (got, doc, corr)
+
+            # Exact spelling, loop bound, correspondence
+            # proven: adopt.
+            got, doc, corr = attempt(True)
+            self.assertEqual(got, row)
+            self.assertEqual(doc["pending_acquisitions"], [])
+            corr.assert_called_once_with(
+                mnt, "/dev/loop9", row)
+            # Exact spelling and bound loop, but the mounted
+            # filesystem is not on that node (renamed node):
+            # retain, never adopt the stranger.
+            got, doc, corr = attempt(False)
+            self.assertIsNone(got)
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+
     # S81-round4: post-mount loop binding — a plausible
     # foreign row (matching fstype, fd-shaped source) refuses
     # unless the mounted filesystem sits on our recorded loop.
@@ -5513,30 +6095,47 @@ class ThirdReviewTests(unittest.TestCase):
                    "super": "rw"}
 
             def attempt(dev_match):
-                def fake_stat(path, **kwargs):
+                fds = iter([101, 102])
+
+                def fake_open(path, flags, *args, **kwargs):
+                    if path in (mnt, "/dev/loop9"):
+                        return next(fds)
+                    raise AssertionError(path)
+
+                def fake_fstat(fd):
                     entry = mock.Mock()
-                    if path == mnt:
+                    if fd == 101:
                         entry.st_dev = (0x0709 if dev_match
                                         else 0x070B)
                         return entry
-                    if path == "/dev/loop9":
-                        entry.st_mode = stat.S_IFBLK | 0o660
-                        entry.st_rdev = 0x0709
-                        return entry
-                    raise AssertionError(path)
+                    entry.st_mode = stat.S_IFBLK | 0o660
+                    entry.st_rdev = 0x0709
+                    return entry
+
                 with mock.patch.object(
                         provision, "read_mount_table",
                         return_value=[row]), \
                         mock.patch.object(
-                            provision.os, "stat",
-                            side_effect=fake_stat):
+                            provision, "_pin_fresh_mount",
+                            return_value=(999, 42)), \
+                        mock.patch.object(
+                            provision.os, "open",
+                            side_effect=fake_open), \
+                        mock.patch.object(
+                            provision.os, "fstat",
+                            side_effect=fake_fstat), \
+                        mock.patch.object(
+                            provision, "_mnt_id_of",
+                            return_value=42):
                     return provision._post_verify_mount(
                         mnt, "ext4", "/dev/loop9",
                         loop="/dev/loop9")
 
-            self.assertEqual(attempt(True), row)
+            got, pin = attempt(True)
+            self.assertEqual(got, row)
+            self.assertEqual(pin, 999)
             with self.assertRaises(
-                    provision._HelperFail) as ctx:
+                    provision._HelperUncertain) as ctx:
                 attempt(False)
             self.assertIn("not on /dev/loop9",
                           str(ctx.exception))
@@ -5550,14 +6149,18 @@ class ThirdReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mnt = os.path.join(tmp, "mnt")
             os.makedirs(mnt)
-            row = {"target": mnt, "mnt_id": 9, "root": "/",
+            mid = real_mnt_id(mnt)
+            row = {"target": mnt, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw,lowerdir=/dev/fd/9"}
 
             def attempt():
                 with mock.patch.object(
                         provision, "read_mount_table",
-                        return_value=[row]):
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "_pin_fresh_mount",
+                            return_value=(999, mid)):
                     return provision._post_verify_mount(
                         mnt, "overlay", "overlay",
                         canary="abc123")
@@ -5565,23 +6168,26 @@ class ThirdReviewTests(unittest.TestCase):
             Path(mnt,
                  provision.MOUNT_CANARY_NAME).write_bytes(
                      b"abc123")
-            self.assertEqual(attempt(), row)
+            got, pin = attempt()
+            self.assertEqual(got, row)
+            self.assertEqual(pin, 999)
             Path(mnt,
                  provision.MOUNT_CANARY_NAME).write_bytes(
                      b"foreign")
             with self.assertRaises(
-                    provision._HelperFail) as ctx:
+                    provision._HelperUncertain) as ctx:
                 attempt()
             self.assertIn("canary mismatch",
                           str(ctx.exception))
             os.unlink(os.path.join(
                 mnt, provision.MOUNT_CANARY_NAME))
-            with self.assertRaises(provision._HelperFail):
+            with self.assertRaises(provision._HelperUncertain):
                 attempt()
 
-    # S81-round4: overlay mount-fs without --canary refuses at
-    # the CLI boundary, before any effect (binding is
-    # mandatory, never silently skipped).
+    # S81-round5: overlay mount-fs without a planted upper
+    # canary refuses before any effect (binding is mandatory,
+    # never silently skipped) — and the expectation comes
+    # from the held upper fd, never from argv.
     def test_mount_fs_overlay_requires_canary(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp) / "run"
@@ -5605,7 +6211,107 @@ class ThirdReviewTests(unittest.TestCase):
                 "--target-ino", str(tst.st_ino),
                 "--fstype", "overlay", *layers)
             self.assertEqual(proc.returncode, 1, proc.stdout)
-            self.assertIn("requires a canary", proc.stdout)
+            self.assertIn("upper canary unreadable", proc.stdout)
+            # The token travels by planted file, never argv: a
+            # --canary flag no longer exists to snoop.
+            proc = run_tool(
+                "mount-fs", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", str(role / "merged"),
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino),
+                "--fstype", "overlay", "--canary", "abc123",
+                *layers)
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("unrecognized arguments",
+                          proc.stderr)
+
+    # S81-round5: the overlay binding expectation reads from
+    # the held upper fd (real dirs, no mocks) — missing,
+    # empty, and non-ascii plants refuse pre-effect.
+    def test_read_upper_canary_from_held_fd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            upper = os.path.join(tmp, "upper")
+            os.makedirs(upper)
+            ufd = os.open(upper, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with self.assertRaisesRegex(
+                        provision._HelperFail, "unreadable"):
+                    provision._read_upper_canary(ufd)
+                Path(upper,
+                     provision.MOUNT_CANARY_NAME).write_bytes(
+                         b"tok-9")
+                self.assertEqual(
+                    provision._read_upper_canary(ufd),
+                    "tok-9")
+                Path(upper,
+                     provision.MOUNT_CANARY_NAME).write_bytes(
+                         b"")
+                with self.assertRaisesRegex(
+                        provision._HelperFail, "empty"):
+                    provision._read_upper_canary(ufd)
+                Path(upper,
+                     provision.MOUNT_CANARY_NAME).write_bytes(
+                         b"\xff\xfe")
+                with self.assertRaisesRegex(
+                        provision._HelperFail, "ascii"):
+                    provision._read_upper_canary(ufd)
+            finally:
+                os.close(ufd)
+
+    # S81-round5: _mount_overlay_now pins the expectation
+    # from upper before the effect and hands it (not argv) to
+    # post-verify; mount(2) never runs without it.
+    def test_mount_overlay_now_flows_upper_expected(self):
+        import types
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run = os.path.join(tmp, "run")
+            role = os.path.join(run, "ov")
+            target = os.path.join(role, "merged")
+            for sub in ("lower", "upper", "work", "merged"):
+                os.makedirs(os.path.join(role, sub))
+            Path(role, "upper",
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"planted-token")
+            layers = []
+            for name in ("lower", "upper", "work"):
+                st = os.stat(os.path.join(role, name))
+                layers.append(
+                    f"{name}={role}/{name}:{st.st_dev}:"
+                    f"{st.st_ino}")
+            args = types.SimpleNamespace(
+                run_root=run, target=target, layer=layers,
+                extra_opts="", aux_root=None, canary=None)
+            row = {"target": target, "mnt_id": 7, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw"}
+            with mock.patch.object(
+                    provision, "_mount2",
+                    return_value=None) as mount, \
+                    mock.patch.object(
+                        provision, "_post_verify_mount",
+                        return_value=(row, 777)) as post:
+                got = provision._mount_overlay_now(
+                    args, run, 55)
+            self.assertEqual(got, (row, 777))
+            mount.assert_called_once()
+            self.assertEqual(
+                post.call_args[1]["canary"], "planted-token")
+            # No plant: pre-effect refusal, mount never runs.
+            os.unlink(os.path.join(
+                role, "upper", provision.MOUNT_CANARY_NAME))
+            with mock.patch.object(
+                    provision, "_mount2") as mount, \
+                    mock.patch.object(
+                        provision, "_post_verify_mount"
+                    ) as post:
+                with self.assertRaisesRegex(
+                        provision._HelperFail, "upper canary"):
+                    provision._mount_overlay_now(args, run, 55)
+                mount.assert_not_called()
+                post.assert_not_called()
 
     # S74-round4: table-diff post-verify — a target renamed
     # around mount(2) is found at its observed mountpoint by
@@ -5621,31 +6327,39 @@ class ThirdReviewTests(unittest.TestCase):
             moved = os.path.join(tmp, "merged2")
             os.makedirs(orig)
             os.makedirs(moved)
+            mid = real_mnt_id(moved)
             Path(moved,
                  provision.MOUNT_CANARY_NAME).write_bytes(
                      b"abc123")
-            row = {"target": moved, "mnt_id": 42, "root": "/",
+            row = {"target": moved, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw"}
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[row]):
+                    return_value=[row]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
                 with self.assertRaises(
                         provision._HelperMoved) as ctx:
                     provision._post_verify_mount(
                         orig, "overlay", "overlay",
                         canary="abc123", pre=frozenset())
-            self.assertEqual(ctx.exception.mnt_id, 42)
+            self.assertEqual(ctx.exception.mnt_id, mid)
             self.assertEqual(ctx.exception.observed, moved)
             # A pre-existing occupant under the moved mount:
             # stacked at the observed name, uncertain.
-            covered = dict(row, mnt_id=7, source="tmpfs",
-                           fstype="tmpfs")
+            covered = dict(row, mnt_id=mid + 100,
+                           source="tmpfs", fstype="tmpfs")
             pre_covered = frozenset([(
-                7, moved, "tmpfs", "tmpfs", "rw", "/")])
+                mid + 100, moved, "tmpfs", "tmpfs", "rw",
+                "/")])
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[covered, row]):
+                    return_value=[covered, row]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
                 with self.assertRaisesRegex(
                         provision._HelperUncertain,
                         "ambiguous stacked mount"):
@@ -5659,17 +6373,21 @@ class ThirdReviewTests(unittest.TestCase):
                      b"abc123")
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[row_at_orig]):
-                self.assertEqual(
-                    provision._post_verify_mount(
-                        orig, "overlay", "overlay",
-                        canary="abc123", pre=frozenset()),
-                    row_at_orig)
+                    return_value=[row_at_orig]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
+                got, pin = provision._post_verify_mount(
+                    orig, "overlay", "overlay",
+                    canary="abc123", pre=frozenset())
+                self.assertEqual(got, row_at_orig)
+                self.assertEqual(pin, 999)
 
-    # S74-round4: ambiguous diff effects stay uncertain (never
-    # adopted), and an empty diff falls through to the
-    # pathname proof — a same-name replacement still fails
-    # with the established binding reasons.
+    # S81-round5: diff selection narrows added rows to our
+    # pinned ID first — a parallel job's mount in the same
+    # window is ignored, never ambiguous. An empty diff falls
+    # through to the pathname proof — a same-name replacement
+    # still fails with the established binding reasons.
     def test_post_verify_mount_diff_fallbacks(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
@@ -5677,24 +6395,44 @@ class ThirdReviewTests(unittest.TestCase):
             other = os.path.join(tmp, "other")
             os.makedirs(mnt)
             os.makedirs(other)
+            mid = real_mnt_id(mnt)
             for place in (mnt, other):
                 Path(place,
                      provision.MOUNT_CANARY_NAME).write_bytes(
                          b"abc123")
 
-            def mkrow(target, mid):
-                return {"target": target, "mnt_id": mid,
+            def mkrow(target, mnt_id):
+                return {"target": target, "mnt_id": mnt_id,
                         "root": "/", "fstype": "overlay",
                         "source": "overlay", "super": "rw"}
 
-            # Two added rows both passing the gates: ambiguous.
+            # Two added rows, ours pinned: the stranger is
+            # ignored, ours verifies.
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[mkrow(mnt, 1),
-                                  mkrow(other, 2)]):
+                    return_value=[mkrow(mnt, mid),
+                                  mkrow(other, mid + 1)]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
+                got, pin = provision._post_verify_mount(
+                    mnt, "overlay", "overlay",
+                    canary="abc123", pre=frozenset())
+                self.assertEqual(got["mnt_id"], mid)
+                self.assertEqual(got["target"], mnt)
+                self.assertEqual(pin, 999)
+            # Two added rows with the SAME ID: impossible in
+            # a real table — defensive refusal, never a pick.
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[mkrow(mnt, mid),
+                                  mkrow(other, mid)]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
                 with self.assertRaisesRegex(
                         provision._HelperUncertain,
-                        "ambiguous mount effects"):
+                        "duplicate mount ID"):
                     provision._post_verify_mount(
                         mnt, "overlay", "overlay",
                         canary="abc123", pre=frozenset())
@@ -5703,12 +6441,15 @@ class ThirdReviewTests(unittest.TestCase):
             Path(mnt,
                  provision.MOUNT_CANARY_NAME).write_bytes(
                      b"foreign")
-            row = mkrow(mnt, 9)
+            row = mkrow(mnt, mid)
             pre = frozenset([(
-                9, mnt, "overlay", "overlay", "rw", "/")])
+                mid, mnt, "overlay", "overlay", "rw", "/")])
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[row]):
+                    return_value=[row]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
                 with self.assertRaisesRegex(
                         provision._HelperUncertain,
                         "canary mismatch"):
@@ -5719,7 +6460,10 @@ class ThirdReviewTests(unittest.TestCase):
             # (the effect fired — never a plain refusal).
             with mock.patch.object(
                     provision, "read_mount_table",
-                    return_value=[]):
+                    return_value=[]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, mid)):
                 with self.assertRaisesRegex(
                         provision._HelperUncertain,
                         "missing after create"):
@@ -5731,6 +6475,87 @@ class ThirdReviewTests(unittest.TestCase):
                     provision._post_verify_mount(
                         mnt, "overlay", "overlay",
                         canary="abc123", pre=frozenset())
+
+    # S81-round5: a replacement carrying the COPIED correct
+    # token still refuses — the pin cross-check binds the
+    # report to the acquisition independently of replayable
+    # content (the stranger's fresh ID never equals the
+    # pinned one: no recycling while ours is alive).
+    def test_post_verify_mount_copied_token_still_refuses(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            pinned = 7701
+            stranger = {"target": mnt, "mnt_id": 7702,
+                        "root": "/", "fstype": "overlay",
+                        "source": "overlay", "super": "rw"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[stranger]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, pinned)), \
+                    mock.patch.object(
+                        provision, "_canary_matches",
+                        return_value=True):
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "changed during effect"):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123", pre=frozenset())
+                # Same verdict on the pathname path (no diff):
+                # the content passes, the acquisition does not.
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "changed during effect"):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123")
+
+    # S81-round5: pin ownership — post-verify closes the pin
+    # on every raise and transfers it open on success (the
+    # caller chowns + reports through it, then closes).
+    def test_post_verify_mount_pin_ownership(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 42, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, 42)), \
+                    mock.patch.object(
+                        provision, "_canary_matches",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision.os, "close") as close:
+                got, pin = provision._post_verify_mount(
+                    mnt, "overlay", "overlay",
+                    canary="abc123")
+                self.assertEqual((got, pin), (row, 999))
+                close.assert_not_called()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]), \
+                    mock.patch.object(
+                        provision, "_pin_fresh_mount",
+                        return_value=(999, 42)), \
+                    mock.patch.object(
+                        provision.os, "close") as close:
+                with self.assertRaises(
+                        provision._HelperUncertain):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123")
+                close.assert_called_once_with(999)
 
     def test_pending_mount_fd_spelling_retires_when_bound(self):
         from unittest import mock
@@ -5792,6 +6617,71 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIn("not provably ours", failures[0])
             retire.assert_not_called()
 
+    # S71-round5: recovery adoption gates the exact arm too —
+    # an exact-spelling row retires only when the recorded
+    # loop still binds our image AND the occupant sits on
+    # that node. (The exact arm previously checked neither.)
+    def test_pending_mount_exact_spelling_requires_binding(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 9, "root": "/",
+                   "fstype": "ext4", "source": "/dev/loop9",
+                   "super": "rw,relatime"}
+            entry = {"kind": "mount", "key": mnt, "target": mnt,
+                     "fstype": "ext4", "source": "/dev/loop9",
+                     "expect_super": [],
+                     "loop_backing": {
+                         "path": image, "dev": st.st_dev,
+                         "ino": st.st_ino}}
+
+            def attempt(ident, correspond=True):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [dict(entry)]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "read_loop_backing",
+                            return_value=image), \
+                        mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            return_value=ident), \
+                        mock.patch.object(
+                            provision, "_mount_matches_loop",
+                            return_value=correspond) as corr, \
+                        mock.patch.object(
+                            provision, "cleanup_one_mount",
+                            return_value=None) as retire:
+                    failures = (
+                        provision.cleanup_pending_acquisitions(
+                            doc, tmp))
+                return (failures, retire, corr)
+
+            failures, retire, corr = attempt(
+                (st.st_dev, st.st_ino))
+            self.assertEqual(failures, [])
+            retire.assert_called_once()
+            corr.assert_called_once_with(
+                mnt, "/dev/loop9", row)
+            # Bound loop, wrong occupant: left in place.
+            failures, retire, corr = attempt(
+                (st.st_dev, st.st_ino), correspond=False)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+            # Exact spelling, rebound loop: left in place.
+            failures, retire, corr = attempt(
+                (st.st_dev, st.st_ino + 1))
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+
     # S72-round4: pending overlay cleanup carries the
     # acquisition canary — a foreign same-type overlay/overlay row
     # at our target (wrong canary content) is left in place, never
@@ -5801,7 +6691,8 @@ class ThirdReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             merged = os.path.join(tmp, "merged")
             os.makedirs(merged)
-            row = {"target": merged, "mnt_id": 9, "root": "/",
+            mid = real_mnt_id(merged)
+            row = {"target": merged, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw,lowerdir=/dev/fd/9"}
             entry = {"kind": "mount", "key": merged,
@@ -5838,7 +6729,204 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertEqual(failures, [])
             retire.assert_called_once()
             self.assertEqual(
-                retire.call_args[0][0]["mnt_id"], 9)
+                retire.call_args[0][0]["mnt_id"], mid)
+
+    # S72-round5: a recorded mount ID that is gone from the
+    # whole table is never swapped for a same-fingerprint
+    # occupant's — the replacement is refused (even with a
+    # matching canary) and the known ID preserved. A matching
+    # ID still adopts.
+    def test_pending_mount_known_id_refuses_replacement(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            merged = os.path.join(tmp, "merged")
+            os.makedirs(merged)
+            Path(merged, ".tt04-mount-canary").write_bytes(
+                b"abc123")
+            known = real_mnt_id(merged)
+            stranger = known + 100
+
+            def attempt(mid):
+                row = {"target": merged, "mnt_id": mid,
+                       "root": "/", "fstype": "overlay",
+                       "source": "overlay",
+                       "super": "rw,lowerdir=/dev/fd/9"}
+                entry = {"kind": "mount", "key": merged,
+                         "target": merged, "fstype": "overlay",
+                         "source": "overlay", "expect_super": [],
+                         "canary": "abc123", "mnt_id": known}
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [entry]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "cleanup_one_mount",
+                            return_value=None) as retire:
+                    failures = (
+                        provision.cleanup_pending_acquisitions(
+                            doc, tmp))
+                return (failures, retire, doc)
+
+            failures, retire, doc = attempt(stranger)
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"recorded mount-ID {known}",
+                          failures[0])
+            self.assertIn(f"occupant has ID {stranger}",
+                          failures[0])
+            self.assertIn("replacement refused", failures[0])
+            retire.assert_not_called()
+            kept = doc["pending_acquisitions"][0]
+            self.assertEqual(kept["mnt_id"], known)
+            failures, retire, doc = attempt(known)
+            self.assertEqual(failures, [])
+            retire.assert_called_once()
+            self.assertEqual(
+                retire.call_args[0][0]["mnt_id"], known)
+
+    # S74-round5: rollback never discharges a helper-reported
+    # mount ID that is still live elsewhere (the role
+    # directory renamed after the report) — custody refreshes
+    # with the observed location. A truly absent mount still
+    # drops.
+    def test_rollback_owned_mount_keeps_moved_id(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            fingerprint = {"fstype": "ext4",
+                           "source": "/dev/loop9",
+                           "expect_super": [], "mnt_id": 42}
+
+            def attempt(table):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "mount", "key": target,
+                    "target": target, "mnt_id": 42,
+                    "detail": "acquiring"}]
+                path = os.path.join(tmp, "manifest.json")
+                provision.save_manifest(doc, path)
+                provision._PERSIST = path
+                try:
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            return_value=table):
+                        note = provision.rollback_owned_mount(
+                            doc, run_root, "ext4-fs01", target,
+                            fingerprint)
+                finally:
+                    provision._PERSIST = None
+                return (note, doc)
+
+            moved = [{"target": "/elsewhere", "mnt_id": 42,
+                      "root": "/", "fstype": "ext4",
+                      "source": "/dev/loop9", "super": "rw"}]
+            note, doc = attempt(moved)
+            self.assertIn("custody kept pending", note)
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0]["mnt_id"], 42)
+            self.assertEqual(kept[0]["observed_target"],
+                             "/elsewhere")
+            note, doc = attempt([])
+            self.assertIn("already absent", note)
+            self.assertEqual(doc["pending_acquisitions"], [])
+
+    # S74-round5: reconciliation never absence-discharges a
+    # known mount ID that is still live elsewhere, even for a
+    # refused-class failure. Truly-absent still drops.
+    def test_reconcile_keeps_known_id_on_refused_failure(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            fingerprint = {"fstype": "ext4",
+                           "source": "/dev/loop9",
+                           "expect_super": [], "mnt_id": 42}
+            refused = (f"mount {target} refused: rc=1 "
+                       f"pre-effect denial")
+
+            def attempt(table):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "mount", "key": target,
+                    "target": target, "mnt_id": 42,
+                    "detail": "acquiring"}]
+                path = os.path.join(tmp, "manifest.json")
+                provision.save_manifest(doc, path)
+                provision._PERSIST = path
+                try:
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            return_value=table):
+                        adopted = (
+                            provision.reconcile_mount_effect(
+                                doc, run_root, "ext4-fs01",
+                                target, fingerprint,
+                                failure=refused))
+                finally:
+                    provision._PERSIST = None
+                return (adopted, doc)
+
+            moved = [{"target": "/elsewhere", "mnt_id": 42,
+                      "root": "/", "fstype": "ext4",
+                      "source": "/dev/loop9", "super": "rw"}]
+            adopted, doc = attempt(moved)
+            self.assertIsNone(adopted)
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0]["mnt_id"], 42)
+            adopted, doc = attempt([])
+            self.assertIsNone(adopted)
+            self.assertEqual(doc["pending_acquisitions"], [])
+
+    # S74-round5: ownership-stage failures are post-effect —
+    # _own_fresh_root raises _HelperUncertain (the mount fired
+    # and verified before this stage), and mount-fs reports
+    # FAILED-UNCERTAIN so the caller keeps custody.
+    def test_own_fresh_root_failures_are_post_effect(self):
+        import types
+        args = types.SimpleNamespace(
+            own_uid=1000, own_gid=None, target="/tmp/x")
+        with self.assertRaises(provision._HelperUncertain):
+            provision._own_fresh_root(args, "/tmp", 999)
+
+    def test_mount_fs_reports_uncertain_after_ownership_failure(
+            self):
+        import contextlib
+        import io
+        import types
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            rst = os.stat(run_root)
+            tst = os.stat(target)
+            args = types.SimpleNamespace(
+                run_root=run_root, root_dev=rst.st_dev,
+                root_ino=rst.st_ino, target=target,
+                target_dev=tst.st_dev, target_ino=tst.st_ino,
+                fstype="ext4", loop="/dev/loop9",
+                backing_dev=1, backing_ino=2, layer=[],
+                extra_opts="", aux_root=None, aux_dev=None,
+                aux_ino=None, own_uid=1000, own_gid=None)
+            row = {"target": target, "mnt_id": 42,
+                   "root": "/", "fstype": "ext4",
+                   "source": "/dev/loop9", "super": "rw"}
+            out = io.StringIO()
+            with mock.patch.object(
+                    provision, "_mount_ext4_now",
+                    return_value=(row, 999)), \
+                    contextlib.redirect_stdout(out):
+                rc = provision.mount_fs_command(args)
+            self.assertEqual(rc, 1)
+            self.assertIn("FAILED-UNCERTAIN", out.getvalue())
 
     # S74-round4: ID-keyed pending recovery — a moved mount is
     # found by its carried mount ID wherever it sits. A
@@ -5853,13 +6941,14 @@ class ThirdReviewTests(unittest.TestCase):
             moved = os.path.join(tmp, "merged2")
             os.makedirs(orig)
             os.makedirs(moved)
-            row = {"target": moved, "mnt_id": 42, "root": "/",
+            mid = real_mnt_id(moved)
+            row = {"target": moved, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw"}
             entry = {"kind": "mount", "key": orig,
                      "target": orig, "fstype": "overlay",
                      "source": "overlay", "expect_super": [],
-                     "canary": "abc123", "mnt_id": 42,
+                     "canary": "abc123", "mnt_id": mid,
                      "observed_target": moved,
                      "detail": "target moved during mount"}
 
@@ -5883,7 +6972,7 @@ class ThirdReviewTests(unittest.TestCase):
                 b"abc123")
             failures, retire = attempt([row])
             self.assertEqual(len(failures), 1)
-            self.assertIn("moved (mnt=42", failures[0])
+            self.assertIn(f"moved (mnt={mid}", failures[0])
             self.assertIn(moved, failures[0])
             self.assertIn("manual retirement required",
                           failures[0])
@@ -5926,16 +7015,17 @@ class ThirdReviewTests(unittest.TestCase):
             doc = provision.fresh_manifest(run_root, False)
             doc["run_root_identity"] = {"dev": st.st_dev,
                                         "ino": st.st_ino}
+            mid = real_mnt_id(moved)
             doc["pending_acquisitions"] = [{
                 "kind": "mount", "key": orig, "target": orig,
                 "fstype": "overlay", "source": "overlay",
                 "expect_super": [], "canary": "abc123",
-                "mnt_id": 42, "observed_target": moved,
+                "mnt_id": mid, "observed_target": moved,
                 "detail": "target moved during mount"}]
             Path(manifest).write_text(json.dumps(doc))
             args = types.SimpleNamespace(run_root=run_root,
                                          manifest=manifest)
-            row = {"target": moved, "mnt_id": 42, "root": "/",
+            row = {"target": moved, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw"}
             out = io.StringIO()
@@ -6042,7 +7132,8 @@ class ThirdReviewTests(unittest.TestCase):
                 "kind": "mount", "key": merged, "role": "ov",
                 "target": merged, "fstype": "overlay",
                 "source": "overlay"}]
-            row = {"target": merged, "mnt_id": 9, "root": "/",
+            mid = real_mnt_id(merged)
+            row = {"target": merged, "mnt_id": mid, "root": "/",
                    "fstype": "overlay", "source": "overlay",
                    "super": "rw,lowerdir=/dev/fd/9"}
             fingerprint = {"fstype": "overlay",
@@ -6201,15 +7292,22 @@ class ThirdReviewTests(unittest.TestCase):
                 mock.patch.object(provision, "_snapshot_mount_rows",
                                    return_value=frozenset()), \
                 mock.patch.object(provision, "_post_verify_mount",
-                                   return_value=row) as post:
+                                   return_value=(row, 777)
+                                   ) as post:
             got = provision._mount_ext4_now(args, "/run", 55)
-        self.assertEqual(got, row)
+        self.assertEqual(got, (row, 777))
         loop_opens = [p for p in opened if p == "/dev/loop9"]
         self.assertEqual(len(loop_opens), 1)
         self.assertEqual(validated, [100])
         self.assertEqual(mounted,
                          [(f"/dev/fd/100", "/dev/fd/55")])
         post.assert_called_once()
+        # S81-round5: the SAME fd verifies — post-verify
+        # receives the retained description, never re-opens.
+        self.assertEqual(
+            post.call_args[1]["loop_fd"], 100)
+        self.assertEqual(
+            post.call_args[1]["backing"], (11, 22))
 
     def test_mount_fs_refuses_bad_fstype(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6250,10 +7348,7 @@ class ThirdReviewTests(unittest.TestCase):
                    "--target", str(target),
                    "--target-dev", str(tst.st_dev),
                    "--target-ino", str(tst.st_ino),
-                   "--fstype", "overlay",
-                   # S81-round4: binding canary present so the
-                   # invocation reaches layer verification.
-                   "--canary", "abc123"]
+                   "--fstype", "overlay"]
             for spec in bad_lower:
                 argv += ["--layer", spec]
             proc = run_tool(*argv)
@@ -6281,10 +7376,9 @@ class ThirdReviewTests(unittest.TestCase):
                    "--target", str(target),
                    "--target-dev", str(tst.st_dev),
                    "--target-ino", str(tst.st_ino),
-                   "--fstype", "overlay",
-                   # S81-round4: binding canary present (and
-                   # planted, for the as-root success branch).
-                   "--canary", "abc123"]
+                   "--fstype", "overlay"]
+            # S81-round5: planted (not argv) for the as-root
+            # success branch.
             (role / "upper" / provision.MOUNT_CANARY_NAME).write_bytes(
                 b"abc123")
             for spec in specs:
@@ -6336,6 +7430,515 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIn("FAILED", proc.stdout)
             self.assertNotIn("Operation not permitted",
                              proc.stdout)
+
+
+class MountNsTests(unittest.TestCase):
+    """S17-round5 keeper mount-namespace confinement (all mocked)."""
+
+    def test_parse_keeper_state_matrix(self):
+        good = "1234 99 " + "ab" * 16 + "\n"
+        self.assertEqual(
+            provision._parse_keeper_state(good.encode()),
+            (1234, 99, "ab" * 16))
+        for bad in (b"", b"1 2\n", b"0 99 " + b"ab" * 16,
+                    b"12 99 " + b"zz" * 16, b"12 99 short",
+                    b"\xff\xfe garbage", b"12 0 " + b"ab" * 16):
+            self.assertIsNone(
+                provision._parse_keeper_state(bad), bad)
+
+    def test_ensure_spawns_and_records(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        provision._MOUNT_NS = None
+        canary = "ab" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            candir = os.path.join(tmp, "canary")
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, candir)), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(1234, 99, canary)
+                        ) as spawn:
+                nspath = provision.ensure_mount_ns()
+            spawn.assert_called_once_with(os.geteuid(), candir)
+            self.assertEqual(nspath, "/proc/1234/ns/mnt")
+            self.assertEqual(provision._MOUNT_NS, nspath)
+            self.assertEqual(
+                Path(pidfile).read_text(),
+                f"1234 99 {canary}\n")
+            st = os.stat(pidfile)
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o600)
+            # Cached: second call neither spawns nor touches disk.
+            with mock.patch.object(
+                    provision, "_spawn_keeper",
+                    side_effect=AssertionError("respawned")):
+                self.assertEqual(
+                    provision.ensure_mount_ns(), nspath)
+
+    def test_ensure_reuses_live_keeper(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        provision._MOUNT_NS = None
+        canary = "cd" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]") as link, \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=True) as check, \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        side_effect=AssertionError(
+                            "respawned")):
+                nspath = provision.ensure_mount_ns()
+            link.assert_called_once_with(4321)
+            check.assert_called_once_with(
+                "/proc/4321/ns/mnt", canary)
+            self.assertEqual(nspath, "/proc/4321/ns/mnt")
+            self.assertEqual(
+                Path(pidfile).read_text(), f"4321 77 {canary}\n")
+
+    def test_ensure_respawns_on_dead_keeper(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        provision._MOUNT_NS = None
+        canary = "cd" * 16
+        fresh = "ef" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value=None), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        side_effect=AssertionError(
+                            "checked dead")) as check, \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(111, 22, fresh)):
+                nspath = provision.ensure_mount_ns()
+            check.assert_not_called()
+            self.assertEqual(nspath, "/proc/111/ns/mnt")
+            self.assertEqual(
+                Path(pidfile).read_text(),
+                f"111 22 {fresh}\n")
+
+    def test_ensure_respawns_on_canary_mismatch(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        provision._MOUNT_NS = None
+        canary = "cd" * 16
+        fresh = "ef" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=False), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(111, 22, fresh)):
+                nspath = provision.ensure_mount_ns()
+            self.assertEqual(nspath, "/proc/111/ns/mnt")
+            self.assertEqual(
+                Path(pidfile).read_text(),
+                f"111 22 {fresh}\n")
+
+    def test_ensure_refuses_alien_pidfile(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        provision._MOUNT_NS = None
+        alien = 1 if os.geteuid() == 0 else 0
+        fake = mock.Mock()
+        fake.st_uid = alien
+        fake.st_mode = stat.S_IFREG | 0o600
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text("1 2 deadbeef\n")
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch("os.fstat", return_value=fake), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        side_effect=AssertionError(
+                            "spawned for alien")):
+                with self.assertRaisesRegex(
+                        provision.AdmissionError, "alien"):
+                    provision.ensure_mount_ns()
+            self.assertIsNone(provision._MOUNT_NS)
+
+    def test_spawn_keeper_reports_identity(self):
+        from unittest import mock
+        canary = "ef" * 16
+        child = mock.Mock()
+        child.stdout.readline.return_value = (
+            f"READY 7777 {canary}\n")
+        fake_sel = mock.Mock()
+        fake_sel.select.return_value = [True]
+        with tempfile.TemporaryDirectory() as tmp:
+            candir = os.path.join(tmp, "canary")
+            before = len(provision._KEEPERS)
+            with mock.patch.object(
+                    provision.subprocess, "Popen",
+                    return_value=child) as popen, \
+                    mock.patch.object(
+                        provision.selectors,
+                        "DefaultSelector",
+                        return_value=fake_sel), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[55]") as link, \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=True) as check:
+                result = provision._spawn_keeper(
+                    os.geteuid(), candir)
+            self.assertEqual(result, (7777, 55, canary))
+            link.assert_called_once_with(7777)
+            check.assert_called_once_with(
+                "/proc/7777/ns/mnt", canary)
+            self.assertIn(child, provision._KEEPERS)
+            self.assertEqual(len(provision._KEEPERS), before + 1)
+            child.kill.assert_not_called()
+            argv = popen.call_args[0][0]
+            self.assertEqual(argv[:5],
+                             ["sudo", "-n", "unshare", "-m",
+                              "bash"])
+            # The canary is generated inside, never on cmdline.
+            self.assertNotIn(canary, " ".join(argv))
+            st = os.stat(candir)
+            self.assertTrue(stat.S_ISDIR(st.st_mode))
+            self.assertEqual(stat.S_IMODE(st.st_mode), 0o700)
+
+    def test_spawn_keeper_garbage_and_timeout_refuse(self):
+        from unittest import mock
+
+        def attempt(line, selected):
+            child = mock.Mock()
+            child.stdout.readline.return_value = line
+            fake_sel = mock.Mock()
+            fake_sel.select.return_value = selected
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.object(
+                        provision.subprocess, "Popen",
+                        return_value=child), \
+                        mock.patch.object(
+                            provision.selectors,
+                            "DefaultSelector",
+                            return_value=fake_sel):
+                    with self.assertRaises(
+                            provision.AdmissionError):
+                        provision._spawn_keeper(
+                            os.geteuid(),
+                            os.path.join(tmp, "canary"))
+            child.kill.assert_called_once_with()
+
+        attempt("GARBAGE\n", [True])
+        attempt("", [])
+
+    def test_spawn_keeper_canary_gate_refuses(self):
+        # A fresh pid with no recorded nsid to compare against
+        # must still prove its namespace is ours: a recycled
+        # pid's namespace lacks canary-<secret>, so the spawn
+        # is refused and the child reaped, never recorded.
+        from unittest import mock
+        canary = "aa" * 16
+        child = mock.Mock()
+        child.stdout.readline.return_value = (
+            f"READY 8888 {canary}\n")
+        fake_sel = mock.Mock()
+        fake_sel.select.return_value = [True]
+        with tempfile.TemporaryDirectory() as tmp:
+            before = len(provision._KEEPERS)
+            with mock.patch.object(
+                    provision.subprocess, "Popen",
+                    return_value=child), \
+                    mock.patch.object(
+                        provision.selectors,
+                        "DefaultSelector",
+                        return_value=fake_sel), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[66]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=False):
+                with self.assertRaisesRegex(
+                        provision.AdmissionError,
+                        "lacks our canary"):
+                    provision._spawn_keeper(
+                        os.geteuid(),
+                        os.path.join(tmp, "canary"))
+            self.assertEqual(len(provision._KEEPERS), before)
+        child.kill.assert_called_once_with()
+        child.wait.assert_called_once_with(timeout=10)
+
+    def test_read_ns_link_none_on_failure(self):
+        # Dead pid (nonzero exit), missing sudo (OSError) and
+        # sudo hang (timeout) all read as None — never raise —
+        # so the caller falls through to respawn.
+        from unittest import mock
+        proc = mock.Mock(returncode=1, stdout="")
+        with mock.patch.object(
+                provision.subprocess, "run",
+                return_value=proc) as run:
+            self.assertIsNone(provision._read_ns_link(4321))
+        argv = run.call_args[0][0]
+        self.assertEqual(
+            argv, ["sudo", "-n", "readlink",
+                  "/proc/4321/ns/mnt"])
+        with mock.patch.object(
+                provision.subprocess, "run",
+                side_effect=OSError("no sudo")):
+            self.assertIsNone(provision._read_ns_link(4321))
+        with mock.patch.object(
+                provision.subprocess, "run",
+                side_effect=provision.subprocess.TimeoutExpired(
+                    "sudo", 30)):
+            self.assertIsNone(provision._read_ns_link(4321))
+
+    def test_run_sudo_nsenter_prefix_and_backstop(self):
+        from unittest import mock
+        proc = mock.Mock(returncode=0, stdout="ok\n", stderr="")
+        with mock.patch.object(provision, "_MOUNT_NS",
+                               "/proc/9/ns/mnt"), \
+                mock.patch.object(provision, "_ROOT_GUARD",
+                                  None), \
+                mock.patch.object(provision.subprocess, "run",
+                                  return_value=proc) as run:
+            rc, out, _ = provision.run_sudo(["true"])
+            argv = run.call_args[0][0]
+            self.assertEqual(argv[:4],
+                             ["sudo", "-n", "nsenter",
+                              "--mount=/proc/9/ns/mnt"])
+            self.assertEqual(argv[4:], ["true"])
+            self.assertEqual((rc, out), (0, "ok\n"))
+        with mock.patch.object(provision, "_MOUNT_NS", None), \
+                mock.patch.object(provision, "_ROOT_GUARD",
+                                  None):
+            rc, _, err = provision.run_sudo(
+                ["python3", "provision_fs.py", "mount-fs"])
+            self.assertEqual(rc, 127)
+            self.assertIn("not ensured", err)
+            with mock.patch.object(provision.subprocess, "run",
+                                   return_value=proc) as run:
+                provision.run_sudo(["true"])
+            self.assertEqual(run.call_args[0][0][:3],
+                             ["sudo", "-n", "true"])
+        with mock.patch.object(provision, "_MOUNT_NS",
+                               "direct"), \
+                mock.patch.object(provision, "_ROOT_GUARD",
+                                  None), \
+                mock.patch.object(provision.subprocess, "run",
+                                  return_value=proc) as run:
+            provision.run_sudo(["x", "retire-mount"])
+            self.assertNotIn("nsenter", run.call_args[0][0])
+
+    def test_read_mount_table_ns_routing(self):
+        from unittest import mock
+        body = ("8419 8260 0:35 / /tmp/x/mnt rw,noatime - btrfs "
+                "/dev/sda3 rw\n")
+        proc = mock.Mock(returncode=0, stdout=body.encode(),
+                         stderr=b"")
+        with mock.patch.object(provision, "_MOUNT_NS",
+                               "/proc/9/ns/mnt"):
+            with mock.patch.object(provision.subprocess, "run",
+                                   return_value=proc) as run:
+                rows = provision.read_mount_table()
+            argv = run.call_args[0][0]
+            self.assertEqual(
+                argv,
+                ["sudo", "-n", "nsenter",
+                 "--mount=/proc/9/ns/mnt",
+                 "cat", "/proc/self/mountinfo"])
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["mnt_id"], 8419)
+            # Explicit fixture paths always read direct.
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".info", delete=False) as handle:
+                handle.write(body)
+                fixture = handle.name
+            try:
+                with mock.patch.object(
+                        provision.subprocess, "run",
+                        side_effect=AssertionError("sudo")):
+                    rows = provision.read_mount_table(fixture)
+            finally:
+                os.unlink(fixture)
+            self.assertEqual(rows[0]["mnt_id"], 8419)
+
+    def test_ns_canary_command(self):
+        import contextlib
+        import io
+        import types
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            Path(target, "canary").write_bytes(b"tok123")
+            mid = real_mnt_id(target)
+
+            def run(**kw):
+                base = {"run_root": run_root,
+                        "target": target, "name": "canary",
+                        "expect_mnt_id": str(mid)}
+                base.update(kw)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = provision.ns_canary_command(
+                        types.SimpleNamespace(**base))
+                return (rc, out.getvalue())
+
+            rc, out = run()
+            self.assertEqual(rc, 0)
+            self.assertEqual(out.strip(), b"tok123".hex())
+            # S81-round5: a swapped-in stranger (live ID
+            # differs from the caller's row) refuses before
+            # any byte is reported.
+            rc, out = run(expect_mnt_id=str(mid + 100))
+            self.assertEqual(rc, 1)
+            self.assertIn("mount mismatch", out)
+            self.assertEqual(run(name="nope")[0], 1)
+            self.assertEqual(run(name="../escape")[0], 1)
+            self.assertEqual(
+                run(run_root="/etc", target="/etc",
+                    name="x")[0], 1)
+            self.assertEqual(run(expect_mnt_id="bogus")[0], 1)
+            self.assertEqual(run(expect_mnt_id="")[0], 1)
+
+    def test_canary_matches_routed(self):
+        from unittest import mock
+        with mock.patch.object(provision, "_MOUNT_NS",
+                               "/proc/9/ns/mnt"):
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    return_value=(0, b"tok123".hex() + "\n",
+                                  "")) as sudo:
+                self.assertTrue(provision._canary_matches(
+                    "/tmp/r/mnt", "canary", "tok123", "/tmp/r",
+                    expect_mnt_id=42))
+            argv = sudo.call_args[0][0]
+            self.assertIn("ns-canary", argv)
+            self.assertNotIn("tok123", " ".join(argv))
+            self.assertIn("--expect-mnt-id", argv)
+            self.assertIn("42", argv)
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    return_value=(1, "FAILED", "")):
+                self.assertFalse(provision._canary_matches(
+                    "/tmp/r/mnt", "canary", "tok123", "/tmp/r",
+                    expect_mnt_id=42))
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    side_effect=AssertionError("sudo")):
+                self.assertFalse(provision._canary_matches(
+                    "/tmp/r/mnt", "canary", "tok123"))
+                # S81-round5: no expected ID, no read — the
+                # helper is never even invoked.
+                self.assertFalse(provision._canary_matches(
+                    "/tmp/r/mnt", "canary", "tok123", "/tmp/r"))
+
+    def test_main_ensures_mount_entries(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "ensure_mount_ns") as ensure, \
+                mock.patch.object(
+                    provision, "create_command",
+                    return_value=0) as create, \
+                mock.patch.object(
+                    provision, "cleanup_command",
+                    return_value=0) as cleanup, \
+                mock.patch.object(
+                    provision, "inspect_command",
+                    return_value=0) as inspect, \
+                mock.patch.object(
+                    provision, "plan_command",
+                    return_value=0) as plan, \
+                mock.patch.object(
+                    provision, "signal_proc_command",
+                    return_value=0) as sig:
+            self.assertEqual(
+                provision.main(["create", "--manifest", "m",
+                                "--run-root", "/tmp/r"]), 0)
+            create.assert_called_once()
+            self.assertEqual(ensure.call_count, 1)
+            provision.main(["cleanup", "--manifest", "m",
+                            "--run-root", "/tmp/r"])
+            cleanup.assert_called_once()
+            self.assertEqual(ensure.call_count, 2)
+            provision.main(["inspect", "--manifest", "m",
+                            "--run-root", "/tmp/r"])
+            inspect.assert_called_once()
+            self.assertEqual(ensure.call_count, 3)
+            provision.main(["plan", "--manifest", "m",
+                            "--run-root", "/tmp/r"])
+            plan.assert_called_once()
+            self.assertEqual(ensure.call_count, 3)
+            provision.main(["signal-proc", "--pid", "1",
+                            "--starttime", "2", "--signum",
+                            "15"])
+            sig.assert_called_once()
+            self.assertEqual(ensure.call_count, 3)
+
+    def test_main_ensure_failure_warns_and_continues(self):
+        import contextlib
+        import io
+        from unittest import mock
+        with mock.patch.object(
+                provision, "ensure_mount_ns",
+                side_effect=provision.AdmissionError(
+                    "no sudo")), \
+                mock.patch.object(
+                    provision, "cleanup_command",
+                    return_value=0) as cleanup:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = provision.main(["cleanup", "--manifest",
+                                     "m", "--run-root",
+                                     "/tmp/r"])
+            self.assertEqual(rc, 0)
+            cleanup.assert_called_once()
+            self.assertIn("no sudo", err.getvalue())
+            self.assertIn("will refuse", err.getvalue())
+
+    def test_manifest_ns_mode(self):
+        old_ns = provision._MOUNT_NS
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+        self.assertTrue(doc["mount_ns"])
+        provision._MOUNT_NS = "/proc/9/ns/mnt"
+        provision._apply_manifest_ns_mode(doc)
+        self.assertEqual(provision._MOUNT_NS, "/proc/9/ns/mnt")
+        provision._apply_manifest_ns_mode({})
+        self.assertEqual(provision._MOUNT_NS, "direct")
 
 
 if __name__ == "__main__":

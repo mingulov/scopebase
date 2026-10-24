@@ -25,7 +25,7 @@
 use scopebase_testkit::cli;
 use scopebase_testkit::fixture::linux::audit::{self, AuditConfig};
 use scopebase_testkit::fixture::linux::seccomp::{
-    install_deny_one, install_deny_ptrace_request, DenyAction,
+    install_deny_one, install_deny_ptrace_request, install_deny_wait_blocking, DenyAction,
 };
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
@@ -99,9 +99,14 @@ fn main() {
         && (argv[1] == "preflight-cont"
             || argv[1] == "preflight-wait"
             || argv[1] == "preflight-contkill"
-            || argv[1] == "preflight-autoreap")
+            || argv[1] == "preflight-autoreap"
+            || argv[1] == "preflight-waitstop"
+            || argv[1] == "preflight-nopidfd")
     {
-        if argv[1] == "preflight-cont" || argv[1] == "preflight-contkill" {
+        if argv[1] == "preflight-cont"
+            || argv[1] == "preflight-contkill"
+            || argv[1] == "preflight-nopidfd"
+        {
             let cont = match denial_request("preflight-cont") {
                 Some(request) => request,
                 None => emit("setup=arch-or-mode-unsupported", 3),
@@ -157,6 +162,40 @@ fn main() {
         }
         if argv[1] == "preflight-wait" {
             if let Err(error) = install_deny_one(libc::SYS_wait4, DenyAction::Eperm) {
+                emit(
+                    &format!("setup=seccomp-{}-{}", error.stage(), error.errno()),
+                    3,
+                );
+            }
+        }
+        // S52-round5: flags-selective wait denial — blocking
+        // waits fail while WNOHANG stays allowed — plus both
+        // kill routes denied. Retirement must consume the
+        // queued TRACEME stop WITHOUT reporting retired, fail
+        // to signal, and report unresolved custody for the
+        // still-stopped child.
+        if argv[1] == "preflight-waitstop" {
+            if let Err(error) = install_deny_wait_blocking(DenyAction::Eperm) {
+                emit(
+                    &format!("setup=seccomp-{}-{}", error.stage(), error.errno()),
+                    3,
+                );
+            }
+            for nr in [libc::SYS_kill, libc::SYS_pidfd_send_signal] {
+                if let Err(error) = install_deny_one(nr, DenyAction::Eperm) {
+                    emit(
+                        &format!("setup=seccomp-{}-{}", error.stage(), error.errno()),
+                        3,
+                    );
+                }
+            }
+        }
+        // S68-round5: pidfd authority denied (plus CONT, to force
+        // a retirement). Signaling must report Uncertain and reap
+        // without signaling — never a numeric SIGKILL — so the
+        // stopped survivor reports unresolved custody.
+        if argv[1] == "preflight-nopidfd" {
+            if let Err(error) = install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm) {
                 emit(
                     &format!("setup=seccomp-{}-{}", error.stage(), error.errno()),
                     3,

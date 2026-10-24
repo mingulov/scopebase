@@ -338,9 +338,31 @@ pub fn run_pinned_with_builders(
                 // reap and signaling) must still retire the tool and
                 // settle the readers — never drop a live Child and
                 // two reader handles with no recovery path.
+                // S85-round5: classify reservation loss BEFORE any
+                // group effect. ECHILD means the leader was reaped
+                // out from under us (SIGCHLD auto-reap or a
+                // competing waiter in this process): the pid AND
+                // pgid numbers are reusable, so neither the group
+                // nor the child handle may be signaled. Settle the
+                // readers (safe: our own threads, bounded) and
+                // report unresolved custody.
+                if reservation_lost(&error) {
+                    let observation = backend(error, Stage::Execute);
+                    let settled = settle_pair(stdout_reader, stderr_reader);
+                    return Err(observe_failure(
+                        observation,
+                        Some(custody_unresolved()),
+                        settled.err(),
+                    ));
+                }
                 let observation = backend(error, Stage::Execute);
                 kill_tool_group(group);
-                let retired = kill_and_wait(&mut child);
+                // S86-round5: deadline-bounded retirement. The other
+                // kill_and_wait sites (overrun, wall-clock expiry,
+                // spawn failure) keep the blocking retire: their
+                // deadline already passed or never started, so a
+                // run-deadline bound would misfire there.
+                let retired = kill_and_wait_deadline(&mut child, deadline);
                 let settled = settle_pair(stdout_reader, stderr_reader);
                 return Err(observe_failure(observation, retired.err(), settled.err()));
             }
@@ -640,10 +662,13 @@ fn observe_failure(
     }
     let mut detail = format!("tool observation failed ({observation})");
     if let Some(retire) = retire {
-        detail.push_str(&format!("; tool retirement failed ({retire})"));
+        detail.push_str(&format!(
+            "; tool retirement failed ({})",
+            chain_text(&retire)
+        ));
     }
     if let Some(settle) = settle {
-        detail.push_str(&format!("; {settle}"));
+        detail.push_str(&format!("; {}", chain_text(&settle)));
     }
     OperationError::new(
         ErrorKind::Backend,
@@ -651,6 +676,20 @@ fn observe_failure(
         observation.raw_os_error(),
         Some(Box::new(Detail(detail))),
     )
+}
+
+/// S87-round5: the full cause chain of a fallout error, head first.
+/// [`OperationError`]'s Display omits its source, so interpolating
+/// the head alone drops the unsettled reader's stream name and
+/// custody diagnosis (both live in the source).
+fn chain_text(error: &OperationError) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut next = std::error::Error::source(error);
+    while let Some(source) = next {
+        parts.push(source.to_string());
+        next = std::error::Error::source(source);
+    }
+    parts.join(" | ")
 }
 
 /// S33: unsettled-reader error. Partial bytes already collected are
@@ -690,6 +729,75 @@ pub(crate) fn kill_and_wait(child: &mut Child) -> Result<(), OperationError> {
         .wait()
         .map_err(|error| backend(error, Stage::Execute))?;
     Ok(())
+}
+
+/// S85-round5: ECHILD from the no-reap observation means the leader
+/// is no longer our child — auto-reaped (SIGCHLD disposition) or
+/// reaped by a competing waiter in this process. Its pid and pgid
+/// numbers are reusable: no signal may be sent to either. Any other
+/// failure (EPERM denial, unexpected child state) leaves the
+/// reservation intact. Off unix there is no group signal, so no
+/// reservation hazard exists.
+#[cfg(unix)]
+fn reservation_lost(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ECHILD)
+}
+#[cfg(not(unix))]
+fn reservation_lost(_error: &std::io::Error) -> bool {
+    false
+}
+
+/// S85-round5: unresolved-custody fallout. The leader escaped
+/// observation (see [`reservation_lost`]): the group was
+/// deliberately NOT signaled, so descendants beyond the leader are
+/// unresolved — reported, never silently abandoned.
+fn custody_unresolved() -> OperationError {
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        None,
+        Some(Box::new(Detail(
+            "child reservation lost: process group not signaled, tool custody unresolved"
+                .to_string(),
+        ))),
+    )
+}
+
+/// S86-round5: retire the tool before a deadline. The signal error
+/// is explicit (a denied kill is recorded, not ignored), and the
+/// reap polls bounded — a kill-proof long-running tool reports
+/// unresolved retirement at the deadline instead of blocking past
+/// the configured timeout.
+fn kill_and_wait_deadline(child: &mut Child, end: Instant) -> Result<(), OperationError> {
+    let signal = child.kill().err();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {
+                if Instant::now() >= end {
+                    return Err(retire_unresolved(signal));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => return Err(backend(error, Stage::Execute)),
+        }
+    }
+}
+
+/// S86-round5: bounded-retirement fallout. The tool is still alive
+/// at the deadline; a refused signal rides along with its errno.
+fn retire_unresolved(signal: Option<std::io::Error>) -> OperationError {
+    let errno = signal.as_ref().and_then(|error| error.raw_os_error());
+    let detail = match &signal {
+        Some(error) => format!("tool still alive after bounded retirement (signal refused: {error})"),
+        None => "tool still alive after bounded retirement".to_string(),
+    };
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        errno,
+        Some(Box::new(Detail(detail))),
+    )
 }
 
 /// Output-reader failure: a mid-stream read failed, so the partial bytes
@@ -818,6 +926,100 @@ mod tests {
         assert!(
             detail.contains("os error 5") && !detail.contains("tool retirement failed"),
             "settle-only fallout is exact: {detail}"
+        );
+    }
+
+    /// S87-round5: the combiner preserves a real unsettled error's
+    /// stream name and custody diagnosis on both fallout legs — not
+    /// just the sourceless Display head. Pre-fix only
+    /// "scopebase-bpf Execute/Backend" rode along.
+    #[test]
+    fn observe_failure_preserves_unsettled_chain() {
+        use std::error::Error as _;
+        let observation = || backend(std::io::Error::from_raw_os_error(1), Stage::Execute);
+        let combined = observe_failure(observation(), None, Some(unsettled("stdout")));
+        let detail = format!("{}", combined.source().expect("settle detail"));
+        assert!(
+            detail.contains("stdout") && detail.contains("unsettled"),
+            "settle leg keeps stream and diagnosis: {detail}"
+        );
+        let combined = observe_failure(observation(), Some(unsettled("stderr")), None);
+        let detail = format!("{}", combined.source().expect("retire detail"));
+        assert!(
+            detail.contains("stderr") && detail.contains("unsettled"),
+            "retire leg keeps stream and diagnosis: {detail}"
+        );
+    }
+
+    /// S85-round5: only ECHILD means lost reservation. EPERM (a
+    /// caller waitid filter) and sourceless errors (an unexpected
+    /// but successful observation) keep the leader reserved, so the
+    /// group signal stays allowed there.
+    #[cfg(unix)]
+    #[test]
+    fn reservation_lost_classifies_echild_only() {
+        assert!(reservation_lost(&std::io::Error::from_raw_os_error(
+            libc::ECHILD
+        )));
+        assert!(!reservation_lost(&std::io::Error::from_raw_os_error(
+            libc::EPERM
+        )));
+        assert!(!reservation_lost(&std::io::Error::other(
+            "unexpected waitid child state"
+        )));
+    }
+
+    /// S85-round5: the unresolved-custody fallout names the lost
+    /// reservation, the withheld group signal, and the unresolved
+    /// tool custody — the S85 auto-reap control asserts these.
+    #[test]
+    fn custody_unresolved_names_withheld_signal() {
+        use std::error::Error as _;
+        let detail = format!(
+            "{}",
+            custody_unresolved().source().expect("custody detail")
+        );
+        assert!(
+            detail.contains("reservation")
+                && detail.contains("not signaled")
+                && detail.contains("unresolved"),
+            "custody fallout is explicit: {detail}"
+        );
+    }
+
+    /// S86-round5: bounded retirement reaps a signaled tool. The
+    /// deadline-exceeded leg needs denied signals (irreversible in
+    /// a test process), so it is pinned by the S86 driver control,
+    /// not here.
+    #[test]
+    fn bounded_retirement_reaps_signaled_tool() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep spawns");
+        let end = Instant::now() + Duration::from_secs(10);
+        kill_and_wait_deadline(&mut child, end).expect("signaled sleep reaps");
+    }
+
+    /// S86-round5: the bounded-retirement fallout carries the
+    /// refused signal's errno and names the live tool — the S86
+    /// signal-denial control asserts these.
+    #[test]
+    fn retire_unresolved_carries_signal_errno() {
+        use std::error::Error as _;
+        let error = retire_unresolved(Some(std::io::Error::from_raw_os_error(1)));
+        assert_eq!(error.raw_os_error(), Some(1));
+        let detail = format!("{}", error.source().expect("retire detail"));
+        assert!(
+            detail.contains("still alive") && detail.contains("signal refused"),
+            "retire fallout is explicit: {detail}"
+        );
+        let silent = retire_unresolved(None);
+        assert_eq!(silent.raw_os_error(), None);
+        let detail = format!("{}", silent.source().expect("silent detail"));
+        assert!(
+            detail.contains("still alive") && !detail.contains("signal refused"),
+            "no signal error means no signal claim: {detail}"
         );
     }
 

@@ -939,6 +939,11 @@ pub enum DeliveryHookPhase {
     /// attempt. Lets a test force the check-to-create plant window
     /// (e.g. plant a symlink at the parent name).
     BeforeParentMkdir,
+    /// S69-round5: after the output parent leaf's successful
+    /// `mkdirat`, before its `openat`. Lets a test force the
+    /// post-success substitution window (e.g. rename the fresh
+    /// directory away and plant a substitute at its name).
+    AfterParentMkdir,
 }
 
 /// S36: test-only entry point with a substitution hook.
@@ -1591,6 +1596,11 @@ fn create_output_parent(
         Err(rustix::io::Errno::EXIST) => false,
         Err(e) => return Err(missing(e)),
     };
+    if newly_owned {
+        if let Some(fire) = hook {
+            fire(DeliveryHookPhase::AfterParentMkdir);
+        }
+    }
     let fd = rustix::fs::openat(
         &dir,
         leaf_c.as_c_str(),
@@ -1604,20 +1614,46 @@ fn create_output_parent(
         )
     })?;
     if newly_owned {
-        // Proven-new by the `mkdirat` above, chmodded through the
-        // just-opened fd: no path re-resolution, no swap window past
-        // a `µs` plant racing this call sequence (which still only
-        // flips modes on an attacker-owned dir, never inherits it —
-        // the exclusivity gate below judges the fd as-is).
-        rustix::fs::fchmod(&fd, Mode::from_bits_truncate(0o700)).map_err(|e| {
-            OperatorError::new(
-                OperatorErrorKind::Engine,
-                format!(
-                    "cannot secure created output parent {}: {e}",
-                    parent.display()
-                ),
-            )
-        })?;
+        // S69-round5: creation identity before chmod. Only an
+        // exclusive containing dir excludes a post-mkdir rename
+        // substitution across the mkdir/open window; there the
+        // opened fd is proven ours and the chmod repairs exotic
+        // umasks. Under a shared container the opened fd may be a
+        // substitute, so only an already-0700 mode proceeds (the
+        // chmod would be a no-op — zero effect on any file) and
+        // anything else refuses instead of chmodding a stranger.
+        // NOFOLLOW cannot help: directory replacement needs no
+        // symlink.
+        let shared =
+            cleanup::exclusive_parent_violation(dir.as_fd(), "output parent container")?.is_some();
+        if shared {
+            let st = rustix::fs::fstat(&fd).map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("cannot stat created output parent {}: {e}", parent.display()),
+                )
+            })?;
+            if st.st_mode & 0o777 != 0o700 {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::Usage,
+                    format!(
+                        "output parent leaf changed after creation \
+                         (refusing to secure a substituted directory): {}",
+                        parent.display()
+                    ),
+                ));
+            }
+        } else {
+            rustix::fs::fchmod(&fd, Mode::from_bits_truncate(0o700)).map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!(
+                        "cannot secure created output parent {}: {e}",
+                        parent.display()
+                    ),
+                )
+            })?;
+        }
     }
     Ok(fd)
 }

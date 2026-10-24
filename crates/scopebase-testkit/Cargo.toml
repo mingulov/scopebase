@@ -13,7 +13,9 @@ include = ["Cargo.toml", "README.md", "LICENSE-APACHE", "THIRD-PARTY-NOTICES.md"
 default = []
 bpf-host = ["dep:scopebase-bpf"]
 object = ["dep:scopebase-bpf", "scopebase-bpf/btf"]
-toolchain = ["object", "dep:libc"]
+# S85-round5: toolchain retirement pins the tool leader through the
+# seccomp surface (no scopebase-linux edge — S78 preserved).
+toolchain = ["object", "dep:libc", "seccomp-fixture"]
 bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
 linux-fixtures = ["dep:scopebase-linux", "scopebase-linux/mapping", "dep:rustix", "dep:libc"]
 # S78-round4: seccomp-only fixture surface (`fixture::linux::seccomp`)
@@ -126,7 +128,10 @@ required-features = ["linux-fixtures"]
 [[bin]]
 name = "scopebase-tc02-invoke-denial"
 path = "src/bin/scopebase-tc02-invoke-denial.rs"
-required-features = ["linux-fixtures"]
+# S83-round5: the driver imports scopebase_bpf and the toolchain
+# module — linux-fixtures alone selects it with unavailable
+# imports. toolchain implies object (the BPF edge).
+required-features = ["linux-fixtures", "toolchain"]
 
 [[bin]]
 name = "scopebase-select"

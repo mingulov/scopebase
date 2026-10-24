@@ -153,6 +153,55 @@ impl FixtureRoot {
         &self.path
     }
 
+    /// Prove the advisory [`FixtureRoot::path`] still addresses the
+    /// pinned directories: the staging ancestor re-resolved by path
+    /// must be the pinned parent fd, and the root name under it the
+    /// pinned root fd. Call immediately before any pathname-based
+    /// effect (notably execution) staged under this root.
+    ///
+    /// S66-round5: under a non-sticky shared TMPDIR another uid can
+    /// rename the staging directory away and plant a substitute
+    /// tree at its path. Descriptor-bound writes and cleanup are
+    /// immune, but a pathname handed to `exec` would follow the
+    /// substitute. A renamed ancestor fails resolution; a planted
+    /// substitute fails the identity comparison — both refuse
+    /// loudly instead of executing (or modifying) foreign files.
+    pub fn verify_anchored(&self) -> io::Result<()> {
+        let staging = self.path.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "fixture path has no parent")
+        })?;
+        let live_parent = rfs::open(
+            staging,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let want_parent = rfs::fstat(&self.parent).map_err(io::Error::from)?;
+        let got_parent = rfs::fstat(&live_parent).map_err(io::Error::from)?;
+        if (got_parent.st_dev, got_parent.st_ino) != (want_parent.st_dev, want_parent.st_ino) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture staging ancestor replaced",
+            ));
+        }
+        let live_root = rfs::openat(
+            &live_parent,
+            &self.name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let want_root = rfs::fstat(&self.root).map_err(io::Error::from)?;
+        let got_root = rfs::fstat(&live_root).map_err(io::Error::from)?;
+        if (got_root.st_dev, got_root.st_ino) != (want_root.st_dev, want_root.st_ino) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture root replaced before use",
+            ));
+        }
+        Ok(())
+    }
+
     /// Write `bytes` to `rel` under the root, creating parent directories.
     /// Absolute paths and any `..`/prefix escape are refused before any write.
     ///
@@ -176,6 +225,41 @@ impl FixtureRoot {
         let mut file = std::fs::File::from(fd);
         file.write_all(bytes)?;
         self.join(rel)
+    }
+
+    /// Chmod `rel` to `mode` through its creation-bound descriptor and
+    /// return the file's `(dev, ino)` identity.
+    ///
+    /// S66-round5: the file opens descriptor-relative from the pinned
+    /// root fd with symlinks refused (the F25 discipline), so a
+    /// swapped staging ancestor cannot redirect the effect at a
+    /// foreign file the way a pathname chmod would. Identity is
+    /// sampled before and after the `fchmod`; a mid-operation swap
+    /// refuses with `InvalidData` instead of reporting success over
+    /// a changed file.
+    pub fn chmod_pinned(&self, rel: &str, mode: u32) -> io::Result<(u64, u64)> {
+        let pieces = self.split(rel)?;
+        let dir = self.open_parent_dir(&pieces)?;
+        let name = piece_cstr(pieces[pieces.len() - 1])?;
+        let fd = rfs::openat(
+            dir.as_fd(),
+            &name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io::Error::from)?;
+        let before = rfs::fstat(&fd).map_err(io::Error::from)?;
+        rfs::fchmod(&fd, Mode::from_bits_truncate(mode)).map_err(io::Error::from)?;
+        let after = rfs::fstat(&fd).map_err(io::Error::from)?;
+        let before_id = (before.st_dev, before.st_ino);
+        let after_id = (after.st_dev, after.st_ino);
+        if before_id != after_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture file replaced during chmod",
+            ));
+        }
+        Ok(after_id)
     }
 
     /// Create (or reuse) `rel` as a directory under the root.

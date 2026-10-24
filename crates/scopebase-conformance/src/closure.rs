@@ -152,9 +152,12 @@ impl VerifiedClosure {
 /// `/`). Pure string work — no filesystem access, no symlink
 /// resolution — so equivalent spellings (`--fixture-root .` with a
 /// bare manifest name, a relative root with an absolute manifest
-/// inside it) compare equal. Only the PREFIX comparison uses this;
-/// the bytes still come from the no-follow descriptor walk below,
-/// which governs what is actually read.
+/// inside it) compare equal.
+/// S82-round5: ONLY the prefix comparison uses this. The bytes come
+/// from resolving the supplied manifest itself
+/// ([`open_manifest_walk`]), never from this normalized twin: a
+/// popped `..` must not erase a missing or symlinked component
+/// from the actual lookup.
 fn anchor_lexical(path: &Path) -> Result<PathBuf, OperatorError> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -193,9 +196,139 @@ fn anchor_lexical(path: &Path) -> Result<PathBuf, OperatorError> {
     Ok(out)
 }
 
+/// S82-round5: resolve the supplied manifest path itself — never a
+/// lexically normalized twin — returning its verified parent fd
+/// and leaf fd. Components walk from the anchor (`/` or the cwd)
+/// over verified directory fds with symlinks refused; `..` pops
+/// one verified directory (the kernel clamps at `/`, like any
+/// faithful lookup). A `..` following a missing or symlinked
+/// component cannot cancel it: the failed step errors first
+/// (ENOENT/ELOOP), exactly as the requested lookup behaves.
+fn open_manifest_walk(
+    manifest_path: &Path,
+) -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), BoundedReadError> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd as _;
+    let mut dir = rustix::fs::open(
+        if manifest_path.is_absolute() { Path::new("/") } else { Path::new(".") },
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| {
+        refused(format!(
+            "cannot anchor {}: {e}",
+            manifest_path.display()
+        ))
+    })?;
+    let mut run: Vec<std::ffi::CString> = Vec::new();
+    for comp in manifest_path.components() {
+        use std::path::Component;
+        match comp {
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                // A `..` leg walks, like every other component —
+                // resolved against verified directories, never
+                // erased against unverified spelling.
+                run.push(std::ffi::CString::new("..").expect("static leg"));
+            }
+            Component::Normal(name) => {
+                run.push(std::ffi::CString::new(name.as_encoded_bytes())
+                    .map_err(|_| refused("manifest path contains NUL".to_string()))?);
+            }
+            Component::Prefix(_) => {
+                return Err(refused(format!(
+                    "manifest path has no anchor: {}",
+                    manifest_path.display()
+                )));
+            }
+        }
+    }
+    let Some((leaf, parents)) = run.split_last() else {
+        return Err(refused("manifest path names no file".to_string()));
+    };
+    for piece in parents {
+        let is_dotdot = piece.as_bytes() == b"..";
+        dir = rustix::fs::openat(
+            dir.as_fd(),
+            piece,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|e| {
+            if is_dotdot {
+                map_open_error(e)
+            } else {
+                walk_open_error(dir.as_fd(), piece, e)
+            }
+        })?;
+    }
+    let fd = rustix::fs::openat(
+        dir.as_fd(),
+        leaf,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| {
+        if e == rustix::io::Errno::LOOP {
+            refused("manifest is a symlink".to_string())
+        } else {
+            map_open_error(e)
+        }
+    })?;
+    Ok((dir, fd))
+}
+
+/// S82-round5: prove the resolved manifest's parent sits at or under
+/// the fixture root by walking up over verified directory fds.
+/// Any failure (including absurd depth) reports not-contained:
+/// fail closed, never read past the proof.
+fn manifest_within_root(
+    mut dir: std::os::fd::OwnedFd,
+    root: std::os::fd::BorrowedFd<'_>,
+) -> bool {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd as _;
+    let want = match rustix::fs::fstat(root) {
+        Ok(st) => (st.st_dev, st.st_ino),
+        Err(_) => return false,
+    };
+    // One owned fd climbs the verified chain; depth past PATH_MAX
+    // can only mean a pathological tree, which refuses.
+    for _ in 0..4096 {
+        let here = match rustix::fs::fstat(dir.as_fd()) {
+            Ok(st) => (st.st_dev, st.st_ino),
+            Err(_) => return false,
+        };
+        if here == want {
+            return true;
+        }
+        let up = match rustix::fs::openat(
+            dir.as_fd(),
+            c"..",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(up) => up,
+            Err(_) => return false,
+        };
+        let there = match rustix::fs::fstat(up.as_fd()) {
+            Ok(st) => (st.st_dev, st.st_ino),
+            Err(_) => return false,
+        };
+        if there == here {
+            // `..` clamped: filesystem root reached, fixture root
+            // not found above.
+            return false;
+        }
+        dir = up;
+    }
+    false
+}
+
 pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosure, OperatorError> {
-    // S38: the manifest itself reads through the retained-root
-    // no-follow reader — a symlinked manifest must refuse, never
+    use std::os::fd::AsFd as _;
+    // S38: the manifest itself reads through a no-follow
+    // descriptor walk — a symlinked manifest must refuse, never
     // open outside the root.
     // S70-round4: anchor and normalize both spellings before the
     // prefix comparison, so `--fixture-root . --fixture-manifest
@@ -204,7 +337,7 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
     // manifest inside it.
     let anchored_root = anchor_lexical(root)?;
     let anchored_manifest = anchor_lexical(manifest_path)?;
-    let rel = anchored_manifest.strip_prefix(&anchored_root).map_err(|_| {
+    anchored_manifest.strip_prefix(&anchored_root).map_err(|_| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
             format!(
@@ -214,16 +347,62 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
             ),
         )
     })?;
-    let rel = rel.to_str().ok_or_else(|| {
-        OperatorError::new(
+    if manifest_path.to_str().is_none() {
+        return Err(OperatorError::new(
             OperatorErrorKind::MissingInput,
             format!(
                 "closure manifest {} is not valid Unicode",
                 manifest_path.display()
             ),
+        ));
+    }
+    // S82-round5: the prefix check above admits spellings, but the
+    // BYTES come from resolving the supplied manifest itself —
+    // never from a lexically normalized twin. A `..` that cancels
+    // a missing or symlinked component must fail that component
+    // (ENOENT/ELOOP), not silently select a different file.
+    let (parent_fd, leaf_fd) = open_manifest_walk(manifest_path).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!(
+                "cannot read closure manifest {}: {e}",
+                manifest_path.display()
+            ),
         )
     })?;
-    let bytes = read_member(root, rel, MAX_MANIFEST_BYTES).map_err(|e| {
+    // The resolved manifest must sit under the fixture root: prove
+    // containment by walking up from its verified parent. The
+    // lexical prefix check already passed, so this only fires on
+    // resolutions the spelling comparison cannot see.
+    let root_fd = rustix::fs::open(
+        root,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!(
+                "cannot read closure manifest {}: {}",
+                manifest_path.display(),
+                map_open_error(e)
+            ),
+        )
+    })?;
+    if !manifest_within_root(parent_fd, root_fd.as_fd()) {
+        return Err(OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!(
+                "closure manifest {} is not under the fixture root {}",
+                manifest_path.display(),
+                root.display()
+            ),
+        ));
+    }
+    let bytes = read_regular_capped(leaf_fd, MAX_MANIFEST_BYTES).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
             format!(
@@ -807,6 +986,55 @@ mod tests {
             "symlinked manifest must refuse at the walk: {}",
             err.detail()
         );
+    }
+
+    // S82-round5: a `..` that cancels a missing component must fail
+    // that component (ENOENT) — never silently read the normalized
+    // twin. Pre-fix `R/missing/../fixture-manifest.json` read
+    // `R/fixture-manifest.json` successfully.
+    #[test]
+    fn verify_closure_canceled_missing_component_fails_not_found() {
+        let dir = scratch("s82-missing");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        // Control: the direct spelling admits.
+        verify_closure(&dir, &dir.join(MANIFEST_FILE)).expect("direct spelling admits");
+        let sneaky = dir.join("missing").join("..").join(MANIFEST_FILE);
+        let err = verify_closure(&dir, &sneaky).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("cannot read closure manifest")
+                && err.detail().contains("no such file"),
+            "canceled missing component must fail ENOENT: {}",
+            err.detail()
+        );
+    }
+
+    // S82-round5: a `..` that cancels a symlink component must fail
+    // at the symlink (no-follow) — the canceled leg must still
+    // reach the walk, never select different bytes.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_canceled_symlink_component_refuses() {
+        let dir = scratch("s82-symlink");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        let outside = scratch("s82-symlink-outside");
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        let sneaky = dir.join("link").join("..").join(MANIFEST_FILE);
+        let err = verify_closure(&dir, &sneaky).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("symlink"),
+            "canceled symlink component must refuse at the walk: {}",
+            err.detail()
+        );
+        // And a benign `..` through a REAL directory still resolves:
+        // faithful lookup, not blanket `..` rejection.
+        let real = dir.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let benign = real.join("..").join(MANIFEST_FILE);
+        verify_closure(&dir, &benign).expect("benign dotdot resolves");
     }
 
     // S38: a symlinked leaf pointing outside refuses instead of

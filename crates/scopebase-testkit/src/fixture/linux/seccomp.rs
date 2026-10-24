@@ -149,6 +149,31 @@ pub fn install_deny_ptrace_request(
     install_program(&program)
 }
 
+/// S52-round5: deny only BLOCKING `wait4` (options word zero) with
+/// the action errno while `WNOHANG` (and every other flag word)
+/// stays allowed. All real wait flags live in the low word, so a
+/// zero low word is exactly the blocking-equivalent set. Same
+/// confined-helper contract as [`install_deny_one`].
+#[cfg(target_arch = "x86_64")]
+pub fn install_deny_wait_blocking(action: DenyAction) -> Result<(), SeccompError> {
+    let deny = action.ret();
+    // wait4(pid, status, options, rusage): options is args[2], a
+    // u64 at offset 32; the low word is compared.
+    const SECCOMP_DATA_ARG2_OFF: u32 = 32;
+    let program = [
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
+        jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
+        stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
+        jump(BPF_JEQ_K, libc::SYS_wait4 as u32, 0, 3),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG2_OFF),
+        jump(BPF_JEQ_K, 0, 0, 1),
+        stmt(BPF_RET_K, deny),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    install_program(&program)
+}
+
 /// Latch `NO_NEW_PRIVS` and install one classic-BPF program.
 #[cfg(target_arch = "x86_64")]
 fn install_program(program: &[libc::sock_filter]) -> Result<(), SeccompError> {
@@ -206,6 +231,15 @@ pub fn install_deny_ptrace_request(
     _request: libc::c_uint,
     _action: DenyAction,
 ) -> Result<(), SeccompError> {
+    Err(SeccompError {
+        stage: "unsupported_arch",
+        errno: libc::ENOSYS,
+    })
+}
+
+/// Non-x86_64 builds refuse without touching process state.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn install_deny_wait_blocking(_action: DenyAction) -> Result<(), SeccompError> {
     Err(SeccompError {
         stage: "unsupported_arch",
         errno: libc::ENOSYS,

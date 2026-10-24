@@ -669,3 +669,65 @@ fn fixture_root_close_refuses_loosened_parent() {
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).expect("retighten");
     std::fs::remove_dir_all(&base).expect("base cleanup");
 }
+
+/// S66-round5: chmod through the creation-bound descriptor sets the
+/// mode and reports the file's stable identity; a symlink final
+/// refuses (F25) instead of chmodding through the link.
+#[test]
+fn chmod_pinned_sets_mode_with_stable_identity() {
+    use std::os::unix::fs::MetadataExt;
+    let base = staging("s66chmod");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    let advisory = root.write_file("mode.dat", b"mode").expect("write");
+    let id = root.chmod_pinned("mode.dat", 0o600).expect("pinned chmod");
+    // Oracles only (effects stayed descriptor-bound): the advisory
+    // path still names the same file, now at the new mode.
+    let oracle = std::fs::metadata(&advisory).expect("oracle stat");
+    assert_eq!((oracle.dev(), oracle.ino()), id);
+    assert_eq!(oracle.mode() & 0o777, 0o600);
+    std::os::unix::fs::symlink("mode.dat", base.join("root").join("link.dat")).expect("plant link");
+    let err = root.chmod_pinned("link.dat", 0o600).expect_err("symlink refuses");
+    assert_eq!(
+        err.raw_os_error(),
+        Some(rustix::io::Errno::LOOP.raw_os_error()),
+        "want ELOOP, saw {err}"
+    );
+    root.close().expect("close");
+    drop_staging(&base);
+}
+
+/// S66-round5: a renamed-away staging ancestor fails anchoring
+/// (resolution), and a planted substitute fails it (identity) —
+/// while descriptor-bound effects stay on the original. Restore
+/// returns to anchored, and close retires the original tree.
+#[test]
+fn verify_anchored_detects_staging_substitution() {
+    let base = staging("s66anchor");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("owned.txt", b"owned").expect("write");
+    root.verify_anchored().expect("anchored before attack");
+    let hidden = base.with_extension("hidden-s66");
+    std::fs::rename(&base, &hidden).expect("rename staging away");
+    let err = root.verify_anchored().expect_err("renamed ancestor refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    // Plant a substitute tree at the staging path with a decoy
+    // file: anchoring must fail identity, not follow it.
+    std::fs::create_dir(&base).expect("plant staging");
+    std::fs::create_dir(base.join("root")).expect("plant root");
+    std::fs::write(base.join("root").join("owned.txt"), b"decoy").expect("plant decoy");
+    let err = root.verify_anchored().expect_err("substitute refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("replaced"), "unexpected error: {err}");
+    // Descriptor-bound effects stayed on the original throughout:
+    // the chmod lands on the hidden file, never the decoy.
+    let id = root.chmod_pinned("owned.txt", 0o600).expect("pinned chmod under attack");
+    use std::os::unix::fs::MetadataExt;
+    let oracle = std::fs::metadata(hidden.join("root").join("owned.txt")).expect("hidden stat");
+    assert_eq!((oracle.dev(), oracle.ino()), id);
+    // Restore and retire the original; the substitute is ours to clear.
+    std::fs::remove_dir_all(&base).expect("clear substitute");
+    std::fs::rename(&hidden, &base).expect("restore staging");
+    root.verify_anchored().expect("anchored after restore");
+    root.close().expect("close");
+    drop_staging(&base);
+}

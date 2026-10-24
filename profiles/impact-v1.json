@@ -78,8 +78,26 @@
     {"id": "planning-docs",
      "argv": ["python3", "tools/check_planning_docs.py"]},
     {"id": "check-i686-testkit",
+     "comment": "S84-round5: the audit-bearing feature must be enabled or the non-x86 audit stub is absent from this check (S83 keeps the toolchain-only denial bin unselected here)",
      "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
-              "--target", "i686-unknown-linux-gnu"]}
+              "--no-default-features", "--features", "linux-fixtures",
+              "--target", "i686-unknown-linux-gnu"]},
+    {"id": "check-testkit-no-features",
+     "comment": "S83-round5: the zero-feature selection must check (unconditional bins only)",
+     "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
+              "--no-default-features"]},
+    {"id": "check-testkit-linux-fixtures",
+     "comment": "S83-round5: the linux-fixtures-only selection must check (binaries it cannot build stay unselected)",
+     "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
+              "--no-default-features", "--features", "linux-fixtures"]},
+    {"id": "check-testkit-toolchain",
+     "comment": "S83-round5: the toolchain surface builds standalone",
+     "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
+              "--no-default-features", "--features", "toolchain"]},
+    {"id": "check-testkit-toolchain-fixtures",
+     "comment": "S83-round5: the invoke-denial driver is selected here and must build",
+     "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
+              "--no-default-features", "--features", "linux-fixtures,toolchain"]}
   ],
   "profile_gates": {
     "held-file-v1":
@@ -87,7 +105,9 @@
     "bounded-walk-v1":
       {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
     "process-observation-v1":
-      {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
+      {"id": "test-linux-process",
+       "comment": "S89-round5: the process_observation test target requires the process feature; default-only selection omits it (minimal-feature coverage stays with the held-file-v1 gate)",
+       "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux", "--features", "process"]},
     "owned-child-v1":
       {"id": "test-linux", "argv": ["cargo", "test", "--offline", "-p", "scopebase-linux"]},
     "capture-core-v1":

@@ -293,24 +293,18 @@ fn spawn_failure_is_operational_refused_with_errno() {
     // redirect — with dev+ino identity pinned across the permission
     // change, so a swap between chmod and spawn is detected instead
     // of executed.
+    // S66-round5: the chmod and identity run through the
+    // creation-bound descriptor (`chmod_pinned`), never through the
+    // replaceable staging pathname; the staging ancestor is
+    // re-verified immediately before the pathname is handed to
+    // exec. A renamed-away or substituted staging refuses loudly
+    // instead of executing (or once chmodding) a foreign file.
     let root = owned_root("s59");
     let blocked = root
         .write_file("noexec", b"not an executable")
         .expect("noexec fixture");
-    let before = std::fs::metadata(&blocked).expect("fixture stat");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
-    }
-    {
-        use std::os::unix::fs::MetadataExt;
-        let after = std::fs::metadata(&blocked).expect("post-chmod stat");
-        assert_eq!(
-            (after.dev(), after.ino()),
-            (before.dev(), before.ino()),
-            "fixture identity must survive its own chmod"
-        );
-    }
+    let _id = root.chmod_pinned("noexec", 0o000).expect("pinned chmod");
+    root.verify_anchored().expect("staging anchored before exec");
     let script = format!("case=child;child={};", blocked.display());
     let err = run("spawn-observe", script.as_bytes()).expect_err("non-executable refuses");
     root.close().expect("cleanup");
@@ -321,6 +315,77 @@ fn spawn_failure_is_operational_refused_with_errno() {
     // parameter shape and spawn failure stay distinct.
     let err = run("spawn-observe", b"case=child;").expect_err("missing child invalid");
     assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
+}
+
+/// S66-round5: private staging for the substitution control — the
+/// S14 exclusive-create + 0700 discipline, but never the
+/// process-shared parent: this test renames its staging away, so
+/// sharing would break parallel tests.
+fn private_staging(tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..1024 {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "scopebase-s66-{}-{tag}-{n}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                    .expect("staging mode");
+                return dir;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("staging: {error}"),
+        }
+    }
+    panic!("staging names exhausted");
+}
+
+/// S66-round5: ancestor-substitution control. With the staging
+/// ancestor renamed away and a substitute tree planted at its path
+/// (the non-sticky shared TMPDIR attack, self-inflicted same-uid):
+/// anchoring refuses at each phase, the pinned chmod still lands on
+/// the original file, and the substitute decoy is untouched.
+/// Restore returns to anchored and close retires the original.
+#[test]
+fn staging_substitution_refuses_anchoring_and_spares_decoy() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let staging = private_staging("substitute");
+    let root = FixtureRoot::create(&staging, "s66root").expect("root");
+    root.write_file("victim", b"original").expect("write");
+    root.verify_anchored().expect("anchored before attack");
+    // Phase 1: staging renamed away — anchoring fails resolution.
+    let hidden = staging.with_extension("hidden-s66");
+    std::fs::rename(&staging, &hidden).expect("rename staging away");
+    let err = root.verify_anchored().expect_err("renamed ancestor refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    // Phase 2: substitute tree planted at the staging path with a
+    // decoy victim — anchoring fails identity, never follows it.
+    std::fs::create_dir(&staging).expect("plant staging");
+    std::fs::create_dir(staging.join("s66root")).expect("plant root");
+    let decoy = staging.join("s66root").join("victim");
+    std::fs::write(&decoy, b"decoy").expect("plant decoy");
+    std::fs::set_permissions(&decoy, std::fs::Permissions::from_mode(0o644)).expect("decoy mode");
+    let err = root.verify_anchored().expect_err("substitute refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("replaced"), "unexpected error: {err}");
+    // The pinned chmod lands on the hidden original (identity
+    // matches the oracle); the decoy keeps its planted mode.
+    let id = root.chmod_pinned("victim", 0o600).expect("pinned chmod under attack");
+    let oracle = std::fs::metadata(hidden.join("s66root").join("victim")).expect("hidden stat");
+    assert_eq!((oracle.dev(), oracle.ino()), id);
+    assert_eq!(oracle.mode() & 0o777, 0o600);
+    let decoy_stat = std::fs::metadata(&decoy).expect("decoy stat");
+    assert_eq!(decoy_stat.mode() & 0o777, 0o644, "decoy must be untouched");
+    // Restore and retire the original; the substitute is ours to clear.
+    std::fs::remove_dir_all(&staging).expect("clear substitute");
+    std::fs::rename(&hidden, &staging).expect("restore staging");
+    root.verify_anchored().expect("anchored after restore");
+    root.close().expect("close");
+    std::fs::remove_dir(&staging).expect("staging drops empty");
 }
 
 /// R33: an otherwise-valid invocation under an alien script

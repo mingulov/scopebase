@@ -1356,12 +1356,25 @@ fn check_call_coverage(
     // instructions instead of calls-times-relocs — the repair
     // entry matches the guard scan's discipline (S65 retention
     // admission included).
-    let mut covered_offsets = std::collections::BTreeSet::new();
+    // S65-round5: sorted Vec with exactly pre-admitted geometry
+    // (see the guard site): capacity for every reloc row is
+    // admitted before allocation. Only R_BPF_64_32 rows are
+    // pushed, so mixed inputs over-admit the non-call rows —
+    // fail-closed, bounded by the input ceiling (each row decodes
+    // from input bytes), and independent of Vec growth policy
+    // (unlike per-push growth charges, which would bake in
+    // std-internal doubling).
+    let mut covered_offsets: Vec<(usize, u64)> = Vec::with_capacity(relocs.len());
+    retain(
+        retained,
+        limits,
+        relocs.len().saturating_mul(size_of::<(usize, u64)>()),
+    )?;
     for reloc in relocs.iter().filter(|reloc| reloc.typ == R_BPF_64_32) {
         charge(work, 1)?;
-        retain(retained, limits, size_of::<(usize, u64)>())?;
-        covered_offsets.insert((reloc.target_sect, reloc.offset));
+        covered_offsets.push((reloc.target_sect, reloc.offset));
     }
+    covered_offsets.sort_unstable();
     for section in &image.sections {
         if !section.executable() {
             continue;
@@ -1398,7 +1411,11 @@ fn check_call_coverage(
             if source == 0 {
                 continue;
             }
-            if !covered_offsets.contains(&(section.index, at as u64)) {
+            // S65-round5: membership on the sorted Vec index.
+            if covered_offsets
+                .binary_search(&(section.index, at as u64))
+                .is_err()
+            {
                 return Err(refuse(
                     ErrorKind::Unsupported,
                     format!("unrelocated call site at {}+{at:#x}", section.label()),
@@ -2854,14 +2871,24 @@ fn check_path_guard(
         // check below is O(log n) per call site. The old per-call
         // linear scan was uncharged O(N) per call — quadratic in
         // one function with many relocated calls.
-        // S65: the index storage is admitted into retention like
-        // every other per-entry allocation.
-        let mut reloc_offsets = std::collections::BTreeSet::new();
+        // S65-round5: the index is a sorted Vec with exactly
+        // pre-admitted geometry: `site_relocs.len()` entries of
+        // `u64` are admitted BEFORE `with_capacity` allocates
+        // them. A BTreeSet's boxed nodes and spare slots have no
+        // such bound (B=6, CAPACITY=11, node metadata), so
+        // per-key charges under-admitted the authorized
+        // allocation.
+        let mut reloc_offsets = Vec::with_capacity(site_relocs.len());
+        retain(
+            retained,
+            limits,
+            site_relocs.len().saturating_mul(size_of::<u64>()),
+        )?;
         for reloc in site_relocs.iter() {
             charge(work, 1)?;
-            retain(retained, limits, size_of::<u64>())?;
-            reloc_offsets.insert(reloc.offset);
+            reloc_offsets.push(reloc.offset);
         }
+        reloc_offsets.sort_unstable();
         for reloc in site_relocs {
             // S09: charge every inspected row, in or out of range:
             // the per-function filter scans the section's relocs.
@@ -2965,7 +2992,8 @@ fn check_path_guard(
                 continue;
             }
             if slot[0] == OP_CALL && image.data.src_reg(slot[1]) != 0 {
-                let covered = reloc_offsets.contains(&at);
+                // S65-round5: membership on the sorted Vec index.
+                let covered = reloc_offsets.binary_search(&at).is_ok();
                 if !covered {
                     push_section_finding(
                         violations,

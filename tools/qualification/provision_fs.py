@@ -138,6 +138,17 @@ class ProcUnknown(AdmissionError):
     """
 
 
+class ProcIdentityChanged(AdmissionError):
+    """The pinned number is proven to be a different process. (S21-round5)
+
+    Whoever was there before is gone-or-foreign: the OLD
+    identity is no longer signalled, and its stale record may
+    be dropped. Unlike a persistence/publication
+    AdmissionError (which must propagate with custody
+    retained), this outcome proves the drop is sound.
+    """
+
+
 class RootAuthorityError(AdmissionError):
     """The retained run-root authority was lost or replaced. (S15)"""
 
@@ -314,11 +325,20 @@ def read_mount_table(path="/proc/self/mountinfo"):
     # against the surrogate-preserving run-root spelling. `replace`
     # decoding collapses distinct byte spellings to U+FFFD and the
     # containment guard misses the mount.
-    try:
-        with open(path, "rb") as handle:
-            text = os.fsdecode(handle.read())
-    except OSError as exc:
-        raise AdmissionError(f"mount table unreadable: {exc}")
+    #
+    # S17-round5: under confinement all our mounts live in the
+    # keeper ns — the host table would miss them, so route
+    # through the ns dump. Explicit fixture paths always read
+    # direct (unit tests stay hermetic).
+    ns = _ns_active()
+    if ns is not None and path == "/proc/self/mountinfo":
+        text = _dump_ns_mount_table(ns)
+    else:
+        try:
+            with open(path, "rb") as handle:
+                text = os.fsdecode(handle.read())
+        except OSError as exc:
+            raise AdmissionError(f"mount table unreadable: {exc}")
     rows = []
     for line in text.splitlines():
         line = line.strip()
@@ -535,6 +555,14 @@ def plan_command(args):
     return 0
 
 
+# S17-round5: helpers confined to the keeper mount namespace.
+# While _MOUNT_NS is unensured these refuse loudly (never a
+# silent host-ns mount); loop helpers are global and stay
+# ungated (nsenter is harmless for them once ensured).
+_MOUNT_NS_COMMANDS = frozenset(
+    {"mount-fs", "retire-mount", "retire-helper"})
+
+
 def run_sudo(argv, timeout=120):
     # S15: while a create holds the run-root authority, every
     # privileged effect is bracketed by re-verification of the held
@@ -543,9 +571,15 @@ def run_sudo(argv, timeout=120):
     guard = _ROOT_GUARD
     if guard is not None:
         guard.verify()
+    ns = _ns_active()
+    if _MOUNT_NS is None and _MOUNT_NS_COMMANDS.intersection(argv):
+        return (127, "",
+                "mount ns not ensured; refusing mount helper")
+    full = (["sudo", "-n", "nsenter", f"--mount={ns}", *argv]
+            if ns is not None else ["sudo", "-n", *argv])
     try:
         proc = subprocess.run(
-            ["sudo", "-n", *argv], capture_output=True,
+            full, capture_output=True,
             text=True, timeout=timeout,
         )
     except OSError as exc:
@@ -579,6 +613,314 @@ _PERSIST = None
 # (they land in the held directory) nor pass silently (the pathname
 # no longer matches the held identity).
 _ROOT_GUARD = None
+
+
+# S17-round5: mount-namespace confinement. All privileged mount
+# effects and every mount observation run inside a dedicated
+# keeper mount namespace (rprivate), entered via nsenter: the
+# kernel rejects MS_MOVE under shared ancestors (verified live:
+# EINVAL), so only a private chain allows the reversible move
+# that move-verify-detach needs; and confinement blinds every
+# host actor without nsenter from our table entirely. Our own
+# helpers stay serialized by the exclock inside it.
+#
+# `_MOUNT_NS` is None in unensured mode (unit tests, helpers
+# already inside, non-mount flows), "direct" for explicit
+# legacy host-table mode (pre-ns manifests only), and the
+# keeper ns path (/proc/<pid>/ns/mnt) once ensured. Only real
+# entry points ensure (CLI create/cleanup/inspect via main,
+# live setUp); unit tests never set it and stay direct.
+# run_sudo refuses mount-confined helpers while unensured
+# (loud, never a silent host-ns mount).
+_MOUNT_NS = None
+
+# Keeper children we spawned and intentionally orphan (they own
+# the persistent namespaces). Retained so GC never reaps the
+# Popen handles mid-run; the keepers outlive us by design.
+_KEEPERS = []
+
+
+def _keeper_paths():
+    euid = os.geteuid()
+    return (f"/tmp/scopebase-mntns-{euid}.pid",
+            f"/tmp/scopebase-mnscanary-{euid}")
+
+
+def _parse_keeper_state(raw):
+    """Parse pidfile bytes; None when absent or malformed."""
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeError:
+        return None
+    parts = text.split()
+    if len(parts) != 3:
+        return None
+    pid_s, nsid_s, canary = parts
+    if (not pid_s.isdigit() or not nsid_s.isdigit()
+            or len(canary) != 32
+            or any(c not in "0123456789abcdef" for c in canary)):
+        return None
+    pid, nsid = int(pid_s), int(nsid_s)
+    if pid <= 1 or nsid <= 0:
+        return None
+    return (pid, nsid, canary)
+
+
+def _read_ns_link(pid):
+    """Host-side readlink of a keeper candidate's mount ns.
+
+    Raw subprocess (foundation primitive, like
+    _ns_has_canary): the keeper runs as root, so an
+    unprivileged os.readlink of /proc/<pid>/ns/mnt always
+    fails with EACCES — the link must be read elevated.
+    Returns the link target (e.g. "mnt:[4026534942]") or
+    None when unreadable (dead pid, no sudo); never raises.
+    """
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "readlink", f"/proc/{pid}/ns/mnt"],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _ns_has_canary(nspath, canary):
+    """True when the joined ns shows our canary mount. (S17-round5)
+
+    Raw subprocess (foundation primitive — must not depend on
+    _MOUNT_NS state or run_sudo). Raises AdmissionError when
+    the check itself cannot run; a missing canary is False
+    (stale/wrong ns → respawn), never an error.
+    """
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "nsenter", f"--mount={nspath}",
+             "grep", "-q", f"canary-{canary}",
+             "/proc/self/mountinfo"],
+            capture_output=True, timeout=30)
+    except OSError as exc:
+        raise AdmissionError(f"mount-ns canary check failed: {exc}")
+    except subprocess.TimeoutExpired:
+        raise AdmissionError("mount-ns canary check timed out")
+    return proc.returncode == 0
+
+
+def _spawn_keeper(euid, candir):
+    """Spawn the keeper ns; return (pid, nsid, canary). (S17-round5)
+
+    The keeper reports pid+canary on stdout (single READY line);
+    the canary is generated inside (never on any cmdline, never
+    pre-plantable). Raises AdmissionError on any failure.
+    """
+    try:
+        os.mkdir(candir, 0o700)
+    except FileExistsError:
+        try:
+            st = os.lstat(candir)
+        except OSError as exc:
+            raise AdmissionError(f"mount-ns canary dir: {exc}")
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != euid:
+            raise AdmissionError(
+                "mount-ns canary dir alien; refusing")
+    except OSError as exc:
+        raise AdmissionError(f"mount-ns canary dir: {exc}")
+    script = (
+        "mount --make-rprivate / && "
+        "C=$(head -c 16 /dev/urandom | od -An -tx1 | "
+        "tr -d ' \\n') && "
+        f"mount -t tmpfs canary-$C {candir} && "
+        "echo \"READY $BASHPID $C\" && exec sleep infinity")
+    try:
+        child = subprocess.Popen(
+            ["sudo", "-n", "unshare", "-m", "bash", "-c", script],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True)
+    except OSError as exc:
+        raise AdmissionError(f"mount-ns keeper not spawning: {exc}")
+
+    def fail(msg):
+        try:
+            child.kill()
+        except OSError:
+            pass
+        # wait(), not communicate(): the keeper's grandchildren
+        # (sudo→unshare→bash→sleep) inherit the pipes, so
+        # communicate would block for pipe EOF until they exit
+        # (the full timeout, every time); wait reaps only the
+        # SIGKILLed direct child. stderr is drained
+        # non-blocking below, for the diagnostic suffix only.
+        try:
+            child.wait(timeout=10)
+        except Exception:
+            pass
+        err = ""
+        try:
+            err_fd = child.stderr.fileno()
+            os.set_blocking(err_fd, False)
+            try:
+                chunk = os.read(err_fd, 65536)
+            finally:
+                os.set_blocking(err_fd, True)
+            err = chunk.decode("utf-8", "replace")
+        except Exception:
+            err = ""
+        for stream in (child.stdout, child.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
+        detail = (f" [{err.strip()[:200]}]"
+                  if err and err.strip() else "")
+        raise AdmissionError(f"{msg}{detail}")
+
+    sel = selectors.DefaultSelector()
+    sel.register(child.stdout, selectors.EVENT_READ)
+    try:
+        if not sel.select(timeout=15):
+            fail("mount-ns keeper spawn timed out")
+        line = child.stdout.readline()
+    finally:
+        sel.close()
+    child.stdout.close()
+    parts = line.strip().split()
+    if (len(parts) != 3 or parts[0] != "READY"
+            or not parts[1].isdigit()
+            or len(parts[2]) != 32
+            or any(c not in "0123456789abcdef"
+                   for c in parts[2])):
+        fail("mount-ns keeper reported garbage; refusing")
+    pid = int(parts[1])
+    canary = parts[2]
+    if pid <= 1:
+        fail("mount-ns keeper pid absurd")
+    link = _read_ns_link(pid)
+    if (link is None or not link.startswith("mnt:[")
+            or not link.endswith("]")
+            or not link[5:-1].isdigit()):
+        fail("mount-ns keeper ns unreadable")
+    nsid = int(link[5:-1])
+    if nsid <= 0:
+        fail("mount-ns keeper ns absurd")
+    # Spawn-path canary gate: the pid is seconds old and the
+    # nsid above has nothing recorded to compare against, so
+    # only the secret mount proves this pid's namespace is
+    # ours (a recycled pid's namespace lacks canary-<secret>).
+    nspath = f"/proc/{pid}/ns/mnt"
+    try:
+        fresh_ok = _ns_has_canary(nspath, canary)
+    except AdmissionError as exc:
+        fail(f"mount-ns keeper canary check failed: {exc}")
+    if not fresh_ok:
+        fail("mount-ns keeper ns lacks our canary; refusing")
+    _KEEPERS.append(child)
+    return (pid, nsid, canary)
+
+
+def ensure_mount_ns():
+    """Join (or spawn) the keeper mount namespace. (S17-round5)
+
+    Idempotent per process (cached in _MOUNT_NS); concurrent
+    processes serialize on the pidfile flock, so no dual
+    keepers. Returns the ns path (/proc/<pid>/ns/mnt). A
+    recorded keeper is trusted only when its pid is alive in
+    the recorded namespace (link read elevated — the keeper
+    is root-owned, unprivileged readlink always gets EACCES)
+    AND the namespace shows our canary mount (pid/nsid reuse
+    alone cannot pass). Raises
+    AdmissionError when no keeper can be verified (no sudo,
+    spawn failure, alien pidfile) — callers treat that as
+    mount-unsupported, never as license to use the host table
+    for ns mounts.
+    """
+    global _MOUNT_NS
+    if _MOUNT_NS is not None:
+        return _MOUNT_NS
+    euid = os.geteuid()
+    pidfile, candir = _keeper_paths()
+    try:
+        fd = os.open(pidfile, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise AdmissionError(f"mount-ns pidfile: {exc}")
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != euid or not stat.S_ISREG(st.st_mode):
+            raise AdmissionError(
+                "mount-ns pidfile alien; refusing")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            try:
+                raw = os.pread(fd, 4096, 0)
+            except OSError as exc:
+                raise AdmissionError(
+                    f"mount-ns pidfile unreadable: {exc}")
+            state = _parse_keeper_state(raw)
+            if state is not None:
+                pid, nsid, canary = state
+                nspath = f"/proc/{pid}/ns/mnt"
+                live = _read_ns_link(pid)
+                if (live == f"mnt:[{nsid}]"
+                        and _ns_has_canary(nspath, canary)):
+                    _MOUNT_NS = nspath
+                    return nspath
+            pid, nsid, canary = _spawn_keeper(euid, candir)
+            blob = f"{pid} {nsid} {canary}\n".encode("ascii")
+            try:
+                os.ftruncate(fd, 0)
+                os.write(fd, blob)
+            except OSError as exc:
+                raise AdmissionError(
+                    f"mount-ns pidfile unwritable: {exc}")
+            _MOUNT_NS = f"/proc/{pid}/ns/mnt"
+            return _MOUNT_NS
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _dump_ns_mount_table(nspath):
+    """Read the keeper-ns mount table. (S17-round5)
+
+    Raw subprocess (foundation primitive). Returns decoded
+    text; raises AdmissionError when the dump cannot run.
+    """
+    try:
+        proc = subprocess.run(
+            ["sudo", "-n", "nsenter", f"--mount={nspath}",
+             "cat", "/proc/self/mountinfo"],
+            capture_output=True, timeout=30)
+    except OSError as exc:
+        raise AdmissionError(f"mount table unreadable: {exc}")
+    except subprocess.TimeoutExpired:
+        raise AdmissionError("mount table unreadable: dump timed out")
+    if proc.returncode != 0:
+        raise AdmissionError(
+            f"mount table unreadable: {tail(os.fsdecode(proc.stderr or b''))}")
+    return os.fsdecode(proc.stdout)
+
+
+def _ns_active():
+    """Keeper ns path when confined, else None. (S17-round5)"""
+    if _MOUNT_NS is None or _MOUNT_NS == "direct":
+        return None
+    return _MOUNT_NS
+
+
+def _apply_manifest_ns_mode(manifest):
+    """Select ns or legacy host-table mode. (S17-round5)
+
+    Manifests written by this code carry mount_ns (ns-native);
+    older ephemeral manifests lack it and their mounts (if
+    any) live on the host table — those clean up direct.
+    Removal criterion: delete the legacy arm once no supported
+    flow can present a pre-ns manifest.
+    """
+    global _MOUNT_NS
+    if not manifest.get("mount_ns"):
+        _MOUNT_NS = "direct"
 
 
 class RootAuthority:
@@ -1203,8 +1545,14 @@ def refresh_pending_proc(manifest, role, pid, starttime, detail):
     persists a single atomic manifest — the durable set holds
     the old or the new record, never neither. A None starttime
     preserves the prior record's (the process was never
-    re-observed); a retry by a stale identity fails closed on
-    starttime mismatch.
+    re-observed).
+
+    S91-round5: a known (non-None) starttime is NEVER replaced
+    by a different observation — the number may have been
+    recycled under the armed record, and adopting the new
+    value would authorize signalling a stranger. On conflict
+    the armed value is kept and the conflict is noted; fresh
+    identity is adopted only when none was established.
     """
     old_start = None
     kept = []
@@ -1213,6 +1561,12 @@ def refresh_pending_proc(manifest, role, pid, starttime, detail):
             old_start = entry.get("starttime")
             continue
         kept.append(entry)
+    if (old_start is not None and starttime is not None
+            and starttime != old_start):
+        detail = (f"identity conflict: armed starttime "
+                  f"{old_start}, observed {starttime}; "
+                  f"{detail}")[:256]
+        starttime = old_start
     manifest["pending_procs"] = kept
     manifest["pending_procs"].append({
         "role": role, "pid": pid,
@@ -1534,29 +1888,72 @@ def _loop_still_ours(loop, backing):
     return loop_backing_verified(loop, live, backing)
 
 
-def _mount_matches_loop(target, loop):
-    """True when the live filesystem at `target` sits on `loop`. (S71)
+def _mount_matches_loop(target, loop, row, loop_fd=None):
+    """True when the SELECTED row's filesystem sits on `loop`. (S71)
 
     Connects the mount row to the retained loop source: the
     mounted filesystem's device ID must equal the loop node's
     own device ID. A foreign loop occupying our target while
     our loop stays correctly bound (loop A ours, loop B
     mounted) mismatches and retains uncertainty — shape plus a
-    separately bound loop never adopts. Live kernel evidence
-    at decision time (not the table snapshot's major:minor,
-    which the parser does not retain); anything unreadable,
-    unstatable, or mismatched refuses. A concurrent target
-    swap can only mismatch (uncertainty) or land on the same
-    device (still ours): fail-closed either way.
+    separately bound loop never adopts.
+
+    S71-round5: every pathname stat is replaced by a held
+    descriptor. A device-node rename (or bind over /dev/loopN)
+    between a validate-stat and a mount-stat defeats pathname
+    evidence while the row spelling stays exact; descriptors
+    cannot be swapped under us. The target side opens O_PATH
+    and must carry the SELECTED row's mount ID (a swapped-in
+    stranger fails even on the same node); the loop side uses
+    the caller's retained fd when given (helper post-verify:
+    the same description mount(2) sourced, never re-resolved)
+    or a fresh O_PATH open otherwise (post-hoc adoption: a
+    node swap after this open cannot redirect the fstat).
+    Live kernel evidence at decision time (not the table
+    snapshot's major:minor, which the parser does not retain);
+    anything unreadable, unstatable, or mismatched refuses.
     """
     try:
-        mounted = os.stat(target).st_dev
+        target_fd = os.open(target, os.O_PATH | os.O_NOFOLLOW
+                            | os.O_CLOEXEC)
     except OSError:
         return False
     try:
-        node = os.stat(loop, follow_symlinks=False)
-    except OSError:
-        return False
+        try:
+            mounted = os.fstat(target_fd).st_dev
+        except OSError:
+            return False
+        try:
+            live_mnt = _mnt_id_of(target_fd)
+        except OSError:
+            return False
+        if live_mnt != row.get("mnt_id"):
+            return False
+        if loop_fd is not None:
+            try:
+                node = os.fstat(loop_fd)
+            except OSError:
+                return False
+        else:
+            try:
+                node_fd = os.open(loop, os.O_PATH | os.O_NOFOLLOW
+                                  | os.O_CLOEXEC)
+            except OSError:
+                return False
+            try:
+                node = os.fstat(node_fd)
+            except OSError:
+                return False
+            finally:
+                try:
+                    os.close(node_fd)
+                except OSError:
+                    pass
+    finally:
+        try:
+            os.close(target_fd)
+        except OSError:
+            pass
     if not stat.S_ISBLK(node.st_mode):
         return False
     return mounted == node.st_rdev
@@ -1615,47 +2012,238 @@ def _mount_exclock_release(fd):
         pass
 
 
-def _canary_matches(target, name, content):
-    """True when the pre-mount canary shows through `target`. (S15)
+def _read_capped(fd, limit):
+    """Read all bytes from fd `fd`; None when over `limit`/on error.
 
-    Guards uncertain-path overlay adoption: super options no
-    longer spell the layer paths (fd-bound layers record as
-    /dev/fd/N), so a random canary written to upper before the
-    effect proves the live mount binds our upper. The binding
-    is the unguessable content, so a plain O_NOFOLLOW read
-    suffices — symlinks, FIFOs, oversized or wrong content all
-    refuse.
+    Never partial content: oversize and I/O errors yield
+    None. The fd stays open (caller owns it).
+    """
+    chunks = []
+    total = 0
+    while True:
+        try:
+            chunk = os.read(fd, 1024)
+        except OSError:
+            return None
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            return None
+    return b"".join(chunks)
+
+
+def _read_bounded_nofollow(path, limit):
+    """Read a file O_NOFOLLOW up to `limit` bytes; None on refusal.
+
+    Symlinks, FIFOs (short reads still bounded), I/O errors and
+    oversize all yield None — never partial content.
     """
     try:
-        fd = os.open(os.path.join(target, name),
-                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                     | os.O_CLOEXEC)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW
+                     | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError:
-        return False
+        return None
     try:
-        chunks = []
-        total = 0
-        while True:
-            try:
-                chunk = os.read(fd, 1024)
-            except OSError:
-                return False
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > 1024:
-                return False
+        return _read_capped(fd, limit)
     finally:
         try:
             os.close(fd)
         except OSError:
             pass
+
+
+def _read_upper_canary(upper_fd):
+    """Expected overlay token from the held upper layer. (S81-round5)
+
+    The binding content comes from retained authority (the
+    verified upper dir fd), never from helper argv: /proc
+    cmdline is world-readable while upper is 0700, so an
+    argv token hands every local observer the content needed
+    for a same-token replacement. Read pre-mount so the
+    expected value is pinned before the interference window
+    (a post-mount read could sample an attacker's rewrite).
+    Raises _HelperFail when missing, unreadable, empty or
+    non-ascii — pre-effect, mount never runs.
+    """
+    try:
+        fd = os.open(MOUNT_CANARY_NAME,
+                     os.O_RDONLY | os.O_NOFOLLOW
+                     | os.O_NONBLOCK | os.O_CLOEXEC,
+                     dir_fd=upper_fd)
+    except OSError as exc:
+        raise _HelperFail(
+            f"overlay upper canary unreadable ({exc}); refusing")
+    try:
+        data = _read_capped(fd, 1024)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if data is None:
+        raise _HelperFail(
+            "overlay upper canary unreadable; refusing")
+    try:
+        text = data.decode("ascii")
+    except UnicodeError:
+        raise _HelperFail(
+            "overlay upper canary not ascii; refusing")
+    if not text:
+        raise _HelperFail(
+            "overlay upper canary empty; refusing")
+    return text
+
+
+def _canary_matches(target, name, content, run_root=None,
+                    expect_mnt_id=None):
+    """True when the pre-mount canary shows through `target`. (S15)
+
+    Guards uncertain-path overlay adoption: super options no
+    longer spell the layer paths (fd-bound layers record as
+    /dev/fd/N), so a random canary written to upper before the
+    effect proves the live mount binds our upper. Symlinks,
+    FIFOs, oversized or wrong content all refuse.
+
+    S81-round5: the read binds to the SELECTED row's mount ID
+    (`expect_mnt_id`, required) — row selection and content
+    proof were separate pathname observations, so a swapped-in
+    same-token stranger passed both. The opened directory
+    must carry the expected ID before the canary file is read
+    through it (openat); the held dir fd then pins that mount
+    for the read itself.
+
+    S17-round5: under confinement the read routes through the
+    keeper ns (the host sees the covered dir, never the mount);
+    the helper reports bounded bytes as hex (argv carries only
+    public paths — never the secret content). `run_root` is
+    required for the routed read (helper-side containment);
+    without it a confined read refuses.
+    """
+    if expect_mnt_id is None:
+        return False
     try:
         want = content.encode("ascii")
     except (UnicodeError, AttributeError):
         return False
-    return b"".join(chunks) == want
+    ns = _ns_active()
+    if ns is not None:
+        if run_root is None:
+            return False
+        helper = os.path.abspath(__file__)
+        rc, out, _ = run_sudo(
+            [sys.executable, helper, "ns-canary",
+             "--run-root", run_root,
+             "--target", target, "--name", name,
+             "--expect-mnt-id", str(expect_mnt_id)],
+            timeout=60)
+        if rc != 0:
+            return False
+        seen = out.strip()
+        return len(seen) <= 2048 and seen == want.hex()
+    try:
+        dir_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY
+                         | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return False
+    try:
+        try:
+            live_mnt = _mnt_id_of(dir_fd)
+        except OSError:
+            return False
+        if live_mnt != expect_mnt_id:
+            return False
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW
+                         | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=dir_fd)
+        except OSError:
+            return False
+        try:
+            data = _read_capped(fd, 1024)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+    if data is None:
+        return False
+    return data == want
+
+
+def ns_canary_command(args):
+    """Privileged-internal: bounded nofollow read as hex. (S17-round5)
+
+    Never invoked by hand: _canary_matches re-execs this file
+    under sudo+nsenter so the canary read sees the keeper-ns
+    mount instead of the host's covered dir. Prints the file's
+    bytes (at most 1024) as lowercase hex, or FAILED (exit 1).
+    The caller (which holds the expected content) compares —
+    argv never carries the secret.
+
+    S81-round5: the read binds to --expect-mnt-id (the
+    caller's selected row) — a swapped-in same-name stranger
+    refuses before any byte is reported.
+    """
+    run_root = check_run_root(args.run_root)
+    if run_root is None:
+        print(f"FAILED: foreign run-root: {args.run_root[:80]!r}")
+        return 1
+    target = args.target or ""
+    name = args.name or ""
+    want_mnt = args.expect_mnt_id or ""
+    if (not target or not name or len(target) > MAX_PATH
+            or "/" in name or name in (".", "..")
+            or not contained(target, run_root)
+            or not want_mnt.isdigit()):
+        print("FAILED: bad ns-canary argv")
+        return 1
+    try:
+        dir_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY
+                         | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        print(f"FAILED: target not openable: {exc}")
+        return 1
+    try:
+        try:
+            live_mnt = _mnt_id_of(dir_fd)
+        except OSError as exc:
+            print(f"FAILED: identity unreadable: {exc}")
+            return 1
+        if live_mnt != int(want_mnt):
+            print(f"FAILED: mount mismatch (live={live_mnt} "
+                  f"expected={want_mnt})")
+            return 1
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW
+                         | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=dir_fd)
+        except OSError:
+            print("FAILED: unreadable")
+            return 1
+        try:
+            data = _read_capped(fd, 1024)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+    if data is None:
+        print("FAILED: unreadable")
+        return 1
+    print(data.hex())
+    return 0
 
 
 def reconcile_mount_effect(manifest, run_root, role, target, fingerprint,
@@ -1709,6 +2297,22 @@ def reconcile_mount_effect(manifest, run_root, role, target, fingerprint,
         return None
     rows = find_mounts(table, target)
     if not rows:
+        # S74-round5: no absence-based discharge while a known
+        # mount ID is still live anywhere — a move-away keeps
+        # it live elsewhere.
+        known = (fingerprint or {}).get("mnt_id")
+        if known is not None:
+            live = [row for row in table
+                    if row.get("mnt_id") == known]
+            if live:
+                kept = dict(fingerprint)
+                _refresh_mount_custody(
+                    manifest, role, target, kept,
+                    f"mount {target} moved (mnt={known} live "
+                    f"at {live[0]['target']}); custody kept "
+                    f"pending",
+                    observed_target=live[0]["target"])
+                return None
         drop_pending_acquisition(manifest, "mount", target)
         _persist_now(manifest)
         return None
@@ -1716,28 +2320,30 @@ def reconcile_mount_effect(manifest, run_root, role, target, fingerprint,
         return None
     if mount_fingerprint_matches(rows[0], fingerprint):
         adopt_fp = fingerprint
-        fd_inferred = False
     elif (loop is not None and loop_backing is not None
             and _fd_spelling_loop_shape(rows[0], fingerprint)):
         # The kernel echoes fd-bound operands literally: adopt
         # under the OBSERVED spelling (the loop binding and
         # mount correspondence gates below are what make this
-        # sound).
+        # sound — and they now run for the exact spelling too).
         adopt_fp = dict(fingerprint, source=rows[0]["source"])
-        fd_inferred = True
     else:
         return None
     if loop is not None and not _loop_still_ours(
             loop, loop_backing):
         return None
-    if fd_inferred and not _mount_matches_loop(target, loop):
-        # S71: the fd spelling names no device — the mounted
-        # filesystem itself must sit on our recorded loop, or a
-        # foreign loop occupying our target adopts while ours
-        # stays correctly bound elsewhere.
+    if loop is not None and not _mount_matches_loop(
+            target, loop, rows[0]):
+        # S71-round5: EVERY loop-backed adoption proves
+        # correspondence — exact spellings included. A
+        # device-node rename defeats the row spelling and the
+        # current-binding check together (both read the same
+        # mutable name); only the descriptor-bound mount-ID +
+        # device proof sees through it.
         return None
     if canary is not None and not _canary_matches(
-            target, canary[0], canary[1]):
+            target, canary[0], canary[1], run_root,
+            expect_mnt_id=rows[0].get("mnt_id")):
         return None
     record_mount(manifest, run_root, role, target,
                  adopt_fp.get("expect_super", []),
@@ -1818,6 +2424,23 @@ def rollback_owned_mount(manifest, run_root, role, target, fingerprint):
             f"rollback table unreadable: {exc}")
         return "rollback table unreadable; custody kept pending"
     if not find_mounts(table, target):
+        # S74-round5: target absence is not a discharge when the
+        # helper-reported mount ID is still live elsewhere (the
+        # role directory may have been renamed after the
+        # report) — refresh custody, never drop.
+        known = (fingerprint or {}).get("mnt_id")
+        if known is not None:
+            live = [row for row in table
+                    if row.get("mnt_id") == known]
+            if live:
+                _refresh_mount_custody(
+                    manifest, role, target, fingerprint,
+                    f"mount {target} moved (mnt={known} live "
+                    f"at {live[0]['target']}); custody kept "
+                    f"pending",
+                    observed_target=live[0]["target"])
+                return ("mount moved after create; custody kept "
+                        "pending")
         drop_pending_acquisition(manifest, "mount", target)
         _persist_now(manifest)
         return "mount already absent; nothing rolled back"
@@ -2073,7 +2696,7 @@ def mount_overlay(manifest, run_root, role, opts, cell_name, lower_base=None):
             layers=[("lower", *layer_ids["lower"]),
                     ("upper", *layer_ids["upper"]),
                     ("work", *layer_ids["work"])],
-            extra_opts=opts, aux=aux, canary=canary)
+            extra_opts=opts, aux=aux)
         if failure is None:
             # S62: admission commits before pending custody is
             # dropped, and the sole row must match the retained
@@ -2679,11 +3302,14 @@ def try_nested_pidns(manifest, auth, helper):
                             ("nested-pidns-sleeper-wrapper", wrap)):
             try:
                 gone = retire_fresh_proc(rrole, rpid, manifest)
-            except AdmissionError:
+            except ProcIdentityChanged:
                 # Identity changed under the pin: the spawned
                 # process is proven gone (a new occupant is a
                 # stranger that was never signalled). Drop the
-                # stale record.
+                # stale record. (S21-round5: ONLY this typed
+                # outcome drops — a persistence/publication
+                # AdmissionError from the retirement's refresh
+                # propagates with custody retained.)
                 drop_pending_proc(manifest, rrole, rpid)
                 continue
             if gone:
@@ -2969,7 +3595,7 @@ def kill_owned(role, pid, starttime, timeout=10):
 
     S21/S22: returns True only when the pid is proven gone;
     survivors yield False; identity change raises
-    AdmissionError; unobservable state raises ProcUnknown. A
+    ProcIdentityChanged; unobservable state raises ProcUnknown. A
     starttime is required: callers that never observed one must
     use retire_fresh_proc, never a blind numeric kill.
     """
@@ -2990,7 +3616,7 @@ def kill_owned(role, pid, starttime, timeout=10):
         if state == "Z":
             return True
         if start != starttime:
-            raise AdmissionError(
+            raise ProcIdentityChanged(
                 f"refusing to kill pid {pid} ({role}): starttime changed")
         signal_owned(pid, _signal.SIGTERM, pin, starttime)
         deadline = _time.time() + timeout
@@ -3009,7 +3635,7 @@ def kill_owned(role, pid, starttime, timeout=10):
         if state == "Z":
             return True
         if start != starttime:
-            raise AdmissionError(
+            raise ProcIdentityChanged(
                 f"refusing to SIGKILL pid {pid} ({role}): "
                 f"starttime changed")
         signal_owned(pid, _signal.SIGKILL, pin, starttime)
@@ -3048,6 +3674,11 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
     dropped before its replacement commits — callers keep the
     spawn record armed across the call and drop only on a
     proven-gone True.
+
+    S91-round5: when the manifest already arms a starttime for
+    this (role, pid) and the fresh observation disagrees, the
+    occupant is a recycled stranger — no signal is sent, the
+    armed identity is preserved, and False is returned.
     """
     try:
         pin = pin_proc(pid)
@@ -3073,6 +3704,23 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
             os.close(pin)
         except OSError:
             pass
+    if manifest is not None:
+        # S91-round5: the number may have been recycled under
+        # an armed spawn record — a just-observed starttime
+        # that disagrees with the armed one is a stranger that
+        # must never be signalled. Fresh identity is killed
+        # only when none was previously established.
+        armed = None
+        for entry in manifest.get("pending_procs", []):
+            if (entry.get("role") == role
+                    and entry.get("pid") == pid):
+                armed = entry.get("starttime")
+                break
+        if armed is not None and armed != start:
+            refresh_pending_proc(
+                manifest, role, pid, start,
+                "recycled occupant refused signal")
+            return False
     try:
         gone = kill_owned(role, pid, start, timeout)
     except ProcUnknown as exc:
@@ -3439,6 +4087,9 @@ def fresh_manifest(run_root, privileged):
         "schema": SCHEMA_MANIFEST, "run_id": run_id,
         "run_root": run_root, "created_utc": stamp,
         "euid": os.geteuid(), "privilege_granted": privileged,
+        # S17-round5: ns-native manifest (mounts confined to the
+        # keeper ns; absence of this key means pre-ns/host).
+        "mount_ns": True,
         "kernel": host_capabilities(), "cells": cells,
         "mounts": [], "procs": [], "files": [], "evidence": {},
         "aux_roots": [],
@@ -3619,6 +4270,7 @@ def inspect_command(args):
     except AdmissionError as exc:
         print(f"inspect: REFUSED {exc}")
         return 1
+    _apply_manifest_ns_mode(manifest)
     try:
         # S15: the root identity gates every other admission — a
         # manifest mixing the original root identity with a
@@ -3725,6 +4377,47 @@ def _umount2(target):
     return ctypes.get_errno()
 
 
+_MS_MOVE = 8192
+
+
+def _mount_move(source, target):
+    """In-process MS_MOVE; returns None on success, else errno.
+
+    (S17-round5: the move half of move-verify-detach.)
+    """
+    libc = _libc_handle()
+    libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
+                           ctypes.c_char_p, ctypes.c_ulong,
+                           ctypes.c_char_p]
+    libc.mount.restype = ctypes.c_int
+    rc = libc.mount(os.fsencode(source), os.fsencode(target),
+                    None, _MS_MOVE, None)
+    if rc == 0:
+        return None
+    return ctypes.get_errno()
+
+
+def _retire_stage_dir(run_root):
+    """Exclusively create a private retire-staging dir. (S17-round5)
+
+    Random suffix (unpredictable to racers); 0700. Returns the
+    path. Raises AdmissionError when it cannot be created.
+    """
+    for _ in range(8):
+        path = os.path.join(
+            run_root, f".tt04-retire-{secrets.token_hex(8)}")
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise AdmissionError(
+                f"retire staging not creatable: {exc}")
+        return path
+    raise AdmissionError(
+        "retire staging not creatable: collisions")
+
+
 def _loop_get_status_on(fd):
     """(dev, ino) of the backing bound to held loop fd `fd`.
 
@@ -3769,13 +4462,14 @@ def retire_mount_now(target, expected, run_root):
     the effect — any open fd on the mount, O_PATH included,
     pins umount EBUSY, verified live); every table observation
     must agree with that snapshot (a replica replacement the
-    record alone would admit refuses); the detach runs
-    in-process via umount2; and the post-proof scans the WHOLE
-    table for our mount ID — a move-away keeps it live
-    elsewhere, so target-scoped "clear" never stands for
-    discharged. Returns None on success (or when already
-    absent), else a failure string; anything uncertain is
-    retained, never detached.
+    record alone would admit refuses); the validated mount is
+    moved to private staging, re-verified there by mount ID,
+    and detached at staging (never at the shared target name);
+    and the post-proof scans the WHOLE table for our mount ID
+    — a move-away keeps it live elsewhere, so target-scoped
+    "clear" never stands for discharged. Returns None on
+    success (or when already absent), else a failure string;
+    anything uncertain is retained, never detached.
 
     S17-round3: the kernel offers no fd-bound detach —
     umount2 on a /proc/self/fd path resolves to the TOP mount
@@ -3807,6 +4501,20 @@ def retire_mount_now(target, expected, run_root):
     table reads. That last sliver is inherent to any
     table-diff post-proof and grants nothing beyond root's
     existing mount privilege.
+
+    S17-round5: move-verify-detach closes that sliver for the
+    detach itself. The effect at the shared name is now only
+    MS_MOVE (reversible): whatever the target resolves to at
+    effect time is moved to unpredictable private staging and
+    re-verified by mount ID before any detach. A swapped-in
+    foreign mount is moved back and reported loudly; an empty
+    or stacked staging is left untouched and loud; only the
+    snapshot-proven occupant is ever detached, and only at
+    staging. What remains is a privileged party that reads our
+    random staging path out of the mount table and swaps the
+    staging occupant inside the move-to-verify window — still
+    detected (any surprise is loud, never None), still never a
+    silent foreign detach.
     """
     if not target or not contained(target, run_root):
         return f"foreign mount target refused: {target[:60]!r}"
@@ -3888,7 +4596,60 @@ def retire_mount_now(target, expected, run_root):
         return (f"mount {target} changed between validation "
                 f"and effect (table={row['mnt_id']} "
                 f"snapshot={snap_mnt}); refusing")
-    umount_err = _umount2(target)
+    # S17-round5: move-verify-detach — the detach never
+    # addresses the shared target name. The validated top
+    # mount is moved to a private staging path first; only a
+    # staging occupant whose mount ID equals the snapshot is
+    # detached. A racer swapping the target between the final
+    # validation and the move only diverts a REVERSIBLE move
+    # (detected below, moved back, reported loudly) — never an
+    # irreversible foreign detach misreported as our discharge.
+    try:
+        staging = _retire_stage_dir(run_root)
+    except AdmissionError as exc:
+        return f"mount {target} retire staging unavailable: {exc}"
+    try:
+        move_err = _mount_move(target, staging)
+        if move_err is not None:
+            return (f"mount {target} not moved to staging "
+                    f"({os.strerror(move_err)}); refusing")
+        try:
+            stage_table = read_mount_table()
+        except AdmissionError as exc:
+            back_err = _mount_move(staging, target)
+            if back_err is not None:
+                return (f"mount {target} staging unverifiable "
+                        f"({exc}); move-back failed "
+                        f"({os.strerror(back_err)}); left at "
+                        f"{staging}; manual recovery required")
+            return (f"mount {target} staging unverifiable "
+                    f"({exc}); moved back; custody retained")
+        staged = find_mounts(stage_table, staging)
+        if len(staged) != 1:
+            count = "empty" if not staged else (
+                f"{len(staged)} stacked")
+            return (f"mount {target} staging {count} after "
+                    f"move (expected sole mnt={snap_mnt}); "
+                    f"left untouched; refusing detach; custody "
+                    f"retained")
+        if staged[0]["mnt_id"] != snap_mnt:
+            back_err = _mount_move(staging, target)
+            if back_err is not None:
+                return (f"mount {target} staging holds foreign "
+                        f"mnt={staged[0]['mnt_id']} (expected "
+                        f"{snap_mnt}); move-back failed "
+                        f"({os.strerror(back_err)}); left at "
+                        f"{staging}; manual recovery required")
+            return (f"mount {target} staging holds foreign "
+                    f"mnt={staged[0]['mnt_id']} (expected "
+                    f"{snap_mnt}); moved back; refusing detach; "
+                    f"custody retained")
+        umount_err = _umount2(staging)
+    finally:
+        try:
+            os.rmdir(staging)
+        except OSError:
+            pass
     # The umount result is advisory: the post-proof decides.
     # Our mount ID must be gone from the WHOLE table — a
     # move-away is still ours, still live.
@@ -4766,7 +5527,7 @@ def cleanup_pending_procs(manifest):
     return failures
 
 
-def _moved_mount_report(entry, fingerprint, row, target):
+def _moved_mount_report(entry, fingerprint, row, target, run_root=None):
     """Manual-recovery report for an ID-found moved mount. (S74)
 
     The pending record carries a mount ID the helper verified
@@ -4781,12 +5542,14 @@ def _moved_mount_report(entry, fingerprint, row, target):
     checks = []
     if entry.get("canary") is not None:
         checks.append(_canary_matches(loc, MOUNT_CANARY_NAME,
-                                      entry["canary"]))
+                                      entry["canary"], run_root,
+                                      expect_mnt_id=row.get(
+                                          "mnt_id")))
     if entry.get("loop_backing") is not None:
         source = fingerprint.get("source") or ""
         checks.append(
             _loop_still_ours(source, entry["loop_backing"])
-            and _mount_matches_loop(loc, source))
+            and _mount_matches_loop(loc, source, row))
     if checks and all(checks):
         return (f"pending mount {target}: moved (mnt="
                 f"{entry['mnt_id']} live at {loc}); manual "
@@ -4862,10 +5625,28 @@ def cleanup_pending_acquisitions(manifest, run_root):
                         if row.get("mnt_id") == entry["mnt_id"]]
                 if live and live[0]["target"] != target:
                     failures.append(_moved_mount_report(
-                        entry, fingerprint, live[0], target))
+                        entry, fingerprint, live[0], target,
+                        run_root))
                     continue
             rows = find_mounts(table, target)
             if not rows:
+                continue
+            known = entry.get("mnt_id")
+            if (known is not None and len(rows) == 1
+                    and rows[0].get("mnt_id") != known):
+                # S72-round5: the recorded mount ID is gone from
+                # the whole table (the search above found it
+                # nowhere) but a same-fingerprint occupant sits
+                # at the target — a replacement, never ours to
+                # unmount, however well it matches. The known ID
+                # is preserved (the record is untouched), not
+                # silently swapped for the stranger's.
+                failures.append(
+                    f"pending mount {target}: recorded mount-ID "
+                    f"{known} absent but occupant has ID "
+                    f"{rows[0].get('mnt_id')}; replacement "
+                    f"refused, left in place; manual "
+                    f"verification required")
                 continue
             adoptable = (
                 len(rows) == 1
@@ -4874,28 +5655,38 @@ def cleanup_pending_acquisitions(manifest, run_root):
                     len(rows) == 1
                     and entry.get("loop_backing") is not None
                     and _fd_spelling_loop_shape(
-                        rows[0], fingerprint)
-                    and _loop_still_ours(
-                        fingerprint["source"],
-                        entry["loop_backing"])
-                    and _mount_matches_loop(
-                        target, fingerprint["source"])):
+                        rows[0], fingerprint)):
                 # S15-round3: the helper mounted on an fd-bound
                 # source but its report was lost (timeout) — the
                 # kernel's literal /dev/fd/N spelling plus the
-                # loop's live binding to our recorded image
-                # proves the occupant is ours.
-                # S71-round4: plus the mounted filesystem itself
-                # sitting on that loop — shape plus a separately
-                # bound loop never adopts a foreign occupant.
+                # gates below proves the occupant is ours.
                 adoptable = True
+            if adoptable and entry.get("loop_backing") is not None:
+                # S71-round5: EVERY loop-backed recovery
+                # adoption proves the retained binding AND the
+                # descriptor-bound correspondence — exact and
+                # fd spellings alike. (The exact arm previously
+                # checked neither: a node-spelling swap adopted
+                # a foreign occupant outright.)
+                src = fingerprint.get("source")
+                if not (isinstance(src, str)
+                        and src.startswith("/dev/loop")):
+                    adoptable = False
+                elif not _loop_still_ours(
+                        src, entry["loop_backing"]):
+                    adoptable = False
+                elif not _mount_matches_loop(
+                        target, src, rows[0]):
+                    adoptable = False
             if adoptable and entry.get("canary") is not None:
                 # S72-round4: the pending entry carries the
                 # acquisition canary — the current occupant must
                 # show it through, or a foreign same-type overlay
                 # at our target is adopted and unmounted.
                 if not _canary_matches(target, MOUNT_CANARY_NAME,
-                                       entry["canary"]):
+                                       entry["canary"], run_root,
+                                       expect_mnt_id=rows[0].get(
+                                           "mnt_id")):
                     adoptable = False
             if adoptable:
                 failure = cleanup_one_mount({
@@ -4953,6 +5744,7 @@ def cleanup_command(args):
             return fail2(f"foreign run-root: {exc}")
         print(f"cleanup: REFUSED {exc}")
         return 1
+    _apply_manifest_ns_mode(manifest)
     try:
         # Raises on a replacement directory; a missing root flows
         # through the no-op paths below to the idempotent retired
@@ -5628,10 +6420,10 @@ def mount_fs_command(args):
                 args.target_ino, "dir")
             try:
                 if args.fstype == "ext4":
-                    row = _mount_ext4_now(
+                    row, pin_fd = _mount_ext4_now(
                         args, run_root, target_fd)
                 elif args.fstype == "overlay":
-                    row = _mount_overlay_now(
+                    row, pin_fd = _mount_overlay_now(
                         args, run_root, target_fd)
                 else:
                     raise _HelperFail(
@@ -5642,8 +6434,18 @@ def mount_fs_command(args):
                     os.close(target_fd)
                 except OSError:
                     pass
-            if args.own_uid is not None:
-                _own_fresh_root(args, run_root, row)
+            # S81-round5: the pin transfers from post-verify —
+            # it stays held through the chown (a swap there
+            # still needs a lazy detach, which the pin
+            # survives) and closes before the report.
+            try:
+                if args.own_uid is not None:
+                    _own_fresh_root(args, run_root, pin_fd)
+            finally:
+                try:
+                    os.close(pin_fd)
+                except OSError:
+                    pass
         finally:
             _mount_exclock_release(lock_fd)
             guard.close()
@@ -5668,7 +6470,7 @@ def mount_fs_command(args):
 
 
 def _mount_ext4_now(args, run_root, target_fd):
-    """mount(2) one ext4 loop fs on held fds; return the live row.
+    """mount(2) one ext4 loop fs on held fds; (row, pin_fd).
 
     S15-round4: the loop device is opened once — its kernel
     backing is validated through that same held descriptor
@@ -5676,6 +6478,12 @@ def _mount_ext4_now(args, run_root, target_fd):
     mount sources /dev/fd/N of it. A device-node substitution
     between a validate-open and a separate mount-open cannot
     redirect the filesystem source: there is no second open.
+
+    S81-round5: the loop fd stays open through post-verify —
+    the binding re-reads the RETAINED description (device +
+    backing), never the spelling, so a node substitution
+    between validation and verification cannot redirect the
+    proof either.
     """
     if not args.loop or not args.loop.startswith("/dev/loop"):
         raise _HelperFail(
@@ -5715,26 +6523,23 @@ def _mount_ext4_now(args, run_root, target_fd):
         err = _mount2(f"/dev/fd/{loop_fd}",
                       f"/dev/fd/{target_fd}", "ext4",
                       MS_RELATIME, None)
+        if err is not None:
+            raise _HelperFail(
+                f"mount {args.target} failed: {os.strerror(err)}")
+        return _post_verify_mount(
+            args.target, "ext4", args.loop, loop=args.loop,
+            loop_fd=loop_fd,
+            backing=(args.backing_dev, args.backing_ino),
+            pre=pre)
     finally:
         try:
             os.close(loop_fd)
         except OSError:
             pass
-    if err is not None:
-        raise _HelperFail(
-            f"mount {args.target} failed: {os.strerror(err)}")
-    return _post_verify_mount(args.target, "ext4", args.loop,
-                              loop=args.loop, pre=pre)
 
 
 def _mount_overlay_now(args, run_root, target_fd):
-    """mount(2) one overlay stack on held fds; return the live row."""
-    # S81-round4: overlay post-mount binding is mandatory — the
-    # row alone cannot survive a replacement in the window.
-    # Required before any effect, like the layer count.
-    if not args.canary:
-        raise _HelperFail(
-            "overlay mount requires a canary for post-mount binding")
+    """mount(2) one overlay stack on held fds; (row, pin_fd)."""
     specs = args.layer or []
     if len(specs) != 3:
         raise _HelperFail(
@@ -5775,6 +6580,11 @@ def _mount_overlay_now(args, run_root, target_fd):
                 f"expected=({dev},{ino}); refusing")
         layers[name] = fd
     try:
+        # S81-round5: overlay post-mount binding is mandatory
+        # — the expected token pins from the HELD upper fd
+        # before any effect (never from argv: cmdline is
+        # world-readable, upper is 0700).
+        expected = _read_upper_canary(layers["upper"])
         extra = args.extra_opts or ""
         if extra and not _OVERLAY_EXTRA_RE.fullmatch(extra):
             raise _HelperFail(
@@ -5801,7 +6611,7 @@ def _mount_overlay_now(args, run_root, target_fd):
         raise _HelperFail(
             f"mount {args.target} failed: {os.strerror(err)}")
     return _post_verify_mount(args.target, "overlay", "overlay",
-                              canary=args.canary, pre=pre)
+                              canary=expected, pre=pre)
 
 
 def _verify_aux_root(args):
@@ -5842,8 +6652,44 @@ def _snapshot_mount_rows():
         for row in read_mount_table())
 
 
+def _pin_fresh_mount(target):
+    """Open+identify the just-mounted target; (fd, mnt_id). (S81-round5)
+
+    The held fd pins OUR vfsmount: a regular umount goes
+    EBUSY while it is open (verified live, both O_PATH and
+    O_RDONLY), so a replacement inside the post-mount window
+    needs a lazy detach — which keeps our mount (and its ID)
+    alive, so the post-verify cross-check (pinned ID versus
+    the live row's ID) cannot be fooled by ID recycling
+    (verified live: a detached-but-held mount keeps its ID
+    and the next mount takes a fresh one). Uses O_RDONLY:
+    fchown and openat need more than O_PATH (EBADF, verified
+    live). Ownership transfers to the caller, which closes
+    after the report. Raises _HelperUncertain when the fresh
+    mount cannot be pinned (post-effect by construction —
+    mount(2) already returned 0).
+    """
+    try:
+        fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY
+                     | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _HelperUncertain(
+            f"fresh mount at {target} not pinnable ({exc}); "
+            f"left in place")
+    try:
+        mid = _mnt_id_of(fd)
+    except OSError as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise _HelperUncertain(
+            f"fresh mount identity unreadable ({exc}); refusing")
+    return (fd, mid)
+
+
 def _verify_mount_row(row, at, fstype, source, loop=None,
-                      canary=None):
+                      canary=None, loop_fd=None, backing=None):
     """Refusal reason for a candidate post-effect row, or None. (S74)
 
     The row gates shared by the pathname and table-diff
@@ -5853,6 +6699,13 @@ def _verify_mount_row(row, at, fstype, source, loop=None,
     binding (loop-device correspondence for ext4, upper
     canary for overlay), checked live at `at`. A passing row
     is proven ours independently of any pathname.
+
+    S81-round5: the ext4 binding reads the RETAINED loop
+    description (`loop_fd`, still open from the mount — never
+    re-resolved) for both the device correspondence and the
+    backing recheck, so a device-node substitution between
+    validation and verification cannot redirect the proof;
+    the canary read binds to the row's mount ID.
     """
     if row["fstype"] != fstype:
         return (f"mount {at} occupant not ours "
@@ -5862,17 +6715,29 @@ def _verify_mount_row(row, at, fstype, source, loop=None,
             and row["source"].startswith("/dev/fd/")):
         return (f"mount {at} occupant not ours "
                 f"({row['fstype']},{row['source']}); left in place")
-    if loop is not None and not _mount_matches_loop(at, loop):
+    if loop is not None and not _mount_matches_loop(
+            at, loop, row, loop_fd):
         return f"mount {at} occupant not on {loop}; left in place"
+    if backing is not None:
+        try:
+            ident = (_loop_get_status_on(loop_fd)
+                     if loop_fd is not None else None)
+        except (AdmissionError, OSError):
+            ident = None
+        if ident != backing:
+            return (f"mount {at} loop backing changed; "
+                    f"left in place")
     if canary is not None and not _canary_matches(
-            at, MOUNT_CANARY_NAME, canary):
+            at, MOUNT_CANARY_NAME, canary,
+            expect_mnt_id=row.get("mnt_id")):
         return f"mount {at} canary mismatch; left in place"
     return None
 
 
 def _post_verify_mount(target, fstype, source, loop=None,
-                       canary=None, pre=None):
-    """The live row for a just-created mount, or raise. (S15)
+                       canary=None, pre=None, loop_fd=None,
+                       backing=None):
+    """The live row + pin fd for a just-created mount. (S15)
 
     Exactly one row at the target, with the expected fstype
     and source; anything else (absent, stacked, foreign) is a
@@ -5883,21 +6748,24 @@ def _post_verify_mount(target, fstype, source, loop=None,
     after every operand verified, and failure returns before
     this read). No rollback detach here: an unverified
     occupant is never unmounted — the caller keeps pending
-    custody.
+    custody. Returns (row, pin_fd); the pin stays open for
+    the caller (chown + report) and is closed here on every
+    raise.
 
-    S81-round4: row selection alone cannot survive a
-    privileged unmount/remount inside the post-read window —
-    the replacement row carries a plausible fstype/source
-    and the old code reported its mount ID, then fchown'd
-    the stranger (whose fd-vs-row check passes, both sides
-    already wrong). Acquisition identity now binds to
-    retained authority independently of the mutable
-    pathname observation: ext4 requires the mounted
-    filesystem to sit on our recorded loop device (`loop`),
-    overlay requires our unguessable upper canary to show
-    through (`canary`). A failing binding refuses before
-    any chown or report — the caller keeps pending custody
-    and the stranger is left in place.
+    S81-round5: the target is pinned BEFORE the post-mount
+    window opens, and the pin decides. A regular umount goes
+    EBUSY while the pin is held, so a replacement needs a
+    lazy detach — which keeps our mount (and ID) alive, so
+    the cross-check (pinned ID versus the live row's ID)
+    refuses any stranger deterministically, independent of
+    replayable content: a copied-token replacement still
+    carries a fresh ID. Diff selection narrows added rows to
+    our pinned ID first (a parallel job's mount in the same
+    window is ignored, not ambiguous); the gates then confirm
+    the selected row as before. Residual: a swap landing
+    between mount(2) and the pin-open (microseconds, no
+    synchronizable hook — blind preemption luck) with a
+    perfect clone is accepted; everything else refuses.
 
     S74-round4: every raise below is post-effect (mount(2)
     returned 0), so failures are _HelperUncertain — the
@@ -5905,58 +6773,75 @@ def _post_verify_mount(target, fstype, source, loop=None,
     pre-effect refusals. When `pre` (a _snapshot_mount_rows
     set taken immediately before the effect) is given, the
     occupant is additionally selected by table difference:
-    exactly one added row passing the gates is ours wherever
-    it sits; at a renamed mountpoint that is a _HelperMoved
+    the added row carrying our pinned ID is ours wherever it
+    sits; at a renamed mountpoint that is a _HelperMoved
     report (mount ID plus observed target for ID-keyed
     recovery) instead of a false failure. With no
     diff-selected occupant the pathname proof below runs
-    unchanged (a same-name replacement fails its gates
-    there with the established reasons).
+    unchanged (a same-name replacement fails the cross-check
+    with the established reasons).
     """
-    _test_post_mount_delay()
+    pin_fd, pin_mnt = _pin_fresh_mount(target)
     try:
-        table = read_mount_table()
-    except AdmissionError as exc:
-        raise _HelperUncertain(
-            f"mount table unreadable after mount: {exc}")
-    if pre is not None:
-        added = [row for row in table
-                 if (row["mnt_id"], row["target"], row["fstype"],
-                     row["source"], row["super"],
-                     row["root"]) not in pre]
-        passing = [row for row in added
-                   if _verify_mount_row(
-                       row, row["target"], fstype, source,
-                       loop, canary) is None]
-        if len(passing) == 1:
-            row = passing[0]
-            if len(find_mounts(table, row["target"])) != 1:
-                raise _HelperUncertain(
-                    f"ambiguous stacked mount at {row['target']} "
-                    f"after create")
-            if row["target"] != target:
-                raise _HelperMoved(
-                    row["mnt_id"], row["target"],
-                    f"target moved during mount (mountpoint now "
-                    f"{row['target'][:80]!r})")
-            return row
-        if len(passing) > 1:
+        _test_post_mount_delay()
+        try:
+            table = read_mount_table()
+        except AdmissionError as exc:
             raise _HelperUncertain(
-                f"ambiguous mount effects after create "
-                f"({len(passing)} matching new occupants); "
-                f"left in place")
-    rows = find_mounts(table, target)
-    if not rows:
-        raise _HelperUncertain(
-            f"mount {target} missing after create")
-    if len(rows) > 1:
-        raise _HelperUncertain(
-            f"ambiguous stacked mount at {target} after create")
-    refusal = _verify_mount_row(rows[0], target, fstype, source,
-                                loop, canary)
-    if refusal is not None:
-        raise _HelperUncertain(refusal)
-    return rows[0]
+                f"mount table unreadable after mount: {exc}")
+        row = None
+        if pre is not None:
+            ours = [
+                added for added in table
+                if (added["mnt_id"], added["target"],
+                    added["fstype"], added["source"],
+                    added["super"], added["root"]) not in pre
+                and added["mnt_id"] == pin_mnt
+                and _verify_mount_row(
+                    added, added["target"], fstype, source,
+                    loop, canary, loop_fd, backing) is None]
+            if len(ours) > 1:
+                raise _HelperUncertain(
+                    f"duplicate mount ID {pin_mnt} after "
+                    f"create; left in place")
+            if len(ours) == 1:
+                row = ours[0]
+                if len(find_mounts(table, row["target"])) != 1:
+                    raise _HelperUncertain(
+                        f"ambiguous stacked mount at "
+                        f"{row['target']} after create")
+                if row["target"] != target:
+                    raise _HelperMoved(
+                        row["mnt_id"], row["target"],
+                        f"target moved during mount (mountpoint now "
+                        f"{row['target'][:80]!r})")
+        if row is None:
+            rows = find_mounts(table, target)
+            if not rows:
+                raise _HelperUncertain(
+                    f"mount {target} missing after create")
+            if len(rows) > 1:
+                raise _HelperUncertain(
+                    f"ambiguous stacked mount at {target} "
+                    f"after create")
+            refusal = _verify_mount_row(
+                rows[0], target, fstype, source,
+                loop, canary, loop_fd, backing)
+            if refusal is not None:
+                raise _HelperUncertain(refusal)
+            row = rows[0]
+        if row["mnt_id"] != pin_mnt:
+            raise _HelperUncertain(
+                f"mount at {target} changed during effect "
+                f"(pinned mnt={pin_mnt}, live "
+                f"mnt={row['mnt_id']}); left in place")
+        return (row, pin_fd)
+    except BaseException:
+        try:
+            os.close(pin_fd)
+        except OSError:
+            pass
+        raise
 
 
 def _test_post_mount_delay():
@@ -5979,59 +6864,48 @@ def _test_post_mount_delay():
         time.sleep(delay_ms / 1000.0)
 
 
-def _own_fresh_root(args, run_root, row):
+def _own_fresh_root(args, run_root, pin_fd):
     """fchown the fresh mount root to --own-uid/gid. (S15)
 
-    The root is opened fresh (post-mount it is the filesystem
-    root, not the covered mountpoint) and bound by mount-ID
-    correspondence to the post-verified row — never a blind
-    pathname chown.
+    The chown addresses the post-verify PIN fd — the same
+    held description the cross-check proved is the selected
+    row's mount — never a fresh pathname open (which would
+    re-resolve the mutable target and re-compare against an
+    already-selected row, both sides wrong after a swap).
+
+    S74-round5: every failure here raises _HelperUncertain,
+    never plain _HelperFail — the mount fired and verified
+    before this stage, so the outcome is post-effect by
+    construction and the caller must keep pending custody
+    (a plain FAILED would normalize as a pre-effect refusal
+    and discharge a live mount).
     """
     if args.own_gid is None:
-        raise _HelperFail("own-gid required with own-uid")
+        raise _HelperUncertain("own-gid required with own-uid")
     if not contained(os.path.normpath(args.target), run_root):
-        raise _HelperFail(
+        raise _HelperUncertain(
             f"own target outside run-root: "
             f"{str(args.target)[:80]!r}")
     try:
-        fd = os.open(args.target, os.O_RDONLY | os.O_DIRECTORY
-                     | os.O_NOFOLLOW | os.O_CLOEXEC)
+        os.fchown(pin_fd, args.own_uid, args.own_gid)
     except OSError as exc:
-        raise _HelperFail(f"fresh root not openable: {exc}")
-    try:
-        try:
-            ident = _mnt_id_of(fd)
-        except OSError as exc:
-            raise _HelperFail(
-                f"fresh root identity unreadable ({exc}); "
-                f"refusing chown")
-        if ident != row["mnt_id"]:
-            raise _HelperFail(
-                f"fresh root mount mismatch (fd={ident} "
-                f"row={row['mnt_id']}); refusing chown")
-        try:
-            os.fchown(fd, args.own_uid, args.own_gid)
-        except OSError as exc:
-            raise _HelperFail(f"fresh root chown failed: {exc}")
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        raise _HelperUncertain(f"fresh root chown failed: {exc}")
 
 
 def mount_fs_via_helper(run_root, guard, target, target_dev,
                         target_ino, fstype, loop=None,
                         backing=None, layers=(), extra_opts="",
-                        aux=None, own=None, canary=None):
+                        aux=None, own=None):
     """Mount one verified filesystem through the helper. (S15)
 
     `backing` is (dev, ino) for ext4; `layers` is a list of
     (name, path, dev, ino); `aux` is (path, dev, ino) or None;
-    `own` is (uid, gid) or None; `canary` is the overlay
-    post-mount binding content (S81, required for overlay).
-    Returns ((mnt_id, source, super), None) on success — the
-    helper's post-verified observation, which joins the
+    `own` is (uid, gid) or None. The overlay post-mount
+    binding token is NOT passed (S81-round5: argv is
+    world-readable) — the controller plants the file in upper
+    and the helper reads the expectation from its held upper
+    fd. Returns ((mnt_id, source, super), None) on success —
+    the helper's post-verified observation, which joins the
     adoption fingerprint — else (None, failure).
     """
     helper = os.path.abspath(__file__)
@@ -6059,8 +6933,6 @@ def mount_fs_via_helper(run_root, guard, target, target_dev,
     if own is not None:
         argv += ["--own-uid", str(own[0]),
                 "--own-gid", str(own[1])]
-    if canary is not None:
-        argv += ["--canary", canary]
     rc, out, err = run_sudo(argv, timeout=120)
     if rc == 0 and out.startswith("mounted "):
         parsed = _parse_mounted_line(out, target)
@@ -6305,6 +7177,14 @@ def main(argv=None):
     sig_cmd.add_argument("--pid", required=True)
     sig_cmd.add_argument("--starttime", required=True)
     sig_cmd.add_argument("--signum", required=True)
+    nsc_cmd = sub.add_parser(
+        "ns-canary",
+        help="privileged-internal bounded canary read (invoked "
+             "via sudo+nsenter by _canary_matches, never by hand)")
+    nsc_cmd.add_argument("--run-root", required=True)
+    nsc_cmd.add_argument("--target", required=True)
+    nsc_cmd.add_argument("--name", required=True)
+    nsc_cmd.add_argument("--expect-mnt-id", required=True)
     make_cmd = sub.add_parser(
         "make-ext4",
         help="privileged-internal verified mkfs (invoked via sudo "
@@ -6355,13 +7235,23 @@ def main(argv=None):
                            default=None)
     mount_cmd.add_argument("--own-gid", required=False, type=int,
                            default=None)
-    # S81-round4: overlay post-mount binding canary (required for
-    # overlay; the controller plants it in upper before spawn).
-    mount_cmd.add_argument("--canary", required=False,
-                           default=None)
+    # S81-round5: no --canary — the expected overlay token is
+    # read from the held upper fd pre-mount (argv is
+    # world-readable; upper is 0700).
     args = parser.parse_args(argv)
     if args.command == "plan":
         return plan_command(args)
+    if args.command in ("create", "inspect", "cleanup"):
+        # S17-round5: mount confinement for real entry points
+        # (helpers already run inside; unit tests never reach
+        # main). A failed ensure degrades loud, never silent:
+        # mount-confined helpers refuse via the run_sudo
+        # backstop while loop/proc/file work proceeds.
+        try:
+            ensure_mount_ns()
+        except AdmissionError as exc:
+            print(f"warning: {exc}; mount ops will refuse",
+                  file=sys.stderr)
     if args.command == "create":
         return create_command(args)
     if args.command == "inspect":
@@ -6380,6 +7270,8 @@ def main(argv=None):
         return mount_fs_command(args)
     if args.command == "signal-proc":
         return signal_proc_command(args)
+    if args.command == "ns-canary":
+        return ns_canary_command(args)
     return cleanup_command(args)
 
 

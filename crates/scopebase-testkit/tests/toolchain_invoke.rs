@@ -864,3 +864,198 @@ fn assert_grandchild_dead(pidfile: &std::path::Path) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// S85/S86-round5: run the invoke-denial driver with mode flags,
+/// returning its output, wall elapsed, and scratch dir (the caller
+/// removes the dir last, so failures keep their evidence — the S67
+/// test's convention). The hang guard matches S67's: 30s, then the
+/// driver is killed and the test fails.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn run_denial_driver(
+    tag: &str,
+    tool: &std::path::Path,
+    timeout_ms: u64,
+    mode_flags: &[&str],
+    tool_args: &[&str],
+) -> (std::process::Output, Duration, PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "tc02-{}-{}-{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let closure_path = dir.join("closure.json");
+    std::fs::write(&closure_path, valid_closure()).unwrap();
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tc02-invoke-denial"));
+    let mut command = std::process::Command::new(&driver);
+    command
+        .arg("--tool")
+        .arg(tool)
+        .arg("--closure")
+        .arg(&closure_path)
+        .arg("--timeout")
+        .arg(timeout_ms.to_string());
+    for flag in mode_flags {
+        command.arg(flag);
+    }
+    command.arg("--");
+    for arg in tool_args {
+        command.arg(arg);
+    }
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("denial driver spawns");
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(30);
+    loop {
+        match child.try_wait().expect("try_wait runs") {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("denial driver hung ({tag} regression)");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+    let output = child.wait_with_output().expect("output collected");
+    (output, start.elapsed(), dir)
+}
+
+/// S85/S86-round5: SIGKILL every pid in the driver's `survivors=`
+/// field, then prove each is gone (a reused pid naming a non-sleep
+/// is equally retired for our purposes — but these tests only run
+/// `sleep` tools, so absence is asserted directly).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn kill_survivors(stdout: &str) {
+    let field = stdout
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("survivors="))
+        .expect("driver reports survivors=");
+    assert!(!field.is_empty(), "expected survivors, got: {stdout}");
+    for pid in field.split(',') {
+        let pid: i32 = pid.parse().expect("survivor pid parses");
+        // SAFETY: signaling a test-spawned sleeper by its pid.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let gone = std::fs::read(format!("/proc/{pid}/cmdline")).is_err();
+            if gone {
+                break;
+            }
+            assert!(Instant::now() < end, "survivor {pid} resisted SIGKILL");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+/// S85-round5: with the tool auto-reaped (SIGCHLD ignored in the
+/// confined driver), the first observation fails with ECHILD — the
+/// leader was reaped out from under the run. No signal may be sent
+/// to the reusable pid/pgid numbers; unresolved custody is
+/// reported, the readers settle (EOF'd pipes), and nothing is left
+/// behind. Pre-fix the branch signaled the saved numbers and
+/// reported a bare retirement ECHILD with no custody diagnosis.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn autoreap_observation_reports_unresolved_custody() {
+    let (output, _elapsed, dir) = run_denial_driver(
+        "s85-autoreap",
+        std::path::Path::new("/bin/true"),
+        10_000,
+        &["--auto-reap"],
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=Backend")
+            && stdout.contains("stage=Execute")
+            && stdout.contains("errno=Some(10)"),
+        "auto-reap must fail Backend/Execute with ECHILD, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("reservation")
+            && stdout.contains("not signaled")
+            && stdout.contains("unresolved"),
+        "lost reservation must be explicit, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=0"),
+        "no child may survive, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S86-round5: with the WNOWAIT observation denied AND the signal
+/// routes denied (reaping allowed), retirement of a long-running
+/// tool must stay deadline-bounded and report the refused signal
+/// instead of blocking past the configured timeout. The surviving
+/// sleeper (kill-proof by design) is reaped by the test from the
+/// driver's `survivors=` field. Pre-fix `kill_and_wait` ignored
+/// the kill failure and blocked in `wait` until natural exit — the
+/// 30s hang guard, not the assertions, caught that hang.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn signal_denial_retires_bounded_with_refused_signal() {
+    let (output, elapsed, dir) = run_denial_driver(
+        "s86-deny-signal",
+        std::path::Path::new("/bin/sleep"),
+        2000,
+        &["--deny-signal"],
+        &["300"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(25),
+        "retirement must be bounded (2s retire + 10s settle), took: {elapsed:?}"
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=Backend")
+            && stdout.contains("stage=Execute")
+            && stdout.contains("errno=Some(1)"),
+        "denied observation must fail Backend/Execute with EPERM, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("still alive") && stdout.contains("signal refused"),
+        "refused signal must be explicit, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("unsettled") && stdout.contains("stdout"),
+        "detached reader keeps its stream diagnosis (S87), got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=1"),
+        "the kill-proof sleeper must be reported alive, got: {stdout}"
+    );
+    kill_survivors(&stdout);
+    let _ = std::fs::remove_dir_all(&dir);
+}

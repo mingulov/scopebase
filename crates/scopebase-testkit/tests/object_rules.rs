@@ -3195,3 +3195,102 @@ fn transformed_bytes_readmit_and_rerun_clean() {
     let after = check_rules(&out, &manifests, Some(&btf));
     assert!(after.is_empty(), "unexpected: {after:?}");
 }
+
+fn index_retention_guard_fixture() -> Vec<u8> {
+    let endian = Endian::Little;
+    let calls = 1500u64;
+    let mut text = Vec::new();
+    for _ in 0..calls {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section("text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let helper = obj.func("helper", true, text_idx, calls * 8, 8);
+    let emit = obj.func("emit", true, text_idx, 0, calls * 8 + 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let edges: Vec<(u64, u32, u32)> = (0..calls)
+        .map(|i| (i * 8, helper as u32, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    obj.build()
+}
+
+fn index_retention_repair_fixture() -> Vec<u8> {
+    let endian = Endian::Little;
+    let calls = 1500u64;
+    let mut text = Vec::new();
+    for _ in 0..calls {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let helper = obj.func("helper", true, text_idx, calls * 8, 8);
+    let emit = obj.func("emit", true, text_idx, 0, calls * 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let edges: Vec<(u64, u32, u32)> = (0..calls)
+        .map(|i| (i * 8, helper as u32, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    obj.build()
+}
+
+#[test]
+fn guard_index_admits_retention_before_allocation() {
+    // S65-round5: the guard's sorted-Vec index (two pops over the
+    // 1500-reloc text, 24000 bytes admitted) charges retention.
+    // Generous control passes clean; the calibrated tight ceiling
+    // trips only on the admitted index. Deterministic: retention
+    // is input-determined, never timing.
+    // Boundary (binary-searched): min-passing retained_bytes is
+    // 133739 with the index retain, 109739 with it neutered (drop
+    // 24000 = 2 pops x 1500 rows x 8 bytes, exactly the index
+    // admission). Tight 121000 trips fixed and passes neutered.
+    let bytes = index_retention_guard_fixture();
+    let guard = single_rule_manifest("stack", 3);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+    let mut tight = limits();
+    tight.retained_bytes = 121_000;
+    let error = check_verifier_rules(
+        &bytes,
+        &contract(),
+        std::slice::from_ref(&guard),
+        None,
+        &tight,
+    )
+    .expect_err("admitted index must exhaust a tight retained ceiling");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+}
+
+#[test]
+fn repair_index_admits_retention_before_allocation() {
+    // S65-round5: the repair entry's sorted-Vec index (1501 reloc
+    // rows, 24016 bytes admitted) charges retention. Generous
+    // control prunes clean; the calibrated tight ceiling trips
+    // only on the admitted index.
+    // Boundary (binary-searched): min-passing retained_bytes is
+    // 121855 with the index retain, 97839 with it neutered (drop
+    // 24016 = 1501 rows x 16 bytes, exactly the index admission).
+    // Tight 109000 trips fixed and passes neutered.
+    let bytes = index_retention_repair_fixture();
+    let allow = load_allowlist();
+    let (_out, _report) =
+        prune_dead_code_with_report(&bytes, &contract(), &allow, &limits()).expect("prune");
+    let mut tight = limits();
+    tight.retained_bytes = 109_000;
+    let error = prune_dead_code_with_report(&bytes, &contract(), &allow, &tight)
+        .expect_err("admitted index must exhaust a tight retained ceiling");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+}

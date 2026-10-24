@@ -8,10 +8,22 @@ and the traversal mount guard against a live mount. Everything
 is strictly cleaned up (umount, driver quit/kill, rmtree) in
 finally blocks; each test skips unless TT04_LIVE_MOUNTS=1 and
 passwordless sudo mount/umount works.
+
+S17-round5: every mount effect and every observation through a
+live mount runs inside the keeper mount namespace (rprivate):
+the kernel rejects MS_MOVE under shared ancestors, so the
+reversible move-verify-detach retirement only works on a
+private chain, and confinement keeps the host table clean.
+LiveBindTests.setUp ensures the ns; sudo() then enters it for
+every call (mount-indifferent commands — losetup, chown,
+kill — behave identically inside), and reads/writes through
+a live mount go through the ns_* helpers. Direct reads stay
+only where no mount is live at that path at that moment.
 """
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -27,16 +39,128 @@ def live_mounts_enabled():
     if os.environ.get("TT04_LIVE_MOUNTS") != "1":
         return False
     try:
-        proc = subprocess.run(
-            ["sudo", "-n", "true"], capture_output=True, timeout=30)
+        probes = [
+            ["sudo", "-n", "true"],
+            # S17-round5: confinement needs the namespace
+            # tools through the same sudo path that uses
+            # them (they may be absent from the user PATH
+            # while present in sudo's secure_path).
+            ["sudo", "-n", "unshare", "--version"],
+            ["sudo", "-n", "nsenter", "--version"],
+        ]
+        for argv in probes:
+            proc = subprocess.run(
+                argv, capture_output=True, timeout=30)
+            if proc.returncode != 0:
+                return False
     except OSError:
         return False
-    return proc.returncode == 0
+    return True
 
 
-def sudo(*argv, timeout=60):
-    return subprocess.run(["sudo", "-n", *argv], capture_output=True,
-                          text=True, timeout=timeout)
+def sudo(*argv, timeout=60, input=None):
+    # S17-round5: once LiveBindTests.setUp ensures the keeper
+    # ns, every sudo call enters it — mounts land on the
+    # private chain move-verify-detach needs, and reads see
+    # the mounts under test. Mount-indifferent commands
+    # (losetup/chown/kill) behave identically inside (global
+    # devices, same filesystem, same pid namespace).
+    ns = provision._ns_active()
+    prefix = (["sudo", "-n", "nsenter", f"--mount={ns}"]
+              if ns is not None else ["sudo", "-n"])
+    return subprocess.run(prefix + list(argv), capture_output=True,
+                          text=True, timeout=timeout, input=input)
+
+
+def live_ns():
+    """The ensured keeper ns path, or a loud failure."""
+    ns = provision._ns_active()
+    if ns is None:
+        raise AssertionError(
+            "live mount ns not ensured (setUp must ensure)")
+    return ns
+
+
+def ns_text(path):
+    """Read text THROUGH a live mount (inside the ns)."""
+    seen = sudo("cat", path)
+    if seen.returncode != 0:
+        raise AssertionError(
+            f"ns read of {path} failed: {seen.stderr}")
+    return seen.stdout
+
+
+def ns_exists(path):
+    """Existence THROUGH a live mount (inside the ns)."""
+    return sudo("test", "-e", path).returncode == 0
+
+
+def ns_write_user(path, data):
+    """Write text THROUGH a live mount as the calling user.
+
+    S17-round5: runuser (same util-linux package as the
+    nsenter this suite already requires) drops back to the
+    controller identity inside the ns, so folded-ownership
+    proofs keep their unprivileged writer.
+    """
+    user = pwd.getpwuid(os.geteuid()).pw_name
+    done = sudo("runuser", "-u", user, "--", "tee", path,
+                input=data)
+    if done.returncode != 0 or done.stdout != data:
+        raise AssertionError(
+            f"ns user-write to {path} failed: "
+            f"rc={done.returncode} err={done.stderr!r}")
+
+
+def mount_live_at(target):
+    """Live-table rows at target (in-ns once ensured)."""
+    return provision.find_mounts(
+        provision.read_mount_table(), target)
+
+
+def retire_verified_mount(target, verified_mnt_id):
+    """Best-effort umount of verified identity at target.
+
+    S93-round5: a privileged test retires its mount on every
+    post-effect failure — but only verified identity. Whatever
+    is live at the test's own target must be the mount it
+    verified (or nothing was verified yet — then whatever the
+    helper left there). A foreign replacement is left alone,
+    loudly visible, instead of unmounted. An unreadable table
+    still attempts the umount (best effort: umount of a
+    non-mount fails harmlessly). Returns True when the umount
+    was attempted.
+    """
+    try:
+        live = mount_live_at(target)
+    except Exception:
+        live = None
+    if live is None or (live and (
+            verified_mnt_id is None or
+            live[0]["mnt_id"] == verified_mnt_id)):
+        sudo("umount", target)
+        return True
+    return False
+
+
+def signal_verified_proc(victim, signum):
+    """Re-pin, re-verify, and signal one owned proc. (S92)
+
+    Fresh pidfd pin plus fresh starttime, then the
+    identity-verified signal_owned path (pidfd-bound signal,
+    privileged-helper escalation on EPERM — no numeric kill at
+    any stage). Returns True when a signal was sent, False when
+    the process was already gone. ProcAbsent/ProcUnknown
+    propagate (nothing signaled); AdmissionError propagates
+    when identity cannot be verified. The fresh pin always
+    closes — including on the error paths.
+    """
+    pin = provision.pin_proc(victim)
+    try:
+        _, start = provision.stat_state_start(victim)
+        return provision.signal_owned(victim, signum, pin, start)
+    finally:
+        os.close(pin)
 
 
 @unittest.skipUnless(live_mounts_enabled(),
@@ -45,6 +169,12 @@ class LiveBindTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="provision-live-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # S17-round5: join the keeper ns before any mount
+        # effect or observation. Failure here is an ERROR,
+        # not a skip: the platform prerequisites (sudo,
+        # unshare, nsenter) were probed by the class gate,
+        # so a failed ensure is a regression to fix.
+        provision.ensure_mount_ns()
 
     def test_real_bind_owned_gate(self):
         churn = os.path.join(self.tmp, "churn")
@@ -69,10 +199,26 @@ class LiveBindTests(unittest.TestCase):
             # filesystem, never the payload pathname.
             self.assertNotEqual(row["source"],
                                 os.path.normpath(payload))
-            self.assertTrue(provision.owned_bind_only(
-                point, payload, st.st_dev, st.st_ino, table))
-            self.assertTrue(provision.target_is_payload(
-                point, payload, st.st_dev, st.st_ino))
+            # S17-round5: the stat arms of the gate see the
+            # bind only inside the ns, so the REAL functions
+            # run there (an in-ns process reads the ns table
+            # directly for /proc/self/mountinfo).
+            qualdir = os.path.dirname(provision.__file__)
+            gate = sudo(
+                sys.executable, "-c",
+                "import os, sys\n"
+                f"sys.path.insert(0, {qualdir!r})\n"
+                "import provision_fs as provision\n"
+                f"table = provision.read_mount_table()\n"
+                f"print('OWNED', provision.owned_bind_only("
+                f"{point!r}, {payload!r}, {st.st_dev}, "
+                f"{st.st_ino}, table))\n"
+                f"print('PAYLOAD', provision.target_is_payload("
+                f"{point!r}, {payload!r}, {st.st_dev}, "
+                f"{st.st_ino}))\n")
+            self.assertEqual(gate.returncode, 0, gate.stderr)
+            self.assertIn("OWNED True", gate.stdout)
+            self.assertIn("PAYLOAD True", gate.stdout)
             proc = sudo("umount", point)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             mounted = False
@@ -102,8 +248,12 @@ class LiveBindTests(unittest.TestCase):
         ack = os.path.join(churn, "ack.txt")
         ledger = os.path.join(churn, "ledger.log")
         os.mkfifo(fifo)
+        # S17-round5: the driver binds inside the keeper ns
+        # (its fifo/ledger/ack files are plain files, visible
+        # in both views, so the drive() protocol is unchanged).
         child = subprocess.Popen(
-            ["sudo", "-n", sys.executable, driver, run_root,
+            ["sudo", "-n", "nsenter", f"--mount={live_ns()}",
+             sys.executable, driver, run_root,
              fifo, ack, str(st.st_dev), str(st.st_ino)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -128,12 +278,14 @@ class LiveBindTests(unittest.TestCase):
 
             line = drive("bind-b")
             self.assertIn("bind-b rc=0", line)
-            with open(point, "rb") as handle:
-                self.assertEqual(handle.read(), b"live-payload\n")
+            # S17-round5: through the live bind — the host
+            # view still shows the covered file.
+            self.assertEqual(ns_text(point), "live-payload\n")
             line = drive("restore")
             self.assertIn("restore rc=0", line)
-            with open(point, "rb") as handle:
-                self.assertEqual(handle.read(), b"live-point\n")
+            # S17-round5: read in-ns (discriminating — a
+            # failed restore still shows the payload there).
+            self.assertEqual(ns_text(point), "live-point\n")
             table = provision.read_mount_table()
             self.assertFalse(provision.find_mounts(table, point))
             line = drive("quit")
@@ -203,7 +355,8 @@ class LiveBindTests(unittest.TestCase):
         # Same-filesystem premise: one shared device, so only the
         # mount ID distinguishes the bind.
         self.assertEqual(os.stat(src).st_dev, os.stat(tree).st_dev)
-        # Snapshot FIRST, while no bind exists.
+        # Snapshot FIRST, while no bind exists (ns-routed:
+        # also proves no leaked mount sits at the tree).
         snapshot = provision.mount_targets_under(tree)
         self.assertEqual(snapshot, frozenset())
         mounted = False
@@ -211,13 +364,32 @@ class LiveBindTests(unittest.TestCase):
             proc = sudo("mount", "--bind", src, sub)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             mounted = True
-            root_fd = os.open(tree, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                with self.assertRaisesRegex(
-                        OSError, "mount boundary"):
-                    provision.fd_clear_dir(root_fd, "", snapshot)
-            finally:
-                os.close(root_fd)
+            # S17-round5: the guard's live arms are
+            # descriptor-bound, so the REAL fd_clear_dir runs
+            # inside the ns (where the bind lives) with the
+            # same stale empty snapshot — the descriptor
+            # mount-ID arm must still refuse traversal. The
+            # probe runs as root via sudo; the S75/S76
+            # controller identity keeps the exclusion gate
+            # open for the controller's tree.
+            qualdir = os.path.dirname(provision.__file__)
+            probe = sudo(
+                sys.executable, "-c",
+                "import os, sys\n"
+                f"sys.path.insert(0, {qualdir!r})\n"
+                "import provision_fs as provision\n"
+                f"fd = os.open({tree!r}, "
+                "os.O_RDONLY | os.O_DIRECTORY)\n"
+                "try:\n"
+                "    provision.fd_clear_dir(fd, '', "
+                "frozenset())\n"
+                "    print('TRAVERSAL-COMPLETED')\n"
+                "except OSError as exc:\n"
+                "    print(f'TRAVERSAL-REFUSED: {exc}')\n"
+                "finally:\n"
+                "    os.close(fd)\n")
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertIn("mount boundary", probe.stdout)
         finally:
             if mounted:
                 bye = sudo("umount", sub)
@@ -250,7 +422,8 @@ class LiveBindTests(unittest.TestCase):
             rows = provision.find_mounts(table, point)
             self.assertEqual(len(rows), 1)
             row = rows[0]
-            self.assertTrue(os.path.exists(
+            # S17-round5: through the live bind (in-ns).
+            self.assertTrue(ns_exists(
                 os.path.join(point, "marker.txt")))
             proc = sudo(sys.executable, provision.__file__,
                         "retire-mount",
@@ -268,6 +441,11 @@ class LiveBindTests(unittest.TestCase):
                 provision.find_mounts(table, point), [])
             self.assertFalse(os.path.exists(
                 os.path.join(point, "marker.txt")))
+            # S17-round5: move-verify-detach leaves no staging
+            # residue behind in the run root.
+            leftovers = [name for name in os.listdir(run)
+                         if name.startswith(".tt04-retire-")]
+            self.assertEqual(leftovers, [])
         finally:
             if mounted:
                 bye = sudo("umount", point)
@@ -437,11 +615,40 @@ class LiveBindTests(unittest.TestCase):
             self.assertEqual(rows[0]["mnt_id"], mnt_id)
             self.assertEqual(rows[0]["fstype"], "ext4")
             self.assertEqual(rows[0]["source"], source)
-            # Folded ownership: our own write lands.
+            # S71-round5: the REAL descriptor correspondence
+            # against the live mount (in-ns: the host view
+            # sees the covered dir). Match, wrong-node, and
+            # changed-observation (doctored row ID) verdicts.
+            qualdir = os.path.dirname(provision.__file__)
+            corr = sudo(
+                sys.executable, "-c",
+                "import os, sys\n"
+                f"sys.path.insert(0, {qualdir!r})\n"
+                "import provision_fs as provision\n"
+                f"row = {{'mnt_id': {mnt_id}}}\n"
+                f"bad = {{'mnt_id': {mnt_id + 10000}}}\n"
+                f"print('MATCH1', provision._mount_matches_loop("
+                f"{point!r}, {loop!r}, row))\n"
+                "print('MATCH2', "
+                "provision._mount_matches_loop("
+                f"{point!r}, '/dev/loop-control', row))\n"
+                f"print('MATCH3', provision._mount_matches_loop("
+                f"{point!r}, {loop!r}, bad))\n")
+            self.assertEqual(corr.returncode, 0, corr.stderr)
+            self.assertIn("MATCH1 True", corr.stdout)
+            self.assertIn("MATCH2 False", corr.stdout)
+            self.assertIn("MATCH3 False", corr.stdout)
+            # Folded ownership: our own write lands
+            # (S17-round5: through the live ext4 mount, so
+            # the unprivileged write and the owner stat run
+            # inside the ns).
             probe = os.path.join(point, "probe.txt")
-            with open(probe, "w") as handle:
-                handle.write("hello\n")
-            self.assertEqual(os.stat(point).st_uid, os.geteuid())
+            ns_write_user(probe, "hello\n")
+            stat_p = sudo("stat", "-c", "%u", point)
+            self.assertEqual(stat_p.returncode, 0,
+                             stat_p.stderr)
+            self.assertEqual(stat_p.stdout.strip(),
+                             str(os.geteuid()))
             row = rows[0]
             bye = sudo(sys.executable, provision.__file__,
                        "retire-mount",
@@ -482,8 +689,9 @@ class LiveBindTests(unittest.TestCase):
                   "w") as handle:
             handle.write("lower-original\n")
         target = os.path.join(role, "merged")
-        # S81-round4: plant the binding canary the helper
-        # requires for overlay post-mount binding.
+        # S81-round5: plant the binding canary the helper
+        # reads from held upper (never argv) for overlay
+        # post-mount binding.
         canary = "live-canary-%d" % os.getpid()
         with open(os.path.join(
                 role, "upper",
@@ -494,8 +702,7 @@ class LiveBindTests(unittest.TestCase):
                "mount-fs", *self._run_root_argv(run),
                "--target", target,
                "--target-dev", tdev, "--target-ino", tino,
-               "--fstype", "overlay",
-               "--canary", canary]
+               "--fstype", "overlay"]
         for name in ("lower", "upper", "work"):
             dev, ino = self._helper_ids(
                 os.path.join(role, name))
@@ -517,11 +724,14 @@ class LiveBindTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["mnt_id"], mnt_id)
             self.assertEqual(rows[0]["fstype"], "overlay")
-            with open(os.path.join(target, "shared.txt")) as fh:
-                self.assertEqual(fh.read(), "lower-original\n")
-            with open(os.path.join(target, "upper-only.txt"),
-                      "w") as handle:
-                handle.write("upper-only\n")
+            # S17-round5: through the live overlay (the
+            # upperdir read below stays direct — plain dir).
+            self.assertEqual(
+                ns_text(os.path.join(target, "shared.txt")),
+                "lower-original\n")
+            ns_write_user(
+                os.path.join(target, "upper-only.txt"),
+                "upper-only\n")
             with open(os.path.join(role, "upper",
                                    "upper-only.txt")) as fh:
                 self.assertEqual(fh.read(), "upper-only\n")
@@ -540,16 +750,12 @@ class LiveBindTests(unittest.TestCase):
             if mounted:
                 sudo("umount", target)
 
-    # S81-round4 live: a privileged replacement mounted inside
-    # the helper's post-mount window is refused at the canary
-    # gate before any chown. The foreign overlay carries a
-    # plausible row (fstype/source both match, so only the
-    # binding can refuse), serves wrong canary content, and is
-    # left in place with its root ownership untouched although
-    # --own-uid/gid was given. The delay hook opens the window
-    # deterministically via `sudo env` (production run_sudo
-    # passes no such variable).
-    def test_live_mount_replacement_refuses_before_chown(self):
+    # S81-round5 live: the helper pins the fresh mount
+    # before its post-mount window opens, so a privileged
+    # regular umount inside the window goes EBUSY — the swap
+    # cannot even start, and the helper reports OUR mount
+    # (ID, content, folded ownership all prove it).
+    def test_live_mount_window_pin_blocks_umount(self):
         if os.geteuid() == 0:
             self.skipTest("needs a non-root controller")
         run = os.path.join(self.tmp, "run")
@@ -563,15 +769,112 @@ class LiveBindTests(unittest.TestCase):
                 role, "upper",
                 provision.MOUNT_CANARY_NAME), "w") as handle:
             handle.write(canary)
-        # Foreign stack: plausible overlay, wrong canary, and
-        # root-owned upper so a folded chown would be visible.
+        target = os.path.join(role, "merged")
+        tdev, tino = self._helper_ids(target)
+        argv = [sys.executable, provision.__file__,
+               "mount-fs", *self._run_root_argv(run),
+               "--target", target,
+               "--target-dev", tdev, "--target-ino", tino,
+               "--fstype", "overlay",
+               "--own-uid", str(os.geteuid()),
+               "--own-gid", str(os.getegid())]
+        for name in ("lower", "upper", "work"):
+            dev, ino = self._helper_ids(
+                os.path.join(role, name))
+            argv += ["--layer",
+                    f"{name}={role}/{name}:{dev}:{ino}"]
+
+        def live_row():
+            table = provision.read_mount_table()
+            rows = provision.find_mounts(table, target)
+            if len(rows) == 1:
+                return rows[0]
+            return None
+
+        def poll_row(timeout):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                row = live_row()
+                if row is not None:
+                    return row
+                time.sleep(0.2)
+            return None
+
+        helper = subprocess.Popen(
+            ["sudo", "-n", "nsenter",
+             f"--mount={live_ns()}", "env",
+             "S81_HELPER_POST_MOUNT_DELAY_MS=20000",
+             *argv],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True)
+        try:
+            first = poll_row(60)
+            self.assertIsNotNone(
+                first, "helper never mounted the target")
+            self.assertIsNone(
+                helper.poll(),
+                "helper finished before the window opened "
+                "(delay hook inert?)")
+            # The swap cannot start: our pin holds EBUSY.
+            bye = sudo("umount", target)
+            self.assertNotEqual(bye.returncode, 0)
+            self.assertIn("busy", bye.stderr.lower())
+            out = helper.communicate(timeout=120)[0]
+            self.assertEqual(helper.returncode, 0, out)
+            line = out.splitlines()[0]
+            mnt_id, source, _ = self._parse_mounted_line(
+                line, target)
+            self.assertEqual(source, "overlay")
+            # Reported OUR mount: live ID, content, and the
+            # folded chown all agree.
+            self.assertEqual(live_row()["mnt_id"], mnt_id)
+            self.assertEqual(
+                ns_text(os.path.join(
+                    target, provision.MOUNT_CANARY_NAME)),
+                canary)
+            stat_p = sudo("stat", "-c", "%u", target)
+            self.assertEqual(stat_p.stdout.strip(),
+                             str(os.geteuid()))
+        finally:
+            if helper.poll() is None:
+                helper.kill()
+                helper.wait()
+            sudo("umount", target)
+
+    # S81-round5 live: a lazy detach defeats the pin, but the
+    # detached mount keeps its ID (no recycling while held),
+    # so the pin cross-check refuses the replacement
+    # deterministically — even carrying the COPIED correct
+    # token. The refusal reason proves content-independence
+    # (a mount change, never a canary mismatch), the
+    # stranger is left in place, and no chown touches it
+    # although --own-uid/gid was given.
+    def test_live_mount_lazy_replacement_refuses_copied_token(
+            self):
+        if os.geteuid() == 0:
+            self.skipTest("needs a non-root controller")
+        run = os.path.join(self.tmp, "run")
+        role = os.path.join(run, "ov")
+        for sub in ("lower", "upper", "work", "merged"):
+            os.makedirs(os.path.join(role, sub), mode=0o700)
+        os.chmod(run, 0o700)
+        os.chmod(role, 0o700)
+        canary = "live-canary-%d" % os.getpid()
+        with open(os.path.join(
+                role, "upper",
+                provision.MOUNT_CANARY_NAME), "w") as handle:
+            handle.write(canary)
+        # Foreign stack: plausible overlay, the COPIED
+        # correct token (read from our upper, as any
+        # privileged interposer could), and root-owned upper
+        # so a folded chown would be visible.
         fx = os.path.join(run, "fx")
         for sub in ("flower", "fupper", "fwork"):
             os.makedirs(os.path.join(fx, sub), mode=0o700)
         with open(os.path.join(
                 fx, "fupper",
                 provision.MOUNT_CANARY_NAME), "w") as handle:
-            handle.write("foreign-canary")
+            handle.write(canary)
         fupper = os.path.join(fx, "fupper")
         own = sudo("chown", "0:0", fupper)
         self.assertEqual(own.returncode, 0, own.stderr)
@@ -582,7 +885,6 @@ class LiveBindTests(unittest.TestCase):
                "--target", target,
                "--target-dev", tdev, "--target-ino", tino,
                "--fstype", "overlay",
-               "--canary", canary,
                "--own-uid", str(os.geteuid()),
                "--own-gid", str(os.getegid())]
         for name in ("lower", "upper", "work"):
@@ -599,9 +901,6 @@ class LiveBindTests(unittest.TestCase):
             return None
 
         def poll_row(timeout, different_super_from=None):
-            # The kernel recycles mount IDs on umount, so the
-            # replacement is told apart by its super options
-            # (foreign upper path), never by mnt_id.
             deadline = time.time() + timeout
             while time.time() < deadline:
                 row = live_row()
@@ -613,7 +912,8 @@ class LiveBindTests(unittest.TestCase):
             return None
 
         helper = subprocess.Popen(
-            ["sudo", "-n", "env",
+            ["sudo", "-n", "nsenter",
+             f"--mount={live_ns()}", "env",
              "S81_HELPER_POST_MOUNT_DELAY_MS=20000",
              *argv],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -626,9 +926,8 @@ class LiveBindTests(unittest.TestCase):
                 helper.poll(),
                 "helper finished before the replacement "
                 "window opened (delay hook inert?)")
-            # Plant the privileged replacement inside the
-            # helper's post-mount window.
-            bye = sudo("umount", target)
+            # Lazy detach + plant inside the window.
+            bye = sudo("umount", "-l", target)
             self.assertEqual(bye.returncode, 0, bye.stderr)
             opts = ("lowerdir=%s,upperdir=%s,workdir=%s"
                     % (os.path.join(fx, "flower"), fupper,
@@ -641,19 +940,21 @@ class LiveBindTests(unittest.TestCase):
                               different_super_from=first["super"])
             self.assertIsNotNone(
                 second, "replacement mount never appeared")
-            # Only the canary binding can refuse this row.
             self.assertEqual(second["fstype"], "overlay")
             self.assertEqual(second["source"], "overlay")
-            # The root-owned merged view needs privilege
-            # to read through.
+            # The plant really carries the copied token...
             seen = sudo("cat", os.path.join(
                 target, provision.MOUNT_CANARY_NAME))
             self.assertEqual(seen.returncode, 0,
                              seen.stderr)
-            self.assertEqual(seen.stdout, "foreign-canary")
+            self.assertEqual(seen.stdout, canary)
+            # ...yet the helper refuses by acquisition (mount
+            # change), never by content.
             out = helper.communicate(timeout=120)[0]
             self.assertEqual(helper.returncode, 1, out)
-            self.assertIn("canary mismatch", out)
+            self.assertIn("FAILED-UNCERTAIN", out)
+            self.assertIn("changed during effect", out)
+            self.assertNotIn("canary mismatch", out)
             # No chown touched the stranger: root-owned upper
             # unchanged, occupant left in place.
             fst = os.stat(fupper)
@@ -700,8 +1001,7 @@ class LiveBindTests(unittest.TestCase):
                "mount-fs", *self._run_root_argv(run),
                "--target", target,
                "--target-dev", tdev, "--target-ino", tino,
-               "--fstype", "overlay",
-               "--canary", canary]
+               "--fstype", "overlay"]
         for name in ("lower", "upper", "work"):
             dev, ino = self._helper_ids(
                 os.path.join(role, name))
@@ -721,8 +1021,10 @@ class LiveBindTests(unittest.TestCase):
                 time.sleep(0.2)
             return []
 
+        # S17-round5: the helper mounts inside the ns.
         helper = subprocess.Popen(
-            ["sudo", "-n", "env",
+            ["sudo", "-n", "nsenter",
+             f"--mount={live_ns()}", "env",
              "S81_HELPER_POST_MOUNT_DELAY_MS=20000",
              *argv],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -745,9 +1047,11 @@ class LiveBindTests(unittest.TestCase):
             self.assertEqual(len(second), 1,
                              "moved mount never appeared")
             self.assertEqual(live_rows_at(target), [])
-            with open(os.path.join(
-                    moved, provision.MOUNT_CANARY_NAME)) as handle:
-                self.assertEqual(handle.read(), canary)
+            # S17-round5: through the moved mount (in-ns).
+            self.assertEqual(
+                ns_text(os.path.join(
+                    moved, provision.MOUNT_CANARY_NAME)),
+                canary)
             out = helper.communicate(timeout=120)[0]
             self.assertEqual(helper.returncode, 1, out)
             self.assertIn("FAILED-MOVED", out)
@@ -824,8 +1128,9 @@ class LiveBindTests(unittest.TestCase):
                   "w") as handle:
             handle.write("lower-original\n")
         target = os.path.join(role, "merged")
-        # S81-round4: plant the binding canary the helper
-        # requires for overlay post-mount binding.
+        # S81-round5: plant the binding canary the helper
+        # reads from held upper (never argv) for overlay
+        # post-mount binding.
         canary = "live-canary-%d" % os.getpid()
         with open(os.path.join(
                 role, "upper",
@@ -836,8 +1141,7 @@ class LiveBindTests(unittest.TestCase):
                "mount-fs", *self._run_root_argv(run),
                "--target", target,
                "--target-dev", tdev, "--target-ino", tino,
-               "--fstype", "overlay",
-               "--canary", canary]
+               "--fstype", "overlay"]
         for name in ("lower", "upper", "work"):
             dev, ino = self._helper_ids(
                 os.path.join(role, name))
@@ -869,8 +1173,10 @@ class LiveBindTests(unittest.TestCase):
             rows = provision.find_mounts(table, target)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["mnt_id"], mnt_id)
-            with open(os.path.join(target, "shared.txt")) as fh:
-                self.assertEqual(fh.read(), "lower-original\n")
+            # S17-round5: through the live overlay (in-ns).
+            self.assertEqual(
+                ns_text(os.path.join(target, "shared.txt")),
+                "lower-original\n")
             row = rows[0]
             bye = sudo(sys.executable, provision.__file__,
                        "retire-mount",
@@ -901,8 +1207,9 @@ class LiveBindTests(unittest.TestCase):
                   "w") as handle:
             handle.write("lower-original\n")
         target = os.path.join(role, "mer\nged")
-        # S81-round4: binding canary (LF name tests escape,
-        # the canary itself stays plain).
+        # S81-round5: binding canary, planted in upper
+        # (LF name tests escape, the canary itself stays
+        # plain and off argv).
         canary = "lf-canary-%d" % os.getpid()
         with open(os.path.join(
                 role, "upper",
@@ -913,16 +1220,21 @@ class LiveBindTests(unittest.TestCase):
                "mount-fs", *self._run_root_argv(run),
                "--target", target,
                "--target-dev", tdev, "--target-ino", tino,
-               "--fstype", "overlay",
-               "--canary", canary]
+               "--fstype", "overlay"]
         for name in ("lower", "upper", "work"):
             dev, ino = self._helper_ids(
                 os.path.join(role, name))
             argv += ["--layer",
                     f"{name}={role}/{name}:{dev}:{ino}"]
         mounted = False
+        verified_mnt_id = None
         try:
             mnt = sudo(*argv)
+            # S93-round5: arm mount custody from the LIVE table,
+            # not the report: a helper that mounts and then fails
+            # verification still leaves an effect to retire.
+            if mount_live_at(target):
+                mounted = True
             self.assertEqual(mnt.returncode, 0,
                              mnt.stdout + mnt.stderr)
             self.assertNotIn("\n", mnt.stdout.strip("\n"),
@@ -935,8 +1247,11 @@ class LiveBindTests(unittest.TestCase):
             rows = provision.find_mounts(table, target)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["mnt_id"], mnt_id)
-            with open(os.path.join(target, "shared.txt")) as fh:
-                self.assertEqual(fh.read(), "lower-original\n")
+            verified_mnt_id = rows[0]["mnt_id"]
+            # S17-round5: through the live overlay (in-ns).
+            self.assertEqual(
+                ns_text(os.path.join(target, "shared.txt")),
+                "lower-original\n")
             row = rows[0]
             bye = sudo(sys.executable, provision.__file__,
                        "retire-mount",
@@ -947,10 +1262,13 @@ class LiveBindTests(unittest.TestCase):
                        "--mount-root", row["root"])
             self.assertEqual(bye.returncode, 0,
                              bye.stdout + bye.stderr)
-            mounted = False
+            # Discharge only after CONFIRMED retirement: the
+            # live row must be gone, not merely reported gone.
+            if not mount_live_at(target):
+                mounted = False
         finally:
             if mounted:
-                sudo("umount", target)
+                retire_verified_mount(target, verified_mnt_id)
 
 
 @unittest.skipUnless(live_mounts_enabled(),
@@ -971,11 +1289,13 @@ class LiveProcTests(unittest.TestCase):
         import signal as _signal
         if os.geteuid() == 0:
             self.skipTest("needs a non-root controller")
-        runner = subprocess.Popen(
-            ["sudo", "-n", "sleep", "117"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL)
+        runner = None
+        victim = None
         try:
+            runner = subprocess.Popen(
+                ["sudo", "-n", "sleep", "117"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
             victim = self._poll_sudo_child(runner.pid, 10)
             self.assertEqual(
                 os.stat(f"/proc/{victim}").st_uid, 0)
@@ -995,9 +1315,31 @@ class LiveProcTests(unittest.TestCase):
                 "root sleep survived the escalation")
             runner.wait(timeout=30)
         finally:
-            sudo("pkill", "-KILL", "-f", "^sleep 117$")
-            if runner.poll() is None:
-                sudo("kill", "-KILL", str(runner.pid))
+            # S92-round5: retire ONLY owned tasks through
+            # retained authorities — no host-wide pkill, no
+            # numeric kill. The root victim (if the test failed
+            # before killing it) is re-pinned and re-verified
+            # by identity, then signaled through the
+            # escalation helper; a reused number refuses
+            # (AdmissionError) instead of signaling a
+            # stranger. The sudo runner is our own child,
+            # killed through the retained Popen handle
+            # (unreaped while held — the number cannot be
+            # recycled underneath).
+            if victim is not None:
+                try:
+                    signal_verified_proc(
+                        victim, _signal.SIGKILL)
+                except (provision.ProcAbsent,
+                        provision.ProcUnknown,
+                        provision.AdmissionError):
+                    pass
+                if not self._poll_gone(victim, 10):
+                    sys.stderr.write(
+                        "WARNING: owned victim %d survived "
+                        "S92 cleanup\n" % victim)
+            if runner is not None and runner.poll() is None:
+                runner.kill()
                 runner.wait(timeout=30)
 
     @staticmethod
@@ -1023,6 +1365,139 @@ class LiveProcTests(unittest.TestCase):
                 return True
             time.sleep(0.1)
         return False
+
+
+class MountCustodyTests(unittest.TestCase):
+    # S93-round5: the mount-custody state machine, without
+    # privilege. The live table and sudo are scripted; no mount,
+    # namespace, or sudo is touched. Ungated: these run in the
+    # default suite, while the live classes above skip without
+    # TT04_LIVE_MOUNTS=1.
+    def _row(self, mnt_id):
+        return {"mnt_id": mnt_id, "source": "overlay",
+                "fstype": "overlay", "root": "/"}
+
+    def test_retire_attempts_when_unverified_and_live(self):
+        from unittest import mock
+        with mock.patch(__name__ + ".sudo") as sudo_mock, \
+             mock.patch(__name__ + ".mount_live_at",
+                        return_value=[self._row(41)]):
+            self.assertTrue(
+                retire_verified_mount("/t", None))
+        sudo_mock.assert_called_once_with("umount", "/t")
+
+    def test_retire_skips_when_absent(self):
+        from unittest import mock
+        with mock.patch(__name__ + ".sudo") as sudo_mock, \
+             mock.patch(__name__ + ".mount_live_at",
+                        return_value=[]):
+            self.assertFalse(
+                retire_verified_mount("/t", 41))
+        sudo_mock.assert_not_called()
+
+    def test_retire_attempts_when_id_matches(self):
+        from unittest import mock
+        with mock.patch(__name__ + ".sudo") as sudo_mock, \
+             mock.patch(__name__ + ".mount_live_at",
+                        return_value=[self._row(41)]):
+            self.assertTrue(
+                retire_verified_mount("/t", 41))
+        sudo_mock.assert_called_once_with("umount", "/t")
+
+    def test_retire_skips_foreign_replacement(self):
+        from unittest import mock
+        with mock.patch(__name__ + ".sudo") as sudo_mock, \
+             mock.patch(__name__ + ".mount_live_at",
+                        return_value=[self._row(99)]):
+            self.assertFalse(
+                retire_verified_mount("/t", 41))
+        sudo_mock.assert_not_called()
+
+    def test_retire_attempts_when_table_unreadable(self):
+        from unittest import mock
+        with mock.patch(__name__ + ".sudo") as sudo_mock, \
+             mock.patch(__name__ + ".mount_live_at",
+                        side_effect=OSError("ns gone")):
+            self.assertTrue(
+                retire_verified_mount("/t", 41))
+        sudo_mock.assert_called_once_with("umount", "/t")
+
+
+class ProcCustodyTests(unittest.TestCase):
+    # S92-round5: the owned-proc retirement helper, without
+    # privilege. Pin/stat/signal/close are scripted; no task is
+    # touched. Ungated like MountCustodyTests above.
+    def test_signal_sends_through_fresh_pin(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7) as pin_mock, \
+             mock.patch.object(
+                provision, "stat_state_start",
+                return_value=("S", 1234)), \
+             mock.patch.object(
+                provision, "signal_owned",
+                return_value=True) as signal_mock, \
+             mock.patch("os.close") as close_mock:
+            self.assertTrue(signal_verified_proc(4242, 9))
+        pin_mock.assert_called_once_with(4242)
+        signal_mock.assert_called_once_with(4242, 9, 7, 1234)
+        close_mock.assert_called_once_with(7)
+
+    def test_signal_reports_gone_at_signal(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7), \
+             mock.patch.object(
+                provision, "stat_state_start",
+                return_value=("S", 1234)), \
+             mock.patch.object(
+                provision, "signal_owned",
+                return_value=False), \
+             mock.patch("os.close") as close_mock:
+            self.assertFalse(signal_verified_proc(4242, 9))
+        close_mock.assert_called_once_with(7)
+
+    def test_signal_propagates_absent_without_close(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                side_effect=provision.ProcAbsent("gone")), \
+             mock.patch("os.close") as close_mock:
+            with self.assertRaises(provision.ProcAbsent):
+                signal_verified_proc(4242, 9)
+        close_mock.assert_not_called()
+
+    def test_signal_closes_pin_on_identity_refusal(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7), \
+             mock.patch.object(
+                provision, "stat_state_start",
+                return_value=("S", 1234)), \
+             mock.patch.object(
+                provision, "signal_owned",
+                side_effect=provision.AdmissionError(
+                    "changed")), \
+             mock.patch("os.close") as close_mock:
+            with self.assertRaises(provision.AdmissionError):
+                signal_verified_proc(4242, 9)
+        close_mock.assert_called_once_with(7)
+
+    def test_signal_closes_pin_on_stat_failure(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7), \
+             mock.patch.object(
+                provision, "stat_state_start",
+                side_effect=provision.ProcAbsent("gone")), \
+             mock.patch("os.close") as close_mock:
+            with self.assertRaises(provision.ProcAbsent):
+                signal_verified_proc(4242, 9)
+        close_mock.assert_called_once_with(7)
 
 
 if __name__ == "__main__":
