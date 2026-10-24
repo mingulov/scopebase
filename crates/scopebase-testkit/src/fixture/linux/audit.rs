@@ -190,14 +190,28 @@ impl AuditReport {
 /// stop once for the register probe when traced, exit. Syscalls and
 /// atomics only; diverges.
 fn preflight_child() -> ! {
-    let (w, release, _) = super::fork::slots();
+    let (w, release, release_w) = super::fork::slots();
+    // S110-round8: close our copy of the release WRITE end first —
+    // the parent's close must produce the EOF the barrier promises
+    // (a retained write end strands a denied-write parent and child
+    // in a mutual block). The report READ end stays open: read-end
+    // retention cannot block the parent's EOF.
+    if release_w >= 0 {
+        // SAFETY: inherited end this child never uses.
+        unsafe { libc::close(release_w) };
+    }
     // S68-round6: parent-release handshake — block until the parent
     // has acquired the birth pidfd, so the pin can never address a
     // recycled number (the child cannot exit, hence cannot be
     // reaped, before the release). EOF releases too (a vanished
-    // parent must not strand the child); EINTR retries; any other
-    // read outcome proceeds — the parent's pin-first ordering
-    // already holds, the read is pacing only.
+    // parent must not strand the child); EINTR retries.
+    // S111-round8: any OTHER read outcome PARKS the child (pause
+    // until the parent's bounded retirement signals it) — it must
+    // never proceed to exit before acquisition. Proceeding on a
+    // denied read would let the child fail TRACEME and exit before
+    // the parent's pidfd_open, voiding the birth-pin claim against
+    // a competing reaper. (Pause itself denied as well would spin
+    // to the parent's bound — loud in time, never silent.)
     loop {
         let mut byte = [0u8; 1];
         // SAFETY: one byte from the inherited release pipe.
@@ -206,8 +220,13 @@ fn preflight_child() -> ! {
             break;
         }
         // SAFETY: errno location for this thread.
-        if unsafe { libc::__errno_location().read() } != libc::EINTR {
-            break;
+        if unsafe { libc::__errno_location().read() } == libc::EINTR {
+            continue;
+        }
+        // Barrier unusable: park until retired.
+        loop {
+            // SAFETY: suspend until a signal arrives.
+            unsafe { libc::pause() };
         }
     }
     // SAFETY: raw ptrace on self; always permitted to attempt.
@@ -494,7 +513,10 @@ fn preflight_x86_64() -> Result<String, AuditError> {
     // returning.
     let pid = unsafe {
         super::fork::fork_guarded(
-            (pipe[1], release[0], -1),
+            // S110-round8: the third slot carries the release
+            // WRITE end so the child can close its copy (EOF
+            // then works even when the release write is denied).
+            (pipe[1], release[0], release[1]),
             |child| child,
             || preflight_child(),
         )
@@ -509,32 +531,123 @@ fn preflight_x86_64() -> Result<String, AuditError> {
         }
         return Err(AuditError::new("preflight fork failed"));
     }
-    // S68-round6: stable authority from birth — the child is blocked
-    // in the release read, so it cannot exit (and cannot be reaped)
-    // before this open: the pin addresses OUR task. The guard closes
-    // on every path below.
+    // S68-round6: stable authority from birth — the child is
+    // blocked in the release read (or parked, when the barrier is
+    // denied — S111-round8), so it cannot exit (and cannot be
+    // reaped) before this open: the pin addresses OUR task. The
+    // guard closes on every path below.
     let pidfd = PidfdGuard(super::seccomp::pidfd_open_raw(pid).ok());
-    // Release the child — unconditional, even when the open failed
-    // (authority then degrades to None, but the child must never
-    // hang). Closing releases via EOF regardless of the write.
+    // S110-round8: release the child — unconditional, even when
+    // the birth open failed (authority then degrades to None, but
+    // the child must never hang). The single-byte write retries on
+    // EINTR; any other failure refuses through bounded retirement
+    // instead of blocking on a report the child can no longer
+    // deliver (a denied write denies its report write too). Ends
+    // close on every path: with the child's own write end closed,
+    // closing releases a barrier-blocked child via EOF.
     {
         let byte = [0u8; 1];
-        // SAFETY: one byte to the release pipe; the child holds the
-        // read end.
-        unsafe {
-            libc::write(release[1], byte.as_ptr() as *const _, 1);
-        }
+        let wrote = loop {
+            // SAFETY: one byte to the release pipe; the child
+            // holds the read end.
+            let wrote = unsafe {
+                libc::write(release[1], byte.as_ptr() as *const _, 1)
+            };
+            if wrote == 1 {
+                break true;
+            }
+            if wrote < 0 && last_errno_is(libc::EINTR) {
+                continue;
+            }
+            break false;
+        };
+        // Captured before the closes below (which may reset it).
+        let write_error = std::io::Error::last_os_error();
         // SAFETY: ends owned by this scope.
         unsafe {
             libc::close(release[0]);
             libc::close(release[1]);
         }
+        if !wrote {
+            // SAFETY: report ends owned by this scope.
+            unsafe {
+                libc::close(pipe[0]);
+                libc::close(pipe[1]);
+            }
+            // The close above already released a
+            // barrier-blocked child via EOF; the bounded
+            // retirement reaps it (or reports it unproven).
+            let retired = retire_preflight_child(pid, pidfd.0);
+            return Err(AuditError::new(format!(
+                "preflight release refused: {write_error}{}",
+                if retired {
+                    String::new()
+                } else {
+                    "; preflight child not proven reaped".to_string()
+                }
+            )));
+        }
     }
     // SAFETY: write end owned by this scope; the child holds its own.
     unsafe { libc::close(pipe[1]) };
+    // S111-round8: the report read is poll-bounded (5s): a parked
+    // child (barrier denied) never reports, and the parent must
+    // refuse through bounded retirement instead of blocking
+    // forever. A ready descriptor is read exactly once — the child
+    // writes at most one byte before stopping or exiting.
     let mut code = [1u8; 1];
-    // SAFETY: one byte from the inherited pipe.
-    let got = unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
+    let got = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let remaining = deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            if remaining <= 0 {
+                // SAFETY: read end owned by this scope.
+                unsafe { libc::close(pipe[0]) };
+                let retired = retire_preflight_child(pid, pidfd.0);
+                return Err(AuditError::new(format!(
+                    "preflight report timed out (barrier unproven){}",
+                    if retired {
+                        String::new()
+                    } else {
+                        "; preflight child not proven reaped".to_string()
+                    }
+                )));
+            }
+            let mut waiting = libc::pollfd {
+                fd: pipe[0],
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: valid pollfd for an owned descriptor.
+            let ready = unsafe { libc::poll(&mut waiting, 1, remaining) };
+            if ready < 0 {
+                if last_errno_is(libc::EINTR) {
+                    continue;
+                }
+                let error = std::io::Error::last_os_error();
+                // SAFETY: read end owned by this scope.
+                unsafe { libc::close(pipe[0]) };
+                let retired = retire_preflight_child(pid, pidfd.0);
+                return Err(AuditError::new(format!(
+                    "preflight report poll refused: {error}{}",
+                    if retired {
+                        String::new()
+                    } else {
+                        "; preflight child not proven reaped".to_string()
+                    }
+                )));
+            }
+            if ready == 0 {
+                continue;
+            }
+            // Ready (data or EOF): a single one-byte read.
+            // SAFETY: one byte from the inherited pipe.
+            break unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
+        }
+    };
     // SAFETY: read end owned by this scope.
     unsafe { libc::close(pipe[0]) };
     // S05: the traced child stops once for the register probe. An
@@ -1921,28 +2034,34 @@ mod tests {
                         libc::close(fd);
                     }
                 }
-                // No pin (birth open failed): recheck before any
-                // numeric signal (S68-round7). A reaped or ECHILD
-                // number is proven gone — the numeric kill is
-                // skipped (the number may already be recycled).
-                // Only a still-unreaped child (WNOHANG == 0:
-                // the number is still OUR reserved child) may
-                // be signaled.
-                None => unsafe {
+                // S119-round8: no pin, NO numeric signal — the
+                // number is unprovable without one. Proven gone
+                // (reaped above or ECHILD) falls through to the
+                // trailing reap, which then returns at once.
+                // Anything else — live, EPERM, ENOSYS,
+                // interrupted — stays unresolved: the drop
+                // reports and returns WITHOUT signaling and
+                // WITHOUT waiting (a blocking wait on a live
+                // child would hang). A leaked child is loud
+                // (stderr), never a stranger's death.
+                None => {
                     let mut status = 0;
-                    let recheck = libc::waitpid(
-                        self.pid,
-                        &mut status,
-                        libc::WNOHANG,
-                    );
+                    // SAFETY: valid status out-pointer.
+                    let recheck = unsafe {
+                        libc::waitpid(self.pid, &mut status, libc::WNOHANG)
+                    };
                     let gone = (recheck == self.pid
                         && wait_status_terminal(status))
-                        || (recheck < 0
-                            && last_errno_is(libc::ECHILD));
+                        || (recheck < 0 && last_errno_is(libc::ECHILD));
                     if !gone {
-                        libc::kill(self.pid, libc::SIGKILL);
+                        eprintln!(
+                            "ChildGuard: pin-less drop over unproven pid {}; \
+                             NOT signaling, NOT waiting",
+                            self.pid
+                        );
+                        return;
                     }
-                },
+                }
             }
             // SAFETY: valid status out-pointer for an owned child;
             // ECHILD when already reaped elsewhere.
@@ -2291,6 +2410,193 @@ mod tests {
             proc_state(me).is_some(),
             "a pin-less drop over a non-child number must spare it"
         );
+    }
+
+    /// S110/S111-round8: run `preflight()` in a forked middleman
+    /// under a caller-installed seccomp denial. The middleman
+    /// reports through its exit code only (20 = Ok, 21 = Err,
+    /// 22 = timed-out Err, 3 = setup refused — the filter install
+    /// is prctl-only so it stacks before any read/write denial).
+    /// The parent enforces `guard` so a deadlock FAILS instead of
+    /// hanging the suite; returns the middleman's exit code.
+    /// The middleman's `preflight()` takes the fork rendezvous
+    /// lock: a fork landing while another test thread holds it
+    /// across ITS fork would hang to the guard (loud failure,
+    /// microsecond window — the accepted direct-fork hazard).
+    #[cfg(target_arch = "x86_64")]
+    fn run_preflight_middleman(deny: &dyn Fn() -> bool, guard: Duration) -> i32 {
+        use std::time::{Duration, Instant};
+        // SAFETY: the middleman installs a seccomp filter, runs
+        // `preflight()`, and reports via _exit code only.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            if !deny() {
+                unsafe { libc::_exit(3) };
+            }
+            match preflight() {
+                Ok(_) => unsafe { libc::_exit(20) },
+                Err(error) => {
+                    if error.to_string().contains("timed out") {
+                        unsafe { libc::_exit(22) };
+                    } else {
+                        unsafe { libc::_exit(21) };
+                    }
+                }
+            }
+        }
+        let deadline = Instant::now() + guard;
+        loop {
+            let mut status = 0;
+            // SAFETY: valid status out-pointer for an owned child.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid {
+                assert!(
+                    libc::WIFEXITED(status),
+                    "middleman died by signal under denial"
+                );
+                return libc::WEXITSTATUS(status);
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("middleman wait failed: {error}");
+            }
+            if Instant::now() >= deadline {
+                // SAFETY: retiring our own hung middleman.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    let mut status = 0;
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                panic!("middleman hung past {guard:?} (deadlock under denial)");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// S110-round8: inherited write→EPERM + TRACEME→EPERM must
+    /// refuse bounded — never deadlock. Pre-fix the middleman's
+    /// release write fails silently while the grandchild (holding
+    /// the release write end) blocks for a byte-or-EOF that never
+    /// comes and the middleman blocks reading its report: the hang
+    /// guard fires (RED). Post-fix the failed release write
+    /// retires bounded and refuses.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn denied_release_write_refuses_bounded() {
+        use super::super::seccomp::{install_deny_one, install_deny_ptrace_request};
+        use super::super::seccomp::DenyAction;
+        use std::time::Duration;
+        let code = run_preflight_middleman(
+            &|| {
+                install_deny_ptrace_request(libc::PTRACE_TRACEME, DenyAction::Eperm).is_ok()
+                    && install_deny_one(libc::SYS_write, DenyAction::Eperm).is_ok()
+            },
+            Duration::from_secs(20),
+        );
+        if code == 3 {
+            eprintln!("skip: seccomp unavailable for the combined denial");
+            return;
+        }
+        assert_eq!(
+            code, 21,
+            "denied release write must refuse, got exit {code}"
+        );
+    }
+
+    /// S111-round8: a denied barrier read must PARK the child
+    /// (never proceed to exit before the parent pins it) and the
+    /// parent must refuse bounded. Pre-fix the child proceeds on
+    /// EPERM and preflight reports Ok — the barrier silently
+    /// bypassed (RED). Post-fix the parent times out the unproven
+    /// report, retires the parked child, and refuses.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn denied_barrier_read_parks_and_refuses() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::time::Duration;
+        let code = run_preflight_middleman(
+            &|| install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok(),
+            Duration::from_secs(30),
+        );
+        if code == 3 {
+            eprintln!("skip: seccomp unavailable for the read denial");
+            return;
+        }
+        assert_eq!(
+            code, 22,
+            "denied barrier read must time out the report, got exit {code}"
+        );
+    }
+
+    /// S119-round8: a pin-less guard drop under wait-denial must
+    /// signal NOTHING — observation failure stays unresolved.
+    /// Confined: the wait4→EPERM filter lives only in the forked
+    /// child, which drops a pin-less armed guard over its OWN pid
+    /// (the round-7 self-PID shape) and must survive to report.
+    /// Pre-fix the EPERM wait reads as "not gone" and the drop
+    /// SIGKILLs the child itself (RED).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pinless_drop_under_wait_denial_signals_nothing() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::time::{Duration, Instant};
+        // SAFETY: the child installs a wait-denying filter, drops
+        // a pin-less self guard, and reports survival via _exit.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            if install_deny_one(libc::SYS_wait4, DenyAction::Eperm).is_err() {
+                unsafe { libc::_exit(3) };
+            }
+            // SAFETY: getpid always succeeds.
+            let me = unsafe { libc::getpid() };
+            let guard = ChildGuard {
+                pid: me,
+                pidfd: None,
+                armed: true,
+            };
+            drop(guard);
+            unsafe { libc::_exit(10) };
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let mut status = 0;
+            // SAFETY: valid status out-pointer for an owned child.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid {
+                assert!(
+                    libc::WIFEXITED(status),
+                    "denied-wait drop must not die by signal (got {})",
+                    libc::WTERMSIG(status)
+                );
+                let code = libc::WEXITSTATUS(status);
+                if code == 3 {
+                    eprintln!("skip: seccomp unavailable for the wait denial");
+                    return;
+                }
+                assert_eq!(
+                    code, 10,
+                    "pin-less drop under wait denial must survive"
+                );
+                return;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("confined wait-denial probe failed: {error}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "confined wait-denial probe hung"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn laden(path: &str) -> serde_json::Value {
