@@ -163,6 +163,38 @@ def signal_verified_proc(victim, signum):
         os.close(pin)
 
 
+def ext4_arm_verdict(ext4_present, have_loop, have_mkfs):
+    """E2E ext4-arm obligation. (G1-I3)
+
+    Returns "verified" when the arm ran, "required" when the arm
+    is missing on a loop+mkfs-capable host (the caller must
+    fail, never pass), else "skipped" (the caller checks the
+    FS01 skip reason instead).
+    """
+    if ext4_present:
+        return "verified"
+    if have_loop and have_mkfs:
+        return "required"
+    return "skipped"
+
+
+def fs01_skip_reason_ok(reason):
+    """True when an FS01 skip names its missing capability. (G1-I3)
+
+    Genuine unavailability reasons name loop/losetup ("no free
+    loop device", "loop-control not openable", "losetup
+    refused/outcome uncertain") or mkfs ("missing mkfs.ext4
+    tool"). Anything else — empty, unrelated, or a mount-stage
+    failure (which implies loop worked) — is not a capability
+    skip.
+    """
+    text = (reason or "").lower()
+    if not text:
+        return False
+    return any(key in text
+               for key in ("loop", "losetup", "mkfs"))
+
+
 @unittest.skipUnless(live_mounts_enabled(),
                      "TT04_LIVE_MOUNTS=1 and sudo -n required")
 class LiveBindTests(unittest.TestCase):
@@ -1794,7 +1826,26 @@ class LiveBindTests(unittest.TestCase):
                 self.assertEqual(os.major(mnt_dev), 7)
                 self.assertEqual(os.minor(mnt_dev), loopnum)
             else:
+                # G1-I3: the ext4 arm must not be silently
+                # optional — on a loop+mkfs-capable host a
+                # missing arm is breakage, not a pass.
+                loop_probe = sudo("losetup", "-f")
+                have_loop = loop_probe.returncode == 0
+                have_mkfs = (
+                    shutil.which("mkfs.ext4") is not None)
+                verdict = ext4_arm_verdict(
+                    False, have_loop, have_mkfs)
+                if verdict == "required":
+                    self.fail(
+                        "ext4 arm missing on a loop-capable "
+                        "host (FS01 cell: "
+                        f"{doc.get('cells', {}).get('FS01')!r})")
                 self.assertIn("FS01", doc.get("cells", {}))
+                reason = doc["cells"]["FS01"].get("reason", "")
+                self.assertTrue(
+                    fs01_skip_reason_ok(reason),
+                    "FS01 skip names no missing capability: "
+                    f"{reason!r}")
             # Churn's driver (a raw-Popen child of
             # create) was born inside the keeper namespace —
             # its bind mounts land in-ns by inheritance.
@@ -2066,6 +2117,45 @@ class ProcCustodyTests(unittest.TestCase):
             with self.assertRaises(provision.ProcAbsent):
                 signal_verified_proc(4242, 9)
         close_mock.assert_called_once_with(7)
+
+
+class Ext4ArmVerdictTests(unittest.TestCase):
+    # G1-I3: the E2E ext4-arm obligation, pinned without live
+    # mounts (the live E2E test calls these helpers). The arm
+    # is required on loop+mkfs-capable hosts; otherwise the
+    # FS01 skip reason must name the missing capability.
+    def test_verdict_matrix(self):
+        self.assertEqual(
+            ext4_arm_verdict(True, True, True), "verified")
+        self.assertEqual(
+            ext4_arm_verdict(True, False, False), "verified")
+        self.assertEqual(
+            ext4_arm_verdict(False, True, True), "required")
+        self.assertEqual(
+            ext4_arm_verdict(False, False, True), "skipped")
+        self.assertEqual(
+            ext4_arm_verdict(False, True, False), "skipped")
+        self.assertEqual(
+            ext4_arm_verdict(False, False, False), "skipped")
+
+    def test_skip_reason_matrix(self):
+        self.assertTrue(fs01_skip_reason_ok(
+            "missing mkfs.ext4 tool"))
+        self.assertTrue(fs01_skip_reason_ok(
+            "losetup refused: rc=1 loop-control not openable"))
+        self.assertTrue(fs01_skip_reason_ok(
+            "no free loop device: [Errno 19] No such device"))
+        self.assertTrue(fs01_skip_reason_ok(
+            "losetup outcome uncertain and backing identity "
+            "matches several loops"))
+        self.assertFalse(fs01_skip_reason_ok(""))
+        self.assertFalse(fs01_skip_reason_ok(None))
+        # Mount-stage failures imply loop worked: not a
+        # capability skip, so they must not pass as one.
+        self.assertFalse(fs01_skip_reason_ok(
+            "ext4 mount not admitted (foreign replacement)"))
+        self.assertFalse(fs01_skip_reason_ok(
+            "some unrelated failure"))
 
 
 if __name__ == "__main__":

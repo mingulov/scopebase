@@ -659,10 +659,17 @@ _ROOT_GUARD = None
 # (pid, nsid, starttime, canary), verified at bind time and
 # re-verified on every ensure call (link + canary mount) and
 # cheaply before every ns-routed operation (unprivileged
-# /proc/PID/stat starttime: a recycled pid never shares the
-# recorded starttime, so observations and effects cannot be
-# redirected into another namespace silently). A path without
+# /proc/PID/stat starttime: a recycled pid fails the
+# recorded starttime, so a stale cache refuses loudly
+# instead of routing into another namespace). A path without
 # identity is unbound and refused.
+# S100-round7: binding reads the anchor twice (before and
+# after link+canary) and requires equality — the recorded
+# starttime provably belongs to the verified pid life, not
+# to a recycle that landed mid-verification. Each later
+# routing check still races its effect by microseconds; the
+# guarantee is same-life binding plus fail-closed rechecks,
+# not the absence of any window.
 _MOUNT_NS = None
 _MOUNT_NS_IDENTITY = None
 
@@ -905,7 +912,10 @@ def _preserve_keeper_evidence(pidfile, pid, nsid, canary, reason):
     recorded (0600, O_APPEND) with everything an operator
     needs to retire it by hand — a live root sleeper is never
     forgotten silently. Failures here must not mask the
-    original error, so they are swallowed.
+    original error, so they are swallowed — but REPORTED:
+    returns True when the record landed, False when it did
+    not (S103-round7: the caller surfaces a False in the
+    loud alarm; a double fault is never silent).
     """
     path = f"{pidfile}.unresolved"
     line = (f"{pid} {nsid} {canary} {reason}\n").encode(
@@ -915,27 +925,28 @@ def _preserve_keeper_evidence(pidfile, pid, nsid, canary, reason):
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND
                      | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     except OSError:
-        return
+        return False
     try:
         try:
             st = os.fstat(fd)
         except OSError:
-            return
+            return False
         if st.st_uid != os.geteuid():
-            return
+            return False
         try:
             while line:
                 done = os.write(fd, line)
                 if done <= 0:
-                    return
+                    return False
                 line = line[done:]
         except OSError:
-            return
+            return False
     finally:
         try:
             os.close(fd)
         except OSError:
             pass
+    return True
 
 
 def _spawn_keeper(euid, candir, publish_to):
@@ -995,9 +1006,10 @@ def _spawn_keeper(euid, candir, publish_to):
             tree_gone = kill_tree("keeper-spawn", child.pid, 10)
         except Exception:
             tree_gone = False
+        preserved = None
         if not tree_gone and evidence is not None:
-            _preserve_keeper_evidence(publish_to, *evidence,
-                                      msg)
+            preserved = _preserve_keeper_evidence(
+                publish_to, *evidence, msg)
         # wait(), not communicate(): the keeper's grandchildren
         # (sudo→unshare→bash→sleep) inherit the pipes, so
         # communicate would block for pipe EOF until they exit
@@ -1029,6 +1041,15 @@ def _spawn_keeper(euid, candir, publish_to):
         if not tree_gone:
             detail += (f" [keeper tree at pid {child.pid} not "
                        f"proven gone; inspect before retrying]")
+            if evidence is not None:
+                # S103-round7: the sudo pid above misdirects
+                # manual retirement — name the keeper itself.
+                detail += (f" [keeper pid={evidence[0]} "
+                           f"nsid={evidence[1]}; retire by hand]")
+                if preserved is False:
+                    detail += (" [keeper evidence NOT "
+                               "preserved; manual recovery "
+                               "required]")
         raise AdmissionError(f"{msg}{detail}")
 
     sel = selectors.DefaultSelector()
@@ -1051,6 +1072,10 @@ def _spawn_keeper(euid, candir, publish_to):
     canary = parts[2]
     if pid <= 1:
         fail("mount-ns keeper pid absurd")
+    # S100-round7: pre-anchor — the post-canary read below
+    # must match it, else the pid died and recycled mid-verify
+    # and the anchor would bind a stranger's starttime.
+    pre = _keeper_starttime(pid)
     link = _read_ns_link(pid)
     if (link is None or not link.startswith("mnt:[")
             or not link.endswith("]")
@@ -1071,8 +1096,11 @@ def _spawn_keeper(euid, candir, publish_to):
     if not fresh_ok:
         fail("mount-ns keeper ns lacks our canary; refusing")
     starttime = _keeper_starttime(pid)
-    if starttime is None:
+    if starttime is None or pre is None:
         fail("mount-ns keeper vanished after READY; refusing")
+    if starttime != pre:
+        fail("mount-ns keeper recycled during verification; "
+             "refusing")
     try:
         _publish_keeper_state(publish_to, candir, pid, nsid,
                               canary)
@@ -1190,17 +1218,23 @@ def ensure_mount_ns():
                         pass
             state = _parse_keeper_state(raw)
             if state is not None:
+                pid, nsid, canary = state
+                # S100-round7: pre-anchor — the post-verify
+                # read must match, else the pid recycled
+                # mid-verify and the anchor would bind a
+                # stranger's starttime.
+                pre = _keeper_starttime(pid)
                 nspath = _verify_recorded_keeper(state)
                 if nspath is not None:
-                    pid, nsid, canary = state
                     starttime = _keeper_starttime(pid)
-                    if starttime is not None:
+                    if (starttime is not None and pre is not None
+                            and starttime == pre):
                         _MOUNT_NS = nspath
                         _MOUNT_NS_IDENTITY = (
                             pid, nsid, starttime, canary)
                         return nspath
-                    # Verified but the anchor read raced its
-                    # death: treat as dead, fall to respawn.
+                    # Verified but the anchor raced death or
+                    # recycle: treat as dead, fall to respawn.
             pid, nsid, canary, starttime = _spawn_keeper(
                 euid, candir, pidfile)
             _MOUNT_NS = f"/proc/{pid}/ns/mnt"
@@ -1266,16 +1300,22 @@ def bind_mount_ns(expected=None):
         raise AdmissionError(
             "no keeper recorded; refusing to create one for a "
             "non-creating command")
+    pid, nsid, canary = state
+    # S100-round7: pre-anchor (same TOCTOU closure as
+    # ensure_mount_ns — the post-verify read must match).
+    pre = _keeper_starttime(pid)
     nspath = _verify_recorded_keeper(state)
     if nspath is None:
         raise AdmissionError(
             "recorded keeper dead or unverifiable; refusing "
             "to substitute a fresh namespace")
-    pid, nsid, canary = state
     starttime = _keeper_starttime(pid)
-    if starttime is None:
+    if starttime is None or pre is None:
         raise AdmissionError(
             "recorded keeper vanished during bind; refusing")
+    if starttime != pre:
+        raise AdmissionError(
+            "recorded keeper recycled during bind; refusing")
     _MOUNT_NS = nspath
     _MOUNT_NS_IDENTITY = (pid, nsid, starttime, canary)
     _check_expected_keeper(expected)

@@ -421,8 +421,9 @@ pub fn run_pinned_with_builders(
                 // (never trusted on the EPERM errno alone), and its
                 // fallout rides the retirement leg. S86-round6: every
                 // post-spawn path retires bounded now (overrun and
-                // wall-clock expiry keep the run deadline; spawn
-                // failure and post-expiry cleanup use CLEANUP_GRACE).
+                // observation failure keep the run deadline; spawn
+                // failure and post-expiry (timeout) cleanup use
+                // CLEANUP_GRACE).
                 let group_fallout = signal_tool_group(group, &authority).err();
                 let retired = kill_and_wait_deadline(&mut child, deadline);
                 let settled = settle_pair(stdout_reader, stderr_reader);

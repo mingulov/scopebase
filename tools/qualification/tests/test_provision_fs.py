@@ -5723,6 +5723,12 @@ class ThirdReviewTests(unittest.TestCase):
     # detach addressed substituted staging) prove the plant
     # was in the window — without them a None would prove
     # nothing.
+    # G1-I2: the plant is modeled in the STIMULUS, not just
+    # the assertions — B is live at staging until our detach
+    # removes it, so the planted run differs from a clean
+    # retire and the test fails if the mechanism misorders
+    # the window (read before detach sees B and alarms) or
+    # distinguishes the runs wrongly.
     def test_retire_mount_detach_replace_residual_pinned(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as run_root:
@@ -5741,18 +5747,45 @@ class ThirdReviewTests(unittest.TestCase):
                     "source": "/dev/loop9", "super": "rw|"}
             staging = os.path.join(run_root, "staging")
             staged = dict(ours, target=staging)
+            # The attacker's quiescent plant B: moved to our
+            # random staging path inside the verify-to-detach
+            # window (after ours was detached by the same
+            # party), so our umount detaches B, not ours.
+            b_row = {"target": staging,
+                     "mnt_id": held + 5000, "root": "/",
+                     "fstype": "tmpfs", "source": "tmpfs",
+                     "super": "rw|"}
 
             def attempt(plant):
                 planted = []
+                final_state = []
 
                 def hook(victim):
                     planted.append(victim)
                     return None
 
+                reads = [[ours], [ours], [staged]]
+                calls = []
+
+                def read_table():
+                    calls.append(True)
+                    if len(calls) < 4:
+                        return reads[len(calls) - 1]
+                    # Final post-proof read. In the planted run
+                    # B is live at staging until our detach
+                    # removes it: a mechanism that read before
+                    # detaching (or never detached) sees B and
+                    # raises the staging-occupant alarm instead
+                    # of the pinned None.
+                    if plant:
+                        final_state.append(bool(planted))
+                        if not planted:
+                            return [b_row]
+                    return []
+
                 with mock.patch.object(
                         provision, "read_mount_table",
-                        side_effect=[[ours], [ours], [staged],
-                                     []]):
+                        side_effect=read_table):
                     with mock.patch.object(
                             provision, "_retire_stage_dir",
                             return_value=staging), \
@@ -5768,8 +5801,10 @@ class ThirdReviewTests(unittest.TestCase):
                     # The plant (detach ours, place quiescent
                     # B) lands inside the window: the detach
                     # call the mechanism issues addresses
-                    # substituted staging.
+                    # substituted staging, and the final read
+                    # observes B already detached by us.
                     self.assertEqual(planted, [staging])
+                    self.assertEqual(final_state, [True])
                 detach.assert_called_once_with(staging)
                 return failure
 
@@ -8398,7 +8433,7 @@ class MountNsTests(unittest.TestCase):
                     return_value=(pidfile, tmp)), \
                     mock.patch.object(
                         provision, "_keeper_starttime",
-                        side_effect=[222, 222]) as anchor, \
+                        side_effect=[222, 222, 222]) as anchor, \
                     mock.patch.object(
                         provision, "_read_ns_link",
                         return_value="mnt:[77]") as link, \
@@ -8411,9 +8446,11 @@ class MountNsTests(unittest.TestCase):
                             "respawned")):
                 nspath = provision.ensure_mount_ns()
             # First anchor read (cache, 111 expected) fails;
-            # second (pidfile adopt) records the fresh one.
+            # the pidfile adopt then reads pre and post
+            # (S100-round7: equal, so the fresh one records).
             self.assertEqual(anchor.call_args_list,
-                             [mock.call(4321), mock.call(4321)])
+                             [mock.call(4321), mock.call(4321),
+                              mock.call(4321)])
             link.assert_called_once_with(4321)
             check.assert_called_once_with(
                 "/proc/4321/ns/mnt", canary)
@@ -8663,6 +8700,134 @@ class MountNsTests(unittest.TestCase):
             attempt(f"4321 77 {canary}\n", expected={
                 "pid": 4321, "nsid": 78, "starttime": 777})
 
+    # S100-round7: a keeper that dies and recycles between the
+    # canary check and the anchor read must not bind the
+    # stranger's starttime — the pre/post anchor reads differ
+    # and the spawn is refused (tree retired, never recorded).
+    # Neuter check: with a single anchor read the spawn binds
+    # fine and this test fails (no refusal to catch).
+    def test_spawn_keeper_recycled_during_verify_refuses(self):
+        from unittest import mock
+        canary = "aa" * 16
+        child = mock.Mock()
+        child.stdout.readline.return_value = (
+            f"READY 8888 {canary}\n")
+        fake_sel = mock.Mock()
+        fake_sel.select.return_value = [True]
+        with tempfile.TemporaryDirectory() as tmp:
+            before = len(provision._KEEPERS)
+            with mock.patch.object(
+                    provision.subprocess, "Popen",
+                    return_value=child), \
+                    mock.patch.object(
+                        provision.selectors,
+                        "DefaultSelector",
+                        return_value=fake_sel), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[66]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        side_effect=[111, 222]), \
+                    mock.patch.object(
+                        provision, "kill_tree",
+                        return_value=True) as retired:
+                with self.assertRaisesRegex(
+                        provision.AdmissionError,
+                        "recycled during verification"):
+                    provision._spawn_keeper(
+                        os.geteuid(),
+                        os.path.join(tmp, "canary"),
+                        os.path.join(tmp, "ns.pid"))
+            self.assertEqual(len(provision._KEEPERS), before)
+        retired.assert_called_once_with(
+            "keeper-spawn", child.pid, 10)
+        child.wait.assert_called_once_with(timeout=10)
+
+    # S100-round7: bind reads the anchor twice around the
+    # link+canary verification — a recycle mid-verify refuses
+    # instead of binding the stranger's starttime.
+    def test_bind_recycled_during_verify_refuses(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        canary = "cd" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        side_effect=[111, 222]), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        side_effect=AssertionError(
+                            "spawned on bind")):
+                with self.assertRaisesRegex(
+                        provision.AdmissionError,
+                        "recycled during bind"):
+                    provision.bind_mount_ns()
+            self.assertIsNone(provision._MOUNT_NS)
+            self.assertIsNone(provision._MOUNT_NS_IDENTITY)
+
+    # S100-round7: ensure treats a mid-verify recycle like a
+    # dead keeper — the pidfile record is dropped and a fresh
+    # keeper is spawned (never adopted with a stranger's
+    # anchor).
+    def test_ensure_respawns_on_anchor_recycle(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        canary = "cd" * 16
+        fresh = "ef" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        side_effect=[111, 222]), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(111, 22, fresh, 999)
+                        ) as spawn:
+                nspath = provision.ensure_mount_ns()
+            spawn.assert_called_once_with(
+                os.geteuid(), tmp, pidfile)
+            self.assertEqual(nspath, "/proc/111/ns/mnt")
+            self.assertEqual(provision._MOUNT_NS_IDENTITY,
+                             (111, 22, 999, fresh))
+
     # S101-round6: unmanifested entry binds opportunistically
     # (residue scans see the ns table), runs unensured when
     # no keeper was ever recorded, and refuses on a
@@ -8895,6 +9060,32 @@ class MountNsTests(unittest.TestCase):
                     ["cleanup", "--manifest", man,
                      "--run-root", run])
             self.assertEqual(rc, 1)
+            # S101-round6 G1-I4: leftover unresolved keeper
+            # evidence refuses even when no keeper was ever
+            # recorded — residue in an unreachable namespace
+            # must never read as a clean host.
+            with mock.patch.object(
+                    provision, "load_manifest",
+                    side_effect=provision.
+                    AdmissionError("missing")), \
+                    mock.patch.object(
+                        provision, "bind_mount_ns",
+                        side_effect=provision.AdmissionError(
+                            "no keeper recorded (gone)")), \
+                    mock.patch.object(
+                        provision, "_keeper_paths",
+                        return_value=(os.path.join(tmp, "np"),
+                                     tmp)), \
+                    mock.patch.object(
+                        provision, "cleanup_command",
+                        side_effect=AssertionError(
+                            "scanned past unresolved")):
+                Path(os.path.join(tmp, "np.unresolved")).write_text(
+                    "9 77 deadbeef unresolved-test\n")
+                rc = provision.main(
+                    ["cleanup", "--manifest", man,
+                     "--run-root", run])
+            self.assertEqual(rc, 1)
 
     # S103-round6: atomic keeper publication — exact bytes,
     # 0600, tmp cleaned, symlink-safe replace; short writes
@@ -8968,6 +9159,12 @@ class MountNsTests(unittest.TestCase):
                         provision.AdmissionError, "alien"):
                     provision._publish_keeper_state(
                         pidfile, candir, 1234, 99, canary)
+            # G1-I5: the refusal unlinked nothing — the alien
+            # tmp and the published pidfile are untouched.
+            self.assertEqual(Path(stale).read_bytes(), b"stale")
+            self.assertEqual(
+                Path(pidfile).read_text(),
+                f"1234 99 {canary}\n")
 
     # S103-round6: failure-after-READY rolls the verified
     # keeper back — the whole tree is retired (never an
@@ -9022,15 +9219,27 @@ class MountNsTests(unittest.TestCase):
                 self.assertEqual(len(provision._KEEPERS),
                                  before)
                 self.assertFalse(os.path.exists(pidfile))
+                if tree_gone:
+                    # G1-I6: proven retirement leaves no
+                    # unresolved residue — checked while the
+                    # tmpdir is still alive (the old code
+                    # returned the path but both call sites
+                    # discarded it after teardown).
+                    self.assertFalse(
+                        os.path.exists(f"{pidfile}.unresolved"))
                 return (str(ctx.exception),
                         os.path.join(tmp, "ns.pid.unresolved"))
 
-            # Proven retired: loud failure, no residue.
-            message, _ = attempt(True)
-            self.assertNotIn("not proven gone", message)
-            # Unproven: durable unresolved evidence.
-            message, _ = attempt(False)
-            self.assertIn("not proven gone", message)
+        # G1-I6: these calls sat at attempt-body indent (dead
+        # code after its return — nothing ever ran them).
+        # Dedented to method level so the proven/unproven
+        # paths execute and the residue checks bite.
+        # Proven retired: loud failure, no residue.
+        message, _ = attempt(True)
+        self.assertNotIn("not proven gone", message)
+        # Unproven: durable unresolved evidence.
+        message, _ = attempt(False)
+        self.assertIn("not proven gone", message)
 
         # The evidence path is exercised for real: a False
         # rollback leaves pid/nsid/canary on disk.
@@ -9073,6 +9282,88 @@ class MountNsTests(unittest.TestCase):
             self.assertIn("7777", seen)
             self.assertIn("55", seen)
             self.assertIn(canary, seen)
+
+    # S103-round6 G1-I7: an unproven rollback names the keeper
+    # itself (pid/nsid for manual retirement — the sudo pid
+    # alone misdirects), and a failed evidence write is loud
+    # in the alarm (never a silent double fault).
+    def test_spawn_keeper_rollback_failure_names_keeper(self):
+        from unittest import mock
+        canary = "ef" * 16
+
+        def attempt(preserved):
+            child = mock.Mock()
+            child.stdout.readline.return_value = (
+                f"READY 7777 {canary}\n")
+            fake_sel = mock.Mock()
+            fake_sel.select.return_value = [True]
+            with tempfile.TemporaryDirectory() as tmp:
+                candir = os.path.join(tmp, "canary")
+                pidfile = os.path.join(tmp, "ns.pid")
+                with mock.patch.object(
+                        provision.subprocess, "Popen",
+                        return_value=child), \
+                        mock.patch.object(
+                            provision.selectors,
+                            "DefaultSelector",
+                            return_value=fake_sel), \
+                        mock.patch.object(
+                            provision, "_read_ns_link",
+                            return_value="mnt:[55]"), \
+                        mock.patch.object(
+                            provision, "_ns_has_canary",
+                            return_value=True), \
+                        mock.patch.object(
+                            provision, "_keeper_starttime",
+                            return_value=31337), \
+                        mock.patch.object(
+                            provision, "_publish_keeper_state",
+                            side_effect=provision.
+                            AdmissionError("disk full")), \
+                        mock.patch.object(
+                            provision, "kill_tree",
+                            return_value=False), \
+                        mock.patch.object(
+                            provision, "_preserve_keeper_evidence",
+                            return_value=preserved) as keep:
+                    with self.assertRaisesRegex(
+                            provision.AdmissionError,
+                            "publication failed") as ctx:
+                        provision._spawn_keeper(
+                            os.geteuid(), candir, pidfile)
+                keep.assert_called_once_with(
+                    pidfile, 7777, 55, canary,
+                    mock.ANY)
+                return str(ctx.exception)
+
+        message = attempt(True)
+        self.assertIn("not proven gone", message)
+        self.assertIn("keeper pid=7777", message)
+        self.assertIn("nsid=55", message)
+        self.assertNotIn("NOT preserved", message)
+        # A failed evidence write is loud, not silent.
+        message = attempt(False)
+        self.assertIn("keeper pid=7777", message)
+        self.assertIn("NOT preserved", message)
+
+    # S103-round6 G1-I7: the evidence writer reports whether
+    # the record landed, so callers can surface a failure.
+    def test_preserve_keeper_evidence_reports_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            self.assertIs(
+                provision._preserve_keeper_evidence(
+                    pidfile, 7777, 55, "ef" * 16,
+                    "test-reason"),
+                True)
+            self.assertIn(
+                "7777 55",
+                Path(f"{pidfile}.unresolved").read_text())
+            self.assertIs(
+                provision._preserve_keeper_evidence(
+                    os.path.join(tmp, "missing", "ns.pid"),
+                    7777, 55, "ef" * 16, "test-reason"),
+                False)
 
     def test_read_ns_link_none_on_failure(self):
         # Dead pid (nonzero exit), missing sudo (OSError) and

@@ -1921,11 +1921,27 @@ mod tests {
                         libc::close(fd);
                     }
                 }
-                // No pin (birth open failed): legacy numeric kill.
-                // Only reached when the test never disarmed AND the
-                // open failed; tests disarm after proved retirement.
+                // No pin (birth open failed): recheck before any
+                // numeric signal (S68-round7). A reaped or ECHILD
+                // number is proven gone — the numeric kill is
+                // skipped (the number may already be recycled).
+                // Only a still-unreaped child (WNOHANG == 0:
+                // the number is still OUR reserved child) may
+                // be signaled.
                 None => unsafe {
-                    libc::kill(self.pid, libc::SIGKILL);
+                    let mut status = 0;
+                    let recheck = libc::waitpid(
+                        self.pid,
+                        &mut status,
+                        libc::WNOHANG,
+                    );
+                    let gone = (recheck == self.pid
+                        && wait_status_terminal(status))
+                        || (recheck < 0
+                            && last_errno_is(libc::ECHILD));
+                    if !gone {
+                        libc::kill(self.pid, libc::SIGKILL);
+                    }
                 },
             }
             // SAFETY: valid status out-pointer for an owned child;
@@ -2253,6 +2269,27 @@ mod tests {
         assert!(
             again < 0 && last_errno_is(libc::ECHILD),
             "armed drop must kill and reap through its pin"
+        );
+    }
+
+    /// S68-round7: a pin-less armed drop never signals a number
+    /// it cannot prove is its live child. The test process's
+    /// own id is not its child (ECHILD) — dropping such a
+    /// guard must skip the numeric kill (pre-fix it SIGKILLed
+    /// the test process itself) and return promptly.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn none_guard_drop_skips_kill_without_proof() {
+        let me = std::process::id() as libc::pid_t;
+        let guard = ChildGuard {
+            pid: me,
+            pidfd: None,
+            armed: true,
+        };
+        drop(guard);
+        assert!(
+            proc_state(me).is_some(),
+            "a pin-less drop over a non-child number must spare it"
         );
     }
 
