@@ -940,14 +940,35 @@ fn is_test_descendant(pid: i32, ancestor: u32) -> bool {
 /// task, a concurrent suite's tree) is NEVER touched — and
 /// precision is the pidfd: an exit+recycle between scan and signal
 /// addresses the dead original (ESRCH), never a replacement.
-/// Exact-argv plus time-window plus per-test-unique durations
-/// (distinct sleeps; `/bin/sleep` and PATH-`sleep` differ in
-/// argv[0]) select WHICH descendants. Returns the signaled pids for
-/// the failure log. Strays already reparented to init are outside
-/// custody: spared (loudly) and leaked — a leak beats a kill.
-/// When the start tick is unknown the sweep fires nothing.
+/// S128-round9: the pin opens BEFORE any custody evidence (argv,
+/// starttime, ancestry are all read after it) and the starttime is
+/// re-verified before the signal — a late open after a recycle
+/// would pin the replacement while the evidence described the
+/// original. Exact-argv plus time-window plus per-test-unique
+/// durations (distinct sleeps; `/bin/sleep` and PATH-`sleep` differ
+/// in argv[0]) select WHICH descendants. Returns the signaled pids
+/// for the failure log. Strays already reparented to init are
+/// outside custody: spared (loudly) and leaked — a leak beats a
+/// kill. When the start tick is unknown the sweep fires nothing.
+/// S128-round9: production callers use this; the acquisition-order
+/// regression uses [`hang_sweep_with_hooks`].
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn hang_sweep(patterns: &[(&str, &[&str])], start_tick: Option<u64>) -> Vec<u32> {
+    hang_sweep_with_hooks(patterns, start_tick, &pidfd_open_task, None)
+}
+
+/// S128-round9: seam for the acquisition-order regression: `open`
+/// pins a candidate (production: [`pidfd_open_task`]) and
+/// `window_hook` runs after identity re-verification and before the
+/// signal (the [`kill_survivors_with_hook`] pattern). Production
+/// callers use [`hang_sweep`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn hang_sweep_with_hooks(
+    patterns: &[(&str, &[&str])],
+    start_tick: Option<u64>,
+    open: &dyn Fn(i32) -> Option<i32>,
+    window_hook: Option<&dyn Fn(i32)>,
+) -> Vec<u32> {
     let Some(start_tick) = start_tick else {
         eprintln!("hang sweep skipped: no start tick");
         return Vec::new();
@@ -964,59 +985,123 @@ fn hang_sweep(patterns: &[(&str, &[&str])], start_tick: Option<u64>) -> Vec<u32>
         if pid as u32 == me {
             continue;
         }
-        let cmdline = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
-        if cmdline.is_empty() {
-            continue;
-        }
-        let argv: Vec<&str> = cmdline
-            .split(|byte| *byte == 0)
-            .filter(|word| !word.is_empty())
-            .filter_map(|word| std::str::from_utf8(word).ok())
-            .collect();
-        let matched = patterns
-            .iter()
-            .any(|(head, tail)| argv.first() == Some(head) && argv.get(1..) == Some(*tail));
-        if !matched {
-            continue;
-        }
-        // `>=`: starttimes tick at 10ms, so a tool spawned within
-        // the same tick as the capture is still ours.
-        match task_starttime_checked(pid) {
-            Ok(Some(started)) if started >= start_tick => {}
-            Ok(_) => continue,
-            Err(error) => {
-                eprintln!("hang sweep spares {pid}: {error}");
-                continue;
-            }
-        }
-        // Descendant custody: spare anything outside our own tree.
-        if !is_test_descendant(pid, me) {
-            eprintln!("hang sweep spares non-descendant {pid} (argv match, outside custody)");
-            continue;
-        }
-        // Pin BEFORE signaling: exit+recycle between the scan and
-        // the signal then addresses the dead original (ESRCH),
-        // never a replacement. Unpinnable-but-live matches leak
-        // loud (old kernels) rather than risk a numeric signal.
-        let Some(pin) = pidfd_open_task(pid) else {
-            eprintln!("hang sweep cannot pin live descendant {pid}; leaking");
-            continue;
+        // S128-round9: PIN FIRST — the pin names whoever holds the
+        // number at open time, and every custody check below runs
+        // AFTER it. A recycle anywhere in the sequence is safe: a
+        // changed holder fails the evidence or the re-verification
+        // (spared — the pinned original is retired), and a dead
+        // pinned task answers ESRCH (nobody signaled). The signal
+        // can only ever address the pinned task.
+        let pin = match open(pid) {
+            Some(pin) => SweepPin(pin),
+            None => match task_starttime_checked(pid) {
+                // Raced exit between the directory scan and the
+                // open: quiet (the common short-lived-task case).
+                Ok(None) => continue,
+                Ok(Some(_)) => {
+                    eprintln!("hang sweep cannot pin live task {pid}; leaking");
+                    continue;
+                }
+                Err(error) => {
+                    eprintln!("hang sweep spares {pid}: {error}");
+                    continue;
+                }
+            },
         };
-        let errno = pidfd_signal_task(pin, libc::SIGKILL);
-        if errno != 0 && errno != libc::ESRCH {
-            // SAFETY: pin owned by this scope.
-            unsafe { libc::close(pin) };
-            eprintln!("hang sweep signal of {pid} refused: errno {errno}");
-            continue;
+        if sweep_candidate(pid, me, patterns, start_tick, pin, window_hook) {
+            killed.push(pid as u32);
         }
-        if !poll_pin_retired(pid, pin) {
-            eprintln!("hang sweep cannot prove {pid} retired (kill was signaled)");
-        }
-        // SAFETY: pin owned by this scope.
-        unsafe { libc::close(pin) };
-        killed.push(pid as u32);
     }
     killed
+}
+
+/// S128-round9: owns a sweep pin across one candidate; closes on
+/// drop so every spare path releases it.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct SweepPin(i32);
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for SweepPin {
+    fn drop(&mut self) {
+        // SAFETY: fd owned by this guard.
+        unsafe { libc::close(self.0) };
+    }
+}
+
+/// S128-round9: examine one sweep candidate through a HELD pin: the
+/// pin is acquired BEFORE any custody evidence, the evidence (exact
+/// argv, window starttime, descendant ancestry) is gathered after,
+/// the starttime is re-verified immediately before the signal, and
+/// the signal goes through the pin. Returns true when the signal
+/// was issued (ESRCH counts: the pinned task died in the window —
+/// nobody else was addressed). Any mismatch spares WITHOUT
+/// signaling. The guard closes the pin on every path.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn sweep_candidate(
+    pid: i32,
+    me: u32,
+    patterns: &[(&str, &[&str])],
+    start_tick: u64,
+    pin: SweepPin,
+    window_hook: Option<&dyn Fn(i32)>,
+) -> bool {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    if cmdline.is_empty() {
+        return false;
+    }
+    let argv: Vec<&str> = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| std::str::from_utf8(word).ok())
+        .collect();
+    let matched = patterns
+        .iter()
+        .any(|(head, tail)| argv.first() == Some(head) && argv.get(1..) == Some(*tail));
+    if !matched {
+        return false;
+    }
+    // `>=`: starttimes tick at 10ms, so a tool spawned within
+    // the same tick as the capture is still ours.
+    let started = match task_starttime_checked(pid) {
+        Ok(Some(started)) if started >= start_tick => started,
+        Ok(_) => return false,
+        Err(error) => {
+            eprintln!("hang sweep spares {pid}: {error}");
+            return false;
+        }
+    };
+    // Descendant custody: spare anything outside our own tree.
+    if !is_test_descendant(pid, me) {
+        eprintln!("hang sweep spares non-descendant {pid} (argv match, outside custody)");
+        return false;
+    }
+    // Re-verify the CURRENT holder is the task the evidence
+    // described: a recycle between the evidence and the signal must
+    // spare (the pinned original is then retired), never record a
+    // kill against a dead pin.
+    match task_starttime_checked(pid) {
+        Ok(Some(now)) if now == started => {}
+        Ok(_) => return false,
+        Err(error) => {
+            eprintln!("hang sweep spares {pid}: re-verify {error}");
+            return false;
+        }
+    }
+    if let Some(hook) = window_hook {
+        hook(pid);
+    }
+    // Signal THROUGH the pin: exit+recycle after re-verification
+    // addresses the dead original (ESRCH — quietly retired), never
+    // whoever holds the number now.
+    let errno = pidfd_signal_task(pin.0, libc::SIGKILL);
+    if errno != 0 && errno != libc::ESRCH {
+        eprintln!("hang sweep signal of {pid} refused: errno {errno}");
+        return false;
+    }
+    if !poll_pin_retired(pin.0) {
+        eprintln!("hang sweep cannot prove {pid} retired (kill was signaled)");
+    }
+    true
 }
 
 /// S85/S86-round5: run the invoke-denial driver with mode flags,
@@ -1235,7 +1320,7 @@ fn kill_survivors_with_hook(stdout: &str, hook: Option<&dyn Fn(i32, u64)>) {
             unsafe { libc::close(pin) };
             panic!("survivor {pid} signal refused: errno {errno}");
         }
-        let retired = poll_pin_retired(pid, pin);
+        let retired = poll_pin_retired(pin);
         // SAFETY: pin owned by this scope.
         unsafe { libc::close(pin) };
         assert!(retired, "survivor {pid} resisted SIGKILL");
@@ -1374,16 +1459,34 @@ fn pidfd_open_task(pid: i32) -> Option<i32> {
 /// reaped-if-ours (a zombie owned child still answers the pin) or
 /// pin-ESRCH (dead and reaped by its owner). Never the /proc
 /// number: a recycled number would poll a stranger. Bounded (5s).
+/// S129-round9: the reap runs through `waitid(P_PIDFD, …)` — the pin
+/// names OUR task even when the number was recycled as a sibling
+/// thread's child (a numeric `waitpid` would steal that
+/// replacement's status: children are process-wide in the test
+/// binary). The numeric pid is no longer even a parameter. A
+/// non-child answers ECHILD — not retired, just not ours to reap —
+/// and retirement is then proven by the pin-ESRCH probe alone. The
+/// waitid return needs no status decode: its only job is reaping
+/// our own zombie; ESRCH proves the reap.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn poll_pin_retired(pid: i32, pin: i32) -> bool {
+fn poll_pin_retired(pin: i32) -> bool {
     let end = Instant::now() + Duration::from_secs(5);
     loop {
-        let mut status = 0;
-        // SAFETY: valid status out-pointer (ECHILD when not ours).
-        let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if reaped == pid && (libc::WIFEXITED(status) || libc::WIFSIGNALED(status)) {
-            return true;
-        }
+        // SAFETY: waitid with a null siginfo reaps the PINNED task
+        // when it is our exited child, ECHILD otherwise (non-child
+        // or already reaped; EINVAL on a kernel predating P_PIDFD —
+        // then the ESRCH probe below still proves retirement for
+        // non-children, while an owned zombie on such a kernel
+        // stays unproven to the bound rather than risking a
+        // numeric reap).
+        unsafe {
+            libc::waitid(
+                libc::P_PIDFD,
+                pin as libc::id_t,
+                std::ptr::null_mut(),
+                libc::WEXITED | libc::WNOHANG,
+            )
+        };
         if pidfd_signal_task(pin, 0) == libc::ESRCH {
             return true;
         }
@@ -1415,6 +1518,19 @@ fn pidfd_signal_task(fd: i32, sig: i32) -> i32 {
     }
 }
 
+/// S138-round9: a pipe whose ends close on exec, so concurrently
+/// spawned commands never inherit the fixture's report channel.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn cloexec_pipe() -> [libc::c_int; 2] {
+    let mut pipe = [0; 2];
+    // SAFETY: valid out-pointer for the pipe ends.
+    assert_eq!(
+        unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
+        0
+    );
+    pipe
+}
+
 /// S112/S115-round8: spawn a sleeper that is NOT our descendant:
 /// the middle child reports the grandchild pid through a pipe and
 /// exits, so the sleeper reparents to init. Returns the orphan's
@@ -1424,9 +1540,20 @@ fn pidfd_signal_task(fd: i32, sig: i32) -> i32 {
 /// patterns.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn spawn_orphan_sleeper(duration: &str) -> (i32, u64) {
-    let mut pipe = [0; 2];
-    // SAFETY: valid out-pointer for the pipe ends.
-    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    spawn_orphan_sleeper_with_hook(duration, None)
+}
+
+/// S138-round9: seam for the concurrent-inheritor regression:
+/// `hook` runs after the report pipe exists (receiving both ends)
+/// and before the middle fork, so the test can fork a deliberate
+/// inheritor holding the write end. Production callers use
+/// [`spawn_orphan_sleeper`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn spawn_orphan_sleeper_with_hook(duration: &str, hook: Option<&dyn Fn(i32, i32)>) -> (i32, u64) {
+    let pipe = cloexec_pipe();
+    if let Some(hook) = hook {
+        hook(pipe[0], pipe[1]);
+    }
     // SAFETY: the middle child forks the sleeper, reports its pid,
     // and exits; the sleeper execs sleep. Stack buffers only — no
     // allocation in either forked child.
@@ -1491,11 +1618,45 @@ fn spawn_orphan_sleeper(duration: &str) -> (i32, u64) {
     }
     // SAFETY: pipe write end owned by this scope.
     unsafe { libc::close(pipe[1]) };
+    // S138-round9: bounded newline-framed report read — the middle
+    // child sends one `pid\n` line, and EOF is NOT required (a
+    // forked inheritor holding the write end must not stall the
+    // fixture: CLOEXEC covers exec'd inheritors, framing covers
+    // fork-only ones). 10s bound; expiry fails loud.
     let mut text = [0u8; 32];
     let mut len = 0;
+    let end = Instant::now() + Duration::from_secs(10);
     loop {
         if len >= text.len() {
             break;
+        }
+        if text[..len].contains(&b'\n') {
+            break;
+        }
+        let remaining = end
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(i32::MAX as u128) as i32;
+        assert!(
+            remaining > 0,
+            "orphan report read timed out (an inheritor holds the write end?)"
+        );
+        let mut waiting = libc::pollfd {
+            fd: pipe[0],
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: valid pollfd for an owned descriptor.
+        let ready = unsafe { libc::poll(&mut waiting, 1, remaining) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            panic!("orphan report poll failed: {error}");
+        }
+        if ready == 0 {
+            continue;
         }
         // SAFETY: bounded read from the middle-child pipe.
         let got = unsafe {
@@ -1637,6 +1798,404 @@ fn hang_sweep_spares_unrelated_matching_task() {
         "same task, not a replacement"
     );
     retire_orphan(pid, pinned);
+}
+
+/// S128-round9: the pin must be acquired BEFORE custody evidence is
+/// gathered. The opener simulates an acquisition-window replacement:
+/// it retires the matched stray and returns a pin to a DIFFERENT
+/// live task — exactly what exit+recycle between the checks and a
+/// late open produces (a pin to the number's new holder while the
+/// evidence described the original). A same-number recycle is
+/// unconstructible without wrapping the pid space, so the spoofed
+/// open is the structural proof: this test fails if the open moves
+/// after the checks. Pre-fix the evidence matched the original, the
+/// late open lands on the stand-in, and the sweep kills it (RED);
+/// post-fix the open precedes the evidence, the evidence observes
+/// the freed number, and the stand-in survives. Durations 881/882
+/// are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn hang_sweep_opens_before_evidence() {
+    let start_tick = boot_ticks_now().expect("tick reads");
+    let mut stray = std::process::Command::new("/bin/sleep")
+        .arg("881")
+        .spawn()
+        .expect("stray spawns");
+    let stray_pid = stray.id() as i32;
+    let mut standin = std::process::Command::new("/bin/sleep")
+        .arg("882")
+        .spawn()
+        .expect("stand-in spawns");
+    let standin_pid = standin.id() as i32;
+    assert!(
+        matches!(task_starttime_checked(stray_pid), Ok(Some(_))),
+        "stray visible"
+    );
+    let standin_live = task_starttime_checked(standin_pid)
+        .expect("stand-in stat readable")
+        .expect("stand-in visible");
+    // Pin the stand-in up front: the spoofed open hands a dup of
+    // this pin over no matter which number it is asked to pin — the
+    // observable shape of a late open after a recycle.
+    let standin_pin = pidfd_open_task(standin_pid).expect("stand-in pinnable");
+    let swept = hang_sweep_with_hooks(
+        &[("/bin/sleep", &["881"])],
+        Some(start_tick),
+        &|pid| {
+            if pid == stray_pid {
+                // SAFETY: retiring our own stray: kill + REAP so
+                // the number is free (not zombie) at evidence time.
+                unsafe {
+                    libc::kill(stray_pid, libc::SIGKILL);
+                }
+                let mut status = 0;
+                // SAFETY: valid status out-pointer for an owned child.
+                unsafe { libc::waitpid(stray_pid, &mut status, 0) };
+                // SAFETY: dup of an owned pin; the sweep owns the copy.
+                let dup = unsafe { libc::fcntl(standin_pin, libc::F_DUPFD_CLOEXEC, 0) };
+                assert!(dup >= 0, "stand-in pin dups");
+                return Some(dup);
+            }
+            pidfd_open_task(pid)
+        },
+        None,
+    );
+    // SAFETY: pin owned by this scope.
+    unsafe { libc::close(standin_pin) };
+    assert!(
+        swept.is_empty(),
+        "freed number must be spared, got: {swept:?}"
+    );
+    assert_eq!(
+        task_retired_checked(standin_pid),
+        Ok(false),
+        "the replacement stand-in must survive the sweep"
+    );
+    assert_eq!(
+        task_starttime_checked(standin_pid),
+        Ok(Some(standin_live)),
+        "same stand-in, not a replacement"
+    );
+    // SAFETY: retiring our own stand-in (the stray is already reaped).
+    unsafe {
+        libc::kill(standin_pid, libc::SIGKILL);
+    }
+    let _ = standin.wait();
+    let _ = stray.wait();
+}
+
+/// S128-round9: a candidate that exits between re-verification and
+/// the signal (hook-injected deterministically — no pid race
+/// needed) retires quietly through its pin with no signal delivered
+/// anywhere. This locks the post-fix window behavior (a numeric
+/// signal, or an over-strict ESRCH panic, would fail it); the spoof
+/// test above is the RED proving the open precedes the evidence.
+/// Durations 883/884 are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn hang_sweep_window_exit_retires_quietly() {
+    let start_tick = boot_ticks_now().expect("tick reads");
+    let mut stray = std::process::Command::new("/bin/sleep")
+        .arg("883")
+        .spawn()
+        .expect("stray spawns");
+    let stray_pid = stray.id() as i32;
+    let mut canary = std::process::Command::new("/bin/sleep")
+        .arg("884")
+        .spawn()
+        .expect("canary spawns");
+    let canary_pid = canary.id() as i32;
+    let canary_live = task_starttime_checked(canary_pid)
+        .expect("canary stat readable")
+        .expect("canary visible");
+    let swept = hang_sweep_with_hooks(
+        &[("/bin/sleep", &["883"])],
+        Some(start_tick),
+        &pidfd_open_task,
+        Some(&|pid| {
+            assert_eq!(pid, stray_pid, "hook fires for the matched stray");
+            // SAFETY: retiring our own stray: kill + REAP so the
+            // number is free (not zombie) at signal time.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            let mut status = 0;
+            // SAFETY: valid status out-pointer for an owned child.
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+        }),
+    );
+    assert_eq!(
+        swept,
+        vec![stray_pid as u32],
+        "a window exit retires through its pin (ESRCH), still recorded"
+    );
+    assert_eq!(
+        task_retired_checked(canary_pid),
+        Ok(false),
+        "window exit must signal nothing live"
+    );
+    assert_eq!(
+        task_starttime_checked(canary_pid),
+        Ok(Some(canary_live)),
+        "same canary, not a replacement"
+    );
+    // SAFETY: retiring our own canary (the stray is already reaped).
+    unsafe {
+        libc::kill(canary_pid, libc::SIGKILL);
+    }
+    let _ = canary.wait();
+    let _ = stray.wait();
+}
+
+/// S138-round9: the fixture pipe hides from exec'd children: a
+/// concurrently spawned command must not inherit the write end
+/// (pre-fix plain `pipe` leaks it and the reader stalls to EOF).
+/// Structural (CLOEXEC on both ends) plus behavioral (the exec'd
+/// child's /proc fd table names no pipe with our write end's
+/// inode — the kernel is the oracle).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn cloexec_pipe_hides_from_exec() {
+    let pipe = cloexec_pipe();
+    // Structural: both ends carry CLOEXEC.
+    for fd in pipe {
+        // SAFETY: fcntl read-back on an owned descriptor.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(
+            flags >= 0 && flags & libc::FD_CLOEXEC != 0,
+            "pipe end {fd} must be close-on-exec"
+        );
+    }
+    // Behavioral: an exec'd child inherits neither end.
+    let write_ino = {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: valid stat out-pointer for an owned descriptor.
+        assert_eq!(unsafe { libc::fstat(pipe[1], &mut stat) }, 0);
+        stat.st_ino
+    };
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("inheritor probe spawns");
+    let child_pid = child.id();
+    let wanted = format!("pipe:[{write_ino}]");
+    let mut leaked = Vec::new();
+    let entries =
+        std::fs::read_dir(format!("/proc/{child_pid}/fd")).expect("child fd table readable");
+    for entry in entries.flatten() {
+        if let Ok(target) = std::fs::read_link(entry.path()) {
+            if target.to_string_lossy() == wanted {
+                leaked.push(entry.file_name());
+            }
+        }
+    }
+    // SAFETY: retiring our own probe.
+    unsafe {
+        libc::kill(child_pid as i32, libc::SIGKILL);
+    }
+    let _ = child.wait();
+    // SAFETY: ends owned by this scope.
+    unsafe {
+        libc::close(pipe[0]);
+        libc::close(pipe[1]);
+    }
+    assert!(
+        leaked.is_empty(),
+        "exec'd child inherited the pipe: {leaked:?}"
+    );
+}
+
+/// S138-round9: a fork-only inheritor (no exec — CLOEXEC cannot
+/// help) holding the report write end must not stall the orphan
+/// fixture: the newline-framed bounded read returns on the `pid\n`
+/// line. Pre-fix the read waits for EOF until the holder exits
+/// (RED: ~25s); post-fix it returns in milliseconds. Duration 94
+/// is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_fixture_survives_concurrent_inheritor() {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    let holder_pid = AtomicI32::new(-1);
+    let start = Instant::now();
+    let (pid, pinned) = spawn_orphan_sleeper_with_hook(
+        "94",
+        Some(&|read_fd, _write_fd| {
+            // SAFETY: the holder keeps ONLY the write end open
+            // across the orphan report, then exits;
+            // async-signal-safe only.
+            let holder = unsafe { libc::fork() };
+            assert!(holder >= 0, "holder fork failed");
+            if holder == 0 {
+                unsafe {
+                    libc::close(read_fd);
+                    let mut remaining = 25u32;
+                    while remaining > 0 {
+                        remaining = libc::sleep(remaining);
+                    }
+                    libc::_exit(0);
+                }
+            }
+            holder_pid.store(holder, Ordering::SeqCst);
+        }),
+    );
+    let elapsed = start.elapsed();
+    // Reap the holder first: it is our child, still sleeping.
+    let holder = holder_pid.load(Ordering::SeqCst);
+    assert!(holder > 0, "hook must report its holder");
+    // SAFETY: retiring our own holder.
+    unsafe {
+        libc::kill(holder, libc::SIGKILL);
+        let mut status = 0;
+        libc::waitpid(holder, &mut status, 0);
+    }
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "framed read must not wait for the inheritor, took: {elapsed:?}"
+    );
+    assert_eq!(
+        task_starttime_checked(pid),
+        Ok(Some(pinned)),
+        "orphan pinned"
+    );
+    assert_eq!(
+        task_retired_checked(pid),
+        Ok(false),
+        "orphan alive after a held write end"
+    );
+    retire_orphan(pid, pinned);
+}
+
+/// S129-round9: retirement polling must never issue a numeric
+/// wait: the probe pins a live NON-child orphan and polls under a
+/// filter that kills on `wait4` (the syscall behind every numeric
+/// waitpid). Pre-fix the first poll iteration dies by SIGSYS (RED);
+/// post-fix the pin-authorized waitid + ESRCH probe never touch
+/// wait4 and the poll times out with the orphan alive — so a
+/// replacement child's status can never be consumed here (only the
+/// pinned task is reaped, through the pin). The orphan-alive
+/// assertions also catch a naive ECHILD-means-retired read. The
+/// manual wait loop retires the orphan on every failure path so RED
+/// runs stay clean. Duration 93 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn poll_pin_retired_issues_no_numeric_wait() {
+    use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
+    let (pid, pinned) = spawn_orphan_sleeper("93");
+    // Pin in the parent (asserting pinnability up front); the forked
+    // probe inherits the pin across the fork.
+    let pin = pidfd_open_task(pid).expect("orphan pinnable while live");
+    // SAFETY: the probe installs a wait4 trap, polls a live
+    // non-child pin, and reports via _exit.
+    let probe = unsafe { libc::fork() };
+    assert!(probe >= 0, "trap fork failed");
+    if probe == 0 {
+        if install_deny_one(libc::SYS_wait4, DenyAction::Kill).is_err() {
+            unsafe { libc::_exit(3) };
+        }
+        let retired = poll_pin_retired(pin);
+        // SAFETY: inherited pin owned by this scope.
+        unsafe { libc::close(pin) };
+        unsafe { libc::_exit(if retired { 11 } else { 10 }) };
+    }
+    // SAFETY: parent copy of the probed pin.
+    unsafe { libc::close(pin) };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let code = loop {
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let got = unsafe { libc::waitpid(probe, &mut status, libc::WNOHANG) };
+        if got == probe {
+            if !libc::WIFEXITED(status) {
+                // Pre-fix RED path: SIGSYS. Retire the surviving
+                // orphan before failing so RED runs stay clean.
+                retire_orphan(pid, pinned);
+                panic!(
+                    "retirement poll issued a numeric wait under trap (signal {})",
+                    libc::WTERMSIG(status)
+                );
+            }
+            break libc::WEXITSTATUS(status);
+        }
+        if got < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            retire_orphan(pid, pinned);
+            panic!("trap probe wait failed: {error}");
+        }
+        if Instant::now() >= deadline {
+            // SAFETY: retiring our own hung probe.
+            unsafe {
+                libc::kill(probe, libc::SIGKILL);
+                let mut status = 0;
+                libc::waitpid(probe, &mut status, 0);
+            }
+            retire_orphan(pid, pinned);
+            panic!("trap probe hung");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if code == 3 {
+        retire_orphan(pid, pinned);
+        eprintln!("skip: seccomp unavailable for the wait4 trap");
+        return;
+    }
+    assert_eq!(
+        code, 10,
+        "trapped poll must time out with the orphan alive (11 would mean ECHILD misread as retired)"
+    );
+    assert_eq!(
+        task_retired_checked(pid),
+        Ok(false),
+        "polled orphan must survive"
+    );
+    assert_eq!(
+        task_starttime_checked(pid),
+        Ok(Some(pinned)),
+        "same orphan, not a replacement"
+    );
+    retire_orphan(pid, pinned);
+}
+
+/// S129-round9 control: pin-authorized polling still reaps an owned
+/// zombie through the pin — the `waitid(P_PIDFD, …)` reap, not the
+/// ESRCH probe, proves it (a zombie answers the pin). Guards
+/// against an over-strict fix that drops reaping: without the reap
+/// this polls to the bound and fails.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn poll_pin_retired_reaps_owned_zombie() {
+    let mut child = std::process::Command::new("/bin/true")
+        .spawn()
+        .expect("probe child spawns");
+    let pid = child.id() as i32;
+    // Wait for the zombie: exit observed, status unreaped.
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match task_retired_checked(pid) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(error) => panic!("probe child observation unresolved: {error}"),
+        }
+        assert!(Instant::now() < end, "probe child never exited");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pin = pidfd_open_task(pid).expect("zombie pinnable while unreaped");
+    assert!(
+        poll_pin_retired(pin),
+        "owned zombie must retire through the pin"
+    );
+    // SAFETY: pin owned by this scope.
+    unsafe { libc::close(pin) };
+    let mut status = 0;
+    // SAFETY: valid status out-pointer for an owned child.
+    let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    assert!(
+        again < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+        "the poll must have reaped the zombie (no status left)"
+    );
+    let _ = child.wait();
 }
 
 /// S115-round8: survivor cleanup of a NON-child (the real

@@ -547,6 +547,12 @@ fn preflight_x86_64() -> Result<String, AuditError> {
     // closing releases a barrier-blocked child via EOF.
     {
         let byte = [0u8; 1];
+        // S139-round9: the retry deadline exists BEFORE the first
+        // attempt — an EINTR-spamming write filter expires bounded
+        // (through closure + retirement below), never spinning the
+        // parent while the child waits.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut expired = false;
         let wrote = loop {
             // SAFETY: one byte to the release pipe; the child
             // holds the read end.
@@ -557,6 +563,10 @@ fn preflight_x86_64() -> Result<String, AuditError> {
                 break true;
             }
             if wrote < 0 && last_errno_is(libc::EINTR) {
+                if std::time::Instant::now() >= deadline {
+                    expired = true;
+                    break false;
+                }
                 continue;
             }
             break false;
@@ -578,8 +588,16 @@ fn preflight_x86_64() -> Result<String, AuditError> {
             // barrier-blocked child via EOF; the bounded
             // retirement reaps it (or reports it unproven).
             let retired = retire_preflight_child(pid, pidfd.0);
+            // An expiry names its deadline (deliberately without
+            // the "timed out" shape: only the barrier-timeout with
+            // proven retirement classifies as expected).
+            let cause = if expired {
+                "EINTR retry deadline exceeded".to_string()
+            } else {
+                write_error.to_string()
+            };
             return Err(AuditError::new(format!(
-                "preflight release refused: {write_error}{}",
+                "preflight release refused: {cause}{}",
                 if retired {
                     String::new()
                 } else {
@@ -2412,40 +2430,595 @@ mod tests {
         );
     }
 
-    /// S110/S111-round8: run `preflight()` in a forked middleman
-    /// under a caller-installed seccomp denial. The middleman
-    /// reports through its exit code only (20 = Ok, 21 = Err,
-    /// 22 = timed-out Err, 3 = setup refused — the filter install
-    /// is prctl-only so it stacks before any read/write denial).
-    /// The parent enforces `guard` so a deadlock FAILS instead of
-    /// hanging the suite; returns the middleman's exit code.
-    /// The middleman's `preflight()` takes the fork rendezvous
-    /// lock: a fork landing while another test thread holds it
-    /// across ITS fork would hang to the guard (loud failure,
-    /// microsecond window — the accepted direct-fork hazard).
+    /// S140-round9: re-exec probe rendezvous. The middleman stub
+    /// execs the test binary at [`PROBE_TEST_PATH`] with
+    /// `PROBE_DENIAL_ENV` set to the denial spec; the probe
+    /// reports one `exit=… grandchild=… err=…` line on the fd named
+    /// by `PROBE_REPORT_FD_ENV`, then _exits with the
+    /// classification. The test path must stay exact: an exec that
+    /// runs zero tests reports no line and fails loud.
     #[cfg(target_arch = "x86_64")]
-    fn run_preflight_middleman(deny: &dyn Fn() -> bool, guard: Duration) -> i32 {
-        use std::time::{Duration, Instant};
-        // SAFETY: the middleman installs a seccomp filter, runs
-        // `preflight()`, and reports via _exit code only.
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            if !deny() {
-                unsafe { libc::_exit(3) };
-            }
-            match preflight() {
-                Ok(_) => unsafe { libc::_exit(20) },
-                Err(error) => {
-                    if error.to_string().contains("timed out") {
-                        unsafe { libc::_exit(22) };
-                    } else {
-                        unsafe { libc::_exit(21) };
+    const PROBE_TEST_PATH: &str = "fixture::linux::audit::tests::tt04_preflight_denial_exec_probe";
+    #[cfg(target_arch = "x86_64")]
+    const PROBE_DENIAL_ENV: &str = "SCOPEBASE_TT04_PREFLIGHT_DENIAL";
+    #[cfg(target_arch = "x86_64")]
+    const PROBE_REPORT_FD_ENV: &str = "SCOPEBASE_TT04_PREFLIGHT_REPORT_FD";
+
+    /// S132-round9: the exact expected-timeout shape — the
+    /// barrier-denied report timeout WITH proven retirement.
+    /// Classification compares the full string: a
+    /// `; preflight child not proven reaped` suffix (or any other
+    /// text) is NOT an expected timeout.
+    #[cfg(target_arch = "x86_64")]
+    const EXPECTED_BARRIER_TIMEOUT: &str = "preflight report timed out (barrier unproven)";
+
+    /// S132-round9: the middleman's surviving preflight child, if
+    /// any — reported so the parent test keeps independent cleanup
+    /// authority over BOTH generations (middleman and grandchild).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, Clone, Copy)]
+    enum GrandchildState {
+        /// The probe observed no surviving preflight child: the
+        /// middleman reaped its own (the retirement proof).
+        None,
+        /// A surviving preflight child (pid + starttime) needing
+        /// test-side cleanup via [`retire_reported_grandchild`].
+        Live(libc::pid_t, u64),
+    }
+
+    /// S132/S140-round9: what the middleman reported — its exit
+    /// classification, its surviving grandchild if any, and the
+    /// preflight error text (empty on success).
+    #[cfg(target_arch = "x86_64")]
+    struct MiddlemanOutcome {
+        code: i32,
+        grandchild: GrandchildState,
+        err: String,
+    }
+
+    /// S132-round9: parse one probe line —
+    /// `exit=<n> grandchild=<none|pid:start> err=<rest>` — into its
+    /// outcome. A malformed line classifies as code -1 (the caller
+    /// fails loud: the middleman must always report exactly).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_middleman_line(line: &str) -> MiddlemanOutcome {
+        let mut code = -1;
+        let mut grandchild = GrandchildState::None;
+        let mut rest = line.trim_end_matches(['\n', '\r']);
+        if let Some(tail) = rest.strip_prefix("exit=") {
+            let (code_text, after) = tail.split_once(' ').unwrap_or((tail, ""));
+            code = code_text.parse().unwrap_or(-1);
+            rest = after;
+        }
+        if let Some(tail) = rest.strip_prefix("grandchild=") {
+            let (gc_text, after) = tail.split_once(' ').unwrap_or((tail, ""));
+            if gc_text != "none" {
+                if let Some((pid_text, start_text)) = gc_text.split_once(':') {
+                    if let (Ok(pid), Ok(started)) = (pid_text.parse(), start_text.parse()) {
+                        grandchild = GrandchildState::Live(pid, started);
                     }
                 }
             }
+            rest = after;
         }
+        let err = rest.strip_prefix("err=").unwrap_or("").to_string();
+        MiddlemanOutcome {
+            code,
+            grandchild,
+            err,
+        }
+    }
+
+    /// S140-round9: the probe's only report channel — write exactly
+    /// one line, then _exit with the classification. Used on EVERY
+    /// probe path (even setup refusal) so the parent never waits on
+    /// a silent middleman.
+    #[cfg(target_arch = "x86_64")]
+    fn probe_report_and_exit(fd: libc::c_int, code: i32, grandchild: &str, err: &str) -> ! {
+        let line = format!("exit={code} grandchild={grandchild} err={err}\n");
+        let bytes = line.as_bytes();
+        let mut written = 0;
+        while written < bytes.len() {
+            // SAFETY: bounded write to the inherited report fd.
+            let got = unsafe {
+                libc::write(
+                    fd,
+                    bytes[written..].as_ptr() as *const libc::c_void,
+                    (bytes.len() - written) as libc::size_t,
+                )
+            };
+            if got <= 0 {
+                break;
+            }
+            written += got as usize;
+        }
+        // SAFETY: report fd owned by this scope.
+        unsafe { libc::close(fd) };
+        // SAFETY: report done; exit with the classification.
+        unsafe { libc::_exit(code) };
+    }
+
+    /// S132-round9: read a /proc file in the probe WITHOUT the
+    /// `read` syscall: under a read-denying spec `read` is refused,
+    /// so discovery uses `pread64` (a different syscall number the
+    /// read-denial does not cover). The subject's barrier uses
+    /// `read` only (see `preflight_child`) — the scenario is
+    /// unchanged; only the probe's own discovery takes the
+    /// alternate number. Fails loud on any error: a silent empty
+    /// read would forge a `none` retirement proof.
+    #[cfg(target_arch = "x86_64")]
+    fn probe_read_to_string(path: &str) -> String {
+        let cpath = std::ffi::CString::new(path).expect("probe path is C-safe");
+        // SAFETY: open read-only; the fd is closed below.
+        let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_RDONLY) };
+        assert!(fd >= 0, "probe opens {path}");
+        let mut out = Vec::new();
+        let mut offset = 0;
+        loop {
+            let mut chunk = [0u8; 512];
+            // SAFETY: bounded pread from an owned descriptor.
+            let got = unsafe {
+                libc::pread(
+                    fd,
+                    chunk.as_mut_ptr() as *mut libc::c_void,
+                    chunk.len() as libc::size_t,
+                    offset,
+                )
+            };
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                // SAFETY: fd owned by this scope.
+                unsafe { libc::close(fd) };
+                panic!("probe reads {path}: {error}");
+            }
+            if got == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..got as usize]);
+            offset += got as libc::off_t;
+        }
+        // SAFETY: fd owned by this scope.
+        unsafe { libc::close(fd) };
+        String::from_utf8(out).expect("probe reads UTF-8")
+    }
+
+    /// S132-round9: the probe's surviving preflight children as a
+    /// protocol token — `none` (reaped: the retirement proof) or
+    /// `pid:starttime` (alive: the parent test cleans it up). The
+    /// probe runs exactly one preflight, so at most one child can
+    /// exist. Unreadable /proc fails loud (a panic the parent
+    /// surfaces): without it the retirement proof is meaningless.
+    #[cfg(target_arch = "x86_64")]
+    fn probe_children_state() -> String {
+        // SAFETY: gettid always succeeds.
+        let tid = unsafe { libc::gettid() };
+        // /proc/self/task/<tid>/children carries one line of pids.
+        let pids = probe_read_to_string(&format!("/proc/self/task/{tid}/children"));
+        let mut live: Vec<(libc::pid_t, u64)> = Vec::new();
+        for word in pids.split_whitespace() {
+            let pid: libc::pid_t = match word.parse() {
+                Ok(pid) => pid,
+                Err(_) => continue,
+            };
+            // The starttime binds the number to the task the probe
+            // forked (a recycled number would carry another birth).
+            let row = probe_read_to_string(&format!("/proc/{pid}/stat"));
+            let started: Option<u64> = (|| {
+                let after_comm = row.rsplit_once(") ")?.1;
+                after_comm.split_whitespace().nth(19)?.parse().ok()
+            })();
+            match started {
+                Some(started) => live.push((pid, started)),
+                None => panic!("probe reads child starttime"),
+            }
+        }
+        assert!(live.len() <= 1, "probe has unexpected children: {live:?}");
+        match live.first() {
+            Some((pid, started)) => format!("{pid}:{started}"),
+            None => "none".to_string(),
+        }
+    }
+
+    /// S139-round9: deny one syscall number with an arbitrary errno
+    /// (the shared installer only offers EPERM/ENOSYS/kill; this
+    /// middleman-local copy adds EINTR for the release-write retry
+    /// regression). Same classic-BPF idiom as
+    /// `super::super::seccomp::install_deny_one` (arch-checked,
+    /// `NO_NEW_PRIVS` first): a follow-up should promote an
+    /// `Errno(n)` action into the shared installer instead of
+    /// duplicating it here.
+    /// S140-round9: `except_fd` exempts one descriptor from the
+    /// denial (the probe's report channel — without the exemption
+    /// a write-denying spec would silence the middleman's own
+    /// report). The subject can never address the exempted fd: it
+    /// is already open, so the subject's pipes allocate elsewhere —
+    /// every subject write stays denied.
+    #[cfg(target_arch = "x86_64")]
+    fn install_deny_errno_one(
+        nr: libc::c_long,
+        errno: libc::c_int,
+        except_fd: Option<libc::c_int>,
+    ) -> Result<(), String> {
+        const BPF_LD_ABS_W: u16 = 0x20;
+        const BPF_JEQ_K: u16 = 0x15;
+        const BPF_RET_K: u16 = 0x06;
+        const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+        const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+        const SECCOMP_DATA_NR_OFF: u32 = 0;
+        const SECCOMP_DATA_ARCH_OFF: u32 = 4;
+        const SECCOMP_DATA_ARG0_OFF: u32 = 16;
+        const AUDIT_ARCH_X86_64: u32 = 0xC000_003E;
+        fn stmt(code: u16, k: u32) -> libc::sock_filter {
+            libc::sock_filter {
+                code,
+                jt: 0,
+                jf: 0,
+                k,
+            }
+        }
+        fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+            libc::sock_filter { code, jt, jf, k }
+        }
+        let mut program = vec![
+            stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
+            jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
+            stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+            stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
+        ];
+        match except_fd {
+            Some(fd) => {
+                program.push(jump(BPF_JEQ_K, nr as u32, 0, 3));
+                program.push(stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG0_OFF));
+                program.push(jump(BPF_JEQ_K, fd as u32, 1, 0));
+                program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | errno as u32));
+                program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
+            }
+            None => {
+                program.push(jump(BPF_JEQ_K, nr as u32, 0, 1));
+                program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | errno as u32));
+                program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
+            }
+        }
+        // SAFETY: `prctl` with explicit `c_ulong` arguments; the
+        // program array outlives the synchronous install call.
+        let nnp = unsafe {
+            libc::prctl(
+                libc::PR_SET_NO_NEW_PRIVS,
+                1 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            )
+        };
+        if nnp != 0 {
+            return Err(format!(
+                "no_new_privs errno {}",
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+            ));
+        }
+        let prog = libc::sock_fprog {
+            len: program.len() as u16,
+            filter: program.as_ptr() as *mut libc::sock_filter,
+        };
+        let installed = unsafe {
+            libc::prctl(
+                libc::PR_SET_SECCOMP,
+                libc::SECCOMP_MODE_FILTER as libc::c_ulong,
+                &prog as *const libc::sock_fprog as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            )
+        };
+        if installed != 0 {
+            return Err(format!(
+                "install_filter errno {}",
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+            ));
+        }
+        Ok(())
+    }
+
+    /// S140-round9: the re-exec'd denial probe (see
+    /// [`run_preflight_middleman`]). Under a normal suite run (no
+    /// rendezvous variables) this passes silently; the middleman
+    /// stub execs the test binary at this exact path with a denial
+    /// spec, and the probe installs the filter, runs `preflight()`,
+    /// reports one line on the report fd, and _exits with the
+    /// classification (20 = Ok, 21 = Err, 22 = expected
+    /// barrier-timeout Err, 3 = setup refused). A single-threaded
+    /// fresh image: the fork rendezvous lock starts unlocked.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn tt04_preflight_denial_exec_probe() {
+        use super::super::seccomp::{install_deny_one, install_deny_ptrace_request, DenyAction};
+        let spec = match std::env::var(PROBE_DENIAL_ENV) {
+            Ok(spec) => spec,
+            Err(_) => return,
+        };
+        let report: libc::c_int = std::env::var(PROBE_REPORT_FD_ENV)
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .unwrap_or(-1);
+        // Denial spec → filter installs. Any install failure is
+        // setup refusal (exit 3, skipped by the caller — never a
+        // test failure).
+        // Write-denying specs exempt the report fd (the probe's
+        // own channel); every other write stays denied.
+        let installed = match spec.as_str() {
+            "read-eperm" => install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok(),
+            "write-traceme-eperm" => {
+                install_deny_ptrace_request(libc::PTRACE_TRACEME, DenyAction::Eperm).is_ok()
+                    && install_deny_errno_one(libc::SYS_write, libc::EPERM, Some(report)).is_ok()
+            }
+            "read-nopidfd" => {
+                install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok()
+                    && install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_ok()
+            }
+            "read-nosignal" => {
+                install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok()
+                    && install_deny_one(libc::SYS_kill, DenyAction::Eperm).is_ok()
+                    && install_deny_one(libc::SYS_pidfd_send_signal, DenyAction::Eperm).is_ok()
+            }
+            "write-eintr" => {
+                install_deny_errno_one(libc::SYS_write, libc::EINTR, Some(report)).is_ok()
+            }
+            _ => false,
+        };
+        if !installed {
+            probe_report_and_exit(report, 3, "none", "setup-filter-refused");
+        }
+        if spec == "write-eintr" || spec == "write-traceme-eperm" {
+            // Self-check the duplicated installer in both
+            // directions: other fds must answer the denial errno
+            // (a wrong syscall number would install cleanly and
+            // filter nothing) while the report fd stays writable —
+            // both must fail loud, never skip.
+            let want = if spec == "write-eintr" {
+                libc::EINTR
+            } else {
+                libc::EPERM
+            };
+            let byte = [0u8; 1];
+            // SAFETY: bad-fd write answered by the filter, never run.
+            let got = unsafe { libc::write(-1, byte.as_ptr() as *const _, 1) };
+            assert!(
+                got < 0 && last_errno_is(want),
+                "write filter must answer its errno"
+            );
+            // SAFETY: zero-length write emits no bytes.
+            let zero = unsafe { libc::write(report, byte.as_ptr() as *const _, 0) };
+            assert_eq!(zero, 0, "report fd must escape the write denial");
+        }
+        match preflight() {
+            Ok(_) => probe_report_and_exit(report, 20, &probe_children_state(), ""),
+            Err(error) => {
+                let text = error.to_string();
+                // S132-round9: the expected timeout is the EXACT
+                // shape — never a substring: an unresolved
+                // retirement (`…; preflight child not proven
+                // reaped`) must refuse, not masquerade as 22.
+                let code = if text == EXPECTED_BARRIER_TIMEOUT {
+                    22
+                } else {
+                    21
+                };
+                probe_report_and_exit(report, code, &probe_children_state(), &text);
+            }
+        }
+    }
+
+    /// S140-round9: retire a grandchild the middleman reported
+    /// alive: pin first, verify the reported starttime still names
+    /// it, signal through the pin, prove disappearance. The
+    /// grandchild reparented to init when the middleman exited, so
+    /// init reaps it once dead — /proc disappearance is the proof.
+    /// Returns true when the grandchild was found alive and retired
+    /// (false: already gone — nothing needed cleanup).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_reported_grandchild(pid: libc::pid_t, started: u64) -> bool {
+        // Pin first: the pin names whoever holds the number now.
+        let pin = match super::super::seccomp::pidfd_open_raw(pid) {
+            Ok(pin) => pin,
+            Err(_) => return false,
+        };
+        // Verify the CURRENT holder is the reported task: a changed
+        // holder (or none) means the original retired — close the
+        // pin and report nothing to do WITHOUT signaling.
+        let current: Option<u64> = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|row| {
+                let after_comm = row.rsplit_once(") ")?.1;
+                after_comm.split_whitespace().nth(19)?.parse().ok()
+            });
+        if current != Some(started) {
+            // SAFETY: pin owned by this scope.
+            unsafe { libc::close(pin) };
+            return false;
+        }
+        // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
+        let sent = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pin as libc::c_long,
+                libc::SIGKILL as libc::c_long,
+                0 as libc::c_long,
+                0 as libc::c_long,
+            )
+        };
+        // SAFETY: pin owned by this scope.
+        unsafe { libc::close(pin) };
+        assert_eq!(
+            sent, 0,
+            "reported grandchild must be signalable through its pin"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                return true;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "reported grandchild {pid} resisted retirement"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// S110/S111-round8: run `preflight()` in a forked middleman
+    /// under a caller-selected seccomp denial, returning what the
+    /// middleman reported. The parent enforces `guard` so a
+    /// deadlock FAILS instead of hanging the suite.
+    /// S140-round9: the middleman stub execs a FRESH test-binary
+    /// image before running any allocation- or lock-using Rust code
+    /// (the denial spec crosses the exec as an environment
+    /// variable — no closure can). The old raw-forked middleman
+    /// inherited the multithreaded image, including a possibly
+    /// locked fork rendezvous mutex, and deadlocked in
+    /// `preflight()` whenever another test held it across the fork.
+    /// `spec` is one of `read-eperm`, `write-traceme-eperm`,
+    /// `read-nopidfd`, `read-nosignal`, `write-eintr`.
+    #[cfg(target_arch = "x86_64")]
+    fn run_preflight_middleman(spec: &'static str, guard: Duration) -> MiddlemanOutcome {
+        use std::os::unix::ffi::OsStringExt as _;
+        use std::time::{Duration, Instant};
+        // Report pipe: the probe's single line. The write end must
+        // stay non-CLOEXEC (it crosses the exec); the read end is
+        // cloexec'd so the probe never inherits it.
+        let mut pipe = [0; 2];
+        // SAFETY: valid out-pointer for the pipe ends.
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        // SAFETY: fcntl flag-set on an owned descriptor.
+        assert_eq!(
+            unsafe { libc::fcntl(pipe[0], libc::F_SETFD, libc::FD_CLOEXEC) },
+            0
+        );
+        // Rendezvous strings, built pre-fork: the child borrows
+        // their (inherited) bytes without allocating.
+        let exe = std::ffi::CString::new(
+            std::env::current_exe()
+                .expect("middleman test binary path")
+                .into_os_string()
+                .into_vec(),
+        )
+        .expect("test binary path is C-safe");
+        let probe = std::ffi::CString::new(PROBE_TEST_PATH).expect("static");
+        let exact = std::ffi::CString::new("--exact").expect("static");
+        let denial =
+            std::ffi::CString::new(format!("{PROBE_DENIAL_ENV}={spec}")).expect("spec is C-safe");
+        // SAFETY: raw fork; the child execs immediately — stack
+        // formatting plus one execve, never allocating, locking,
+        // or returning into test code. Immune to the
+        // inherited-mutex hazard by construction (no Rust runtime
+        // call between fork and exec).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            // Stack-format the report-fd variable (the fd number
+            // is dynamic — no allocation):
+            // `SCOPEBASE_TT04_PREFLIGHT_REPORT_FD=<n>`.
+            let mut var = [0u8; 128];
+            let prefix = PROBE_REPORT_FD_ENV.as_bytes();
+            var[..prefix.len()].copy_from_slice(prefix);
+            var[prefix.len()] = b'=';
+            let mut len = prefix.len() + 1;
+            let mut digits = [0u8; 16];
+            let mut dlen = 0;
+            let mut value = pipe[1] as u32;
+            loop {
+                digits[dlen] = b'0' + (value % 10) as u8;
+                dlen += 1;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            let mut i = 0;
+            while i < dlen {
+                var[len] = digits[dlen - 1 - i];
+                len += 1;
+                i += 1;
+            }
+            var[len] = 0;
+            let argv = [
+                exe.as_ptr(),
+                probe.as_ptr(),
+                exact.as_ptr(),
+                std::ptr::null(),
+            ];
+            let envp = [
+                denial.as_ptr(),
+                var.as_ptr() as *const libc::c_char,
+                std::ptr::null(),
+            ];
+            unsafe {
+                libc::execve(exe.as_ptr(), argv.as_ptr(), envp.as_ptr());
+                libc::_exit(127);
+            }
+        }
+        // SAFETY: write end owned by the middleman now.
+        unsafe { libc::close(pipe[1]) };
         let deadline = Instant::now() + guard;
+        // Bounded newline-framed report read: the probe writes one
+        // line (even on setup refusal) and a parked grandchild
+        // holding the write end must not stall the parent — EOF is
+        // NOT required (S138's lesson).
+        let mut line = Vec::new();
+        loop {
+            if line.contains(&b'\n') {
+                break;
+            }
+            assert!(
+                line.len() < 4096,
+                "middleman report line overruns its frame"
+            );
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            if remaining <= 0 {
+                // SAFETY: retiring our own hung middleman.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    let mut status = 0;
+                    libc::waitpid(pid, &mut status, 0);
+                    libc::close(pipe[0]);
+                }
+                panic!("middleman hung past {guard:?} (deadlock under denial)");
+            }
+            let mut waiting = libc::pollfd {
+                fd: pipe[0],
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: valid pollfd for an owned descriptor.
+            let ready = unsafe { libc::poll(&mut waiting, 1, remaining) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("middleman report poll failed: {error}");
+            }
+            if ready == 0 {
+                continue;
+            }
+            let mut byte = [0u8; 256];
+            // SAFETY: bounded read from the report pipe.
+            let got = unsafe {
+                libc::read(
+                    pipe[0],
+                    byte.as_mut_ptr() as *mut libc::c_void,
+                    byte.len() as libc::size_t,
+                )
+            };
+            if got <= 0 {
+                break;
+            }
+            line.extend_from_slice(&byte[..got as usize]);
+        }
+        // SAFETY: read end owned by this scope.
+        unsafe { libc::close(pipe[0]) };
+        let outcome = parse_middleman_line(&String::from_utf8_lossy(&line));
         loop {
             let mut status = 0;
             // SAFETY: valid status out-pointer for an owned child.
@@ -2455,7 +3028,12 @@ mod tests {
                     libc::WIFEXITED(status),
                     "middleman died by signal under denial"
                 );
-                return libc::WEXITSTATUS(status);
+                let code = libc::WEXITSTATUS(status);
+                assert_eq!(
+                    code, outcome.code,
+                    "middleman exit must match its report line"
+                );
+                return outcome;
             }
             if got < 0 {
                 let error = std::io::Error::last_os_error();
@@ -2487,23 +3065,31 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn denied_release_write_refuses_bounded() {
-        use super::super::seccomp::{install_deny_one, install_deny_ptrace_request};
-        use super::super::seccomp::DenyAction;
         use std::time::Duration;
-        let code = run_preflight_middleman(
-            &|| {
-                install_deny_ptrace_request(libc::PTRACE_TRACEME, DenyAction::Eperm).is_ok()
-                    && install_deny_one(libc::SYS_write, DenyAction::Eperm).is_ok()
-            },
-            Duration::from_secs(20),
-        );
-        if code == 3 {
+        let outcome = run_preflight_middleman("write-traceme-eperm", Duration::from_secs(20));
+        if outcome.code == 3 {
             eprintln!("skip: seccomp unavailable for the combined denial");
             return;
         }
         assert_eq!(
-            code, 21,
-            "denied release write must refuse, got exit {code}"
+            outcome.code, 21,
+            "denied release write must refuse, got exit {}",
+            outcome.code
+        );
+        assert!(
+            outcome.err.starts_with("preflight release refused:"),
+            "release refusal must name its stage, got: {}",
+            outcome.err
+        );
+        assert!(
+            !outcome.err.contains("not proven reaped"),
+            "S110 retirement must be proven, got: {}",
+            outcome.err
+        );
+        assert!(
+            matches!(outcome.grandchild, GrandchildState::None),
+            "refused release must leave no grandchild, got: {:?}",
+            outcome.grandchild
         );
     }
 
@@ -2516,19 +3102,203 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn denied_barrier_read_parks_and_refuses() {
-        use super::super::seccomp::{install_deny_one, DenyAction};
         use std::time::Duration;
-        let code = run_preflight_middleman(
-            &|| install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok(),
-            Duration::from_secs(30),
-        );
-        if code == 3 {
+        let outcome = run_preflight_middleman("read-eperm", Duration::from_secs(30));
+        if outcome.code == 3 {
             eprintln!("skip: seccomp unavailable for the read denial");
             return;
         }
         assert_eq!(
-            code, 22,
-            "denied barrier read must time out the report, got exit {code}"
+            outcome.code, 22,
+            "denied barrier read must time out the report, got exit {}",
+            outcome.code
+        );
+        // S132-round9: the pass requires the EXACT expected shape
+        // (not a substring) plus retirement proof: no surviving
+        // grandchild may remain.
+        assert_eq!(
+            outcome.err, EXPECTED_BARRIER_TIMEOUT,
+            "expected-timeout shape must be exact"
+        );
+        assert!(
+            matches!(outcome.grandchild, GrandchildState::None),
+            "timed-out report must retire its parked child, got: {:?}",
+            outcome.grandchild
+        );
+    }
+
+    /// S132-round9: an unresolved retirement must NOT classify as
+    /// the expected timeout. With the barrier denied AND pidfd
+    /// acquisition denied, the parked grandchild cannot be
+    /// signaled, production reports `…; preflight child not proven
+    /// reaped`, and the middleman must refuse (21 — never 22). The
+    /// test retires the reported grandchild through its own
+    /// independent authority (cleanup runs before the assertions so
+    /// RED runs stay clean) and requires that cleanup to have
+    /// found it alive — proving the leak the old substring
+    /// classifier hid. Pre-fix this exits 22 (RED).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn denied_barrier_read_unresolved_retirement_fails() {
+        use std::time::Duration;
+        let outcome = run_preflight_middleman("read-nopidfd", Duration::from_secs(30));
+        if outcome.code == 3 {
+            eprintln!("skip: seccomp unavailable for the unresolved-retirement probe");
+            return;
+        }
+        // Independent cleanup FIRST (RED runs stay clean even when
+        // the assertions below fail), then require it to have been
+        // needed.
+        let cleaned = match outcome.grandchild {
+            GrandchildState::Live(pid, started) => retire_reported_grandchild(pid, started),
+            GrandchildState::None => false,
+        };
+        assert_eq!(
+            outcome.code, 21,
+            "unresolved retirement must refuse, got exit {}",
+            outcome.code
+        );
+        assert!(
+            outcome.err.contains("not proven reaped"),
+            "production must report the unresolved custody, got: {}",
+            outcome.err
+        );
+        assert!(
+            cleaned,
+            "the parked grandchild must need independent cleanup (else the leak is uncovered)"
+        );
+    }
+
+    /// S132-round9 control: disabling retirement a SECOND way
+    /// (signal routes denied — the pin exists but SIGKILL is
+    /// refused) must also refuse (21, never 22). If the
+    /// exact-shape classifier ever regresses to substring
+    /// matching, this control turns red: it proves the S111 pass
+    /// depends on retirement actually working.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn denied_barrier_read_signalless_retirement_control() {
+        use std::time::Duration;
+        let outcome = run_preflight_middleman("read-nosignal", Duration::from_secs(30));
+        if outcome.code == 3 {
+            eprintln!("skip: seccomp unavailable for the signalless-retirement probe");
+            return;
+        }
+        let cleaned = match outcome.grandchild {
+            GrandchildState::Live(pid, started) => retire_reported_grandchild(pid, started),
+            GrandchildState::None => false,
+        };
+        assert_eq!(
+            outcome.code, 21,
+            "signalless retirement must refuse, got exit {}",
+            outcome.code
+        );
+        assert!(
+            outcome.err.contains("not proven reaped"),
+            "production must report the unresolved custody, got: {}",
+            outcome.err
+        );
+        assert!(
+            cleaned,
+            "the parked grandchild must need independent cleanup (else the leak is uncovered)"
+        );
+    }
+
+    /// S140-round9: the middleman must not depend on inherited
+    /// multithreaded state: with the fork rendezvous lock HELD by
+    /// another thread across the whole middleman run, the run must
+    /// still complete. Pre-fix the raw-forked middleman inherited
+    /// the locked mutex and deadlocked in `preflight()` (RED: the
+    /// guard fires); post-fix the middleman execs a fresh image
+    /// before any lock-using Rust code. The fast S110 spec keeps
+    /// the hold short (~1s green); the holder thread times out
+    /// alone so a RED run costs the guard, not the suite.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn middleman_survives_held_fork_lock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        let held = std::sync::Arc::new(AtomicBool::new(false));
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let held_t = held.clone();
+        let done_t = done.clone();
+        let holder = std::thread::spawn(move || {
+            // SAFETY: the rendezvous child _exits immediately; the
+            // parent holds the lock until the middleman run ends.
+            unsafe {
+                super::super::fork::fork_guarded(
+                    (-1, -1, -1),
+                    |pid| {
+                        held_t.store(true, Ordering::SeqCst);
+                        let end = Instant::now() + Duration::from_secs(20);
+                        while !done_t.load(Ordering::SeqCst) && Instant::now() < end {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        // Reap the rendezvous child (ours, exited).
+                        // (Inside the outer unsafe block: no second
+                        // block needed.) SAFETY: valid status
+                        // out-pointer.
+                        let mut status = 0;
+                        libc::waitpid(pid, &mut status, 0);
+                    },
+                    || libc::_exit(0),
+                )
+            };
+        });
+        // Wait for the hold (fail loud if it never arrives): from
+        // here the lock is GUARANTEED held across the middleman
+        // run — the deadlock is deterministic, not a window.
+        let end = Instant::now() + Duration::from_secs(10);
+        while !held.load(Ordering::SeqCst) {
+            assert!(Instant::now() < end, "holder thread never took the lock");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let outcome = run_preflight_middleman("write-traceme-eperm", Duration::from_secs(8));
+        done.store(true, Ordering::SeqCst);
+        let _ = holder.join();
+        if outcome.code == 3 {
+            eprintln!("skip: seccomp unavailable for the held-lock probe");
+            return;
+        }
+        assert_eq!(
+            outcome.code, 21,
+            "middleman must complete under a held fork lock, got {}",
+            outcome.code
+        );
+    }
+
+    /// S139-round9: an EINTR-spamming write filter must expire
+    /// the release bounded: the middleman refuses (21) with the
+    /// deadline named, having retired its own child — never spins.
+    /// Pre-fix the release write retries EINTR forever and the
+    /// guard fires (RED). Cleanup runs before the assertions so a
+    /// failure never leaks the grandchild.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn eintr_release_write_expires_bounded() {
+        use std::time::Duration;
+        let outcome = run_preflight_middleman("write-eintr", Duration::from_secs(12));
+        if outcome.code == 3 {
+            eprintln!("skip: seccomp unavailable for the EINTR probe");
+            return;
+        }
+        let cleaned = match outcome.grandchild {
+            GrandchildState::Live(pid, started) => retire_reported_grandchild(pid, started),
+            GrandchildState::None => false,
+        };
+        assert_eq!(
+            outcome.code, 21,
+            "EINTR-spammed release must refuse, got exit {}",
+            outcome.code
+        );
+        assert_eq!(
+            outcome.err, "preflight release refused: EINTR retry deadline exceeded",
+            "expiry must name its deadline"
+        );
+        assert!(
+            !cleaned && matches!(outcome.grandchild, GrandchildState::None),
+            "expired release must retire its own child, got: {:?}",
+            outcome.grandchild
         );
     }
 
