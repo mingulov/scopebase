@@ -971,6 +971,160 @@ class LiveBindTests(unittest.TestCase):
             sudo("chown", "-R",
                  "%d:%d" % (os.geteuid(), os.getegid()), fx)
 
+    # S81-round6 live: a copied-token replacement planted
+    # BEFORE the pin open refuses at the pin probe. The
+    # clone carries our C1 token, so the pin opens it and
+    # every content gate passes — but the fresh challenge
+    # written through the pin drains to the clone's upper,
+    # never to ours. The refusal precedes any chown (the
+    # root-owned foreign upper is unchanged) and the clone
+    # is left in place. Deterministic via the pre-pin delay
+    # window (no blind preemption luck).
+    def test_live_mount_pre_pin_clone_refuses_pin_probe(self):
+        if os.geteuid() == 0:
+            self.skipTest("needs a non-root controller")
+        run = os.path.join(self.tmp, "run")
+        role = os.path.join(run, "ov")
+        for sub in ("lower", "upper", "work", "merged"):
+            os.makedirs(os.path.join(role, sub), mode=0o700)
+        os.chmod(run, 0o700)
+        os.chmod(role, 0o700)
+        canary = "live-canary-%d" % os.getpid()
+        token_path = os.path.join(
+            role, "upper", provision.MOUNT_CANARY_NAME)
+        fd = os.open(token_path,
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                     0o600)
+        try:
+            os.write(fd, canary.encode("ascii"))
+        finally:
+            os.close(fd)
+        # Foreign clone: plausible overlay, the COPIED
+        # correct token, and root-owned upper so a folded
+        # chown would be visible.
+        fx = os.path.join(run, "fx")
+        for sub in ("flower", "fupper", "fwork"):
+            os.makedirs(os.path.join(fx, sub), mode=0o700)
+        with open(os.path.join(
+                fx, "fupper",
+                provision.MOUNT_CANARY_NAME), "w") as handle:
+            handle.write(canary)
+        fupper = os.path.join(fx, "fupper")
+        own = sudo("chown", "0:0", fupper)
+        self.assertEqual(own.returncode, 0, own.stderr)
+        target = os.path.join(role, "merged")
+        tdev, tino = self._helper_ids(target)
+        argv = [sys.executable, provision.__file__,
+               "mount-fs", *self._run_root_argv(run),
+               "--target", target,
+               "--target-dev", tdev, "--target-ino", tino,
+               "--fstype", "overlay",
+               "--own-uid", str(os.geteuid()),
+               "--own-gid", str(os.getegid())]
+        for name in ("lower", "upper", "work"):
+            dev, ino = self._helper_ids(
+                os.path.join(role, name))
+            argv += ["--layer",
+                    f"{name}={role}/{name}:{dev}:{ino}"]
+
+        def live_row():
+            table = provision.read_mount_table()
+            rows = provision.find_mounts(table, target)
+            if len(rows) == 1:
+                return rows[0]
+            return None
+
+        def poll_row(timeout, different_super_from=None):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                row = live_row()
+                if row is not None and (
+                        different_super_from is None
+                        or row["super"] != different_super_from):
+                    return row
+                time.sleep(0.2)
+            return None
+
+        helper = subprocess.Popen(
+            ["sudo", "-n", "nsenter",
+             f"--mount={live_ns()}", "env",
+             "S74_PRE_PIN_DELAY_MS=20000",
+             *argv],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True)
+        try:
+            first = poll_row(60)
+            self.assertIsNotNone(
+                first, "helper never mounted the target")
+            self.assertIsNone(
+                helper.poll(),
+                "helper finished before the pre-pin window "
+                "opened (delay hook inert?)")
+            # Lazy detach + copied-token plant inside the
+            # PRE-PIN window (ours is unpinned, so the lazy
+            # detach destroys it — the clone is the sole
+            # occupant when the pin opens).
+            bye = sudo("umount", "-l", target)
+            self.assertEqual(bye.returncode, 0, bye.stderr)
+            opts = ("lowerdir=%s,upperdir=%s,workdir=%s"
+                    % (os.path.join(fx, "flower"), fupper,
+                       os.path.join(fx, "fwork")))
+            plant = sudo("mount", "-t", "overlay", "overlay",
+                         "-o", opts, target)
+            self.assertEqual(plant.returncode, 0,
+                             plant.stderr)
+            second = poll_row(30,
+                              different_super_from=first["super"])
+            self.assertIsNotNone(
+                second, "replacement mount never appeared")
+            self.assertEqual(second["fstype"], "overlay")
+            # The plant really carries the copied token...
+            seen = sudo("cat", os.path.join(
+                target, provision.MOUNT_CANARY_NAME))
+            self.assertEqual(seen.returncode, 0,
+                             seen.stderr)
+            self.assertEqual(seen.stdout, canary)
+            # ...yet the helper refuses at the pin probe
+            # (drain failure), never by content.
+            out = helper.communicate(timeout=120)[0]
+            self.assertEqual(helper.returncode, 1, out)
+            self.assertIn("FAILED-UNCERTAIN", out)
+            self.assertIn("pin probe", out)
+            self.assertNotIn("canary mismatch", out)
+            # The challenge reached the clone's upper (and
+            # only there), 0600, root-written.
+            listing = sudo("ls", "-a", fupper)
+            self.assertEqual(listing.returncode, 0,
+                             listing.stderr)
+            probes = [
+                name for name in listing.stdout.split()
+                if name.startswith(
+                    provision.MOUNT_PROBE_PREFIX)]
+            self.assertEqual(len(probes), 1)
+            mode = sudo("stat", "-c", "%a:%u",
+                        os.path.join(fupper, probes[0]))
+            self.assertEqual(mode.stdout.strip(), "600:0")
+            self.assertEqual(
+                [name for name in os.listdir(
+                    os.path.join(role, "upper"))
+                 if name.startswith(
+                     provision.MOUNT_PROBE_PREFIX)], [])
+            # No chown touched the stranger: root-owned upper
+            # unchanged, occupant left in place.
+            fst = os.stat(fupper)
+            self.assertEqual((fst.st_uid, fst.st_gid),
+                             (0, 0))
+            self.assertEqual(live_row()["super"],
+                             second["super"])
+        finally:
+            if helper.poll() is None:
+                helper.kill()
+                helper.wait()
+            sudo("umount", target)
+            # Restore ownership so plain cleanup can rmtree.
+            sudo("chown", "-R",
+                 "%d:%d" % (os.geteuid(), os.getegid()), fx)
+
     # S74-round4 live: a target renamed around the effect is
     # reported as moved (mount ID + observed mountpoint),
     # never as a false "missing" failure. A live mountpoint
@@ -1065,6 +1219,156 @@ class LiveBindTests(unittest.TestCase):
                 helper.kill()
                 helper.wait()
             sudo("umount", moved)
+            sudo("umount", target)
+
+    # S74-round6 live: the role parent is renamed OUTSIDE the
+    # run root BEFORE PIN acquisition (pre-pin delay window).
+    # Mount through the held operand succeeds, the pin fails,
+    # and table-difference recovery reports _HelperMoved with
+    # the live ID + observed target. Reconcile keeps ID-keyed
+    # pending custody; ACTUAL cleanup then fails loudly
+    # (manual retirement) with the mount still live at the
+    # escaped path and custody retained — never a silent
+    # discharge past the empty name and the run-root-only
+    # sweep. No chown touches the moved-but-unpinned mount
+    # although --own-uid/gid was given.
+    def test_live_mount_pre_pin_rename_outside_recovers(self):
+        import contextlib
+        import io
+        import types
+        run = os.path.join(self.tmp, "run")
+        role = os.path.join(run, "ov")
+        for sub in ("lower", "upper", "work", "merged"):
+            os.makedirs(os.path.join(role, sub), mode=0o700)
+        os.chmod(run, 0o700)
+        os.chmod(role, 0o700)
+        canary = "live-canary-%d" % os.getpid()
+        with open(os.path.join(
+                role, "upper",
+                provision.MOUNT_CANARY_NAME), "w") as handle:
+            handle.write(canary)
+        target = os.path.join(role, "merged")
+        escaped_role = os.path.join(self.tmp, "escaped")
+        escaped = os.path.join(escaped_role, "merged")
+        tdev, tino = self._helper_ids(target)
+        argv = [sys.executable, provision.__file__,
+               "mount-fs", *self._run_root_argv(run),
+               "--target", target,
+               "--target-dev", tdev, "--target-ino", tino,
+               "--fstype", "overlay",
+               "--own-uid", "0", "--own-gid", "0"]
+        for name in ("lower", "upper", "work"):
+            dev, ino = self._helper_ids(
+                os.path.join(role, name))
+            argv += ["--layer",
+                    f"{name}={role}/{name}:{dev}:{ino}"]
+
+        def live_rows_at(path):
+            table = provision.read_mount_table()
+            return provision.find_mounts(table, path)
+
+        def poll_rows_at(path, timeout):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                rows = live_rows_at(path)
+                if rows:
+                    return rows
+                time.sleep(0.2)
+            return []
+
+        helper = subprocess.Popen(
+            ["sudo", "-n", "nsenter",
+             f"--mount={live_ns()}", "env",
+             "S74_PRE_PIN_DELAY_MS=20000",
+             *argv],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True)
+        try:
+            first = poll_rows_at(target, 60)
+            self.assertEqual(len(first), 1,
+                             "helper never mounted the target")
+            self.assertIsNone(
+                helper.poll(),
+                "helper finished before the pre-pin window "
+                "opened (delay hook inert?)")
+            # Rename the role PARENT outside the run root
+            # before pin acquisition; the mount follows.
+            os.rename(role, escaped_role)
+            second = poll_rows_at(escaped, 30)
+            self.assertEqual(len(second), 1,
+                             "moved mount never appeared")
+            self.assertEqual(live_rows_at(target), [])
+            out = helper.communicate(timeout=120)[0]
+            self.assertEqual(helper.returncode, 1, out)
+            self.assertIn("FAILED-MOVED", out)
+            parsed = provision._parse_moved_report(out)
+            self.assertIsNotNone(parsed, out)
+            mnt_id, observed = parsed
+            self.assertEqual(observed, escaped)
+            self.assertEqual(mnt_id, second[0]["mnt_id"])
+            # No chown on the moved-but-unpinned mount: the
+            # upper it carries is still controller-owned.
+            fst = os.stat(os.path.join(escaped_role, "upper"))
+            self.assertEqual((fst.st_uid, fst.st_gid),
+                             (os.geteuid(), os.getegid()))
+            # Reconcile through production code: the
+            # controller normalizes the helper report and
+            # keeps ID-keyed pending custody.
+            manifest_path = os.path.join(self.tmp,
+                                         "manifest.json")
+            doc = provision.fresh_manifest(run, False)
+            st = os.stat(run)
+            doc["run_root_identity"] = {"dev": st.st_dev,
+                                        "ino": st.st_ino}
+            provision.record_pending_acquisition(doc, {
+                "kind": "mount", "key": target, "role": "ov",
+                "target": target, "fstype": "overlay",
+                "source": "overlay", "expect_super": [],
+                "canary": canary})
+            failure = provision._normalize_mount_failure(
+                target, helper.returncode, out, "")
+            adopted = provision.reconcile_mount_effect(
+                doc, run, "ov", target,
+                {"fstype": "overlay", "source": "overlay",
+                 "expect_super": []},
+                canary=(provision.MOUNT_CANARY_NAME, canary),
+                failure=failure)
+            self.assertIsNone(adopted)
+            pendings = doc["pending_acquisitions"]
+            self.assertEqual(len(pendings), 1)
+            self.assertEqual(pendings[0].get("mnt_id"), mnt_id)
+            self.assertEqual(pendings[0].get("observed_target"),
+                             escaped)
+            with open(manifest_path, "w") as handle:
+                json.dump(doc, handle)
+            # ACTUAL cleanup: loud failure — the escaped
+            # occupant is outside run-root containment, so the
+            # binding re-check cannot rerun there (the
+            # ns-canary helper rightly refuses outside paths)
+            # and the mount is left in place, never retired
+            # blind. Custody retained, never discharged.
+            args = types.SimpleNamespace(run_root=run,
+                                         manifest=manifest_path)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = provision.cleanup_command(args)
+            self.assertEqual(rc, 1, buf.getvalue())
+            self.assertIn("left in place", buf.getvalue())
+            self.assertIn(escaped, buf.getvalue())
+            live = live_rows_at(escaped)
+            self.assertEqual(len(live), 1)
+            self.assertEqual(live[0]["mnt_id"], mnt_id)
+            kept = json.loads(open(manifest_path).read())
+            self.assertEqual(
+                len(kept["pending_acquisitions"]), 1)
+            self.assertEqual(
+                kept["pending_acquisitions"][0].get("mnt_id"),
+                mnt_id)
+        finally:
+            if helper.poll() is None:
+                helper.kill()
+                helper.wait()
+            sudo("umount", escaped)
             sudo("umount", target)
 
     # S75-round4 live: a real mixed-ownership caller-to-root
@@ -1269,6 +1573,270 @@ class LiveBindTests(unittest.TestCase):
         finally:
             if mounted:
                 retire_verified_mount(target, verified_mnt_id)
+
+    # S102-round6 live effect check: unprivileged and refused
+    # entries never touch keeper infrastructure. The keeper
+    # is killed first (stale pidfile left behind, so any
+    # ensure would observably respawn); real default create,
+    # legacy inspect and an invalid create then run — the
+    # pidfile bytes stay stale, no new keeper sleep appears,
+    # and the commands still report their own outcomes. The
+    # keeper is re-ensured for later tests before returning.
+    def test_live_unprivileged_entries_spawn_no_keeper(self):
+        pidfile, _candir = provision._keeper_paths()
+        try:
+            with open(pidfile, "rb") as handle:
+                stale = handle.read()
+        except OSError:
+            stale = None
+        keeper_pid = None
+        if stale is not None:
+            try:
+                keeper_pid = int(stale.split()[0])
+            except (ValueError, IndexError):
+                keeper_pid = None
+
+        def sleepers():
+            out = subprocess.run(
+                ["pgrep", "-f", "^sleep infinity$"],
+                capture_output=True, text=True)
+            return {int(word) for word in out.stdout.split()
+                    if word.isdigit()}
+
+        before = sleepers()
+        try:
+            if keeper_pid is not None:
+                sudo("kill", "-KILL", str(keeper_pid))
+                deadline = time.time() + 15
+                while time.time() < deadline:
+                    if not os.path.exists(
+                            f"/proc/{keeper_pid}"):
+                        break
+                    time.sleep(0.2)
+                self.assertFalse(
+                    os.path.exists(f"/proc/{keeper_pid}"),
+                    "keeper survived SIGKILL")
+            tool = provision.__file__
+            run = os.path.join(self.tmp, "plain")
+            manifest = os.path.join(self.tmp, "plain.json")
+            first = subprocess.run(
+                [sys.executable, tool, "create",
+                 "--manifest", manifest, "--run-root", run],
+                capture_output=True, text=True, timeout=300)
+            self.assertEqual(first.returncode, 0,
+                             first.stdout + first.stderr)
+            second = subprocess.run(
+                [sys.executable, tool, "inspect",
+                 "--manifest", manifest, "--run-root", run],
+                capture_output=True, text=True, timeout=300)
+            self.assertEqual(second.returncode, 0,
+                             second.stdout + second.stderr)
+            third = subprocess.run(
+                [sys.executable, tool, "create",
+                 "--manifest", manifest, "--run-root",
+                 "/etc/shadow"],
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(third.returncode, 2,
+                             third.stdout + third.stderr)
+            # No keeper infrastructure appeared: the pidfile
+            # still holds the stale record (or is still
+            # absent) and no new sleeper exists.
+            try:
+                with open(pidfile, "rb") as handle:
+                    now = handle.read()
+            except OSError:
+                now = None
+            self.assertEqual(now, stale)
+            self.assertTrue(sleepers() <= before)
+        finally:
+            provision._MOUNT_NS = None
+            provision._MOUNT_NS_IDENTITY = None
+            provision.ensure_mount_ns()
+
+    # S100/S103-round6 live: killing the keeper drops every
+    # later routing decision loudly, and the next ensure
+    # respawns exactly one verified keeper (new identity,
+    # canary present, routed reads work) — no dual keepers,
+    # no silent adoption of the stale record.
+    def test_live_keeper_respawn_recovers(self):
+        pidfile, _ = provision._keeper_paths()
+        with open(pidfile, "rb") as handle:
+            old = handle.read().split()
+        old_pid = int(old[0])
+        sudo("kill", "-KILL", str(old_pid))
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if not os.path.exists(f"/proc/{old_pid}"):
+                break
+            time.sleep(0.2)
+        self.assertFalse(os.path.exists(f"/proc/{old_pid}"))
+        # Routed decisions on the stale cache refuse loudly.
+        with self.assertRaises(provision.AdmissionError):
+            provision.read_mount_table()
+        # The next ensure respawns + verifies a fresh keeper.
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        nspath = provision.ensure_mount_ns()
+        with open(pidfile, "rb") as handle:
+            new = handle.read().split()
+        new_pid = int(new[0])
+        self.assertNotEqual(new_pid, old_pid)
+        self.assertEqual(nspath, f"/proc/{new_pid}/ns/mnt")
+        rows = provision.read_mount_table()
+        self.assertIsInstance(rows, list)
+        self.assertFalse(os.path.exists(f"/proc/{old_pid}"))
+
+    # S99-round6 end to end: real privileged create, inspect
+    # and cleanup through the production entry points (main,
+    # including the in-namespace re-exec), with independent
+    # device/mount correspondence — files stat onto their
+    # mounts (not the covered parents), the loop still binds
+    # the image, the host table stays clean, and cleanup
+    # discharges everything. The ext4 arms adapt when loop
+    # support is unavailable (skip recorded, overlay still
+    # fully verified).
+    def test_live_privileged_create_inspect_cleanup_e2e(self):
+        tool = provision.__file__
+        run = os.path.join(self.tmp, "run")
+        manifest = os.path.join(self.tmp, "manifest.json")
+
+        def tool_run(*args, timeout=600):
+            return subprocess.run(
+                [sys.executable, tool, *args],
+                capture_output=True, text=True,
+                timeout=timeout)
+
+        def ns_stat(path):
+            out = sudo(sys.executable, "-c",
+                       "import os, sys\n"
+                       f"st = os.stat({path!r})\n"
+                       "print(st.st_dev, st.st_ino)")
+            self.assertEqual(out.returncode, 0,
+                             out.stdout + out.stderr)
+            dev, ino = out.stdout.split()
+            return (int(dev), int(ino))
+
+        created = tool_run(
+            "create", "--manifest", manifest,
+            "--run-root", run, "--privileged")
+        self.assertEqual(created.returncode, 0,
+                         created.stdout + created.stderr)
+        try:
+            with open(manifest) as handle:
+                doc = json.load(handle)
+            # The manifest binds the keeper it provisioned in.
+            mode = doc.get("mount_ns")
+            self.assertIsInstance(mode, dict)
+            pidfile, _ = provision._keeper_paths()
+            with open(pidfile) as handle:
+                recorded = handle.read().split()
+            self.assertEqual(
+                (mode["pid"], mode["nsid"]),
+                (int(recorded[0]), int(recorded[1])))
+            mounts = {entry["target"]: entry
+                      for entry in doc.get("mounts", [])}
+            # Overlay correspondence (always available): the
+            # shared file stats onto the mount, which differs
+            # from the covered parent — three channels agree
+            # (manifest row, ns table, in-ns stat).
+            overseen = [target for target in mounts
+                        if target.endswith("/merged")]
+            self.assertGreaterEqual(len(overseen), 1)
+            table = provision.read_mount_table()
+            with open("/proc/self/mountinfo") as handle:
+                host = handle.read()
+            for target in overseen:
+                self.assertNotIn(target, host)
+                rows = provision.find_mounts(table, target)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(
+                    rows[0]["mnt_id"],
+                    mounts[target]["mnt_id"])
+                parent = os.path.dirname(target)
+                file_dev, _ = ns_stat(os.path.join(
+                    target, "shared.txt"))
+                mnt_dev, _ = ns_stat(target)
+                parent_dev, _ = ns_stat(parent)
+                self.assertEqual(file_dev, mnt_dev)
+                self.assertNotEqual(mnt_dev, parent_dev)
+            # Ext4 correspondence when loop provisioned it:
+            # exactly one loop device backs our image (sysfs
+            # scan — no manifest strings), and the mount's
+            # device numbers name that loop (major 7).
+            ext4_mnt = os.path.join(run, "ext4", "mnt")
+            if ext4_mnt in mounts:
+                import glob
+                import re
+                images = glob.glob(
+                    os.path.join(run, "ext4", "*.img"))
+                self.assertEqual(len(images), 1)
+                image = images[0]
+                ours = []
+                for path in glob.glob(
+                        "/sys/block/loop*/loop/backing_file"):
+                    try:
+                        with open(path) as handle:
+                            content = handle.read().strip()
+                    except OSError:
+                        continue
+                    if content == image:
+                        ours.append(path)
+                self.assertEqual(len(ours), 1)
+                loopnum = int(
+                    re.search(r"loop(\d+)", ours[0]).group(1))
+                file_dev, _ = ns_stat(
+                    os.path.join(ext4_mnt, "a.bin"))
+                mnt_dev, _ = ns_stat(ext4_mnt)
+                parent_dev, _ = ns_stat(
+                    os.path.join(run, "ext4"))
+                self.assertEqual(file_dev, mnt_dev)
+                self.assertNotEqual(mnt_dev, parent_dev)
+                self.assertEqual(os.major(mnt_dev), 7)
+                self.assertEqual(os.minor(mnt_dev), loopnum)
+            else:
+                self.assertIn("FS01", doc.get("cells", {}))
+            # Churn's driver (a raw-Popen child of
+            # create) was born inside the keeper namespace —
+            # its bind mounts land in-ns by inheritance.
+            drivers = [
+                proc for proc in doc.get("procs", [])
+                if proc.get("role") == "churn-driver"
+                and os.path.exists(f"/proc/{proc['pid']}")]
+            self.assertGreaterEqual(len(drivers), 1)
+            link = sudo(
+                "readlink",
+                f"/proc/{drivers[0]['pid']}/ns/mnt")
+            self.assertEqual(link.returncode, 0,
+                             link.stdout + link.stderr)
+            self.assertEqual(link.stdout.strip(),
+                             f"mnt:[{mode['nsid']}]")
+            # Provisioned procs are independently alive.
+            for proc in doc.get("procs", [])[:4]:
+                self.assertTrue(
+                    os.path.exists(f"/proc/{proc['pid']}"),
+                    proc)
+            inspected = tool_run(
+                "inspect", "--manifest", manifest,
+                "--run-root", run)
+            self.assertEqual(inspected.returncode, 0,
+                             inspected.stdout +
+                             inspected.stderr)
+            self.assertIn("admitted", inspected.stdout)
+        finally:
+            cleaned = tool_run(
+                "cleanup", "--manifest", manifest,
+                "--run-root", run)
+            self.assertEqual(cleaned.returncode, 0,
+                             cleaned.stdout + cleaned.stderr)
+            self.assertFalse(os.path.exists(run))
+            table = provision.read_mount_table()
+            leftovers = [
+                row for row in table
+                if row["target"].startswith(run + "/")]
+            self.assertEqual(leftovers, [])
+            with open("/proc/self/mountinfo") as handle:
+                host = handle.read()
+            self.assertNotIn(run + "/", host)
 
 
 @unittest.skipUnless(live_mounts_enabled(),

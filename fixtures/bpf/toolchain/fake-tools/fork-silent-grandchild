@@ -3,6 +3,8 @@
 # then exit at once. The grandchild sleeps (bounded stray, self-cleans)
 # without writing, so readers see EOF only after it dies.
 # SPDX-License-Identifier: Apache-2.0
-sleep 300 &
+# S98-round6: optional $2 grandchild sleep duration (default 300),
+# so the S67 hang sweep can pass a per-test-unique argv.
+sleep "${2:-300}" &
 echo "$!" > "$1"
 exit 0

@@ -46,6 +46,8 @@ use scopebase_testkit::object::{
     ObjectContract, PruneAllowlist, VerifierRules, FROZEN_DEAD_BUILTINS,
 };
 use sha2::{Digest, Sha256};
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::error::Error as _;
 
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
@@ -157,6 +159,7 @@ fn load_allowlist() -> PruneAllowlist {
 
 /// Relocation types (docs.kernel.org/bpf/llvm_reloc.html, donor-cited URL).
 const R_BPF_64_64: u32 = 1;
+const R_BPF_64_NODYLD32: u32 = 4;
 const R_BPF_64_32: u32 = 10;
 
 const SHT_PROGBITS: u32 = 1;
@@ -3218,6 +3221,16 @@ fn index_retention_guard_fixture() -> Vec<u8> {
         .map(|i| (i * 8, helper as u32, R_BPF_64_32))
         .collect();
     obj.reloc_section(".rel.text", text_idx, &edges);
+    // S65-round6: 500 mixed out-of-extent call rows (the guard
+    // groups calls only, so type-mixing cannot reach its index):
+    // collected, grouped, and index-admitted like every call row,
+    // but range-skipped before call resolution and consumed by
+    // nothing — the index admission (all 2000 rows) diverges
+    // observably from consumed accounting.
+    let mixed: Vec<(u64, u32, u32)> = (0..500)
+        .map(|i| (0xffff_ffff_ffff_f000 + i * 8, helper, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text.mixed", text_idx, &mixed);
     obj.build()
 }
 
@@ -3243,26 +3256,36 @@ fn index_retention_repair_fixture() -> Vec<u8> {
         .map(|i| (i * 8, helper as u32, R_BPF_64_32))
         .collect();
     obj.reloc_section(".rel.text", text_idx, &edges);
+    // S65-round6: 500 mixed non-call rows (nodyld relocs against a
+    // .BTF section): collected and index-admitted like every row,
+    // but pushed nowhere (the repair index pushes calls only) and
+    // validated nowhere, so the index admission (all 2001 rows)
+    // diverges observably from call-driven accounting (1501 calls).
+    let btf_idx = obj.section(".BTF", SHT_PROGBITS, 0, Vec::new());
+    let mixed: Vec<(u64, u32, u32)> = (0..500).map(|i| (i * 16, 0, R_BPF_64_NODYLD32)).collect();
+    obj.reloc_section(".rel.BTF", btf_idx, &mixed);
     obj.build()
 }
 
 #[test]
 fn guard_index_admits_retention_before_allocation() {
-    // S65-round5: the guard's sorted-Vec index (two pops over the
-    // 1500-reloc text, 24000 bytes admitted) charges retention.
+    // S65-round5: the guard's sorted-Vec index charges retention.
     // Generous control passes clean; the calibrated tight ceiling
     // trips only on the admitted index. Deterministic: retention
     // is input-determined, never timing.
-    // Boundary (binary-searched): min-passing retained_bytes is
-    // 133739 with the index retain, 109739 with it neutered (drop
-    // 24000 = 2 pops x 1500 rows x 8 bytes, exactly the index
-    // admission). Tight 121000 trips fixed and passes neutered.
+    // S65-round6 mixed fixture: 1500 in-extent calls plus 500
+    // out-of-extent calls (consumed by nothing, admitted by the
+    // index). Boundary (binary-searched): min-passing
+    // retained_bytes is 173914 with the index retain, 141914 with
+    // it neutered (drop 32000 = 2 pops x 2000 rows x 8 bytes,
+    // exactly the index admission). Tight 157000 trips fixed and
+    // passes neutered.
     let bytes = index_retention_guard_fixture();
     let guard = single_rule_manifest("stack", 3);
     let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
     assert!(violations.is_empty(), "unexpected: {violations:?}");
     let mut tight = limits();
-    tight.retained_bytes = 121_000;
+    tight.retained_bytes = 157_000;
     let error = check_verifier_rules(
         &bytes,
         &contract(),
@@ -3276,21 +3299,150 @@ fn guard_index_admits_retention_before_allocation() {
 
 #[test]
 fn repair_index_admits_retention_before_allocation() {
-    // S65-round5: the repair entry's sorted-Vec index (1501 reloc
-    // rows, 24016 bytes admitted) charges retention. Generous
-    // control prunes clean; the calibrated tight ceiling trips
-    // only on the admitted index.
+    // S65-round5: the repair entry's sorted-Vec index charges
+    // retention. Generous control prunes clean; the calibrated
+    // tight ceiling trips only on the admitted index.
+    // S65-round6 mixed fixture: 1501 call rows plus 500 nodyld rows
+    // (admitted by the index, pushed nowhere, validated nowhere).
     // Boundary (binary-searched): min-passing retained_bytes is
-    // 121855 with the index retain, 97839 with it neutered (drop
-    // 24016 = 1501 rows x 16 bytes, exactly the index admission).
-    // Tight 109000 trips fixed and passes neutered.
+    // 158169 with the index retain, 126153 with it neutered (drop
+    // 32016 = 2001 rows x 16 bytes, exactly the index admission).
+    // Tight 142000 trips fixed and passes neutered.
     let bytes = index_retention_repair_fixture();
     let allow = load_allowlist();
     let (_out, _report) =
         prune_dead_code_with_report(&bytes, &contract(), &allow, &limits()).expect("prune");
     let mut tight = limits();
-    tight.retained_bytes = 109_000;
+    tight.retained_bytes = 142_000;
     let error = prune_dead_code_with_report(&bytes, &contract(), &allow, &tight)
         .expect_err("admitted index must exhaust a tight retained ceiling");
     assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+}
+
+// S65-round6: thread-local allocation counting for the
+// allocation-observed refusal tests below. The ceiling tests above
+// prove a refusal happens; only observed heap distinguishes refusal
+// BEFORE allocation (correct order) from allocation followed by
+// refusal (the defect — same verdict, 32KB of refused heap).
+// Counting is per-thread (other tests allocate concurrently) and
+// gross (freed bytes stay counted — deterministic per code path).
+thread_local! {
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+    static COUNTED: Cell<usize> = const { Cell::new(0) };
+}
+
+struct CountingAlloc;
+
+unsafe impl GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        COUNTING.with(|flag| {
+            if flag.get() {
+                COUNTED.with(|sum| sum.set(sum.get() + layout.size()));
+            }
+        });
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        COUNTING.with(|flag| {
+            if flag.get() {
+                COUNTED.with(|sum| sum.set(sum.get() + new_size));
+            }
+        });
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static COUNTING_ALLOC: CountingAlloc = CountingAlloc;
+
+/// RAII arming scope: counts this thread's gross allocated bytes
+/// until dropped (disarms even on panic).
+struct CountScope;
+
+impl CountScope {
+    fn armed() -> Self {
+        COUNTED.with(|sum| sum.set(0));
+        COUNTING.with(|flag| flag.set(true));
+        CountScope
+    }
+
+    fn bytes(&self) -> usize {
+        COUNTED.with(|sum| sum.get())
+    }
+}
+
+impl Drop for CountScope {
+    fn drop(&mut self) {
+        COUNTING.with(|flag| flag.set(false));
+    }
+}
+
+/// Calibrated gross-heap pins (S65-round6): tight-ceiling refused
+/// runs must not allocate the index they refused. Tolerance ±4KB
+/// absorbs unrelated churn at 8x under the 32KB order signal.
+const GUARD_ALLOC_PIN: usize = 198_098;
+const REPAIR_ALLOC_PIN: usize = 164_954;
+const ALLOC_TOLERANCE: usize = 4096;
+
+/// S65-round6: allocation-observed refusal (guard site). The tight
+/// ceiling trips AT the first index retain; the refused run must
+/// not allocate the 16000-byte index it refused. Swapping the order
+/// back (allocate-then-refuse) exceeds the pin by exactly the index
+/// bytes and fails — while the ceiling test above passes under
+/// EITHER order (same LimitExceeded), which is why the ceilings
+/// alone cannot discriminate the ordering defect.
+#[test]
+fn guard_index_refusal_precedes_allocation() {
+    let bytes = index_retention_guard_fixture();
+    let guard = single_rule_manifest("stack", 3);
+    let contract = contract();
+    let mut tight = limits();
+    tight.retained_bytes = 157_000;
+    let scope = CountScope::armed();
+    let error = check_verifier_rules(
+        &bytes,
+        &contract,
+        std::slice::from_ref(&guard),
+        None,
+        &tight,
+    )
+    .expect_err("tight ceiling must refuse at the index retain");
+    let gross = scope.bytes();
+    drop(scope);
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+    assert!(
+        gross > GUARD_ALLOC_PIN.saturating_sub(ALLOC_TOLERANCE)
+            && gross < GUARD_ALLOC_PIN + ALLOC_TOLERANCE,
+        "refused run must not allocate the refused index: gross={gross}, pin={GUARD_ALLOC_PIN}"
+    );
+}
+
+/// S65-round6: allocation-observed refusal (repair site). The tight
+/// ceiling trips AT the index retain; the refused run must not
+/// allocate the 32016-byte index it refused. Order-swap neuter
+/// exceeds the pin by exactly the index bytes (see the guard test
+/// above for why ceilings alone cannot discriminate).
+#[test]
+fn repair_index_refusal_precedes_allocation() {
+    let bytes = index_retention_repair_fixture();
+    let allow = load_allowlist();
+    let contract = contract();
+    let mut tight = limits();
+    tight.retained_bytes = 142_000;
+    let scope = CountScope::armed();
+    let error = prune_dead_code_with_report(&bytes, &contract, &allow, &tight)
+        .expect_err("tight ceiling must refuse at the index retain");
+    let gross = scope.bytes();
+    drop(scope);
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+    assert!(
+        gross > REPAIR_ALLOC_PIN.saturating_sub(ALLOC_TOLERANCE)
+            && gross < REPAIR_ALLOC_PIN + ALLOC_TOLERANCE,
+        "refused run must not allocate the refused index: gross={gross}, pin={REPAIR_ALLOC_PIN}"
+    );
 }

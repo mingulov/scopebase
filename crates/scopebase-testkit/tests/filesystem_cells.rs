@@ -2278,8 +2278,7 @@ fn preflight_autoreap_never_signals_unreserved_pid() {
     );
     assert!(
         stdout.starts_with("verdict=err")
-            && stdout.contains("SIGCHLD=SIG_IGN")
-            && stdout.contains("auto-reap"),
+            && stdout.contains("SIGCHLD auto-reap (SIG_IGN or SA_NOCLDWAIT)"),
         "auto-reap must fail loud naming the disposition, got: {stdout}"
     );
     assert!(
@@ -2287,6 +2286,41 @@ fn preflight_autoreap_never_signals_unreserved_pid() {
         "nothing forked needs no custody note, got: {stdout}"
     );
     pass("FS10", "auto-reap refuses pre-fork without signaling");
+}
+
+/// S68-round6: same refusal under `SA_NOCLDWAIT` without `SIG_IGN`
+/// — the auto-reap configuration the round-5 predicate missed. The
+/// kill tripwire and the loud refusal are asserted exactly as for
+/// the `SIG_IGN` mode above.
+#[test]
+fn preflight_autoreap_nocldwait_never_signals() {
+    let output = preflight_denial_output("preflight-autoreap-nocldwait");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver must survive (SIGSYS = something signaled); stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("SIGCHLD auto-reap (SIG_IGN or SA_NOCLDWAIT)"),
+        "nocldwait auto-reap must fail loud, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("not proven reaped"),
+        "nothing forked needs no custody note, got: {stdout}"
+    );
+    pass(
+        "FS10",
+        "nocldwait auto-reap refuses pre-fork without signaling",
+    );
 }
 
 /// S32: with the wait syscall itself denied (EPERM, never ECHILD),

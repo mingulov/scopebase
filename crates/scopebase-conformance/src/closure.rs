@@ -196,33 +196,25 @@ fn anchor_lexical(path: &Path) -> Result<PathBuf, OperatorError> {
     Ok(out)
 }
 
-/// S82-round5: resolve the supplied manifest path itself — never a
-/// lexically normalized twin — returning its verified parent fd
-/// and leaf fd. Components walk from the anchor (`/` or the cwd)
-/// over verified directory fds with symlinks refused; `..` pops
-/// one verified directory (the kernel clamps at `/`, like any
-/// faithful lookup). A `..` following a missing or symlinked
-/// component cannot cancel it: the failed step errors first
-/// (ENOENT/ELOOP), exactly as the requested lookup behaves.
-fn open_manifest_walk(
-    manifest_path: &Path,
-) -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), BoundedReadError> {
-    use rustix::fs::{Mode, OFlags};
-    use std::os::fd::AsFd as _;
-    let mut dir = rustix::fs::open(
-        if manifest_path.is_absolute() { Path::new("/") } else { Path::new(".") },
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|e| {
-        refused(format!(
-            "cannot anchor {}: {e}",
-            manifest_path.display()
-        ))
-    })?;
+/// S82-round6: a raw trailing `/` (any run) or `/.` requires the
+/// leaf to be a directory — native lookup fails ENOTDIR on a file.
+/// `Path::components` erases both suffixes, so the raw path bytes
+/// decide. Interior dots are lookup no-ops (native agrees) and
+/// need no flag.
+fn manifest_dir_required(manifest_path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+    let raw = manifest_path.as_os_str().as_bytes();
+    raw.ends_with(b"/") || raw.ends_with(b"/.")
+}
+
+/// S82-round5: collect the walk legs for a path: `..` is kept as a
+/// leg (resolved against verified directories, never erased
+/// against unverified spelling); interior dots and the root itself
+/// are lookup no-ops.
+fn collect_legs(path: &Path) -> Result<Vec<std::ffi::CString>, BoundedReadError> {
+    use std::path::Component;
     let mut run: Vec<std::ffi::CString> = Vec::new();
-    for comp in manifest_path.components() {
-        use std::path::Component;
+    for comp in path.components() {
         match comp {
             Component::RootDir | Component::CurDir => {}
             Component::ParentDir => {
@@ -232,18 +224,41 @@ fn open_manifest_walk(
                 run.push(std::ffi::CString::new("..").expect("static leg"));
             }
             Component::Normal(name) => {
-                run.push(std::ffi::CString::new(name.as_encoded_bytes())
-                    .map_err(|_| refused("manifest path contains NUL".to_string()))?);
+                run.push(
+                    std::ffi::CString::new(name.as_encoded_bytes())
+                        .map_err(|_| refused("manifest path contains NUL".to_string()))?,
+                );
             }
             Component::Prefix(_) => {
                 return Err(refused(format!(
                     "manifest path has no anchor: {}",
-                    manifest_path.display()
+                    path.display()
                 )));
             }
         }
     }
-    let Some((leaf, parents)) = run.split_last() else {
+    Ok(run)
+}
+
+/// S82-round5: walk legs from a verified start fd over verified
+/// directory fds with symlinks refused, returning the verified
+/// parent fd and leaf fd. `..` legs walk (the kernel clamps at the
+/// filesystem root, like any faithful lookup); containment against
+/// the fixture root is proved separately afterwards, so climbs
+/// above the start refuse there. A `..` following a missing or
+/// symlinked component cannot cancel it: the failed step errors
+/// first (ENOENT/ELOOP), exactly as the requested lookup behaves.
+/// S82-round6: `dir_required` (raw trailing `/` or `/.`) opens the
+/// leaf with `O_DIRECTORY`, so the kernel enforces ENOTDIR on a
+/// file exactly as native lookup does.
+fn walk_legs_from(
+    mut dir: std::os::fd::OwnedFd,
+    legs: &[std::ffi::CString],
+    dir_required: bool,
+) -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), BoundedReadError> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd as _;
+    let Some((leaf, parents)) = legs.split_last() else {
         return Err(refused("manifest path names no file".to_string()));
     };
     for piece in parents {
@@ -262,20 +277,97 @@ fn open_manifest_walk(
             }
         })?;
     }
-    let fd = rustix::fs::openat(
-        dir.as_fd(),
-        leaf,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|e| {
+    let mut leaf_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    if dir_required {
+        leaf_flags |= OFlags::DIRECTORY;
+    }
+    let fd = rustix::fs::openat(dir.as_fd(), leaf, leaf_flags, Mode::empty()).map_err(|e| {
         if e == rustix::io::Errno::LOOP {
             refused("manifest is a symlink".to_string())
+        } else if e == rustix::io::Errno::NOTDIR {
+            // Only a `dir_required` leaf open can report NOTDIR
+            // (the parents are all verified directories): the raw
+            // spelling demands a directory the leaf is not.
+            refused("not a directory".to_string())
         } else {
             map_open_error(e)
         }
     })?;
     Ok((dir, fd))
+}
+
+/// S82-round5: resolve the supplied manifest path itself — never a
+/// lexically normalized twin — from the anchor (`/` or the cwd).
+/// S105-round6: this is now the fallback for spellings the pinned
+/// root cannot strip (exotic `..`-normalized paths, unavailable
+/// cwd); the common case walks beneath the pinned root instead.
+fn open_manifest_walk(
+    manifest_path: &Path,
+    dir_required: bool,
+) -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd), BoundedReadError> {
+    use rustix::fs::{Mode, OFlags};
+    let dir = rustix::fs::open(
+        if manifest_path.is_absolute() {
+            Path::new("/")
+        } else {
+            Path::new(".")
+        },
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| refused(format!("cannot anchor {}: {e}", manifest_path.display())))?;
+    let legs = collect_legs(manifest_path)?;
+    walk_legs_from(dir, &legs, dir_required)
+}
+
+/// S105-round6: the manifest's root-relative remainder as RAW legs
+/// (`..` intact — the walk resolves them against verified fds,
+/// never erases them). Same-anchor spellings strip directly
+/// (`CurDir` filtered — interior dots are lookup no-ops); mixed
+/// anchors (S70's relative root plus absolute manifest) absolutize
+/// both sides against the physical cwd first — lexically, resolving
+/// no symlinks. `None` when the manifest does not start with the
+/// root (exotic `..`-normalized spellings) or the cwd is
+/// unavailable: the caller falls back to the faithful anchor walk
+/// (still contained below). Comparison is component-wise over
+/// native bytes — no Unicode needed.
+fn strip_root_remainder(root: &Path, manifest: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    fn legs(path: &Path) -> Vec<Component<'_>> {
+        path.components()
+            .filter(|leg| !matches!(leg, Component::CurDir))
+            .collect()
+    }
+    let root_buf;
+    let manifest_buf;
+    let (root_path, manifest_path): (&Path, &Path) = if root.is_absolute() == manifest.is_absolute()
+    {
+        (root, manifest)
+    } else {
+        let cwd = std::env::current_dir().ok()?;
+        root_buf = cwd.join(root);
+        manifest_buf = cwd.join(manifest);
+        (&root_buf, &manifest_buf)
+    };
+    let root_legs = legs(root_path);
+    let manifest_legs = legs(manifest_path);
+    let mut rest = manifest_legs.iter();
+    for root_leg in &root_legs {
+        match rest.next() {
+            Some(manifest_leg) if manifest_leg == root_leg => {}
+            _ => return None,
+        }
+    }
+    let mut remainder = PathBuf::new();
+    for leg in rest {
+        match leg {
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => remainder.push(".."),
+            Component::Normal(name) => remainder.push(name),
+            Component::Prefix(_) => return None,
+        }
+    }
+    Some(remainder)
 }
 
 /// S82-round5: prove the resolved manifest's parent sits at or under
@@ -347,33 +439,14 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
             ),
         )
     })?;
-    if manifest_path.to_str().is_none() {
-        return Err(OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!(
-                "closure manifest {} is not valid Unicode",
-                manifest_path.display()
-            ),
-        ));
-    }
-    // S82-round5: the prefix check above admits spellings, but the
-    // BYTES come from resolving the supplied manifest itself —
-    // never from a lexically normalized twin. A `..` that cancels
-    // a missing or symlinked component must fail that component
-    // (ENOENT/ELOOP), not silently select a different file.
-    let (parent_fd, leaf_fd) = open_manifest_walk(manifest_path).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!(
-                "cannot read closure manifest {}: {e}",
-                manifest_path.display()
-            ),
-        )
-    })?;
-    // The resolved manifest must sit under the fixture root: prove
-    // containment by walking up from its verified parent. The
-    // lexical prefix check already passed, so this only fires on
-    // resolutions the spelling comparison cannot see.
+    // S106-round6: no whole-path Unicode gate — path operands stay
+    // native end to end (a non-UTF-8 root with a UTF-8 manifest is
+    // a supported public API case). Only content fields require
+    // Unicode, and the JSON parse below enforces that.
+    // S105-round6: pin the caller-selected root FIRST — its
+    // symlinked ancestors (the /var/run shape) are caller
+    // authority, resolved once here — then walk the manifest
+    // beneath the pin with symlinks refused per component.
     let root_fd = rustix::fs::open(
         root,
         rustix::fs::OFlags::RDONLY
@@ -392,6 +465,60 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
             ),
         )
     })?;
+    // S82-round5: the prefix check above admits spellings, but the
+    // BYTES come from resolving the supplied manifest itself —
+    // never from a lexically normalized twin. A `..` that cancels
+    // a missing or symlinked component must fail that component
+    // (ENOENT/ELOOP), not silently select a different file.
+    let dir_required = manifest_dir_required(manifest_path);
+    let (parent_fd, leaf_fd) = match strip_root_remainder(root, manifest_path) {
+        // The common case: raw remainder legs (`..` intact)
+        // beneath the pinned root.
+        Some(remainder) => {
+            let start = root_fd.try_clone().map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!(
+                        "cannot read closure manifest {}: {e}",
+                        manifest_path.display()
+                    ),
+                )
+            })?;
+            let legs = collect_legs(&remainder).map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!(
+                        "cannot read closure manifest {}: {e}",
+                        manifest_path.display()
+                    ),
+                )
+            })?;
+            walk_legs_from(start, &legs, dir_required).map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!(
+                        "cannot read closure manifest {}: {e}",
+                        manifest_path.display()
+                    ),
+                )
+            })?
+        }
+        // Exotic `..`-normalized spellings (or unavailable cwd):
+        // faithful anchor walk as before — still contained below.
+        // Fail-closed divergence: symlinked ancestors refuse here
+        // (NOFOLLOW from the anchor), where native lookup would
+        // follow them; only the caller-selected root above earns
+        // ancestor resolution.
+        None => open_manifest_walk(manifest_path, dir_required).map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::MissingInput,
+                format!(
+                    "cannot read closure manifest {}: {e}",
+                    manifest_path.display()
+                ),
+            )
+        })?,
+    };
     if !manifest_within_root(parent_fd, root_fd.as_fd()) {
         return Err(OperatorError::new(
             OperatorErrorKind::MissingInput,
@@ -1035,6 +1162,143 @@ mod tests {
         std::fs::create_dir(&real).unwrap();
         let benign = real.join("..").join(MANIFEST_FILE);
         verify_closure(&dir, &benign).expect("benign dotdot resolves");
+    }
+
+    // S82-round6: a trailing slash requires the leaf to be a
+    // directory — native lookup fails ENOTDIR on the regular
+    // manifest. `Path::components` erases the suffix; the raw
+    // bytes must enforce it. Pre-fix this spelling opened the
+    // manifest file successfully.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_trailing_slash_requires_directory() {
+        let dir = scratch("s82-slash");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        let mut raw = dir.join(MANIFEST_FILE).into_os_string();
+        raw.push("/");
+        let err = verify_closure(&dir, &PathBuf::from(raw)).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("not a directory"),
+            "trailing slash on a file must fail ENOTDIR: {}",
+            err.detail()
+        );
+        // And a trailing slash on a REAL directory opens it (then
+        // refuses downstream: a manifest must be a regular file —
+        // never silently reads a twin).
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let mut raw = sub.into_os_string();
+        raw.push("/");
+        let err = verify_closure(&dir, &PathBuf::from(raw)).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("not a regular file"),
+            "dir slash opens, then refuses downstream: {}",
+            err.detail()
+        );
+    }
+
+    // S82-round6: a trailing `/.` is a directory requirement too
+    // (same native ENOTDIR on a file). Pre-fix the `CurDir` leg
+    // was skipped and the file opened.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_trailing_dot_requires_directory() {
+        let dir = scratch("s82-dot");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        let mut raw = dir.join(MANIFEST_FILE).into_os_string();
+        raw.push("/");
+        raw.push(".");
+        let err = verify_closure(&dir, &PathBuf::from(raw)).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("not a directory"),
+            "trailing /. on a file must fail ENOTDIR: {}",
+            err.detail()
+        );
+    }
+
+    // S82-round6 control: interior dots are lookup no-ops (native
+    // agrees) — only trailing directory requirements refuse.
+    // Passes pre- and post-fix alike.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_interior_dot_still_resolves() {
+        let dir = scratch("s82-interior");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        let mut spelling = dir.clone().into_os_string();
+        spelling.push(format!("/./{MANIFEST_FILE}"));
+        verify_closure(&dir, &PathBuf::from(spelling)).expect("interior dot resolves");
+    }
+
+    // S105-round6: a fixture root reached through an OWNED symlinked
+    // ancestor (the /var/run shape) verifies: the caller-selected
+    // root is pinned once (its ancestors are caller authority),
+    // and the protected walk runs only beneath it. Pre-fix the
+    // anchor walk refused the ancestor alias with ELOOP.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_root_through_symlinked_ancestor_admits() {
+        let base = scratch("s105-base");
+        let real = base.join("real");
+        let sub = real.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&sub, &[("notice.txt", None, None)]);
+        std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
+        let root = base.join("link").join("sub");
+        let manifest = root.join(MANIFEST_FILE);
+        let closure = verify_closure(&root, &manifest).expect("aliased root admits");
+        assert_eq!(closure.read("notice.txt").unwrap(), b"notice");
+    }
+
+    // S105-round6: the anchor-walk fallback stays faithful — a
+    // `..`-normalized spelling the pinned root cannot strip
+    // (`R` reachable only past a canceled `X`) still fails the
+    // canceled missing component (ENOENT), never the normalized
+    // twin. And the benign twin (real `X`) still admits: the
+    // fallback is not blanket refusal.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_fallback_dotdot_stays_faithful() {
+        let base = scratch("s105-fallback");
+        let root = base.join("R");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&root, &[("notice.txt", None, None)]);
+        // Missing X: the fallback walk must fail X itself.
+        let sneaky = base.join("X").join("..").join("R").join(MANIFEST_FILE);
+        let err = verify_closure(&root, &sneaky).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+        assert!(
+            err.detail().contains("no such file"),
+            "fallback must fail the canceled component: {}",
+            err.detail()
+        );
+        // Real X: the same spelling shape admits.
+        std::fs::create_dir(base.join("X")).unwrap();
+        verify_closure(&root, &sneaky).expect("benign fallback spelling admits");
+    }
+
+    // S106-round6: a native (non-UTF-8) root with an ordinary UTF-8
+    // manifest filename verifies end to end — only content fields
+    // require Unicode, never the path operands. Pre-fix the
+    // whole-path `to_str` gate refused this public API case.
+    #[test]
+    #[cfg(unix)]
+    fn verify_closure_native_root_admits() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let base = scratch("s106-base");
+        let root = base.join(std::ffi::OsStr::from_bytes(b"r\xfft"));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&root, &[("notice.txt", None, None)]);
+        let closure = verify_closure(&root, &root.join(MANIFEST_FILE)).expect("native root admits");
+        assert_eq!(closure.read("notice.txt").unwrap(), b"notice");
     }
 
     // S38: a symlinked leaf pointing outside refuses instead of

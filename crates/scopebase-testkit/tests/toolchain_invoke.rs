@@ -710,9 +710,7 @@ fn second_reader_failure_completes_with_forking_tool() {
                     let running = std::fs::read_to_string(&gate_pidfile)
                         .ok()
                         .and_then(|text| text.trim().parse::<i32>().ok())
-                        .and_then(|pid| {
-                            std::fs::read(format!("/proc/{pid}/cmdline")).ok()
-                        })
+                        .and_then(|pid| std::fs::read(format!("/proc/{pid}/cmdline")).ok())
                         .map(|bytes| bytes.starts_with(b"sleep"))
                         .unwrap_or(false);
                     if running {
@@ -785,10 +783,12 @@ fn waitid_denial_still_retires_tool_and_readers() {
         .arg(&pidfile)
         .arg("--")
         .arg(&pidfile)
+        .arg("307")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("denial driver spawns");
+    let start_tick = boot_ticks_now();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match child.try_wait().expect("try_wait runs") {
@@ -797,7 +797,14 @@ fn waitid_denial_still_retires_tool_and_readers() {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    panic!("denial driver hung (S67 regression)");
+                    // S98-round6: a hung driver never reported
+                    // survivors — sweep the orphaned PATH-`sleep
+                    // 307` grandchild before failing. (The fixture
+                    // tool itself exits at once; only the grandchild
+                    // can outlive the hang.)
+                    let grandchild_args = ["307"];
+                    let swept = hang_sweep(&[("sleep", grandchild_args.as_slice())], start_tick);
+                    panic!("denial driver hung (S67 regression; swept {swept:?})");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -865,11 +872,103 @@ fn assert_grandchild_dead(pidfile: &std::path::Path) {
     }
 }
 
+/// S98-round6: boot clock ticks (clock ticks since boot) at this
+/// instant: `CLOCK_MONOTONIC` seconds x HZ plus the sub-second
+/// ticks. `/proc` starttimes live in this domain; comparing against
+/// it keeps the hang sweep inside this test's window.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn boot_ticks_now() -> Option<u64> {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime with a valid out-pointer.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+        return None;
+    }
+    // SAFETY: sysconf with a valid name.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if hz <= 0 {
+        return None;
+    }
+    let hz = hz as u64;
+    Some(now.tv_sec as u64 * hz + (now.tv_nsec as u64 * hz) / 1_000_000_000)
+}
+
+/// S98-round6: sweep `/proc` for tasks whose argv EXACTLY matches one
+/// of `patterns` and whose starttime is at or after this test's
+/// start tick, SIGKILLing each. Only the hang guards call this: a hung
+/// driver never prints `survivors=`, so its orphaned tool would
+/// otherwise leak (the finding's hang-guard cleanup gap). Exact-argv
+/// plus time-window keeps the sweep inside this test: every caller
+/// passes a per-test-unique argv (distinct sleep durations;
+/// `/bin/sleep` and PATH-`sleep` differ in argv[0]). Returns the
+/// killed pids for the failure log. When the start tick is unknown
+/// (clock read failed) the sweep fires nothing: a leaked sleeper
+/// beats killing a foreign same-argv task.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn hang_sweep(patterns: &[(&str, &[&str])], start_tick: Option<u64>) -> Vec<u32> {
+    let Some(start_tick) = start_tick else {
+        eprintln!("hang sweep skipped: no start tick");
+        return Vec::new();
+    };
+    let mut killed = Vec::new();
+    let entries = std::fs::read_dir("/proc").into_iter().flatten().flatten();
+    for entry in entries {
+        let name = entry.file_name();
+        let pid: i32 = match name.to_string_lossy().parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        let cmdline = std::fs::read(entry.path().join("cmdline")).unwrap_or_default();
+        if cmdline.is_empty() {
+            continue;
+        }
+        let argv: Vec<&str> = cmdline
+            .split(|byte| *byte == 0)
+            .filter(|word| !word.is_empty())
+            .filter_map(|word| std::str::from_utf8(word).ok())
+            .collect();
+        let matched = patterns
+            .iter()
+            .any(|(head, tail)| argv.first() == Some(head) && argv.get(1..) == Some(*tail));
+        if !matched {
+            continue;
+        }
+        // `>=`: starttimes tick at 10ms, so a tool spawned within
+        // the same tick as the capture is still ours. The window's
+        // real quarry — previous-run strays — is thousands of ticks
+        // older either way.
+        match task_starttime(pid) {
+            Some(started) if started >= start_tick => {
+                // SAFETY: signaling an argv- and window-matched stray
+                // of this hung test.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let end = Instant::now() + Duration::from_secs(5);
+                while !task_retired(pid) {
+                    if Instant::now() >= end {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                killed.push(pid as u32);
+            }
+            _ => {}
+        }
+    }
+    killed
+}
+
 /// S85/S86-round5: run the invoke-denial driver with mode flags,
 /// returning its output, wall elapsed, and scratch dir (the caller
 /// removes the dir last, so failures keep their evidence — the S67
 /// test's convention). The hang guard matches S67's: 30s, then the
 /// driver is killed and the test fails.
+/// S98-round6: `extra_sweep` adds known-descendant argv patterns
+/// (grandchildren the tool spawns under a different argv) to the
+/// hang-guard sweep; the tool's own argv is always swept.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn run_denial_driver(
     tag: &str,
@@ -877,6 +976,7 @@ fn run_denial_driver(
     timeout_ms: u64,
     mode_flags: &[&str],
     tool_args: &[&str],
+    extra_sweep: &[(&str, &[&str])],
 ) -> (std::process::Output, Duration, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "tc02-{}-{}-{}",
@@ -912,6 +1012,9 @@ fn run_denial_driver(
         .spawn()
         .expect("denial driver spawns");
     let start = Instant::now();
+    // S98-round6: tick floor for the hang sweep, captured before
+    // the driver spawns anything.
+    let start_tick = boot_ticks_now();
     let deadline = start + Duration::from_secs(30);
     loop {
         match child.try_wait().expect("try_wait runs") {
@@ -920,7 +1023,15 @@ fn run_denial_driver(
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    panic!("denial driver hung ({tag} regression)");
+                    // The hung driver never reported survivors: sweep
+                    // its orphaned tool (own argv plus known
+                    // descendants) before failing, or the stray
+                    // outlives the test run.
+                    let tool_head = tool.to_string_lossy().into_owned();
+                    let mut patterns: Vec<(&str, &[&str])> = vec![(tool_head.as_str(), tool_args)];
+                    patterns.extend_from_slice(extra_sweep);
+                    let swept = hang_sweep(&patterns, start_tick);
+                    panic!("denial driver hung ({tag} regression; swept {swept:?})");
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -930,10 +1041,47 @@ fn run_denial_driver(
     (output, start.elapsed(), dir)
 }
 
-/// S85/S86-round5: SIGKILL every pid in the driver's `survivors=`
-/// field, then prove each is gone (a reused pid naming a non-sleep
-/// is equally retired for our purposes — but these tests only run
-/// `sleep` tools, so absence is asserted directly).
+/// S98-round6: starttime of a live task (field 22 of
+/// `/proc/PID/stat`, clock ticks since boot). `None` when the task
+/// is gone or the row is unreadable/unparseable. The (pid,
+/// starttime) pair is the stable cross-process identity the driver
+/// hands to this cleanup path: a recycled number always carries a
+/// different starttime, so identity is verifiable without a shared
+/// descriptor.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn task_starttime(pid: i32) -> Option<u64> {
+    let row = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = row.rsplit_once(") ")?.1;
+    // Fields 1 (pid) and 2 (comm) consumed with the parens;
+    // starttime is field 22, index 19 of the remainder.
+    after_comm.split_whitespace().nth(19)?.parse().ok()
+}
+
+/// S98-round6: the task is retired when it is gone from `/proc` or
+/// a zombie (dead but unreaped — a synthetic victim owned by the
+/// test itself stays a zombie until the test reaps it, while a
+/// driver survivor reparented to init vanishes once reaped).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn task_retired(pid: i32) -> bool {
+    let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(row) => row,
+        Err(_) => return true,
+    };
+    let state = row
+        .rsplit_once(") ")
+        .and_then(|(_, after)| after.split_whitespace().next());
+    state == Some("Z")
+}
+
+/// S98-round6: SIGKILL every survivor the driver reports — but only
+/// after re-verifying its pinned (pid, starttime) identity. A
+/// sleeper that died and whose number was recycled between the
+/// driver's report and this cleanup must NOT kill its replacement:
+/// entries that no longer match (gone, or a different task under
+/// the number) are skipped, because the pinned original is then
+/// definitionally retired. Round-5 killed raw pids with no
+/// identity, so a reaped-then-reused number could signal a
+/// stranger before the post-kill absence check.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn kill_survivors(stdout: &str) {
     let field = stdout
@@ -941,39 +1089,145 @@ fn kill_survivors(stdout: &str) {
         .find_map(|word| word.strip_prefix("survivors="))
         .expect("driver reports survivors=");
     assert!(!field.is_empty(), "expected survivors, got: {stdout}");
-    for pid in field.split(',') {
-        let pid: i32 = pid.parse().expect("survivor pid parses");
-        // SAFETY: signaling a test-spawned sleeper by its pid.
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            let gone = std::fs::read(format!("/proc/{pid}/cmdline")).is_err();
-            if gone {
-                break;
+    for entry in field.split(',') {
+        let (pid_text, start_text) = entry.split_once(':').expect("survivor pins pid:starttime");
+        let pid: i32 = pid_text.parse().expect("survivor pid parses");
+        let pinned: u64 = start_text.parse().expect("survivor starttime parses");
+        match task_starttime(pid) {
+            Some(now) if now == pinned => {
+                // SAFETY: signaling the identity-verified test sleeper.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if task_retired(pid) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "survivor {pid} resisted SIGKILL");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
             }
-            assert!(Instant::now() < end, "survivor {pid} resisted SIGKILL");
-            std::thread::sleep(Duration::from_millis(10));
+            Some(now) => {
+                // A different task owns the number now: the pinned
+                // original is retired. No signal is sent; the
+                // replacement is none of this test's business.
+                eprintln!("survivor {pid}: pinned starttime {pinned} replaced by {now}; skipped");
+            }
+            None => {
+                // The pinned original is already gone.
+            }
         }
     }
 }
 
-/// S85-round5: with the tool auto-reaped (SIGCHLD ignored in the
-/// confined driver), the first observation fails with ECHILD — the
-/// leader was reaped out from under the run. No signal may be sent
-/// to the reusable pid/pgid numbers; unresolved custody is
-/// reported, the readers settle (EOF'd pipes), and nothing is left
-/// behind. Pre-fix the branch signaled the saved numbers and
-/// reported a bare retirement ECHILD with no custody diagnosis.
+/// S98-round6 negative: a survivor entry pinning the WRONG starttime
+/// for a live task must not signal it. Deterministic: no pid
+/// recycling is raced; the mismatch itself is the fixture. Neuter
+/// check: deleting the starttime comparison kills the victim and
+/// fails this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
-fn autoreap_observation_reports_unresolved_custody() {
-    let (output, _elapsed, dir) = run_denial_driver(
+fn survivor_cleanup_skips_starttime_mismatch() {
+    let mut victim = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("victim spawns");
+    let pid = victim.id() as i32;
+    let live = task_starttime(pid).expect("victim visible");
+    kill_survivors(&format!(
+        "verdict=err survivors={pid}:{} children_after=1",
+        live + 1
+    ));
+    // Aliveness, not just identity: a killed-but-unreaped victim
+    // keeps its starttime as a zombie, so identity alone would pass
+    // a neutered (comparison-deleted) verifier.
+    assert_eq!(
+        task_starttime(pid),
+        Some(live),
+        "mismatched survivor keeps its identity"
+    );
+    assert!(
+        !task_retired(pid),
+        "mismatched survivor must survive cleanup"
+    );
+    // SAFETY: retiring our own verified victim.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let _ = victim.wait();
+}
+
+/// S98-round6: the hang sweep retires an argv- and window-matched
+/// stray and spares everything else (wrong argv, or older than the
+/// window). Deterministic and fast: no driver hang involved.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn hang_sweep_retires_window_matched_stray() {
+    let start_tick = boot_ticks_now().expect("tick reads");
+    let mut stray = std::process::Command::new("/bin/sleep")
+        .arg("997")
+        .spawn()
+        .expect("stray spawns");
+    let pid = stray.id();
+    assert!(task_starttime(pid as i32).is_some(), "stray visible");
+    let swept = hang_sweep(&[("/bin/sleep", &["997"])], Some(start_tick));
+    assert_eq!(swept, vec![pid], "window-matched stray is swept");
+    assert!(task_retired(pid as i32), "swept stray is retired");
+    let _ = stray.wait();
+    // An older-than-window floor spares even an exact-argv task.
+    let mut keeper = std::process::Command::new("/bin/sleep")
+        .arg("998")
+        .spawn()
+        .expect("keeper spawns");
+    let keeper_pid = keeper.id() as i32;
+    assert!(task_starttime(keeper_pid).is_some(), "keeper visible");
+    let future_tick = task_starttime(keeper_pid).map(|started| started + 10_000);
+    let swept = hang_sweep(&[("/bin/sleep", &["998"])], future_tick);
+    assert!(swept.is_empty(), "predated task is spared, got: {swept:?}");
+    assert!(!task_retired(keeper_pid), "spared task survives");
+    // SAFETY: retiring our own keeper.
+    unsafe {
+        libc::kill(keeper_pid, libc::SIGKILL);
+    }
+    let _ = keeper.wait();
+}
+
+/// S98-round6 positive: a survivor entry pinning the CORRECT
+/// identity is retired — the verifier still kills what it should.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn survivor_cleanup_retires_verified_identity() {
+    let mut sleeper = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleeper spawns");
+    let pid = sleeper.id() as i32;
+    let live = task_starttime(pid).expect("sleeper visible");
+    kill_survivors(&format!(
+        "verdict=err survivors={pid}:{live} children_after=1"
+    ));
+    assert!(task_retired(pid), "verified survivor must be retired");
+    let _ = sleeper.wait();
+}
+
+/// S85-round6: with `SIGCHLD` ignored in the confined driver, the
+/// run refuses UP FRONT — group reservation is unprovable under
+/// auto-reap, so no tool may spawn. A sleeping tool with a 10s
+/// timeout returns in under 5s (a run would take the full 10s to
+/// time out), with `InvalidInput/Admission` naming auto-reap and
+/// zero children. Round-5 ran the tool and diagnosed ECHILD after
+/// the fact; the ECHILD branch survives only for competing-waiter
+/// reaps (caller-contract violation), pinned by unit tests.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn autoreap_refuses_before_spawn() {
+    let (output, elapsed, dir) = run_denial_driver(
         "s85-autoreap",
-        std::path::Path::new("/bin/true"),
+        std::path::Path::new("/bin/sleep"),
         10_000,
         &["--auto-reap"],
+        &["300"],
         &[],
     );
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -983,21 +1237,99 @@ fn autoreap_observation_reports_unresolved_custody() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.starts_with("verdict=err")
-            && stdout.contains("kind=Backend")
-            && stdout.contains("stage=Execute")
-            && stdout.contains("errno=Some(10)"),
-        "auto-reap must fail Backend/Execute with ECHILD, got: {stdout}"
+        elapsed < Duration::from_secs(5),
+        "refusal must precede the run (a 10s-timeout run would take 10s), took: {elapsed:?}"
     );
     assert!(
-        stdout.contains("reservation")
-            && stdout.contains("not signaled")
-            && stdout.contains("unresolved"),
-        "lost reservation must be explicit, got: {stdout}"
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=InvalidInput")
+            && stdout.contains("stage=Admission")
+            && stdout.contains("auto-reap"),
+        "auto-reap must refuse InvalidInput/Admission, got: {stdout}"
     );
     assert!(
         stdout.contains("children_after=0"),
-        "no child may survive, got: {stdout}"
+        "no child may spawn, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S85-round6: the combined case — auto-reap PLUS the waitid filter
+/// (which masks ECHILD as EPERM) PLUS a fast-exiting tool, with any
+/// `kill`/`killpg` attempt turned fatal (SIGSYS). Round-5 signaled
+/// the recycled pgid here (the EPERM misread as "reservation
+/// intact"); post-fix the run refuses up front and the driver
+/// survives — survival is the no-signal oracle. Neuter check:
+/// deleting the upfront refusal crashes this test with SIGSYS.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn combined_autoreap_denial_withholds_all_signals() {
+    let (output, elapsed, dir) = run_denial_driver(
+        "s85-combined",
+        std::path::Path::new("/bin/true"),
+        10_000,
+        &["--auto-reap", "--deny-waitid", "--trap-signal"],
+        &[],
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "driver must survive (a signal attempt kills it with SIGSYS): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "refusal must precede the run, took: {elapsed:?}"
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=InvalidInput")
+            && stdout.contains("stage=Admission")
+            && stdout.contains("auto-reap"),
+        "combined case must refuse InvalidInput/Admission, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=0"),
+        "no child may spawn, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S85-round6 control: the trap fires. A normal run (no auto-reap)
+/// of a fast tool under the `kill` trap dies with SIGSYS — the
+/// EPERM-observation path attempts the group signal under valid
+/// pidfd authority (no over-withholding). This control passes pre-
+/// and post-fix alike (both attempt the signal there); it proves
+/// the combined test's trap would catch an attempt.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn trap_control_proves_group_signal_attempted() {
+    use std::os::unix::process::ExitStatusExt as _;
+    let (output, _elapsed, dir) = run_denial_driver(
+        "s85-trap",
+        std::path::Path::new("/bin/true"),
+        10_000,
+        &["--trap-signal"],
+        &[],
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        !output.status.success() && output.status.code().is_none(),
+        "trapped run must die by signal, got: {stdout}"
+    );
+    assert_eq!(
+        output.status.signal(),
+        Some(libc::SIGSYS),
+        "death must be the SIGSYS trap, got: {stdout}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1019,6 +1351,7 @@ fn signal_denial_retires_bounded_with_refused_signal() {
         2000,
         &["--deny-signal"],
         &["300"],
+        &[],
     );
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if output.status.code() == Some(3) {
@@ -1051,6 +1384,118 @@ fn signal_denial_retires_bounded_with_refused_signal() {
     assert!(
         stdout.contains("unsettled") && stdout.contains("stdout"),
         "detached reader keeps its stream diagnosis (S87), got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=1"),
+        "the kill-proof sleeper must be reported alive, got: {stdout}"
+    );
+    kill_survivors(&stdout);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S86-round6: a tool that overruns output and then sleeps, under the
+/// full waitid/signal denial, must retire bounded — the overrun path
+/// previously called the unbounded `kill_and_wait`, hanging past the
+/// run deadline. Pre-fix this test trips the 30s hang guard (RED);
+/// post-fix the verdict carries the overrun with bounded retirement
+/// fallout. Duration 302 keeps the hang sweep unique.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn overrun_under_denial_retires_bounded() {
+    let start_tick = boot_ticks_now();
+    let (output, elapsed, dir) = run_denial_driver(
+        "s86-noisy",
+        std::path::Path::new("/bin/sh"),
+        10_000,
+        &["--deny-signal-only"],
+        &["-c", "head -c 2000000 /dev/zero; sleep 302"],
+        &[("sleep", &["302"])],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(28),
+        "overrun retirement must be bounded (10s grace + 10s settle), took: {elapsed:?}"
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=LimitExceeded")
+            && stdout.contains("stage=Execute")
+            && stdout.contains("over bound"),
+        "noisy overrun must fail LimitExceeded/Execute, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("still alive") && stdout.contains("signal refused"),
+        "refused signal must ride along, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=1"),
+        "the kill-proof tool must be reported alive, got: {stdout}"
+    );
+    // The driver's report covers its own children (the sh tool);
+    // the sh-spawned `sleep 302` grandchild is swept explicitly so
+    // no stray outlives the test.
+    hang_sweep(&[("sleep", &["302"])], start_tick);
+    kill_survivors(&stdout);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S86-round6: wall-clock expiry under the full denial must retire
+/// bounded — the timeout path previously called the unbounded
+/// `kill_and_wait`, hanging past run-deadline-plus-cleanup. Short
+/// run timeout (500ms) plus a kill-proof sleeper: pre-fix the 30s
+/// hang guard trips (RED); post-fix the verdict carries the timeout
+/// with bounded retirement fallout. Duration 301 keeps the hang
+/// sweep unique.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn timeout_under_denial_retires_bounded() {
+    let (output, elapsed, dir) = run_denial_driver(
+        "s86-timeout",
+        std::path::Path::new("/bin/sleep"),
+        500,
+        &["--deny-signal-only"],
+        &["301"],
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_secs(28),
+        "timeout retirement must be bounded (10s grace + 10s settle), took: {elapsed:?}"
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=LimitExceeded")
+            && stdout.contains("stage=Execute")
+            && stdout.contains("wall-clock timeout"),
+        "denied timeout must fail LimitExceeded/Execute, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("still alive") && stdout.contains("signal refused"),
+        "refused signal must ride along, got: {stdout}"
     );
     assert!(
         stdout.contains("children_after=1"),

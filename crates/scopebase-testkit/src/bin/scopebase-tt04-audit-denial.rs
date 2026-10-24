@@ -100,6 +100,7 @@ fn main() {
             || argv[1] == "preflight-wait"
             || argv[1] == "preflight-contkill"
             || argv[1] == "preflight-autoreap"
+            || argv[1] == "preflight-autoreap-nocldwait"
             || argv[1] == "preflight-waitstop"
             || argv[1] == "preflight-nopidfd")
     {
@@ -140,9 +141,22 @@ fn main() {
         // an unreserved number; any cleanup signal then kills the
         // driver with SIGSYS instead of risking a recycled same-UID
         // process.
-        if argv[1] == "preflight-autoreap" {
-            // SAFETY: SIG_IGN for SIGCHLD in a single-threaded driver.
-            unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+        if argv[1] == "preflight-autoreap" || argv[1] == "preflight-autoreap-nocldwait" {
+            if argv[1] == "preflight-autoreap" {
+                // SAFETY: SIG_IGN for SIGCHLD in a single-threaded driver.
+                unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+            } else {
+                // S68-round6: SA_NOCLDWAIT auto-reap without SIG_IGN
+                // (the configuration the round-5 predicate missed).
+                // SAFETY: sigaction install in a single-threaded driver.
+                unsafe {
+                    let mut act: libc::sigaction = std::mem::zeroed();
+                    act.sa_sigaction = libc::SIG_DFL;
+                    act.sa_flags = libc::SA_NOCLDWAIT;
+                    libc::sigemptyset(&mut act.sa_mask);
+                    libc::sigaction(libc::SIGCHLD, &act, std::ptr::null_mut());
+                }
+            }
             if let Err(error) =
                 install_deny_ptrace_request(libc::PTRACE_TRACEME, DenyAction::Eperm)
             {

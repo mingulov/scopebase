@@ -218,6 +218,16 @@ fn retain(retained: &mut usize, limits: &Limits, bytes: usize) -> Result<(), Ope
     Ok(())
 }
 
+/// S65-round6: checked sorted-index geometry — `len` entries of
+/// `entry` bytes. Overflow refuses `Overflow` (never a saturated
+/// size: admission must account the true geometry or refuse it).
+/// Callers admit the returned bytes via [`retain`] BEFORE
+/// `Vec::with_capacity` allocates them (R08 discipline).
+fn index_bytes(len: usize, entry: usize) -> Result<usize, OperationError> {
+    len.checked_mul(entry)
+        .ok_or_else(|| refuse(ErrorKind::Overflow, "sorted index geometry overflows"))
+}
+
 // ---------------------------------------------------------------------------
 // Strict admission: prune allowlist and rule manifests
 // ---------------------------------------------------------------------------
@@ -1356,20 +1366,19 @@ fn check_call_coverage(
     // instructions instead of calls-times-relocs — the repair
     // entry matches the guard scan's discipline (S65 retention
     // admission included).
-    // S65-round5: sorted Vec with exactly pre-admitted geometry
-    // (see the guard site): capacity for every reloc row is
-    // admitted before allocation. Only R_BPF_64_32 rows are
-    // pushed, so mixed inputs over-admit the non-call rows —
-    // fail-closed, bounded by the input ceiling (each row decodes
-    // from input bytes), and independent of Vec growth policy
-    // (unlike per-push growth charges, which would bake in
-    // std-internal doubling).
+    // S65-round5: sorted Vec with exactly admitted geometry (see
+    // the guard site): capacity for every reloc row is accounted.
+    // Only R_BPF_64_32 rows are pushed, so mixed inputs over-admit
+    // the non-call rows — fail-closed, bounded by the input ceiling
+    // (each row decodes from input bytes), and independent of Vec
+    // growth policy (unlike per-push growth charges, which would
+    // bake in std-internal doubling).
+    // S65-round6: checked geometry and the retain run BEFORE
+    // `with_capacity` (R08 discipline — round-5 allocated first, so
+    // a refusal still incurred the heap it refused).
+    let index = index_bytes(relocs.len(), size_of::<(usize, u64)>())?;
+    retain(retained, limits, index)?;
     let mut covered_offsets: Vec<(usize, u64)> = Vec::with_capacity(relocs.len());
-    retain(
-        retained,
-        limits,
-        relocs.len().saturating_mul(size_of::<(usize, u64)>()),
-    )?;
     for reloc in relocs.iter().filter(|reloc| reloc.typ == R_BPF_64_32) {
         charge(work, 1)?;
         covered_offsets.push((reloc.target_sect, reloc.offset));
@@ -2872,18 +2881,16 @@ fn check_path_guard(
         // linear scan was uncharged O(N) per call — quadratic in
         // one function with many relocated calls.
         // S65-round5: the index is a sorted Vec with exactly
-        // pre-admitted geometry: `site_relocs.len()` entries of
-        // `u64` are admitted BEFORE `with_capacity` allocates
-        // them. A BTreeSet's boxed nodes and spare slots have no
-        // such bound (B=6, CAPACITY=11, node metadata), so
-        // per-key charges under-admitted the authorized
-        // allocation.
+        // admitted geometry: `site_relocs.len()` entries of `u64`.
+        // A BTreeSet's boxed nodes and spare slots have no such
+        // bound (B=6, CAPACITY=11, node metadata), so per-key
+        // charges under-admitted the authorized allocation.
+        // S65-round6: checked geometry and the retain run BEFORE
+        // `with_capacity` (R08 discipline — round-5 allocated
+        // first, so a refusal still incurred the heap it refused).
+        let index = index_bytes(site_relocs.len(), size_of::<u64>())?;
+        retain(retained, limits, index)?;
         let mut reloc_offsets = Vec::with_capacity(site_relocs.len());
-        retain(
-            retained,
-            limits,
-            site_relocs.len().saturating_mul(size_of::<u64>()),
-        )?;
         for reloc in site_relocs.iter() {
             charge(work, 1)?;
             reloc_offsets.push(reloc.offset);
@@ -3436,4 +3443,21 @@ fn check_program(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S65-round6: index geometry multiplies exactly and refuses
+    /// `Overflow` on overflow (never a saturated size).
+    #[test]
+    fn index_geometry_is_checked() {
+        assert_eq!(index_bytes(1500, 16).expect("product"), 24_000);
+        assert_eq!(index_bytes(0, 16).expect("empty"), 0);
+        let error = index_bytes(usize::MAX, 16).expect_err("overflow refuses");
+        assert_eq!(error.kind(), ErrorKind::Overflow);
+        let error = index_bytes(usize::MAX / 8 + 1, 16).expect_err("overflow refuses");
+        assert_eq!(error.kind(), ErrorKind::Overflow);
+    }
 }

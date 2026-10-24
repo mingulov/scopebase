@@ -136,6 +136,15 @@ pub(crate) fn is_proxy_key(key: &OsStr) -> bool {
 /// reports take precedence over reader failures); wall-clock expiry is
 /// `LimitExceeded/Execute` with no byte count. Overrun or expired
 /// children are killed before return.
+///
+/// Preconditions (S85-round6): the caller must not auto-reap children
+/// (`SIGCHLD` set to `SIG_IGN` or `SA_NOCLDWAIT`) and must not run
+/// competing waiters on the tool pid — either recycles the pid/pgid
+/// numbers the group retirement relies on. Auto-reap is refused up
+/// front (`InvalidInput/Admission`); reset the `SIGCHLD` disposition
+/// around the call. A caller seccomp filter denying `waitid` and/or
+/// signaling is tolerated: observation outage retires bounded with
+/// explicit fallout instead of hanging.
 pub fn run_pinned(
     closure: &CompilerClosure,
     tool_id: &str,
@@ -217,6 +226,18 @@ pub fn run_pinned_with_builders(
         }
     }
 
+    // S85-round6: refuse auto-reap up front. An auto-reaped child
+    // never becomes our zombie, so its pid/pgid numbers recycle on
+    // exit — and a waitid filter turns the ECHILD proof into an
+    // indistinguishable EPERM, which round-5 misread as "reservation
+    // intact" and signaled. No run may start unprovable.
+    #[cfg(unix)]
+    if sigchld_auto_reaps() {
+        return Err(invalid(
+            "SIGCHLD auto-reap refused: tool group reservation unprovable",
+        ));
+    }
+
     let mut command = std::process::Command::new(tool_path);
     command
         .args(args)
@@ -256,6 +277,15 @@ pub fn run_pinned_with_builders(
     // side ran in pre_exec.
     claim_tool_group(child.id());
     let group = Some(child.id());
+    // S85-round6: retained reservation authority. The spawn-time
+    // pidfd (Linux) pins OUR leader task; group effects consult it
+    // instead of trusting the observation errno. Auto-reap was
+    // refused above, so without a competing waiter (caller contract)
+    // the leader cannot be reaped before we reap it.
+    let authority = ToolAuthority {
+        #[cfg(target_os = "linux")]
+        pidfd: crate::fixture::linux::seccomp::pidfd_open_raw(child.id() as libc::pid_t).ok(),
+    };
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let stdout_hit = Arc::new(AtomicBool::new(false));
@@ -272,8 +302,17 @@ pub fn run_pinned_with_builders(
     ) {
         Ok(handle) => handle,
         Err(error) => {
-            kill_tool_tree(group, &mut child);
-            return Err(backend(error, Stage::Execute));
+            // S86-round6: the already-spawned tool retires bounded
+            // (never the blocking retire), with group and signal
+            // fallout chained instead of dropped.
+            let group_fallout = signal_tool_group(group, &authority).err();
+            let retired = kill_and_wait_deadline(&mut child, Instant::now() + CLEANUP_GRACE);
+            return Err(primary_failure(
+                backend(error, Stage::Execute),
+                "tool reader spawn failed",
+                combine_fallout(group_fallout, retired.err()),
+                None,
+            ));
         }
     };
     // S33-round3: test-only gate before the second reader spawn, so
@@ -294,21 +333,18 @@ pub fn run_pinned_with_builders(
             // descendant holding stdout must not hang cleanup), and
             // an unsettled reader joins the spawn error in the
             // report instead of vanishing with a bare `let _`.
-            kill_tool_tree(group, &mut child);
+            // S86-round6: the tool retires bounded here too, with
+            // group fallout riding the retirement leg.
+            let group_fallout = signal_tool_group(group, &authority).err();
+            let retired = kill_and_wait_deadline(&mut child, Instant::now() + CLEANUP_GRACE);
             let spawn = backend(error, Stage::Execute);
-            match settle_one(stdout_reader, "stdout") {
-                Ok(_) => return Err(spawn),
-                Err(unsettled) => {
-                    return Err(OperationError::new(
-                        ErrorKind::Backend,
-                        Stage::Execute,
-                        spawn.raw_os_error(),
-                        Some(Box::new(Detail(format!(
-                            "reader spawn failed ({spawn}); {unsettled}"
-                        )))),
-                    ));
-                }
-            }
+            let settled = settle_one(stdout_reader, "stdout");
+            return Err(primary_failure(
+                spawn,
+                "tool reader spawn failed",
+                combine_fallout(group_fallout, retired.err()),
+                settled.err(),
+            ));
         }
     };
     // R05 sweep note: this addition cannot overflow. `timeout_ms` is a
@@ -325,10 +361,35 @@ pub fn run_pinned_with_builders(
 
     loop {
         if stdout_hit.load(Ordering::SeqCst) || stderr_hit.load(Ordering::SeqCst) {
-            kill_tool_group(group);
-            kill_and_wait(&mut child)?;
-            let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
-            return Err(capped_error(&out, &err));
+            // S86-round6: bounded retirement on the overrun path too:
+            // a kill-proof overrun tool must not hang cleanup. The
+            // overrun stays the verdict; retirement and settlement
+            // fallout ride along instead of preempting or vanishing.
+            let group_fallout = signal_tool_group(group, &authority).err();
+            let retired = kill_and_wait_deadline(&mut child, deadline);
+            let settled = settle_pair(stdout_reader, stderr_reader);
+            let retire_leg = combine_fallout(group_fallout, retired.err());
+            let (primary, settle_leg) = match settled {
+                Ok((out, err)) => (capped_error(&out, &err), None),
+                // Settlement failed: the overrun verdict stands (the
+                // flags prove it; the byte count is unobservable
+                // without outputs), with the settlement diagnosis
+                // riding the settle leg.
+                Err(settle) => {
+                    let blind = if stdout_hit.load(Ordering::SeqCst) {
+                        bound_exceeded("stdout over bound", Stage::Execute)
+                    } else {
+                        bound_exceeded("stderr over bound", Stage::Execute)
+                    };
+                    (blind, Some(settle))
+                }
+            };
+            return Err(primary_failure(
+                primary,
+                "tool output overrun",
+                retire_leg,
+                settle_leg,
+            ));
         }
         let observed = match exited_no_reap(&child) {
             Ok(observed) => observed,
@@ -356,15 +417,20 @@ pub fn run_pinned_with_builders(
                     ));
                 }
                 let observation = backend(error, Stage::Execute);
-                kill_tool_group(group);
-                // S86-round5: deadline-bounded retirement. The other
-                // kill_and_wait sites (overrun, wall-clock expiry,
-                // spawn failure) keep the blocking retire: their
-                // deadline already passed or never started, so a
-                // run-deadline bound would misfire there.
+                // S85-round6: the group signal is authority-gated
+                // (never trusted on the EPERM errno alone), and its
+                // fallout rides the retirement leg. S86-round6: every
+                // post-spawn path retires bounded now (overrun and
+                // wall-clock expiry keep the run deadline; spawn
+                // failure and post-expiry cleanup use CLEANUP_GRACE).
+                let group_fallout = signal_tool_group(group, &authority).err();
                 let retired = kill_and_wait_deadline(&mut child, deadline);
                 let settled = settle_pair(stdout_reader, stderr_reader);
-                return Err(observe_failure(observation, retired.err(), settled.err()));
+                return Err(observe_failure(
+                    observation,
+                    combine_fallout(group_fallout, retired.err()),
+                    settled.err(),
+                ));
             }
         };
         match observed {
@@ -376,47 +442,99 @@ pub fn run_pinned_with_builders(
                 // try_wait-then-killpg order reaped first: with the
                 // group empty, the pgid number was free for reuse
                 // and the SIGKILL could hit a new same-UID group.
-                kill_tool_group(group);
-                let status = child
-                    .wait()
-                    .map_err(|error| backend(error, Stage::Execute))?;
+                // S85-round6: the group signal is authority-gated;
+                // withheld/refused fallout chains onto every error
+                // return below (only one `.take()` runs).
+                let mut group_fallout = signal_tool_group(group, &authority).err();
+                let status = child.wait().map_err(|error| {
+                    primary_failure(
+                        backend(error, Stage::Execute),
+                        "tool execution failed",
+                        group_fallout.take(),
+                        None,
+                    )
+                })?;
                 // S33: forked descendants may hold the pipes;
                 // settle bounded either way.
-                let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
+                let (out, err) = settle_pair(stdout_reader, stderr_reader).map_err(|settle| {
+                    primary_failure(settle, "tool execution failed", group_fallout.take(), None)
+                })?;
                 if out.overrun || err.overrun {
-                    return Err(capped_error(&out, &err));
+                    return Err(primary_failure(
+                        capped_error(&out, &err),
+                        "tool execution failed",
+                        group_fallout.take(),
+                        None,
+                    ));
                 }
                 if out.read_error || err.read_error {
-                    return Err(reader_failed());
+                    return Err(primary_failure(
+                        reader_failed(),
+                        "tool execution failed",
+                        group_fallout.take(),
+                        None,
+                    ));
                 }
                 if status.success() {
+                    // A withheld group signal with an otherwise clean
+                    // run is still unresolved descendant custody (a
+                    // pipeless daemonized descendant may survive) —
+                    // fail closed, never silently leak.
+                    if let Some(fallout) = group_fallout.take() {
+                        return Err(fallout);
+                    }
                     return Ok(NestedOutput {
                         code: status.code(),
                         stdout: out.data,
                         stderr: err.data,
                     });
                 }
-                return Err(OperationError::new(
-                    ErrorKind::Backend,
-                    Stage::Execute,
+                return Err(primary_failure(
+                    OperationError::new(
+                        ErrorKind::Backend,
+                        Stage::Execute,
+                        None,
+                        Some(Box::new(Detail(
+                            "tool exited nonzero or signaled".to_string(),
+                        ))),
+                    ),
+                    "tool execution failed",
+                    group_fallout.take(),
                     None,
-                    Some(Box::new(Detail(
-                        "tool exited nonzero or signaled".to_string(),
-                    ))),
                 ));
             }
             None => {
                 if Instant::now() >= deadline {
-                    kill_tool_group(group);
-                    kill_and_wait(&mut child)?;
-                    let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
-                    if out.overrun || err.overrun {
-                        return Err(capped_error(&out, &err));
-                    }
-                    if out.read_error || err.read_error {
-                        return Err(reader_failed());
-                    }
-                    return Err(bound_exceeded("wall-clock timeout", Stage::Execute));
+                    // S86-round6: the run deadline expired, so
+                    // retirement gets its own cleanup grace — bounded
+                    // either way, with fallout chained.
+                    let group_fallout = signal_tool_group(group, &authority).err();
+                    let retired =
+                        kill_and_wait_deadline(&mut child, Instant::now() + CLEANUP_GRACE);
+                    let settled = settle_pair(stdout_reader, stderr_reader);
+                    let retire_leg = combine_fallout(group_fallout, retired.err());
+                    let (primary, settle_leg) = match settled {
+                        Ok((out, err)) if out.overrun || err.overrun => {
+                            (capped_error(&out, &err), None)
+                        }
+                        Ok((out, err)) if out.read_error || err.read_error => {
+                            (reader_failed(), None)
+                        }
+                        Ok(_) => (bound_exceeded("wall-clock timeout", Stage::Execute), None),
+                        // Settlement failed: the timeout verdict
+                        // stands, with the settlement diagnosis riding
+                        // the settle leg.
+                        Err(settle) => (
+                            bound_exceeded("wall-clock timeout", Stage::Execute),
+                            Some(settle),
+                        ),
+                    };
+                    return Err(primary_failure(
+                        primary,
+                        "tool timeout",
+                        retire_leg,
+                        settle_leg,
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -566,9 +684,7 @@ fn exited_no_reap(
                 code if code == libc::CLD_KILLED => info.si_status() & 0x7f,
                 code if code == libc::CLD_DUMPED => (info.si_status() & 0x7f) | 0x80,
                 _ => {
-                    return Err(std::io::Error::other(
-                        "unexpected waitid child state",
-                    ));
+                    return Err(std::io::Error::other("unexpected waitid child state"));
                 }
             };
             Ok(Some(std::process::ExitStatus::from_raw(raw)))
@@ -583,23 +699,164 @@ fn exited_no_reap(
 /// S33: SIGKILL the tool process group: the child plus any forked
 /// descendants holding pipes. Idempotent (ESRCH is fine); not
 /// available off unix, where settlement still bounds the wait.
-fn kill_tool_group(group: Option<u32>) {
-    #[cfg(unix)]
-    if let Some(group) = group {
-        // SAFETY: signal our own fresh tool group.
-        unsafe {
-            libc::killpg(group as libc::pid_t, libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = group;
+/// S86-round6: cleanup grace for post-spawn retirement after the run
+/// deadline expired (timeout path) or never started (reader-spawn
+/// failure). Matches the 10s reader-settlement bound: cleanup stays
+/// in the same order as the run's own bounds, never unbounded.
+const CLEANUP_GRACE: Duration = Duration::from_secs(10);
+
+/// S85-round6: retained reservation authority for one tool run. The
+/// value itself proves the spawn-time checks ran; on Linux it
+/// additionally pins the leader through a spawn-time pidfd, immune
+/// to pid-number reuse.
+struct ToolAuthority {
+    /// Spawn-time pidfd of the leader (Linux only). `None` when the
+    /// birth open failed — pre-pidfd kernel, or the leader already
+    /// reaped by a competing waiter — and group effects are then
+    /// withheld: without the pin, a masked observation cannot prove
+    /// the pgid number is still ours.
+    #[cfg(target_os = "linux")]
+    pidfd: Option<std::os::fd::RawFd>,
 }
 
-/// S33: retire the whole tool tree, ignoring errors: the group
-/// first (descendants), then the child handle itself.
-fn kill_tool_tree(group: Option<u32>, child: &mut Child) {
-    kill_tool_group(group);
-    let _ = kill_and_wait(child);
+#[cfg(target_os = "linux")]
+impl Drop for ToolAuthority {
+    fn drop(&mut self) {
+        if let Some(fd) = self.pidfd.take() {
+            // SAFETY: fd owned by this authority.
+            unsafe {
+                libc::close(fd);
+            }
+        }
+    }
+}
+
+/// S85-round6: true when `SIGCHLD` currently auto-reaps children —
+/// `SIG_IGN` disposition or `SA_NOCLDWAIT`. An auto-reaped child
+/// never becomes our zombie, so its pid/pgid numbers recycle the
+/// moment it exits. Read-back only; touches no process state.
+/// (A caller racing disposition changes against group effects
+/// defeats any check — same contract as competing waiters.)
+/// Twin of the audit preflight detector (unix-wide here, x86_64-only
+/// there — different cfg homes, same logic); keep the two in sync.
+#[cfg(unix)]
+fn sigchld_auto_reaps() -> bool {
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: sigaction read-back (act NULL) for this process.
+    let rc = unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut old) };
+    // A failed read-back fails closed: unknown disposition is
+    // treated as auto-reap.
+    rc != 0 || old.sa_sigaction == libc::SIG_IGN || (old.sa_flags & libc::SA_NOCLDWAIT) != 0
+}
+
+/// S85-round6: probe the pinned leader through its pidfd (signal 0).
+/// `Ok(true)` — our task is present (alive or zombie; a zombie still
+/// reserves pid AND pgid). `Ok(false)` — our task was reaped
+/// (ESRCH through the pin names OUR child, never a recycled
+/// number). `Err` — the probe itself failed (denied filter,
+/// unexpected errno): authority unprovable, fail closed.
+#[cfg(target_os = "linux")]
+fn pidfd_alive(fd: std::os::fd::RawFd) -> Result<bool, i32> {
+    // SAFETY: pidfd_send_signal(pidfd, 0, NULL, 0).
+    let sent = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd as libc::c_long,
+            0 as libc::c_long,
+            0 as libc::c_long,
+            0 as libc::c_long,
+        )
+    };
+    if sent == 0 {
+        return Ok(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(errno) => Err(errno),
+        None => Err(-1),
+    }
+}
+
+/// S85-round6: withheld-group-signal fallout. The numeric group was
+/// deliberately NOT signaled; descendants beyond the leader are
+/// unresolved — reported, never silently abandoned.
+fn group_unresolved(why: &str) -> OperationError {
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        None,
+        Some(Box::new(Detail(format!(
+            "tool group not signaled ({why}); descendant custody unresolved"
+        )))),
+    )
+}
+
+/// S86-round6: refused-group-signal fallout. The `killpg` was
+/// attempted under valid authority but refused; its errno rides
+/// along instead of being ignored.
+fn group_signal_refused(error: std::io::Error) -> OperationError {
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        error.raw_os_error(),
+        Some(Box::new(Detail(format!(
+            "tool group signal refused ({error}); descendant custody unresolved"
+        )))),
+    )
+}
+
+/// S85-round6: signal the tool group under retained reservation
+/// authority — never on the observation errno alone. The round-5
+/// rule trusted any non-ECHILD errno as "reservation intact", but a
+/// waitid filter turns ECHILD into an indistinguishable EPERM: with
+/// auto-reap, that EPERM hides a reaped leader and the signal hits a
+/// recycled pgid. The gate is now: no auto-reap engaged right now
+/// (numbers cannot recycle without a reap), and on Linux a pidfd
+/// proving OUR leader still holds its group membership (which also
+/// detects competing-waiter reaps a filter would hide). Withheld and
+/// refused signals return errors; only a signaled group (or no group
+/// signal off unix) returns `Ok`.
+#[cfg(unix)]
+fn signal_tool_group(group: Option<u32>, authority: &ToolAuthority) -> Result<(), OperationError> {
+    let Some(pgid) = group else {
+        return Ok(());
+    };
+    if sigchld_auto_reaps() {
+        return Err(group_unresolved("SIGCHLD auto-reap engaged"));
+    }
+    #[cfg(target_os = "linux")]
+    match authority.pidfd {
+        None => {
+            return Err(group_unresolved("no pidfd authority for the leader"));
+        }
+        Some(fd) => match pidfd_alive(fd) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(group_unresolved("leader reaped under a masked observation"));
+            }
+            Err(errno) => {
+                return Err(group_unresolved(&format!(
+                    "leader authority unprovable (errno {errno})"
+                )));
+            }
+        },
+    }
+    // SAFETY: signal our own reserved tool group: auto-reap is off
+    // (no reap without us, so no number reuse), and on Linux the
+    // pidfd proves OUR leader still holds the membership.
+    let sent = unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+    if sent == 0 {
+        Ok(())
+    } else {
+        Err(group_signal_refused(std::io::Error::last_os_error()))
+    }
+}
+
+/// Off unix there is no group signal, so no reservation hazard exists.
+#[cfg(not(unix))]
+fn signal_tool_group(group: Option<u32>, authority: &ToolAuthority) -> Result<(), OperationError> {
+    let _ = (group, authority);
+    Ok(())
 }
 
 /// S33: join one output reader within the settlement bound. A reader
@@ -648,19 +905,47 @@ fn settle_pair(
     Ok((out, err))
 }
 
-/// S67-round4: combine an observation failure with bounded-retirement
-/// fallout. Clean retirement returns the observation error unchanged;
-/// an unretired tool or unsettled readers join the report, so
-/// unresolved ownership is explicit, never silently dropped.
-fn observe_failure(
-    observation: OperationError,
+/// S86-round6: merge two retirement-leg fallouts (group signal +
+/// child retire) into one leg, preserving both chains. `None` when
+/// both are clean — clean retirement stays silent.
+fn combine_fallout(
+    first: Option<OperationError>,
+    second: Option<OperationError>,
+) -> Option<OperationError> {
+    match (first, second) {
+        (None, None) => None,
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (Some(first), Some(second)) => Some(OperationError::new(
+            first.kind(),
+            first.stage(),
+            first.raw_os_error(),
+            Some(Box::new(Detail(format!(
+                "{} | {}",
+                chain_text(&first),
+                chain_text(&second)
+            )))),
+        )),
+    }
+}
+
+/// S86-round6: attach retirement and settlement fallout to a failure
+/// primary, preserving the primary's kind, stage, errno and required
+/// size. Clean legs return the primary unchanged — wrapping is
+/// invisible when there is no fallout (existing verdicts keep their
+/// exact shape).
+fn primary_failure(
+    primary: OperationError,
+    context: &str,
     retire: Option<OperationError>,
     settle: Option<OperationError>,
 ) -> OperationError {
     if retire.is_none() && settle.is_none() {
-        return observation;
+        return primary;
     }
-    let mut detail = format!("tool observation failed ({observation})");
+    // The primary rides with its full chain: Display alone would
+    // drop a settlement diagnosis ("output reader unsettled:
+    // stdout...") living in its source.
+    let mut detail = format!("{context} ({})", chain_text(&primary));
     if let Some(retire) = retire {
         detail.push_str(&format!(
             "; tool retirement failed ({})",
@@ -670,12 +955,28 @@ fn observe_failure(
     if let Some(settle) = settle {
         detail.push_str(&format!("; {}", chain_text(&settle)));
     }
-    OperationError::new(
-        ErrorKind::Backend,
-        Stage::Execute,
-        observation.raw_os_error(),
+    let mut combined = OperationError::new(
+        primary.kind(),
+        primary.stage(),
+        primary.raw_os_error(),
         Some(Box::new(Detail(detail))),
-    )
+    );
+    if let Some(size) = primary.required_size() {
+        combined = combined.with_required_size(size);
+    }
+    combined
+}
+
+/// S67-round4: combine an observation failure with bounded-retirement
+/// fallout. Clean retirement returns the observation error unchanged;
+/// an unretired tool or unsettled readers join the report, so
+/// unresolved ownership is explicit, never silently dropped.
+fn observe_failure(
+    observation: OperationError,
+    retire: Option<OperationError>,
+    settle: Option<OperationError>,
+) -> OperationError {
+    primary_failure(observation, "tool observation failed", retire, settle)
 }
 
 /// S87-round5: the full cause chain of a fallout error, head first.
@@ -732,11 +1033,16 @@ pub(crate) fn kill_and_wait(child: &mut Child) -> Result<(), OperationError> {
 }
 
 /// S85-round5: ECHILD from the no-reap observation means the leader
-/// is no longer our child — auto-reaped (SIGCHLD disposition) or
-/// reaped by a competing waiter in this process. Its pid and pgid
-/// numbers are reusable: no signal may be sent to either. Any other
-/// failure (EPERM denial, unexpected child state) leaves the
-/// reservation intact. Off unix there is no group signal, so no
+/// is no longer our child — reaped out from under the run (auto-reap
+/// is refused up front since round-6; a competing waiter in this
+/// process is the remaining cause, a caller-contract violation). Its
+/// pid and pgid numbers are reusable: no signal may be sent to
+/// either.
+/// S85-round6 correction: any OTHER failure (EPERM denial,
+/// unexpected child state) leaves the reservation UNPROVEN, not
+/// intact — a filter masks ECHILD as EPERM. Non-ECHILD failures
+/// route to the authority gate ([`signal_tool_group`]), never to a
+/// blind group signal. Off unix there is no group signal, so no
 /// reservation hazard exists.
 #[cfg(unix)]
 fn reservation_lost(error: &std::io::Error) -> bool {
@@ -789,7 +1095,9 @@ fn kill_and_wait_deadline(child: &mut Child, end: Instant) -> Result<(), Operati
 fn retire_unresolved(signal: Option<std::io::Error>) -> OperationError {
     let errno = signal.as_ref().and_then(|error| error.raw_os_error());
     let detail = match &signal {
-        Some(error) => format!("tool still alive after bounded retirement (signal refused: {error})"),
+        Some(error) => {
+            format!("tool still alive after bounded retirement (signal refused: {error})")
+        }
         None => "tool still alive after bounded retirement".to_string(),
     };
     OperationError::new(
@@ -842,10 +1150,7 @@ mod tests {
             match exited_no_reap(&child).expect("observation runs") {
                 Some(status) => break status,
                 None => {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "true never exited"
-                    );
+                    assert!(std::time::Instant::now() < deadline, "true never exited");
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             }
@@ -855,7 +1160,13 @@ mod tests {
         // group membership intact.
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .expect("unreaped child still reserved in /proc");
-        let state = stat.rsplit(')').next().unwrap_or("").trim_start().chars().next();
+        let state = stat
+            .rsplit(')')
+            .next()
+            .unwrap_or("")
+            .trim_start()
+            .chars()
+            .next();
         assert_eq!(state, Some('Z'), "expected zombie, stat: {stat}");
         let group = unsafe { libc::getpgid(pid as libc::pid_t) };
         assert!(group > 0, "zombie leader keeps its group");
@@ -876,10 +1187,7 @@ mod tests {
     #[test]
     fn observe_failure_combines_retirement_fallout() {
         use std::error::Error as _;
-        let observation = backend(
-            std::io::Error::from_raw_os_error(1),
-            Stage::Execute,
-        );
+        let observation = backend(std::io::Error::from_raw_os_error(1), Stage::Execute);
         // Clean retirement: unchanged.
         let clean = observe_failure(
             backend(std::io::Error::from_raw_os_error(1), Stage::Execute),
@@ -951,10 +1259,13 @@ mod tests {
         );
     }
 
-    /// S85-round5: only ECHILD means lost reservation. EPERM (a
-    /// caller waitid filter) and sourceless errors (an unexpected
-    /// but successful observation) keep the leader reserved, so the
-    /// group signal stays allowed there.
+    /// S85-round5: only ECHILD means PROVEN lost reservation.
+    /// S85-round6 correction: EPERM (a caller waitid filter) and
+    /// sourceless errors no longer mean "reserved" — they mean
+    /// UNPROVEN (a filter masks ECHILD as EPERM). Non-ECHILD
+    /// failures route to the authority gate, never to a blind group
+    /// signal; see `signal_tool_group` and the combined
+    /// auto-reap/denial driver test.
     #[cfg(unix)]
     #[test]
     fn reservation_lost_classifies_echild_only() {
@@ -975,16 +1286,209 @@ mod tests {
     #[test]
     fn custody_unresolved_names_withheld_signal() {
         use std::error::Error as _;
-        let detail = format!(
-            "{}",
-            custody_unresolved().source().expect("custody detail")
-        );
+        let detail = format!("{}", custody_unresolved().source().expect("custody detail"));
         assert!(
             detail.contains("reservation")
                 && detail.contains("not signaled")
                 && detail.contains("unresolved"),
             "custody fallout is explicit: {detail}"
         );
+    }
+
+    /// S86-round6: the generic combiner preserves the primary's
+    /// kind, stage, errno and required size (an overrun verdict keeps
+    /// its `LimitExceeded` and byte count under fallout), and returns
+    /// the primary untouched when both legs are clean.
+    #[test]
+    fn primary_failure_preserves_primary_shape() {
+        use std::error::Error as _;
+        let capped = bound_exceeded("stdout over bound", Stage::Execute).with_required_size(99);
+        let clean = primary_failure(
+            bound_exceeded("stdout over bound", Stage::Execute).with_required_size(99),
+            "tool output overrun",
+            None,
+            None,
+        );
+        assert_eq!(clean.kind(), ErrorKind::LimitExceeded);
+        assert_eq!(clean.required_size(), Some(99));
+        let combined = primary_failure(
+            capped,
+            "tool output overrun",
+            Some(retire_unresolved(None)),
+            Some(unsettled("stdout")),
+        );
+        assert_eq!(combined.kind(), ErrorKind::LimitExceeded);
+        assert_eq!(combined.stage(), Stage::Execute);
+        assert_eq!(combined.required_size(), Some(99));
+        let detail = format!("{}", combined.source().expect("combined detail"));
+        assert!(
+            detail.contains("tool output overrun")
+                && detail.contains("tool retirement failed")
+                && detail.contains("still alive")
+                && detail.contains("unsettled"),
+            "context and both legs ride along: {detail}"
+        );
+    }
+
+    /// S86-round6: fallout merging keeps both chains, passes single
+    /// legs through, and stays silent when clean.
+    #[test]
+    fn combine_fallout_merges_both_chains() {
+        use std::error::Error as _;
+        assert!(combine_fallout(None, None).is_none());
+        let solo = backend(std::io::Error::from_raw_os_error(3), Stage::Execute);
+        assert!(combine_fallout(Some(solo), None).is_some());
+        let first = group_unresolved("probe");
+        let second = retire_unresolved(None);
+        let merged = combine_fallout(Some(first), Some(second)).expect("merges");
+        let detail = format!("{}", merged.source().expect("merged detail"));
+        assert!(
+            detail.contains("not signaled") && detail.contains("still alive"),
+            "both chains ride along: {detail}"
+        );
+    }
+
+    /// S85-round6: a fresh test process does not auto-reap (read-only
+    /// check — setting dispositions process-wide would race parallel
+    /// tests, so positives live in the confined denial driver, not
+    /// here).
+    #[cfg(unix)]
+    #[test]
+    fn sigchld_disposition_defaults_to_no_auto_reap() {
+        assert!(!sigchld_auto_reaps());
+    }
+
+    /// Spawn `/bin/sleep 30` as its own process-group leader, via
+    /// the production `pre_exec` idiom: post-exec `setpgid` from the
+    /// parent fails EACCES, so the child must claim its group itself
+    /// (`claim_tool_group` alone would silently leave it in ours,
+    /// and a withhold regression would then hit nothing — a vacuous
+    /// tripwire).
+    #[cfg(target_os = "linux")]
+    fn spawn_grouped_sleep() -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = std::process::Command::new("/bin/sleep");
+        // SAFETY: setpgid is async-signal-safe; the parent does not
+        // depend on its result (a failure surfaces in the test).
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        command.arg("30").spawn().expect("grouped sleep spawns")
+    }
+
+    /// S85-round6: a pidfd-pinned live leader in its own group is
+    /// signaled — authority holds, the group dies.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn signal_tool_group_kills_reserved_group() {
+        let mut child = spawn_grouped_sleep();
+        let id = child.id();
+        let authority = ToolAuthority {
+            pidfd: Some(
+                crate::fixture::linux::seccomp::pidfd_open_raw(id as libc::pid_t)
+                    .expect("pidfd opens on owned child"),
+            ),
+        };
+        signal_tool_group(Some(id), &authority).expect("reserved group signaled");
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait().expect("try_wait runs") {
+                Some(status) => {
+                    assert!(!status.success(), "signaled tool did not exit zero");
+                    break;
+                }
+                None => {
+                    assert!(Instant::now() < end, "group signal had no effect");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    /// S85-round6: without a pidfd pin the group signal is withheld
+    /// and the live leader survives — no blind numeric signal.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn signal_tool_group_withholds_without_pidfd() {
+        use std::error::Error as _;
+        // A real group: a withhold regression would kill the leader
+        // and trip the aliveness assertion below.
+        let mut child = spawn_grouped_sleep();
+        let id = child.id();
+        let authority = ToolAuthority { pidfd: None };
+        let refused = signal_tool_group(Some(id), &authority).expect_err("withheld");
+        let detail = format!("{}", refused.source().expect("withheld detail"));
+        assert!(
+            detail.contains("not signaled") && detail.contains("unresolved"),
+            "withheld signal is explicit: {detail}"
+        );
+        assert!(
+            child.try_wait().expect("try_wait runs").is_none(),
+            "withheld signal must spare the leader"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// S85-round6: a pidfd proving the leader reaped (ESRCH through
+    /// the pin — the competing-waiter case a filter would hide)
+    /// withholds the group signal instead of hitting a recycled pgid.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn signal_tool_group_withholds_reaped_leader() {
+        use std::error::Error as _;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep spawns");
+        let id = child.id();
+        let authority = ToolAuthority {
+            pidfd: Some(
+                crate::fixture::linux::seccomp::pidfd_open_raw(id as libc::pid_t)
+                    .expect("pidfd opens on owned child"),
+            ),
+        };
+        // Reap the leader out from under the pin (what a competing
+        // waiter does): the pin now proves absence.
+        let _ = child.kill();
+        let _ = child.wait();
+        let refused = signal_tool_group(Some(id), &authority).expect_err("reaped leader withholds");
+        let detail = format!("{}", refused.source().expect("withheld detail"));
+        assert!(
+            detail.contains("reaped under a masked observation"),
+            "reaped leader is explicit: {detail}"
+        );
+    }
+
+    /// S86-round6: a killpg refused under valid authority (nonexistent
+    /// pgid — 99999999 exceeds any pid_max) reports its errno instead
+    /// of being ignored.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn signal_tool_group_reports_refused_killpg() {
+        use std::error::Error as _;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep spawns");
+        let authority = ToolAuthority {
+            pidfd: Some(
+                crate::fixture::linux::seccomp::pidfd_open_raw(child.id() as libc::pid_t)
+                    .expect("pidfd opens on owned child"),
+            ),
+        };
+        let refused = signal_tool_group(Some(99_999_999), &authority).expect_err("refused killpg");
+        assert_eq!(refused.raw_os_error(), Some(libc::ESRCH));
+        let detail = format!("{}", refused.source().expect("refused detail"));
+        assert!(
+            detail.contains("signal refused") && detail.contains("unresolved"),
+            "refused signal is explicit: {detail}"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     /// S86-round5: bounded retirement reaps a signaled tool. The
