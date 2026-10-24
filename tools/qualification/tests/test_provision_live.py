@@ -199,8 +199,10 @@ def private_keeper_state(tmpdir):
     shared keeper after. Restoration is exact on every path,
     including mid-test failure. Subprocess entries are NOT
     redirected (separate address space): they keep consulting
-    the shared paths, which destructive tests must therefore
-    leave alive and byte-identical.
+    the shared paths unless a test redirects chosen
+    subprocesses explicitly (write_redirected_tool plus
+    private_keeper_subprocess_env, S137); anything still on
+    the shared paths requires them alive and byte-identical.
     """
     pidfile = os.path.join(tmpdir, "private-keeper.pid")
     candir = os.path.join(tmpdir, "private-keeper-canary")
@@ -226,26 +228,143 @@ def poll_proc_gone(pid, timeout=15):
     return not os.path.exists(f"/proc/{pid}")
 
 
-def quiesce_private_lives(lives):
+def register_keeper_life(lives):
+    """Register the CURRENTLY ensured keeper life. (S131)
+
+    Appends (pid, starttime) from the in-process ensured
+    identity to `lives` and returns it. Call IMMEDIATELY after
+    ensure_mount_ns — before every fallible observation (pidfile
+    reads, table reads, assertions) — so a failure between
+    acquisition and observation still reaches the finalizer
+    instead of escaping it with a live keeper. Refuses loudly
+    when no keeper is ensured.
+    """
+    identity = provision._MOUNT_NS_IDENTITY
+    if identity is None:
+        raise AssertionError(
+            "no ensured keeper identity to register "
+            "(ensure first, then register immediately)")
+    pid, _, start, _ = identity
+    lives.append((pid, start))
+    return (pid, start)
+
+
+def quiesce_private_lives(lives, timeout=15):
     """Best-effort retire of owned private keeper lives. (S117)
 
     `lives` holds (pid, starttime) pairs this test exclusively
-    owns (recorded at ensure time). Each number is signaled
-    ONLY while it still hosts the recorded life — a dead or
-    recycled number is left alone, never killed by number.
-    Never raises; an unretired life is reported loudly for
-    manual recovery.
+    owns (recorded at ensure time via register_keeper_life).
+    Each number is signaled ONLY while it still hosts the
+    recorded life — a dead or recycled number is left alone,
+    never killed by number. A signaled life is re-checked
+    (gone within `timeout`) before it counts as retired.
+    Never raises. Returns the lives whose retirement is
+    UNPROVEN as [(pid, starttime, reason)] — a kill fault, a
+    survivor, or unreadable state; callers retain the private
+    records/dirs and fail loudly on a non-empty return
+    instead of warning-and-passing over a live keeper (S131).
     """
+    unproven = []
     for pid, start in lives:
-        if provision._keeper_starttime(pid) != start:
+        try:
+            current = provision._keeper_starttime(pid)
+        except Exception as exc:
+            sys.stderr.write(
+                "WARNING: private keeper life pid=%d start=%r "
+                "state unreadable: %r; retirement unproven, "
+                "retire by hand\n" % (pid, start, exc))
+            unproven.append(
+                (pid, start, f"starttime unreadable: {exc!r}"))
+            continue
+        if current != start:
             continue
         try:
-            kill_bound_keeper(pid, start)
+            sent = kill_bound_keeper(pid, start)
         except Exception as exc:
             sys.stderr.write(
                 "WARNING: private keeper life pid=%d start=%r "
                 "not proven retired: %r; retire by hand\n"
                 % (pid, start, exc))
+            unproven.append(
+                (pid, start, f"kill failed: {exc!r}"))
+            continue
+        if not sent:
+            # Gone between the starttime check and the
+            # signal: retired, not unproven.
+            continue
+        if poll_proc_gone(pid, timeout=timeout):
+            continue
+        sys.stderr.write(
+            "WARNING: private keeper life pid=%d start=%r "
+            "survived SIGKILL; retirement unproven, retire "
+            "by hand\n" % (pid, start))
+        unproven.append(
+            (pid, start, "survived SIGKILL; retire by hand"))
+    return unproven
+
+
+# Env channels that redirect ONE entry subprocess's keeper
+# paths to private (stale/absent) state. Only
+# write_redirected_tool honors them; production and plain
+# `python provision_fs.py ...` invocations never read them.
+PRIVATE_KEEPER_PIDFILE_ENV = "SCOPEBASE_TEST_KEEPER_PIDFILE"
+PRIVATE_KEEPER_CANDIR_ENV = "SCOPEBASE_TEST_KEEPER_CANDIR"
+
+
+def write_redirected_tool(tmpdir):
+    """An entry script honoring the private-keeper env. (S137)
+
+    Writes tmpdir/redirected-tool.py, which imports
+    provision_fs from the suite's own qualdir, patches ITS
+    _keeper_paths to the env-supplied private pair (when both
+    are set), then dispatches provision.main() — so the entry
+    subprocess consults stale/absent private keeper state
+    while the shared keeper stays alive and byte-identical.
+    Two test-only probes: --probe-keeper-paths prints the
+    effective (pidfile, candir) as JSON; --probe-ensure
+    prints ENSURED <nspath> or REFUSED <error> (rc 0 either
+    way). Returns the script path.
+    """
+    qualdir = os.path.dirname(provision.__file__)
+    script = os.path.join(tmpdir, "redirected-tool.py")
+    with open(script, "w") as handle:
+        handle.write(
+            "import json, os, sys\n"
+            f"sys.path.insert(0, {qualdir!r})\n"
+            "import provision_fs as provision\n"
+            f"pidfile = os.environ.get("
+            f"{PRIVATE_KEEPER_PIDFILE_ENV!r})\n"
+            f"candir = os.environ.get("
+            f"{PRIVATE_KEEPER_CANDIR_ENV!r})\n"
+            "if pidfile and candir:\n"
+            "    provision._keeper_paths = "
+            "lambda: (pidfile, candir)\n"
+            "if sys.argv[1:2] == ['--probe-keeper-paths']:\n"
+            "    print(json.dumps(provision._keeper_paths()))\n"
+            "    sys.exit(0)\n"
+            "if sys.argv[1:2] == ['--probe-ensure']:\n"
+            "    try:\n"
+            "        nspath = provision.ensure_mount_ns()\n"
+            "    except Exception as exc:\n"
+            "        print(f'REFUSED {exc}')\n"
+            "    else:\n"
+            "        print(f'ENSURED {nspath}')\n"
+            "    sys.exit(0)\n"
+            "sys.exit(provision.main())\n")
+    return script
+
+
+def private_keeper_subprocess_env(pidfile, candir):
+    """Env redirecting a subprocess's keeper paths. (S137)
+
+    Copies os.environ with the private pair set, for subprocess
+    invocations of write_redirected_tool output. The shared
+    keeper paths stay untouched — S117's constraint stands.
+    """
+    env = dict(os.environ)
+    env[PRIVATE_KEEPER_PIDFILE_ENV] = pidfile
+    env[PRIVATE_KEEPER_CANDIR_ENV] = candir
+    return env
 
 
 def ext4_arm_verdict(ext4_present, have_loop, have_mkfs):
@@ -338,18 +457,61 @@ def e2e_retirement_verdict(cleanup_ok, leftovers, host_clean):
     return "preserve"
 
 
+def e2e_retirement_retains_tmp(verdict):
+    """True unless retirement is proven. (S130)
+
+    The ORIGINAL fixture tmpdir survives exactly when the
+    e2e_retirement_verdict is not "retired" — automatic
+    removal is conditional on proven retirement, since
+    copies alone (new inodes, original paths in the
+    manifest) cannot recover the fixture.
+    """
+    return verdict != "retired"
+
+
+def remove_tmp_unless_retained(tmp, retain):
+    """rmtree a fixture tmpdir unless retained. (S130)
+
+    When `retain` is true the ORIGINAL directory is kept
+    loudly for manual recovery (same inodes the manifest
+    names) and False is returned; otherwise the tmpdir is
+    removed and True is returned. Never raises.
+    """
+    if retain:
+        sys.stderr.write(
+            f"RETAINED original fixture tmpdir {tmp} for "
+            f"manual recovery (retirement unproven; the "
+            f"manifest names original paths/identities)\n")
+        return False
+    shutil.rmtree(tmp, ignore_errors=True)
+    return True
+
+
 def preserve_e2e_evidence(run, manifest, detail):
     """Copy manifest + fixture root aside; return the dir. (S118)
 
-    setUp's tearDown rmtree fires unconditionally, so on
-    failed or uncertain retirement the evidence must live
-    OUTSIDE the fixture tmpdir. Best effort and never raises
-    (a preservation fault must not mask the retirement fault
-    it records); always reports loudly to stderr, including
-    the destination directory for manual recovery.
+    On failed or uncertain retirement the evidence must live
+    OUTSIDE the fixture tmpdir (copies have new inodes, so
+    the ORIGINAL tmpdir is additionally retained via
+    remove_tmp_unless_retained — S130); the REASON note
+    records the original run/manifest identities so recovery
+    can verify it holds the same objects the manifest names.
+    Best effort and never raises (a preservation fault must
+    not mask the retirement fault it records); always reports
+    loudly to stderr, including the destination directory for
+    manual recovery.
     """
     dest = tempfile.mkdtemp(prefix="provision-e2e-preserved-")
-    note = f"{detail}\nrun={run}\nmanifest={manifest}\n"
+    lines = [detail, f"run={run}", f"manifest={manifest}"]
+    for label, path in (("run", run), ("manifest", manifest)):
+        try:
+            st = os.stat(path)
+        except OSError as exc:
+            lines.append(f"{label}_identity=unstatable: {exc}")
+        else:
+            lines.append(f"{label}_identity=dev:{st.st_dev} "
+                         f"ino:{st.st_ino}")
+    note = "\n".join(lines) + "\n"
     try:
         with open(os.path.join(dest, "REASON"), "w") as handle:
             handle.write(note)
@@ -380,13 +542,27 @@ def preserve_e2e_evidence(run, manifest, detail):
 class LiveBindTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="provision-live-")
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # S130: removal of the ORIGINAL fixture is conditional
+        # on proven retirement. Tests that hit failed or
+        # uncertain retirement (the E2E verdict, unproven
+        # private keeper lives) set _retain_tmp, and the
+        # original dir + manifest survive for recovery
+        # alongside the outside copies.
+        self._retain_tmp = False
+        self.addCleanup(self._remove_tmp_unless_retained)
         # S17-round5: join the keeper ns before any mount
         # effect or observation. Failure here is an ERROR,
         # not a skip: the platform prerequisites (sudo,
         # unshare, nsenter) were probed by the class gate,
         # so a failed ensure is a regression to fix.
         provision.ensure_mount_ns()
+
+    def _remove_tmp_unless_retained(self):
+        # S130: the tearDown rmtree honors _retain_tmp (set on
+        # failed/uncertain retirement), keeping the ORIGINAL
+        # fixture for recovery.
+        remove_tmp_unless_retained(
+            self.tmp, getattr(self, "_retain_tmp", False))
 
     def test_real_bind_owned_gate(self):
         churn = os.path.join(self.tmp, "churn")
@@ -1436,14 +1612,18 @@ class LiveBindTests(unittest.TestCase):
     # S74-round6 live: the role parent is renamed OUTSIDE the
     # run root BEFORE PIN acquisition (pre-pin delay window).
     # Mount through the held operand succeeds, the pin fails,
-    # and table-difference recovery reports _HelperMoved with
-    # the live ID + observed target. Reconcile keeps ID-keyed
-    # pending custody; ACTUAL cleanup then fails loudly
-    # (manual retirement) with the mount still live at the
-    # escaped path and custody retained — never a silent
-    # discharge past the empty name and the run-root-only
-    # sweep. No chown touches the moved-but-unpinned mount
-    # although --own-uid/gid was given.
+    # and — S108/S136: the token alone is copyable, so no pin
+    # means no held-upper binding proof and NO authoritative
+    # moved report. The helper reports FAILED-UNCERTAIN with
+    # the live ID/location as non-authoritative observation
+    # text only. Reconcile keeps ID-less pending custody;
+    # ACTUAL cleanup then fails loudly (absence unprovable,
+    # custody kept pending) with the mount still live at the
+    # escaped path — a location cleanup never learns — and
+    # custody retained, never a silent discharge past the
+    # empty name and the run-root-only sweep. No chown
+    # touches the moved-but-unpinned mount although
+    # --own-uid/gid was given.
     def test_live_mount_pre_pin_rename_outside_recovers(self):
         import contextlib
         import io
@@ -1512,12 +1692,19 @@ class LiveBindTests(unittest.TestCase):
             self.assertEqual(live_rows_at(target), [])
             out = helper.communicate(timeout=120)[0]
             self.assertEqual(helper.returncode, 1, out)
-            self.assertIn("FAILED-MOVED", out)
-            parsed = provision._parse_moved_report(out)
-            self.assertIsNotNone(parsed, out)
-            mnt_id, observed = parsed
-            self.assertEqual(observed, escaped)
-            self.assertEqual(mnt_id, second[0]["mnt_id"])
+            # S136: uncertainty, not an authoritative moved
+            # report — the live ID/location appear only as
+            # non-authoritative observation text for manual
+            # retirement, never parsed into custody.
+            self.assertIn("FAILED-UNCERTAIN", out)
+            self.assertNotIn("FAILED-MOVED", out)
+            self.assertIsNone(
+                provision._parse_moved_report(out), out)
+            self.assertIn("unpinned moved candidate", out)
+            self.assertIn("lacks held-upper binding", out)
+            self.assertIn(
+                f"(mnt={second[0]['mnt_id']} observed at ",
+                out)
             # No chown on the moved-but-unpinned mount: the
             # upper it carries is still controller-owned.
             fst = os.stat(os.path.join(escaped_role, "upper"))
@@ -1548,34 +1735,44 @@ class LiveBindTests(unittest.TestCase):
             self.assertIsNone(adopted)
             pendings = doc["pending_acquisitions"]
             self.assertEqual(len(pendings), 1)
-            self.assertEqual(pendings[0].get("mnt_id"), mnt_id)
-            self.assertEqual(pendings[0].get("observed_target"),
-                             escaped)
+            # S136: ID-less pending custody — the unverified
+            # observation text never becomes recovery identity.
+            self.assertNotIn("mnt_id", pendings[0])
+            self.assertNotIn("observed_target", pendings[0])
+            self.assertIn("uncertain",
+                          pendings[0].get("detail", ""))
             with open(manifest_path, "w") as handle:
                 json.dump(doc, handle)
-            # ACTUAL cleanup: loud failure — the escaped
-            # occupant is outside run-root containment, so the
-            # binding re-check cannot rerun there (the
-            # ns-canary helper rightly refuses outside paths)
-            # and the mount is left in place, never retired
-            # blind. Custody retained, never discharged.
+            # ACTUAL cleanup: loud failure — the target is
+            # empty but the outcome is uncertain, so absence
+            # is unprovable and custody stays pending. Cleanup
+            # never learns the escaped location (no ID-keyed
+            # recovery without binding proof) and retires
+            # nothing blind. Custody retained, never discharged.
             args = types.SimpleNamespace(run_root=run,
                                          manifest=manifest_path)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 rc = provision.cleanup_command(args)
             self.assertEqual(rc, 1, buf.getvalue())
-            self.assertIn("left in place", buf.getvalue())
-            self.assertIn(escaped, buf.getvalue())
+            self.assertIn("cleanup: FAILED", buf.getvalue())
+            self.assertIn("cannot prove absence",
+                          buf.getvalue())
+            self.assertIn("custody kept pending",
+                          buf.getvalue())
+            self.assertNotIn(escaped, buf.getvalue())
             live = live_rows_at(escaped)
             self.assertEqual(len(live), 1)
-            self.assertEqual(live[0]["mnt_id"], mnt_id)
+            self.assertEqual(live[0]["mnt_id"],
+                             second[0]["mnt_id"])
             kept = json.loads(open(manifest_path).read())
             self.assertEqual(
                 len(kept["pending_acquisitions"]), 1)
-            self.assertEqual(
-                kept["pending_acquisitions"][0].get("mnt_id"),
-                mnt_id)
+            self.assertNotIn(
+                "mnt_id", kept["pending_acquisitions"][0])
+            self.assertNotIn(
+                "observed_target",
+                kept["pending_acquisitions"][0])
         finally:
             if helper.poll() is None:
                 helper.kill()
@@ -1790,20 +1987,24 @@ class LiveBindTests(unittest.TestCase):
     # entries never touch keeper infrastructure. A PRIVATE
     # keeper is ensured and killed first (S117: the shared
     # keeper is never killed); real default create, legacy
-    # inspect and an invalid create then run — both pidfile
-    # records stay byte-identical, no new keeper sleep
-    # appears, and the commands still report their own
-    # outcomes. The shared keeper is re-verified for later
-    # tests before returning.
+    # inspect and an invalid create then run THROUGH THE
+    # PRIVATE (stale) keeper paths (S137: injected into the
+    # actual subprocess interpreters, so an erroneous ensure
+    # can no longer silently reuse the healthy shared
+    # keeper) — both pidfile records stay byte-identical, no
+    # new keeper sleep appears, and the commands still report
+    # their own outcomes. The shared keeper is re-verified
+    # for later tests before returning.
     def test_live_unprivileged_entries_spawn_no_keeper(self):
-        # S117: the dead-keeper precondition now uses a PRIVATE
+        # S117: the dead-keeper precondition uses a PRIVATE
         # keeper this test exclusively owns — the shared
-        # per-UID keeper is never killed. The entry
-        # subprocesses still consult the shared paths
-        # (separate address space), so the no-spawn proof
-        # asserts BOTH records byte-identical plus no new
-        # sleeper anywhere; the shared keeper is verified
-        # alive and recoverable afterward.
+        # per-UID keeper is never killed. S137: the entry
+        # subprocesses run through the redirected tool with
+        # the private stale paths injected (proven by the
+        # in-test probe below), so the no-spawn proof keeps
+        # its discriminating precondition; the shared keeper
+        # is verified alive, byte-identical and recoverable
+        # afterward.
         global_pidfile, _ = provision._keeper_paths()
         with open(global_pidfile, "rb") as handle:
             global_before = handle.read()
@@ -1817,12 +2018,16 @@ class LiveBindTests(unittest.TestCase):
             return {int(word) for word in out.stdout.split()
                     if word.isdigit()}
 
-        with private_keeper_state(self.tmp) as (pidfile, _candir):
+        quiesce_unproven = []
+        with private_keeper_state(self.tmp) as (pidfile,
+                                               priv_candir):
             handles_before = len(provision._KEEPERS)
             provision.ensure_mount_ns()
-            keeper_pid, _, keeper_start, _ = \
-                provision._MOUNT_NS_IDENTITY
-            lives = [(keeper_pid, keeper_start)]
+            # S131: registered immediately, before every
+            # fallible observation below.
+            lives = []
+            keeper_pid, keeper_start = register_keeper_life(
+                lives)
             try:
                 # S116: PIDFD-authority kill bound to the
                 # originally verified starttime.
@@ -1842,26 +2047,47 @@ class LiveBindTests(unittest.TestCase):
                 except OSError:
                     stale = None
                 before = sleepers()
-                tool = provision.__file__
+                # S137: the private stale paths go into the
+                # ACTUAL subprocess interpreters — the probe
+                # proves the precondition (these entries
+                # consult the dead private keeper, never the
+                # healthy shared one), then the real entries
+                # run through the same redirection.
+                tool = write_redirected_tool(self.tmp)
+                env = private_keeper_subprocess_env(
+                    pidfile, priv_candir)
+                probe = subprocess.run(
+                    [sys.executable, tool,
+                     "--probe-keeper-paths"],
+                    capture_output=True, text=True,
+                    timeout=60, env=env)
+                self.assertEqual(probe.returncode, 0,
+                                 probe.stdout + probe.stderr)
+                self.assertEqual(
+                    json.loads(probe.stdout),
+                    [pidfile, priv_candir])
                 run = os.path.join(self.tmp, "plain")
                 manifest = os.path.join(self.tmp, "plain.json")
                 first = subprocess.run(
                     [sys.executable, tool, "create",
                      "--manifest", manifest, "--run-root", run],
-                    capture_output=True, text=True, timeout=300)
+                    capture_output=True, text=True, timeout=300,
+                    env=env)
                 self.assertEqual(first.returncode, 0,
                                  first.stdout + first.stderr)
                 second = subprocess.run(
                     [sys.executable, tool, "inspect",
                      "--manifest", manifest, "--run-root", run],
-                    capture_output=True, text=True, timeout=300)
+                    capture_output=True, text=True, timeout=300,
+                    env=env)
                 self.assertEqual(second.returncode, 0,
                                  second.stdout + second.stderr)
                 third = subprocess.run(
                     [sys.executable, tool, "create",
                      "--manifest", manifest, "--run-root",
                      "/etc/shadow"],
-                    capture_output=True, text=True, timeout=120)
+                    capture_output=True, text=True, timeout=120,
+                    env=env)
                 self.assertEqual(third.returncode, 2,
                                  third.stdout + third.stderr)
                 # No keeper infrastructure appeared: neither
@@ -1877,7 +2103,17 @@ class LiveBindTests(unittest.TestCase):
                     self.assertEqual(handle.read(), global_before)
                 self.assertTrue(sleepers() <= before)
             finally:
-                quiesce_private_lives(lives)
+                quiesce_unproven = quiesce_private_lives(lives)
+                if quiesce_unproven:
+                    # S131: retirement unproven — retain the
+                    # ORIGINAL private records/dirs for manual
+                    # recovery instead of letting tearDown
+                    # erase them.
+                    self._retain_tmp = True
+                    sys.stderr.write(
+                        "UNPROVEN private lives "
+                        f"{quiesce_unproven!r}; original "
+                        f"fixture {self.tmp} retained\n")
         # The shared keeper this suite (and any other fixture)
         # depends on is untouched and recoverable: the cache
         # was dropped, so this re-ensure fully re-verifies
@@ -1889,6 +2125,11 @@ class LiveBindTests(unittest.TestCase):
                          global_identity)
         rows = provision.read_mount_table()
         self.assertIsInstance(rows, list)
+        if quiesce_unproven:
+            self.fail(
+                "private keeper lives not proven retired: "
+                f"{quiesce_unproven!r} (original fixture "
+                f"retained at {self.tmp})")
 
     # S100/S103-round6 live: killing the keeper drops every
     # later routing decision loudly, and the next ensure
@@ -1907,12 +2148,14 @@ class LiveBindTests(unittest.TestCase):
             global_before = handle.read()
         global_identity = provision._MOUNT_NS_IDENTITY
         self.assertIsNotNone(global_identity)
+        quiesce_unproven = []
         with private_keeper_state(self.tmp) as (pidfile, _candir):
             handles_before = len(provision._KEEPERS)
             provision.ensure_mount_ns()
-            old_pid, _, old_start, _ = \
-                provision._MOUNT_NS_IDENTITY
-            lives = [(old_pid, old_start)]
+            # S131: registered immediately, before every
+            # fallible observation below.
+            lives = []
+            old_pid, old_start = register_keeper_life(lives)
             try:
                 with open(pidfile, "rb") as handle:
                     old = handle.read().split()
@@ -1955,6 +2198,13 @@ class LiveBindTests(unittest.TestCase):
                 provision._MOUNT_NS = None
                 provision._MOUNT_NS_IDENTITY = None
                 nspath = provision.ensure_mount_ns()
+                # S131: the replacement life is registered
+                # IMMEDIATELY — before the fallible
+                # pidfile/table reads below — so a failure
+                # between still reaches the finalizer instead
+                # of escaping with a live keeper.
+                early_pid, early_start = register_keeper_life(
+                    lives)
                 with open(pidfile, "rb") as handle:
                     new = handle.read().split()
                 new_pid = int(new[0])
@@ -1970,7 +2220,11 @@ class LiveBindTests(unittest.TestCase):
                 # no pinned namespace.
                 _, _, new_start, _ = \
                     provision._MOUNT_NS_IDENTITY
-                lives.append((new_pid, new_start))
+                # The immediately registered life is the
+                # observed one (single registration, no late
+                # append to forget).
+                self.assertEqual((new_pid, new_start),
+                                 (early_pid, early_start))
                 self.assertEqual(
                     provision._keeper_starttime(new_pid),
                     new_start)
@@ -1986,7 +2240,17 @@ class LiveBindTests(unittest.TestCase):
                               "did not collapse after the "
                               "bound kill")
             finally:
-                quiesce_private_lives(lives)
+                quiesce_unproven = quiesce_private_lives(lives)
+                if quiesce_unproven:
+                    # S131: retirement unproven — retain the
+                    # ORIGINAL private records/dirs for manual
+                    # recovery instead of letting tearDown
+                    # erase them.
+                    self._retain_tmp = True
+                    sys.stderr.write(
+                        "UNPROVEN private lives "
+                        f"{quiesce_unproven!r}; original "
+                        f"fixture {self.tmp} retained\n")
         # The independent shared keeper is untouched and
         # recoverable: same record, same life, routed reads
         # work after a full re-verification.
@@ -1997,6 +2261,11 @@ class LiveBindTests(unittest.TestCase):
                          global_identity)
         rows = provision.read_mount_table()
         self.assertIsInstance(rows, list)
+        if quiesce_unproven:
+            self.fail(
+                "private keeper lives not proven retired: "
+                f"{quiesce_unproven!r} (original fixture "
+                f"retained at {self.tmp})")
 
     # S99-round6 end to end: real privileged create, inspect
     # and cleanup through the production entry points (main,
@@ -2200,6 +2469,14 @@ class LiveBindTests(unittest.TestCase):
                     f"residue unobservable: {exc!r}")
             verdict = e2e_retirement_verdict(
                 cleanup_ok, leftovers, host_clean)
+            # S130: removal of the ORIGINAL fixture is
+            # conditional on proven retirement — copies
+            # alone (new inodes, original paths in the
+            # manifest) cannot recover, and removing the
+            # original image can make loop retirement
+            # refuse its deleted backing.
+            self._retain_tmp = e2e_retirement_retains_tmp(
+                verdict)
             preserved = None
             if verdict != "retired":
                 preserved = preserve_e2e_evidence(
@@ -2580,10 +2857,15 @@ class QuiesceLivesTests(unittest.TestCase):
                 provision, "_keeper_starttime",
                 return_value=1234) as start_mock, \
              mock.patch(__name__ + ".kill_bound_keeper",
-                        return_value=True) as kill_mock:
-            quiesce_private_lives([(4242, 1234)])
+                        return_value=True) as kill_mock, \
+             mock.patch(__name__ + ".poll_proc_gone",
+                        return_value=True) as gone_mock:
+            # S131: proven retirement returns no unproven lives.
+            self.assertEqual(
+                quiesce_private_lives([(4242, 1234)]), [])
         start_mock.assert_called_once_with(4242)
         kill_mock.assert_called_once_with(4242, 1234)
+        gone_mock.assert_called_once_with(4242, timeout=15)
 
     def test_recycled_and_dead_numbers_untouched(self):
         from unittest import mock
@@ -2592,8 +2874,9 @@ class QuiesceLivesTests(unittest.TestCase):
                 side_effect=[9999, None]), \
              mock.patch(__name__ + ".kill_bound_keeper") \
                 as kill_mock:
-            quiesce_private_lives([(4242, 1234),
-                                   (4243, 1234)])
+            self.assertEqual(
+                quiesce_private_lives([(4242, 1234),
+                                       (4243, 1234)]), [])
         kill_mock.assert_not_called()
 
     def test_kill_error_warns_and_never_raises(self):
@@ -2606,8 +2889,95 @@ class QuiesceLivesTests(unittest.TestCase):
              mock.patch(__name__ + ".kill_bound_keeper",
                         side_effect=OSError("boom")), \
              mock.patch("sys.stderr", captured):
-            quiesce_private_lives([(4242, 1234)])
+            # S131: the fault is RETURNED (callers retain the
+            # private records/dirs and fail loudly) — never a
+            # warning-only pass over a live keeper.
+            unproven = quiesce_private_lives([(4242, 1234)])
         self.assertIn("4242", captured.getvalue())
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (4242, 1234))
+        self.assertTrue(unproven[0][2])
+
+    def test_survivor_reported_unproven(self):
+        # S131: the signal went out but the life is still
+        # there — retirement unproven, reported for manual
+        # recovery, never silently dropped.
+        import io
+        from unittest import mock
+        captured = io.StringIO()
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234), \
+             mock.patch(__name__ + ".kill_bound_keeper",
+                        return_value=True), \
+             mock.patch(__name__ + ".poll_proc_gone",
+                        return_value=False), \
+             mock.patch("sys.stderr", captured):
+            unproven = quiesce_private_lives([(4242, 1234)])
+        self.assertIn("4242", captured.getvalue())
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (4242, 1234))
+
+    def test_gone_between_check_and_signal_counts_retired(self):
+        # signal_owned reports the life already gone (False):
+        # retired, not unproven.
+        from unittest import mock
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234), \
+             mock.patch(__name__ + ".kill_bound_keeper",
+                        return_value=False) as kill_mock, \
+             mock.patch(__name__ + ".poll_proc_gone") \
+                as gone_mock:
+            self.assertEqual(
+                quiesce_private_lives([(4242, 1234)]), [])
+        kill_mock.assert_called_once_with(4242, 1234)
+        gone_mock.assert_not_called()
+
+    def test_starttime_error_returns_unproven_and_never_raises(self):
+        # S131: unreadable state is unproven custody, not a
+        # cleanup crash (pre-fix the exception propagated out
+        # of the "never raises" finalizer).
+        import io
+        from unittest import mock
+        captured = io.StringIO()
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                side_effect=OSError("proc gone mid-read")), \
+             mock.patch(__name__ + ".kill_bound_keeper") \
+                as kill_mock, \
+             mock.patch("sys.stderr", captured):
+            unproven = quiesce_private_lives([(4242, 1234)])
+        kill_mock.assert_not_called()
+        self.assertIn("4242", captured.getvalue())
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (4242, 1234))
+
+
+class RegisterKeeperLifeTests(unittest.TestCase):
+    # S131: every acquired keeper is registered with the
+    # failure finalizer IMMEDIATELY after ensure, before any
+    # fallible observation — a replacement created-then-read
+    # must not escape the finalizer when a read between fails.
+    # The live respawn test wires this helper into its ensure
+    # sites; these pins cover the mechanism itself.
+    def setUp(self):
+        self.saved = provision._MOUNT_NS_IDENTITY
+
+    def tearDown(self):
+        provision._MOUNT_NS_IDENTITY = self.saved
+
+    def test_registers_current_identity(self):
+        lives = [(1111, 100)]
+        provision._MOUNT_NS_IDENTITY = (4242, 77, 1234, "canary")
+        self.assertEqual(register_keeper_life(lives),
+                         (4242, 1234))
+        self.assertEqual(lives, [(1111, 100), (4242, 1234)])
+
+    def test_no_identity_refuses_loudly(self):
+        provision._MOUNT_NS_IDENTITY = None
+        with self.assertRaises(AssertionError):
+            register_keeper_life([])
 
 
 class E2ERetirementTests(unittest.TestCase):
@@ -2684,6 +3054,327 @@ class E2ERetirementTests(unittest.TestCase):
         with open(os.path.join(dest, "manifest.json")) as handle:
             self.assertEqual(handle.read(), "{}")
         self.assertIn("PRESERVED", captured.getvalue())
+
+    def test_retain_decision_matrix(self):
+        # S130: automatic removal of the ORIGINAL fixture is
+        # conditional on PROVEN retirement — anything else
+        # retains it for recovery.
+        self.assertFalse(e2e_retirement_retains_tmp("retired"))
+        self.assertTrue(e2e_retirement_retains_tmp("preserve"))
+
+    def test_remove_helper_removes_when_not_retained(self):
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        gone = os.path.join(tmp, "run")
+        os.makedirs(gone)
+        self.assertTrue(remove_tmp_unless_retained(tmp, False))
+        self.assertFalse(os.path.exists(tmp))
+
+    def test_remove_helper_retains_original_when_retained(self):
+        # S130: retention keeps the ORIGINAL directory (same
+        # inodes the manifest names), loudly, for manual
+        # recovery — never a quiet rmtree past copies.
+        import io
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(os.path.join(run, "ext4"))
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write('{"run_root": "%s"}' % run)
+        before = (os.stat(run), os.stat(manifest))
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            self.assertFalse(
+                remove_tmp_unless_retained(tmp, True))
+        self.assertIn(tmp, captured.getvalue())
+        self.assertIn("RETAINED", captured.getvalue())
+        after = (os.stat(run), os.stat(manifest))
+        self.assertEqual(
+            [(st.st_dev, st.st_ino) for st in after],
+            [(st.st_dev, st.st_ino) for st in before])
+
+    def test_preserve_records_original_identity(self):
+        # S130: the preserved REASON names the ORIGINAL
+        # run/manifest identities, so recovery can verify it
+        # holds the same objects the manifest names (copies
+        # have new inodes and prove nothing by themselves).
+        import io
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(run)
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write('{}')
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            dest = preserve_e2e_evidence(
+                run, manifest, "cleanup rc=1 for pins")
+        self.addCleanup(shutil.rmtree, dest, ignore_errors=True)
+        with open(os.path.join(dest, "REASON")) as handle:
+            reason = handle.read()
+        run_st = os.stat(run)
+        manifest_st = os.stat(manifest)
+        self.assertIn(
+            f"run_identity=dev:{run_st.st_dev} "
+            f"ino:{run_st.st_ino}", reason)
+        self.assertIn(
+            f"manifest_identity=dev:{manifest_st.st_dev} "
+            f"ino:{manifest_st.st_ino}", reason)
+
+    def test_retain_plus_preserve_keeps_recoverable_original(self):
+        # S130: the full failed-retirement path — the verdict
+        # retains the ORIGINAL (same inodes, manifest still
+        # names valid paths) while the copies land outside the
+        # fixture root. Recoverability, not just copied bytes.
+        import io
+        import json as _json
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(os.path.join(run, "ext4"))
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write(_json.dumps({"run_root": run}))
+        with open(os.path.join(run, "ext4", "a.bin"),
+                  "w") as handle:
+            handle.write("payload")
+        verdict = e2e_retirement_verdict(False, None, False)
+        retain = e2e_retirement_retains_tmp(verdict)
+        self.assertTrue(retain)
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            dest = preserve_e2e_evidence(
+                run, manifest, "cleanup rc=1 for pins")
+            removed = remove_tmp_unless_retained(tmp, retain)
+        self.addCleanup(shutil.rmtree, dest, ignore_errors=True)
+        self.assertFalse(removed)
+        self.assertFalse(dest.startswith(tmp + os.sep))
+        # The original is recoverable in place: same bytes,
+        # and the manifest's recorded paths still resolve.
+        with open(os.path.join(
+                dest, "run", "ext4", "a.bin")) as handle:
+            self.assertEqual(handle.read(), "payload")
+        with open(manifest) as handle:
+            doc = _json.load(handle)
+        self.assertTrue(os.path.isdir(doc["run_root"]))
+        with open(os.path.join(
+                doc["run_root"], "ext4", "a.bin")) as handle:
+            self.assertEqual(handle.read(), "payload")
+
+
+class UnpinnedMovedUncertaintyTests(unittest.TestCase):
+    # S136: the pre-pin overlay rename reports uncertainty with
+    # NON-authoritative observations — the helper's embedded
+    # mnt=/observed-at text is never parsed into custody, and
+    # reconcile/cleanup keep ID-less pending custody that can
+    # only report unprovable absence loudly. The live pre-pin
+    # rename test wires this contract to a real kernel move;
+    # these pins cover the decision chain without privilege.
+    # The helper text mirrors the S108 production wording
+    # exactly (provision._recover_unpinned_mount).
+    HELPER_OUT = (
+        "FAILED-UNCERTAIN: mount /tmp/s136/run/ov/merged pin "
+        "failed (target not openable: [Errno 2] No such file "
+        "or directory); unpinned moved candidate (mnt=41 "
+        "observed at '/tmp/s136/escaped/merged') lacks "
+        "held-upper binding; left in place; manual retirement "
+        "required\n")
+
+    def setUp(self):
+        self.saved_persist = provision._PERSIST
+
+    def tearDown(self):
+        provision._PERSIST = self.saved_persist
+
+    def test_uncertain_output_has_no_parseable_moved_report(self):
+        out = self.HELPER_OUT
+        self.assertIn("FAILED-UNCERTAIN", out)
+        self.assertNotIn("FAILED-MOVED", out)
+        self.assertIsNone(provision._parse_moved_report(out))
+
+    def test_normalize_and_classify_uncertain_without_identity(self):
+        failure = provision._normalize_mount_failure(
+            "/tmp/s136/run/ov/merged", 1, self.HELPER_OUT, "")
+        self.assertIn("effect uncertain", failure)
+        self.assertEqual(
+            provision._classify_mount_failure(failure),
+            ("uncertain", None, None))
+
+    def _reconciled_doc(self, run):
+        target = os.path.join(run, "ov", "merged")
+        canary = "pin-canary"
+        doc = provision.fresh_manifest(run, False)
+        st = os.stat(run)
+        doc["run_root_identity"] = {"dev": st.st_dev,
+                                    "ino": st.st_ino}
+        provision.record_pending_acquisition(doc, {
+            "kind": "mount", "key": target, "role": "ov",
+            "target": target, "fstype": "overlay",
+            "source": "overlay", "expect_super": [],
+            "canary": canary})
+        failure = provision._normalize_mount_failure(
+            target, 1, self.HELPER_OUT, "")
+        adopted = provision.reconcile_mount_effect(
+            doc, run, "ov", target,
+            {"fstype": "overlay", "source": "overlay",
+             "expect_super": []},
+            canary=(provision.MOUNT_CANARY_NAME, canary),
+            failure=failure)
+        return (doc, target, adopted)
+
+    def test_reconcile_keeps_id_less_pending(self):
+        tmp = tempfile.mkdtemp(prefix="s136-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(run)
+        provision._PERSIST = None
+        doc, _, adopted = self._reconciled_doc(run)
+        self.assertIsNone(adopted)
+        pendings = doc["pending_acquisitions"]
+        self.assertEqual(len(pendings), 1)
+        # No recovery identity: the unverified observation
+        # text never becomes custody.
+        self.assertNotIn("mnt_id", pendings[0])
+        self.assertNotIn("observed_target", pendings[0])
+        self.assertIn("uncertain",
+                      pendings[0].get("detail", ""))
+
+    def test_cleanup_reports_unprovable_absence_and_retains(self):
+        tmp = tempfile.mkdtemp(prefix="s136-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(run)
+        provision._PERSIST = None
+        doc, target, _ = self._reconciled_doc(run)
+        failures = provision.cleanup_pending_acquisitions(
+            doc, run)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("cannot prove absence", failures[0])
+        self.assertIn("custody kept pending", failures[0])
+        # Cleanup never learns the escaped location: the
+        # observation stays non-authoritative end to end.
+        self.assertNotIn("escaped", failures[0])
+        self.assertNotIn("mnt=41", failures[0])
+        self.assertEqual(
+            len(doc["pending_acquisitions"]), 1)
+
+
+class RedirectedToolTests(unittest.TestCase):
+    # S137: chosen entry subprocesses consult PRIVATE keeper
+    # paths (stale or absent) instead of the healthy shared
+    # keeper — an erroneous ensure inside unprivileged
+    # creation/inspection can no longer silently reuse it. The
+    # live no-keeper negative wires this into real entries
+    # against a killed private keeper; these pins cover the
+    # redirection mechanism plus real unprivileged entries
+    # through it (no sudo, no keeper, no mounts).
+    def test_probe_reports_private_paths(self):
+        tmp = tempfile.mkdtemp(prefix="s137-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        tool = write_redirected_tool(tmp)
+        pidfile = os.path.join(tmp, "private.pid")
+        candir = os.path.join(tmp, "private-canary")
+        env = private_keeper_subprocess_env(pidfile, candir)
+        probe = subprocess.run(
+            [sys.executable, tool, "--probe-keeper-paths"],
+            capture_output=True, text=True, timeout=60,
+            env=env)
+        self.assertEqual(probe.returncode, 0,
+                         probe.stdout + probe.stderr)
+        self.assertEqual(json.loads(probe.stdout),
+                         [pidfile, candir])
+
+    def test_probe_without_env_reports_shared_paths(self):
+        tmp = tempfile.mkdtemp(prefix="s137-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        tool = write_redirected_tool(tmp)
+        env = dict(os.environ)
+        env.pop(PRIVATE_KEEPER_PIDFILE_ENV, None)
+        env.pop(PRIVATE_KEEPER_CANDIR_ENV, None)
+        probe = subprocess.run(
+            [sys.executable, tool, "--probe-keeper-paths"],
+            capture_output=True, text=True, timeout=60,
+            env=env)
+        self.assertEqual(probe.returncode, 0,
+                         probe.stdout + probe.stderr)
+        self.assertEqual(json.loads(probe.stdout),
+                         list(provision._keeper_paths()))
+
+    def test_probe_ensure_refuses_corrupt_private_record(self):
+        # Bad control: the stale state is really established in
+        # the subprocess — a corrupt private record refuses
+        # there instead of silently using the shared keeper
+        # (live: a broken redirection would ENSURE via the
+        # healthy shared keeper and fail this; bare: passes
+        # vacuously since no keeper exists either way).
+        tmp = tempfile.mkdtemp(prefix="s137-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        tool = write_redirected_tool(tmp)
+        pidfile = os.path.join(tmp, "private.pid")
+        candir = os.path.join(tmp, "private-canary")
+        with open(pidfile, "wb") as handle:
+            handle.write(b"not a keeper record\n")
+        env = private_keeper_subprocess_env(pidfile, candir)
+        probe = subprocess.run(
+            [sys.executable, tool, "--probe-ensure"],
+            capture_output=True, text=True, timeout=60,
+            env=env)
+        self.assertEqual(probe.returncode, 0,
+                         probe.stdout + probe.stderr)
+        self.assertTrue(
+            probe.stdout.startswith("REFUSED"),
+            probe.stdout)
+        self.assertIn("corrupt", probe.stdout)
+
+    def test_unprivileged_entries_leave_stale_record_untouched(self):
+        tmp = tempfile.mkdtemp(prefix="s137-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        tool = write_redirected_tool(tmp)
+        pidfile = os.path.join(tmp, "private.pid")
+        candir = os.path.join(tmp, "private-canary")
+        # A stale record (dead keeper): the entries must
+        # neither respawn through it nor disturb it.
+        with open(pidfile, "wb") as handle:
+            handle.write(b"424242 77 dead-canary\n")
+        with open(pidfile, "rb") as handle:
+            stale = handle.read()
+        global_pidfile, _ = provision._keeper_paths()
+        try:
+            with open(global_pidfile, "rb") as handle:
+                global_before = handle.read()
+        except OSError:
+            global_before = None
+        env = private_keeper_subprocess_env(pidfile, candir)
+        run = os.path.join(tmp, "plain")
+        manifest = os.path.join(tmp, "plain.json")
+
+        def tool_run(*args, timeout=300):
+            return subprocess.run(
+                [sys.executable, tool, *args],
+                capture_output=True, text=True,
+                timeout=timeout, env=env)
+
+        first = tool_run("create", "--manifest", manifest,
+                         "--run-root", run)
+        self.assertEqual(first.returncode, 0,
+                         first.stdout + first.stderr)
+        second = tool_run("inspect", "--manifest", manifest,
+                          "--run-root", run)
+        self.assertEqual(second.returncode, 0,
+                         second.stdout + second.stderr)
+        third = tool_run("create", "--manifest", manifest,
+                         "--run-root", "/etc/shadow")
+        self.assertEqual(third.returncode, 2,
+                         third.stdout + third.stderr)
+        with open(pidfile, "rb") as handle:
+            self.assertEqual(handle.read(), stale)
+        if global_before is not None:
+            with open(global_pidfile, "rb") as handle:
+                self.assertEqual(handle.read(), global_before)
 
 
 class Ext4ArmVerdictTests(unittest.TestCase):
