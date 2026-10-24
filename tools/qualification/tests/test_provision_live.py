@@ -21,6 +21,7 @@ a live mount go through the ns_* helpers. Direct reads stay
 only where no mount is live at that path at that moment.
 """
 
+import contextlib
 import json
 import os
 import pwd
@@ -163,6 +164,90 @@ def signal_verified_proc(victim, signum):
         os.close(pin)
 
 
+def kill_bound_keeper(pid, expected_start):
+    """SIGKILL one keeper life through PIDFD authority. (S116)
+
+    A fresh pidfd pin plus signal_owned against the ORIGINALLY
+    verified starttime (the caller's retained
+    _MOUNT_NS_IDENTITY anchor — never a re-read number): exit
+    and PID reuse before dispatch refuse (AdmissionError)
+    instead of redirecting a root-authorized signal, and the
+    EPERM escalation re-pins and re-verifies the same original
+    starttime inside the helper. Returns True when the signal
+    was sent, False when the life was already gone. The pin
+    always closes. No numeric kill at any stage.
+    """
+    import signal as _signal
+    pin = provision.pin_proc(pid)
+    try:
+        return provision.signal_owned(
+            pid, _signal.SIGKILL, pin, expected_start)
+    finally:
+        os.close(pin)
+
+
+@contextlib.contextmanager
+def private_keeper_state(tmpdir):
+    """Redirect keeper records to tmpdir; exclusive ownership. (S117)
+
+    Patches provision._keeper_paths to a private pidfile/candir
+    pair under tmpdir (the lock, publish tmp, and evidence
+    paths all derive from it) and drops the cached keeper —
+    no in-memory identity crosses the boundary in either
+    direction, so callers ensure a private keeper inside,
+    retire it inside, and re-ensure (fully re-verifying) the
+    shared keeper after. Restoration is exact on every path,
+    including mid-test failure. Subprocess entries are NOT
+    redirected (separate address space): they keep consulting
+    the shared paths, which destructive tests must therefore
+    leave alive and byte-identical.
+    """
+    pidfile = os.path.join(tmpdir, "private-keeper.pid")
+    candir = os.path.join(tmpdir, "private-keeper-canary")
+    saved_paths = provision._keeper_paths
+    provision._keeper_paths = lambda: (pidfile, candir)
+    provision._MOUNT_NS = None
+    provision._MOUNT_NS_IDENTITY = None
+    try:
+        yield (pidfile, candir)
+    finally:
+        provision._keeper_paths = saved_paths
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+
+
+def poll_proc_gone(pid, timeout=15):
+    """True when /proc/<pid> vanishes within timeout. (S117)"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not os.path.exists(f"/proc/{pid}"):
+            return True
+        time.sleep(0.2)
+    return not os.path.exists(f"/proc/{pid}")
+
+
+def quiesce_private_lives(lives):
+    """Best-effort retire of owned private keeper lives. (S117)
+
+    `lives` holds (pid, starttime) pairs this test exclusively
+    owns (recorded at ensure time). Each number is signaled
+    ONLY while it still hosts the recorded life — a dead or
+    recycled number is left alone, never killed by number.
+    Never raises; an unretired life is reported loudly for
+    manual recovery.
+    """
+    for pid, start in lives:
+        if provision._keeper_starttime(pid) != start:
+            continue
+        try:
+            kill_bound_keeper(pid, start)
+        except Exception as exc:
+            sys.stderr.write(
+                "WARNING: private keeper life pid=%d start=%r "
+                "not proven retired: %r; retire by hand\n"
+                % (pid, start, exc))
+
+
 def ext4_arm_verdict(ext4_present, have_loop, have_mkfs):
     """E2E ext4-arm obligation. (G1-I3)
 
@@ -179,20 +264,115 @@ def ext4_arm_verdict(ext4_present, have_loop, have_mkfs):
 
 
 def fs01_skip_reason_ok(reason):
-    """True when an FS01 skip names its missing capability. (G1-I3)
+    """True only for IDENTIFIED capability unavailability. (S113)
 
-    Genuine unavailability reasons name loop/losetup ("no free
-    loop device", "loop-control not openable", "losetup
-    refused/outcome uncertain") or mkfs ("missing mkfs.ext4
-    tool"). Anything else — empty, unrelated, or a mount-stage
-    failure (which implies loop worked) — is not a capability
-    skip.
+    Production's FS01 skip reasons name one of three identified
+    unavailability outcomes: the absent formatter tool
+    ("missing mkfs.ext4 tool") or a native loop-attach refusal
+    ("loop-control not openable", "no free loop device" — the
+    attach failures arrive wrapped in production's "losetup
+    refused" report line, so the wrapper is accepted only with
+    an identified inner cause). Everything else is NOT a
+    capability skip: formatter failures ("mkfs.ext4 refused" —
+    before loop custody is armed), bare utility failures
+    ("losetup refused" without an identified cause; production
+    attaches via native ioctls, so a utility failure proves
+    nothing), uncertain outcomes ("losetup outcome uncertain"
+    — unresolved custody, never a clean skip),
+    association/integrity refusals, loop configure failures,
+    mount-stage failures (which imply loop worked), and
+    empty/unrelated text.
     """
     text = (reason or "").lower()
     if not text:
         return False
-    return any(key in text
-               for key in ("loop", "losetup", "mkfs"))
+    return any(marker in text for marker in (
+        "missing mkfs.ext4 tool",
+        "loop-control not openable",
+        "no free loop device",
+    ))
+
+
+# S113: the exact capability production uses — LOOP_CTL_GET_FREE
+# on /dev/loop-control (provision._configure_free_loop), never
+# the losetup CLI. Runs under sudo (the capability's real user
+# is the privileged helper); prints LOOP_VIABLE plus the free
+# number, and dies (nonzero, no marker) on any refusal.
+NATIVE_LOOP_PROBE = (
+    "import fcntl, os\n"
+    "fd = os.open('/dev/loop-control', os.O_RDWR)\n"
+    "try:\n"
+    f"    num = fcntl.ioctl(fd, {provision.LOOP_CTL_GET_FREE})\n"
+    "finally:\n"
+    "    os.close(fd)\n"
+    "print('LOOP_VIABLE', num)\n"
+)
+
+
+def native_loop_probe_verdict(returncode, stdout):
+    """True only when the native probe proves viability. (S113)
+
+    Any other outcome — nonzero exit, missing marker, absent
+    output — degrades to not-viable: the E2E then takes the
+    skip path, where the FS01 reason must still name a real
+    missing capability (fail closed, never a forced pass or a
+    forced failure from an inconclusive probe).
+    """
+    if returncode != 0:
+        return False
+    return "LOOP_VIABLE" in (stdout or "")
+
+
+def e2e_retirement_verdict(cleanup_ok, leftovers, host_clean):
+    """'retired' only when cleanup worked with no residue. (S118)
+
+    `leftovers` is the list of live rows still under the
+    fixture root (None when unobservable); `host_clean` tells
+    whether the host table shows no fixture residue. Any
+    failed cleanup, any leftover row, any host residue, or any
+    unobservable residue returns 'preserve' — unknown is not
+    retired.
+    """
+    if cleanup_ok and leftovers == [] and host_clean:
+        return "retired"
+    return "preserve"
+
+
+def preserve_e2e_evidence(run, manifest, detail):
+    """Copy manifest + fixture root aside; return the dir. (S118)
+
+    setUp's tearDown rmtree fires unconditionally, so on
+    failed or uncertain retirement the evidence must live
+    OUTSIDE the fixture tmpdir. Best effort and never raises
+    (a preservation fault must not mask the retirement fault
+    it records); always reports loudly to stderr, including
+    the destination directory for manual recovery.
+    """
+    dest = tempfile.mkdtemp(prefix="provision-e2e-preserved-")
+    note = f"{detail}\nrun={run}\nmanifest={manifest}\n"
+    try:
+        with open(os.path.join(dest, "REASON"), "w") as handle:
+            handle.write(note)
+    except OSError as exc:
+        sys.stderr.write(
+            f"WARNING: E2E REASON not preserved: {exc!r}\n")
+    try:
+        shutil.copy2(manifest, os.path.join(dest,
+                                             "manifest.json"))
+    except OSError as exc:
+        sys.stderr.write(
+            f"WARNING: E2E manifest not preserved: {exc!r}\n")
+    if os.path.isdir(run):
+        try:
+            shutil.copytree(run, os.path.join(dest, "run"))
+        except OSError as exc:
+            sys.stderr.write(
+                f"WARNING: E2E run root not preserved: "
+                f"{exc!r}\n")
+    sys.stderr.write(
+        f"PRESERVED E2E retirement evidence in {dest}: "
+        f"{detail}\n")
+    return dest
 
 
 @unittest.skipUnless(live_mounts_enabled(),
@@ -1607,26 +1787,28 @@ class LiveBindTests(unittest.TestCase):
                 retire_verified_mount(target, verified_mnt_id)
 
     # S102-round6 live effect check: unprivileged and refused
-    # entries never touch keeper infrastructure. The keeper
-    # is killed first (stale pidfile left behind, so any
-    # ensure would observably respawn); real default create,
-    # legacy inspect and an invalid create then run — the
-    # pidfile bytes stay stale, no new keeper sleep appears,
-    # and the commands still report their own outcomes. The
-    # keeper is re-ensured for later tests before returning.
+    # entries never touch keeper infrastructure. A PRIVATE
+    # keeper is ensured and killed first (S117: the shared
+    # keeper is never killed); real default create, legacy
+    # inspect and an invalid create then run — both pidfile
+    # records stay byte-identical, no new keeper sleep
+    # appears, and the commands still report their own
+    # outcomes. The shared keeper is re-verified for later
+    # tests before returning.
     def test_live_unprivileged_entries_spawn_no_keeper(self):
-        pidfile, _candir = provision._keeper_paths()
-        try:
-            with open(pidfile, "rb") as handle:
-                stale = handle.read()
-        except OSError:
-            stale = None
-        keeper_pid = None
-        if stale is not None:
-            try:
-                keeper_pid = int(stale.split()[0])
-            except (ValueError, IndexError):
-                keeper_pid = None
+        # S117: the dead-keeper precondition now uses a PRIVATE
+        # keeper this test exclusively owns — the shared
+        # per-UID keeper is never killed. The entry
+        # subprocesses still consult the shared paths
+        # (separate address space), so the no-spawn proof
+        # asserts BOTH records byte-identical plus no new
+        # sleeper anywhere; the shared keeper is verified
+        # alive and recoverable afterward.
+        global_pidfile, _ = provision._keeper_paths()
+        with open(global_pidfile, "rb") as handle:
+            global_before = handle.read()
+        global_identity = provision._MOUNT_NS_IDENTITY
+        self.assertIsNotNone(global_identity)
 
         def sleepers():
             out = subprocess.run(
@@ -1635,55 +1817,78 @@ class LiveBindTests(unittest.TestCase):
             return {int(word) for word in out.stdout.split()
                     if word.isdigit()}
 
-        before = sleepers()
-        try:
-            if keeper_pid is not None:
-                sudo("kill", "-KILL", str(keeper_pid))
-                deadline = time.time() + 15
-                while time.time() < deadline:
-                    if not os.path.exists(
-                            f"/proc/{keeper_pid}"):
-                        break
-                    time.sleep(0.2)
-                self.assertFalse(
-                    os.path.exists(f"/proc/{keeper_pid}"),
-                    "keeper survived SIGKILL")
-            tool = provision.__file__
-            run = os.path.join(self.tmp, "plain")
-            manifest = os.path.join(self.tmp, "plain.json")
-            first = subprocess.run(
-                [sys.executable, tool, "create",
-                 "--manifest", manifest, "--run-root", run],
-                capture_output=True, text=True, timeout=300)
-            self.assertEqual(first.returncode, 0,
-                             first.stdout + first.stderr)
-            second = subprocess.run(
-                [sys.executable, tool, "inspect",
-                 "--manifest", manifest, "--run-root", run],
-                capture_output=True, text=True, timeout=300)
-            self.assertEqual(second.returncode, 0,
-                             second.stdout + second.stderr)
-            third = subprocess.run(
-                [sys.executable, tool, "create",
-                 "--manifest", manifest, "--run-root",
-                 "/etc/shadow"],
-                capture_output=True, text=True, timeout=120)
-            self.assertEqual(third.returncode, 2,
-                             third.stdout + third.stderr)
-            # No keeper infrastructure appeared: the pidfile
-            # still holds the stale record (or is still
-            # absent) and no new sleeper exists.
-            try:
-                with open(pidfile, "rb") as handle:
-                    now = handle.read()
-            except OSError:
-                now = None
-            self.assertEqual(now, stale)
-            self.assertTrue(sleepers() <= before)
-        finally:
-            provision._MOUNT_NS = None
-            provision._MOUNT_NS_IDENTITY = None
+        with private_keeper_state(self.tmp) as (pidfile, _candir):
+            handles_before = len(provision._KEEPERS)
             provision.ensure_mount_ns()
+            keeper_pid, _, keeper_start, _ = \
+                provision._MOUNT_NS_IDENTITY
+            lives = [(keeper_pid, keeper_start)]
+            try:
+                # S116: PIDFD-authority kill bound to the
+                # originally verified starttime.
+                kill_bound_keeper(keeper_pid, keeper_start)
+                self.assertTrue(
+                    poll_proc_gone(keeper_pid),
+                    "private keeper survived SIGKILL")
+                try:
+                    provision._KEEPERS[
+                        handles_before].wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.fail("private keeper tree did not "
+                              "collapse after the bound kill")
+                try:
+                    with open(pidfile, "rb") as handle:
+                        stale = handle.read()
+                except OSError:
+                    stale = None
+                before = sleepers()
+                tool = provision.__file__
+                run = os.path.join(self.tmp, "plain")
+                manifest = os.path.join(self.tmp, "plain.json")
+                first = subprocess.run(
+                    [sys.executable, tool, "create",
+                     "--manifest", manifest, "--run-root", run],
+                    capture_output=True, text=True, timeout=300)
+                self.assertEqual(first.returncode, 0,
+                                 first.stdout + first.stderr)
+                second = subprocess.run(
+                    [sys.executable, tool, "inspect",
+                     "--manifest", manifest, "--run-root", run],
+                    capture_output=True, text=True, timeout=300)
+                self.assertEqual(second.returncode, 0,
+                                 second.stdout + second.stderr)
+                third = subprocess.run(
+                    [sys.executable, tool, "create",
+                     "--manifest", manifest, "--run-root",
+                     "/etc/shadow"],
+                    capture_output=True, text=True, timeout=120)
+                self.assertEqual(third.returncode, 2,
+                                 third.stdout + third.stderr)
+                # No keeper infrastructure appeared: neither
+                # the private stale record nor the shared
+                # record changed, and no new sleeper exists.
+                try:
+                    with open(pidfile, "rb") as handle:
+                        now = handle.read()
+                except OSError:
+                    now = None
+                self.assertEqual(now, stale)
+                with open(global_pidfile, "rb") as handle:
+                    self.assertEqual(handle.read(), global_before)
+                self.assertTrue(sleepers() <= before)
+            finally:
+                quiesce_private_lives(lives)
+        # The shared keeper this suite (and any other fixture)
+        # depends on is untouched and recoverable: the cache
+        # was dropped, so this re-ensure fully re-verifies
+        # link + canary before routing again.
+        provision.ensure_mount_ns()
+        with open(global_pidfile, "rb") as handle:
+            self.assertEqual(handle.read(), global_before)
+        self.assertEqual(provision._MOUNT_NS_IDENTITY,
+                         global_identity)
+        rows = provision.read_mount_table()
+        self.assertIsInstance(rows, list)
 
     # S100/S103-round6 live: killing the keeper drops every
     # later routing decision loudly, and the next ensure
@@ -1691,32 +1896,107 @@ class LiveBindTests(unittest.TestCase):
     # canary present, routed reads work) — no dual keepers,
     # no silent adoption of the stale record.
     def test_live_keeper_respawn_recovers(self):
-        pidfile, _ = provision._keeper_paths()
-        with open(pidfile, "rb") as handle:
-            old = handle.read().split()
-        old_pid = int(old[0])
-        sudo("kill", "-KILL", str(old_pid))
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            if not os.path.exists(f"/proc/{old_pid}"):
-                break
-            time.sleep(0.2)
-        self.assertFalse(os.path.exists(f"/proc/{old_pid}"))
-        # Routed decisions on the stale cache refuse loudly.
-        with self.assertRaises(provision.AdmissionError):
-            provision.read_mount_table()
-        # The next ensure respawns + verifies a fresh keeper.
-        provision._MOUNT_NS = None
-        provision._MOUNT_NS_IDENTITY = None
-        nspath = provision.ensure_mount_ns()
-        with open(pidfile, "rb") as handle:
-            new = handle.read().split()
-        new_pid = int(new[0])
-        self.assertNotEqual(new_pid, old_pid)
-        self.assertEqual(nspath, f"/proc/{new_pid}/ns/mnt")
+        # S116/S117: the kill runs through PIDFD authority
+        # bound to the originally verified starttime, against
+        # a PRIVATE keeper this test exclusively owns — the
+        # shared per-UID keeper survives with its record and
+        # identity intact, and routed reads through it still
+        # work afterward.
+        global_pidfile, _ = provision._keeper_paths()
+        with open(global_pidfile, "rb") as handle:
+            global_before = handle.read()
+        global_identity = provision._MOUNT_NS_IDENTITY
+        self.assertIsNotNone(global_identity)
+        with private_keeper_state(self.tmp) as (pidfile, _candir):
+            handles_before = len(provision._KEEPERS)
+            provision.ensure_mount_ns()
+            old_pid, _, old_start, _ = \
+                provision._MOUNT_NS_IDENTITY
+            lives = [(old_pid, old_start)]
+            try:
+                with open(pidfile, "rb") as handle:
+                    old = handle.read().split()
+                self.assertEqual(int(old[0]), old_pid)
+                # S116 live replacement-task negative: a wrong
+                # starttime refuses — signum 0, harmless even
+                # if the refusal regressed — and the recorded
+                # life survives.
+                self.assertEqual(
+                    provision._keeper_starttime(old_pid),
+                    old_start)
+                pin = provision.pin_proc(old_pid)
+                try:
+                    with self.assertRaises(
+                            provision.AdmissionError):
+                        provision.signal_owned(
+                            old_pid, 0, pin, old_start + 1)
+                finally:
+                    os.close(pin)
+                self.assertEqual(
+                    provision._keeper_starttime(old_pid),
+                    old_start)
+                # The bound kill retires exactly this life.
+                kill_bound_keeper(old_pid, old_start)
+                self.assertTrue(
+                    poll_proc_gone(old_pid),
+                    "private keeper survived SIGKILL")
+                try:
+                    provision._KEEPERS[
+                        handles_before].wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.fail("private keeper tree did not "
+                              "collapse after the bound kill")
+                # Routed decisions on the stale cache refuse
+                # loudly.
+                with self.assertRaises(provision.AdmissionError):
+                    provision.read_mount_table()
+                # The next ensure respawns + verifies a fresh
+                # keeper.
+                provision._MOUNT_NS = None
+                provision._MOUNT_NS_IDENTITY = None
+                nspath = provision.ensure_mount_ns()
+                with open(pidfile, "rb") as handle:
+                    new = handle.read().split()
+                new_pid = int(new[0])
+                self.assertNotEqual(new_pid, old_pid)
+                self.assertEqual(
+                    nspath, f"/proc/{new_pid}/ns/mnt")
+                rows = provision.read_mount_table()
+                self.assertIsInstance(rows, list)
+                self.assertFalse(os.path.exists(
+                    f"/proc/{old_pid}"))
+                # Retire the respawned private keeper inside
+                # the private state — no leaked root sleepers,
+                # no pinned namespace.
+                _, _, new_start, _ = \
+                    provision._MOUNT_NS_IDENTITY
+                lives.append((new_pid, new_start))
+                self.assertEqual(
+                    provision._keeper_starttime(new_pid),
+                    new_start)
+                kill_bound_keeper(new_pid, new_start)
+                self.assertTrue(
+                    poll_proc_gone(new_pid),
+                    "respawned private keeper survived SIGKILL")
+                try:
+                    provision._KEEPERS[
+                        handles_before + 1].wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.fail("respawned private keeper tree "
+                              "did not collapse after the "
+                              "bound kill")
+            finally:
+                quiesce_private_lives(lives)
+        # The independent shared keeper is untouched and
+        # recoverable: same record, same life, routed reads
+        # work after a full re-verification.
+        provision.ensure_mount_ns()
+        with open(global_pidfile, "rb") as handle:
+            self.assertEqual(handle.read(), global_before)
+        self.assertEqual(provision._MOUNT_NS_IDENTITY,
+                         global_identity)
         rows = provision.read_mount_table()
         self.assertIsInstance(rows, list)
-        self.assertFalse(os.path.exists(f"/proc/{old_pid}"))
 
     # S99-round6 end to end: real privileged create, inspect
     # and cleanup through the production entry points (main,
@@ -1748,12 +2028,17 @@ class LiveBindTests(unittest.TestCase):
             dev, ino = out.stdout.split()
             return (int(dev), int(ino))
 
-        created = tool_run(
-            "create", "--manifest", manifest,
-            "--run-root", run, "--privileged")
-        self.assertEqual(created.returncode, 0,
-                         created.stdout + created.stderr)
+        # S118: retirement is armed BEFORE creation —
+        # create runs INSIDE the try, so every outcome (a
+        # failed create, a timeout, a mid-body assertion)
+        # still reaches production cleanup in the finally
+        # below.
         try:
+            created = tool_run(
+                "create", "--manifest", manifest,
+                "--run-root", run, "--privileged")
+            self.assertEqual(created.returncode, 0,
+                             created.stdout + created.stderr)
             with open(manifest) as handle:
                 doc = json.load(handle)
             # The manifest binds the keeper it provisioned in.
@@ -1829,8 +2114,13 @@ class LiveBindTests(unittest.TestCase):
                 # G1-I3: the ext4 arm must not be silently
                 # optional — on a loop+mkfs-capable host a
                 # missing arm is breakage, not a pass.
-                loop_probe = sudo("losetup", "-f")
-                have_loop = loop_probe.returncode == 0
+                # S113: probe the capability production
+                # actually uses (native loop-control ioctl),
+                # not the losetup utility's health.
+                loop_probe = sudo(
+                    sys.executable, "-c", NATIVE_LOOP_PROBE)
+                have_loop = native_loop_probe_verdict(
+                    loop_probe.returncode, loop_probe.stdout)
                 have_mkfs = (
                     shutil.which("mkfs.ext4") is not None)
                 verdict = ext4_arm_verdict(
@@ -1874,20 +2164,58 @@ class LiveBindTests(unittest.TestCase):
                              inspected.stderr)
             self.assertIn("admitted", inspected.stdout)
         finally:
-            cleaned = tool_run(
-                "cleanup", "--manifest", manifest,
-                "--run-root", run)
-            self.assertEqual(cleaned.returncode, 0,
-                             cleaned.stdout + cleaned.stderr)
+            # S118: production cleanup runs on EVERY path —
+            # including a failed create and mid-body timeouts.
+            # Its own failure (or a raised timeout) preserves
+            # the manifest + fixture root OUTSIDE the tearDown
+            # rmtree instead of erasing recovery custody, and
+            # fails loudly.
+            try:
+                cleaned = tool_run(
+                    "cleanup", "--manifest", manifest,
+                    "--run-root", run)
+            except Exception as exc:
+                cleaned = None
+                cleanup_note = f"cleanup raised {exc!r}"
+            else:
+                cleanup_note = (
+                    f"cleanup rc={cleaned.returncode} "
+                    f"out={cleaned.stdout.strip()[-300:]} "
+                    f"err={cleaned.stderr.strip()[-300:]}")
+            cleanup_ok = (cleaned is not None
+                          and cleaned.returncode == 0)
+            try:
+                table = provision.read_mount_table()
+                leftovers = [
+                    row for row in table
+                    if row["target"].startswith(run + "/")]
+                with open("/proc/self/mountinfo") as handle:
+                    host = handle.read()
+                host_clean = (run + "/" not in host)
+                observe_note = ""
+            except Exception as exc:
+                leftovers = None
+                host_clean = False
+                observe_note = (
+                    f"residue unobservable: {exc!r}")
+            verdict = e2e_retirement_verdict(
+                cleanup_ok, leftovers, host_clean)
+            preserved = None
+            if verdict != "retired":
+                preserved = preserve_e2e_evidence(
+                    run, manifest,
+                    f"{cleanup_note} "
+                    f"leftovers={leftovers!r} "
+                    f"host_clean={host_clean} {observe_note}")
+            self.assertTrue(
+                cleanup_ok,
+                f"{cleanup_note} (evidence: {preserved})")
             self.assertFalse(os.path.exists(run))
-            table = provision.read_mount_table()
-            leftovers = [
-                row for row in table
-                if row["target"].startswith(run + "/")]
-            self.assertEqual(leftovers, [])
-            with open("/proc/self/mountinfo") as handle:
-                host = handle.read()
-            self.assertNotIn(run + "/", host)
+            self.assertEqual(leftovers, [], observe_note)
+            self.assertTrue(
+                host_clean,
+                "host table shows fixture residue under "
+                f"{run}/")
 
 
 @unittest.skipUnless(live_mounts_enabled(),
@@ -2119,6 +2447,245 @@ class ProcCustodyTests(unittest.TestCase):
         close_mock.assert_called_once_with(7)
 
 
+class KeeperSignalTests(unittest.TestCase):
+    # S116: keeper kills go through PIDFD authority bound to
+    # the ORIGINALLY verified starttime — never a numeric
+    # root kill of a pidfile number. Pin/stat/signal/close
+    # are scripted; no task is touched. Ungated like
+    # ProcCustodyTests above.
+    def test_kill_sends_through_pidfd_with_original_start(self):
+        import signal as _signal
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7) as pin_mock, \
+             mock.patch.object(
+                provision, "signal_owned",
+                return_value=True) as signal_mock, \
+             mock.patch("os.close") as close_mock, \
+             mock.patch("os.kill",
+                        side_effect=AssertionError(
+                            "numeric kill used")), \
+             mock.patch(__name__ + ".sudo",
+                        side_effect=AssertionError(
+                            "sudo kill used")):
+            self.assertTrue(kill_bound_keeper(4242, 1234))
+        pin_mock.assert_called_once_with(4242)
+        # The ORIGINAL starttime travels into the
+        # identity-verified signal (and its EPERM
+        # escalation) — a recycled number refuses.
+        signal_mock.assert_called_once_with(
+            4242, _signal.SIGKILL, 7, 1234)
+        close_mock.assert_called_once_with(7)
+
+    def test_kill_replacement_refusal_propagates_and_closes(self):
+        # S116 replacement-task negative: the pinned number
+        # now hosts another life — signal_owned refuses, the
+        # refusal propagates, the pin still closes, and no
+        # numeric kill is attempted as a fallback.
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                return_value=7), \
+             mock.patch.object(
+                provision, "signal_owned",
+                side_effect=provision.AdmissionError(
+                    "starttime changed")), \
+             mock.patch("os.close") as close_mock, \
+             mock.patch("os.kill",
+                        side_effect=AssertionError(
+                            "numeric kill used")), \
+             mock.patch(__name__ + ".sudo",
+                        side_effect=AssertionError(
+                            "sudo kill used")):
+            with self.assertRaises(provision.AdmissionError):
+                kill_bound_keeper(4242, 1234)
+        close_mock.assert_called_once_with(7)
+
+    def test_kill_reports_gone_without_close(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "pin_proc",
+                side_effect=provision.ProcAbsent("gone")), \
+             mock.patch("os.close") as close_mock:
+            with self.assertRaises(provision.ProcAbsent):
+                kill_bound_keeper(4242, 1234)
+        close_mock.assert_not_called()
+
+
+class PrivateKeeperStateTests(unittest.TestCase):
+    # S117: the redirection mechanics pin without privilege
+    # (no ensure, no keeper spawned). The live destructive
+    # tests run their real kill/respawn lifecycle inside it.
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="keeper-state-pin-")
+        self.addCleanup(shutil.rmtree, self.tmp,
+                        ignore_errors=True)
+        self.saved = (provision._keeper_paths,
+                      provision._MOUNT_NS,
+                      provision._MOUNT_NS_IDENTITY)
+
+    def tearDown(self):
+        (provision._keeper_paths, provision._MOUNT_NS,
+         provision._MOUNT_NS_IDENTITY) = self.saved
+
+    def test_private_paths_redirect_and_restore(self):
+        provision._MOUNT_NS = "SENTINEL-NS"
+        provision._MOUNT_NS_IDENTITY = ("SENT-ID",)
+        with private_keeper_state(self.tmp) as (pidfile, candir):
+            self.assertTrue(pidfile.startswith(self.tmp))
+            self.assertTrue(candir.startswith(self.tmp))
+            self.assertEqual(provision._keeper_paths(),
+                             (pidfile, candir))
+            # No identity crosses the boundary inward.
+            self.assertIsNone(provision._MOUNT_NS)
+            self.assertIsNone(provision._MOUNT_NS_IDENTITY)
+        # Restoration is exact, and the cache stays cleared:
+        # the shared keeper must be re-verified, never
+        # resumed from a pre-destruction snapshot.
+        self.assertIs(provision._keeper_paths, self.saved[0])
+        self.assertIsNone(provision._MOUNT_NS)
+        self.assertIsNone(provision._MOUNT_NS_IDENTITY)
+        pidfile, _ = provision._keeper_paths()
+        self.assertEqual(
+            pidfile, f"/tmp/scopebase-mntns-{os.geteuid()}.pid")
+
+    def test_exception_inside_still_restores(self):
+        with self.assertRaises(RuntimeError):
+            with private_keeper_state(self.tmp):
+                raise RuntimeError("mid-test failure")
+        self.assertIs(provision._keeper_paths, self.saved[0])
+        self.assertIsNone(provision._MOUNT_NS)
+        self.assertIsNone(provision._MOUNT_NS_IDENTITY)
+
+
+class PollGoneTests(unittest.TestCase):
+    # S117: the /proc-gone poll, pinned without privilege.
+    def test_gone_immediately(self):
+        self.assertTrue(poll_proc_gone(2 ** 30 - 1, timeout=5))
+
+    def test_persistent_reports_false(self):
+        self.assertFalse(
+            poll_proc_gone(os.getpid(), timeout=0))
+
+
+class QuiesceLivesTests(unittest.TestCase):
+    # S117: mid-test-failure retirement of exclusively owned
+    # private keeper lives — signaled ONLY while the number
+    # still hosts the recorded life. Scripted; nothing is
+    # touched. Ungated.
+    def test_alive_life_is_retired(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234) as start_mock, \
+             mock.patch(__name__ + ".kill_bound_keeper",
+                        return_value=True) as kill_mock:
+            quiesce_private_lives([(4242, 1234)])
+        start_mock.assert_called_once_with(4242)
+        kill_mock.assert_called_once_with(4242, 1234)
+
+    def test_recycled_and_dead_numbers_untouched(self):
+        from unittest import mock
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                side_effect=[9999, None]), \
+             mock.patch(__name__ + ".kill_bound_keeper") \
+                as kill_mock:
+            quiesce_private_lives([(4242, 1234),
+                                   (4243, 1234)])
+        kill_mock.assert_not_called()
+
+    def test_kill_error_warns_and_never_raises(self):
+        import io
+        from unittest import mock
+        captured = io.StringIO()
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234), \
+             mock.patch(__name__ + ".kill_bound_keeper",
+                        side_effect=OSError("boom")), \
+             mock.patch("sys.stderr", captured):
+            quiesce_private_lives([(4242, 1234)])
+        self.assertIn("4242", captured.getvalue())
+
+
+class E2ERetirementTests(unittest.TestCase):
+    # S118: retirement is complete only when production
+    # cleanup succeeded AND no residue remains; anything
+    # else preserves the manifest + fixture root outside the
+    # tearDown rmtree. Pinned without privilege (real tmpdirs,
+    # no mounts); the live E2E wires these decisions into its
+    # armed try/finally.
+    def test_verdict_matrix(self):
+        self.assertEqual(
+            e2e_retirement_verdict(True, [], True), "retired")
+        self.assertEqual(
+            e2e_retirement_verdict(False, [], True), "preserve")
+        self.assertEqual(
+            e2e_retirement_verdict(
+                True, [{"mnt_id": 41}], True), "preserve")
+        self.assertEqual(
+            e2e_retirement_verdict(True, [], False), "preserve")
+        # Unobservable residue is uncertain, never retired.
+        self.assertEqual(
+            e2e_retirement_verdict(True, None, True), "preserve")
+        self.assertEqual(
+            e2e_retirement_verdict(False, None, False),
+            "preserve")
+
+    def test_preserve_copies_manifest_and_run(self):
+        import io
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(os.path.join(run, "ext4"))
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write('{"cells": {}}')
+        with open(os.path.join(run, "ext4", "a.bin"),
+                  "w") as handle:
+            handle.write("payload")
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            dest = preserve_e2e_evidence(
+                run, manifest, "cleanup rc=1 for pins")
+        self.addCleanup(shutil.rmtree, dest, ignore_errors=True)
+        self.assertTrue(os.path.isdir(dest))
+        with open(os.path.join(dest, "manifest.json")) as handle:
+            self.assertEqual(handle.read(), '{"cells": {}}')
+        with open(os.path.join(
+                dest, "run", "ext4", "a.bin")) as handle:
+            self.assertEqual(handle.read(), "payload")
+        with open(os.path.join(dest, "REASON")) as handle:
+            self.assertIn("cleanup rc=1", handle.read())
+        # Outside the fixture root: the tearDown rmtree of the
+        # fixture cannot take it.
+        self.assertFalse(dest.startswith(run + os.sep))
+        self.assertFalse(dest.startswith(tmp + os.sep))
+        self.assertIn("PRESERVED", captured.getvalue())
+        self.assertIn(dest, captured.getvalue())
+
+    def test_preserve_survives_missing_run(self):
+        import io
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write('{}')
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            dest = preserve_e2e_evidence(
+                os.path.join(tmp, "gone"), manifest,
+                "cleanup raised for pins")
+        self.addCleanup(shutil.rmtree, dest, ignore_errors=True)
+        with open(os.path.join(dest, "manifest.json")) as handle:
+            self.assertEqual(handle.read(), "{}")
+        self.assertIn("PRESERVED", captured.getvalue())
+
+
 class Ext4ArmVerdictTests(unittest.TestCase):
     # G1-I3: the E2E ext4-arm obligation, pinned without live
     # mounts (the live E2E test calls these helpers). The arm
@@ -2142,12 +2709,11 @@ class Ext4ArmVerdictTests(unittest.TestCase):
         self.assertTrue(fs01_skip_reason_ok(
             "missing mkfs.ext4 tool"))
         self.assertTrue(fs01_skip_reason_ok(
-            "losetup refused: rc=1 loop-control not openable"))
+            "losetup refused: rc=1 FAILED: loop-control not "
+            "openable: [Errno 2] No such file or directory"))
         self.assertTrue(fs01_skip_reason_ok(
-            "no free loop device: [Errno 19] No such device"))
-        self.assertTrue(fs01_skip_reason_ok(
-            "losetup outcome uncertain and backing identity "
-            "matches several loops"))
+            "losetup refused: rc=1 FAILED: no free loop device: "
+            "[Errno 19] No such device"))
         self.assertFalse(fs01_skip_reason_ok(""))
         self.assertFalse(fs01_skip_reason_ok(None))
         # Mount-stage failures imply loop worked: not a
@@ -2156,6 +2722,48 @@ class Ext4ArmVerdictTests(unittest.TestCase):
             "ext4 mount not admitted (foreign replacement)"))
         self.assertFalse(fs01_skip_reason_ok(
             "some unrelated failure"))
+
+    def test_skip_reason_rejects_formatter_and_utility_failures(self):
+        # S113: production reports every formatter-helper
+        # failure as "mkfs.ext4 refused" (before loop custody
+        # is armed) — the old ("loop","losetup","mkfs")
+        # substring classifier accepted it as a capability
+        # skip. Bare "losetup refused" (utility failure, no
+        # identified inner cause) is not missing capability
+        # either: production attaches via native ioctls.
+        self.assertFalse(fs01_skip_reason_ok(
+            "mkfs.ext4 refused: rc=1 mkfs failed"))
+        self.assertFalse(fs01_skip_reason_ok(
+            "losetup refused: rc=127 /usr/sbin/losetup missing"))
+        self.assertFalse(fs01_skip_reason_ok(
+            "losetup refused: rc=1 FAILED: loop /dev/loop3 "
+            "configure failed: [Errno 5] Input/output error"))
+        # Uncertain custody is unresolved, never a clean skip;
+        # integrity refusals are breakage, not unavailability.
+        self.assertFalse(fs01_skip_reason_ok(
+            "losetup outcome uncertain and backing identity "
+            "matches several loops; acquisition kept pending"))
+        self.assertFalse(fs01_skip_reason_ok(
+            "losetup association not ours: kernel backing "
+            "identity differs from the held image; acquisition "
+            "kept pending"))
+
+    def test_native_loop_probe_matrix(self):
+        # S113: only a successful native probe (LOOP_VIABLE
+        # marker from the loop-control ioctl) proves loop
+        # viability. Anything else degrades to not-viable —
+        # the E2E then takes the skip path, where the FS01
+        # reason must still name a real missing capability.
+        self.assertTrue(native_loop_probe_verdict(
+            0, "LOOP_VIABLE 3\n"))
+        self.assertFalse(native_loop_probe_verdict(
+            1, ""))
+        self.assertFalse(native_loop_probe_verdict(
+            0, ""))
+        self.assertFalse(native_loop_probe_verdict(
+            0, None))
+        self.assertFalse(native_loop_probe_verdict(
+            1, "LOOP_VIABLE 3\n"))
 
 
 if __name__ == "__main__":
