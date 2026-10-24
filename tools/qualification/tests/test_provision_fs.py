@@ -9217,9 +9217,8 @@ class MountNsTests(unittest.TestCase):
         pw.pw_dir = "/home/ctrl"
         with mock.patch.object(provision, "_MOUNT_NS",
                                "/proc/9/ns/mnt"), \
-                mock.patch.object(provision, "_keeper_paths",
-                                  return_value=("/tmp/fake.pid",
-                                               "/tmp")), \
+                mock.patch.object(provision, "_MOUNT_NS_IDENTITY",
+                                  (9, 77, 555, "c" * 32)), \
                 mock.patch.object(provision.os, "getuid",
                                   return_value=1000), \
                 mock.patch.object(provision.os, "geteuid",
@@ -9238,15 +9237,16 @@ class MountNsTests(unittest.TestCase):
         lookup.assert_called_once_with(1000)
         self.assertEqual(
             exe.call_args[0][0], "sudo")
-        # S114-round8: the join proves the namespace in-join
-        # (canary gate) before dropping to the controller.
+        # NEW-1-round8: the join proves the pinned ns (same
+        # sudo invocation, nsid from identity) before dropping
+        # to the controller.
         self.assertEqual(
             exe.call_args[0][1],
             ["sudo", "-n", "env", "TMPDIR=/tmp/x",
-             "HOME=/home/ctrl", "nsenter",
-             "--mount=/proc/9/ns/mnt", "sh", "-c",
-             provision._join_gate_script("/tmp/fake.pid"),
-             "nsgate", "runuser", "-u",
+             "HOME=/home/ctrl", "sh", "-c",
+             provision._ns_pin_proof_script(),
+             "/proc/9/ns/mnt", "77",
+             "runuser", "-u",
              "ctrl", "--", "/usr/bin/python3",
              os.path.abspath("provision_fs.py"), "create",
              "--run-root", "/tmp/r"])
@@ -9258,6 +9258,19 @@ class MountNsTests(unittest.TestCase):
             with self.assertRaisesRegex(
                     provision.AdmissionError,
                     "cannot resolve controller user"):
+                provision._reexec_inside_ns()
+        # NEW-1-round8: unbound identity refuses the re-exec
+        # join loudly (never joins).
+        with mock.patch.object(provision, "_MOUNT_NS",
+                               "/proc/9/ns/mnt"), \
+                mock.patch.object(provision,
+                                  "_MOUNT_NS_IDENTITY", None), \
+                mock.patch.object(provision.os, "execvp",
+                                  side_effect=AssertionError(
+                                      "joined")):
+            with self.assertRaisesRegex(
+                    provision.AdmissionError,
+                    "unbound"):
                 provision._reexec_inside_ns()
 
     # S99-round6: entry is a no-op inside; outside it re-execs
@@ -9797,53 +9810,131 @@ class MountNsTests(unittest.TestCase):
                     "sudo", 30)):
             self.assertIsNone(provision._read_ns_link(4321))
 
-    # S114-round8: every nsenter join proves the joined
-    # namespace from INSIDE (same invocation as the effect) —
-    # the canary gate demands our canary mount (secret from
-    # the current pidfile record, never on any cmdline) before
-    # exec'ing the payload. A recycled pid joins a wrong
-    # namespace whose mountinfo lacks the secret, so the
-    # effect never runs there. (An unprivileged controller
-    # cannot retain the keeper's ns fd directly — opening a
-    # root process's ns file fails EACCES, verified live — so
-    # in-join proof is the authority.)
-    def test_nsenter_join_gate(self):
+    # NEW-1-round8: every nsenter join proves the bound
+    # namespace from OUTSIDE (same sudo invocation opens the
+    # ns path — pinning the namespace object — verifies the
+    # pinned description against the verified nsid, and joins
+    # through the pinned fd, all binaries host-resolved). A
+    # recycled pid joins a wrong namespace whose ino differs,
+    # so the effect never runs there — and no joined-ns
+    # binary or path is ever trusted (the S114 in-join gate's
+    # flaw). (An unprivileged controller cannot retain the
+    # keeper's ns fd directly — opening a root process's ns
+    # file fails EACCES, verified live — so the open happens
+    # inside the same sudo invocation as the join.)
+    def test_ns_pin_proof_pass_and_refusals(self):
+        script = provision._ns_pin_proof_script()
+        own = os.readlink("/proc/self/ns/mnt")
+        own_nsid = own.split("[")[1].rstrip("]")
+        mine = "/proc/self/ns/mnt"
         with tempfile.TemporaryDirectory() as tmp:
-            pidfile = os.path.join(tmp, "ns.pid")
-            canary = "ab" * 16
-            Path(pidfile).write_text(
-                f"4321 77 {canary}\n")
-            table = os.path.join(tmp, "mountinfo")
-            Path(table).write_text(
-                "99 1 0:1 / /proc/self/x rw - tmpfs "
-                f"canary-{canary} rw\n")
-            script = provision._join_gate_script(pidfile, table)
-            # Proven namespace: the payload runs with argv
-            # intact.
-            proc = subprocess.run(
-                ["sh", "-c", script, "nsgate",
-                 "echo", "GATED-HI"],
-                capture_output=True, text=True, timeout=30)
+            # Stub nsenter: unprivileged setns always fails
+            # (even for our own ns, verified live), so the
+            # join step is stubbed — the stub demands the
+            # pinned-fd target, reports the description it
+            # actually inherited, then execs the payload. All
+            # arms run with the stub on PATH so a broken
+            # proof would visibly exec the payload (the arms
+            # discriminate the PROOF, not nsenter privilege).
+            stub = os.path.join(tmp, "nsenter")
+            Path(stub).write_text(
+                "#!/bin/sh\n"
+                "[ \"$1\" = \"--mount=/proc/self/fd/3\" ] "
+                "|| exit 7\n"
+                "readlink /proc/self/fd/3\n"
+                "shift\n"
+                "exec \"$@\"\n")
+            os.chmod(stub, 0o755)
+            env = dict(os.environ)
+            env["PATH"] = tmp + os.pathsep + env.get(
+                "PATH", "")
+
+            def run(nspath, nsid, *payload):
+                return subprocess.run(
+                    ["sh", "-c", script, nspath, nsid,
+                     *payload],
+                    capture_output=True, text=True,
+                    timeout=30, env=env)
+
+            # Pinned namespace: the join runs through the
+            # pinned fd (carrying exactly our ns) and the
+            # payload runs with argv intact.
+            proc = run(mine, own_nsid, "echo", "PINNED-HI")
             self.assertEqual(proc.returncode, 0)
-            self.assertEqual(proc.stdout, "GATED-HI\n")
-            # Wrong namespace (mountinfo lacks the canary):
-            # the payload never executes.
-            Path(table).write_text("99 1 0:1 / /x rw\n")
-            proc = subprocess.run(
-                ["sh", "-c", script, "nsgate",
-                 "echo", "GATED-HI"],
-                capture_output=True, text=True, timeout=30)
+            self.assertEqual(proc.stdout,
+                             f"{own}\nPINNED-HI\n")
+            # Wrong namespace (identity mismatch, the recycle
+            # scenario): refuse before any join or effect.
+            proc = run(mine, str(int(own_nsid) + 1000000000),
+                       "echo", "PINNED-HI")
             self.assertNotEqual(proc.returncode, 0)
-            self.assertNotIn("GATED-HI", proc.stdout)
-            # Missing pidfile: refuse, never exec.
-            missing = provision._join_gate_script(
-                os.path.join(tmp, "absent.pid"), table)
-            proc = subprocess.run(
-                ["sh", "-c", missing, "nsgate",
-                 "echo", "GATED-HI"],
-                capture_output=True, text=True, timeout=30)
+            self.assertNotIn("PINNED-HI", proc.stdout)
+            # Missing ns path: refuse, never exec.
+            proc = run("/proc/99999999/ns/mnt", own_nsid,
+                       "echo", "PINNED-HI")
             self.assertNotEqual(proc.returncode, 0)
-            self.assertNotIn("GATED-HI", proc.stdout)
+            self.assertNotIn("PINNED-HI", proc.stdout)
+            # Empty payload: refuse (never a bare nsenter
+            # shell in the keeper ns).
+            proc = run(mine, own_nsid)
+            self.assertNotEqual(proc.returncode, 0)
+
+    # NEW-1-round8: a routed join without verified identity
+    # is unbound and refused loudly (never joined).
+    def test_gated_nsenter_unbound_identity_refuses(self):
+        with mock.patch.object(provision,
+                               "_MOUNT_NS_IDENTITY", None):
+            with self.assertRaisesRegex(
+                    provision.AdmissionError, "unbound"):
+                provision._gated_nsenter_argv(
+                    "/proc/9/ns/mnt", ["true"])
+
+    # NEW-1-round8: the route proof must not trust binaries
+    # resolved inside the joined namespace. A recycled-into
+    # attacker ns can cover sh/cut/grep (covered cut yields
+    # a non-empty canary, covered grep always passes) and
+    # sail any proof that executes them post-join. This test
+    # runs the proof portion of the routed argv with exactly
+    # those covers on PATH: pre-fix the payload runs (the
+    # bypass); post-fix the proof refuses (it opens and
+    # verifies the ns from OUTSIDE, consulting no
+    # joined-ns binary or path).
+    def test_covered_binaries_cannot_sail_route_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cover = os.path.join(tmp, "cover")
+            os.mkdir(cover)
+            cut = os.path.join(cover, "cut")
+            Path(cut).write_text("#!/bin/sh\necho BOGUSCANARY\n")
+            grep = os.path.join(cover, "grep")
+            Path(grep).write_text("#!/bin/sh\nexit 0\n")
+            os.chmod(cut, 0o755)
+            os.chmod(grep, 0o755)
+            env = dict(os.environ)
+            env["PATH"] = cover + os.pathsep + env.get(
+                "PATH", "")
+            # The "attacker's" namespace: our own mount ns,
+            # whose identity provably differs from the
+            # recorded keeper nsid (the recycle scenario).
+            own = os.readlink("/proc/self/ns/mnt")
+            own_nsid = int(own.split("[")[1].rstrip("]"))
+            attacker_nsid = own_nsid + 1000000000
+            with mock.patch.object(
+                    provision, "_MOUNT_NS_IDENTITY",
+                    (os.getpid(), attacker_nsid, None,
+                     "c" * 32)):
+                argv = provision._gated_nsenter_argv(
+                    "/proc/self/ns/mnt",
+                    ["echo", "COVERED-SHOULD-NOT-RUN"])
+            # The proof portion: everything from the proof
+            # shell onward (old in-join gate and new outside
+            # proof share this argv shape).
+            at = argv.index("-c")
+            proc = subprocess.run(
+                argv[at - 1:], capture_output=True, text=True,
+                timeout=30, env=env)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertNotIn("COVERED-SHOULD-NOT-RUN",
+                             proc.stdout)
 
     def test_run_sudo_nsenter_prefix_and_backstop(self):
         from unittest import mock
@@ -9854,23 +9945,20 @@ class MountNsTests(unittest.TestCase):
                                   (9, 77, 555, "c" * 32)), \
                 mock.patch.object(provision, "_ROOT_GUARD",
                                   None), \
-                mock.patch.object(provision, "_keeper_paths",
-                                  return_value=("/tmp/fake.pid",
-                                               "/tmp")), \
                 mock.patch.object(provision, "_keeper_starttime",
                                   return_value=555), \
                 mock.patch.object(provision.subprocess, "run",
                                   return_value=proc) as run:
             rc, out, _ = provision.run_sudo(["true"])
             argv = run.call_args[0][0]
-            # S114-round8: the routed effect runs behind the
-            # in-join canary gate (same nsenter invocation).
+            # NEW-1-round8: the routed effect runs behind the
+            # pinned-ns proof (same sudo invocation opens and
+            # verifies before the join; nsid from identity).
             self.assertEqual(
                 argv,
-                ["sudo", "-n", "nsenter",
-                 "--mount=/proc/9/ns/mnt", "sh", "-c",
-                 provision._join_gate_script("/tmp/fake.pid"),
-                 "nsgate", "true"])
+                ["sudo", "-n", "sh", "-c",
+                 provision._ns_pin_proof_script(),
+                 "/proc/9/ns/mnt", "77", "true"])
             self.assertEqual((rc, out), (0, "ok\n"))
         with mock.patch.object(provision, "_MOUNT_NS", None), \
                 mock.patch.object(provision, "_ROOT_GUARD",
@@ -9920,23 +10008,20 @@ class MountNsTests(unittest.TestCase):
                                "/proc/9/ns/mnt"), \
                 mock.patch.object(provision, "_MOUNT_NS_IDENTITY",
                                   (9, 77, 555, "c" * 32)), \
-                mock.patch.object(provision, "_keeper_paths",
-                                  return_value=("/tmp/fake.pid",
-                                               "/tmp")), \
                 mock.patch.object(provision, "_keeper_starttime",
                                   return_value=555):
             with mock.patch.object(provision.subprocess, "run",
                                    return_value=proc) as run:
                 rows = provision.read_mount_table()
             argv = run.call_args[0][0]
-            # S114-round8: table observations are gated too
+            # NEW-1-round8: table observations are proven too
             # (they feed effects).
             self.assertEqual(
                 argv,
-                ["sudo", "-n", "nsenter",
-                 "--mount=/proc/9/ns/mnt", "sh", "-c",
-                 provision._join_gate_script("/tmp/fake.pid"),
-                 "nsgate", "cat", "/proc/self/mountinfo"])
+                ["sudo", "-n", "sh", "-c",
+                 provision._ns_pin_proof_script(),
+                 "/proc/9/ns/mnt", "77",
+                 "cat", "/proc/self/mountinfo"])
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["mnt_id"], 8419)
             # Explicit fixture paths always read direct.

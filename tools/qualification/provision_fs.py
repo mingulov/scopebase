@@ -803,41 +803,67 @@ def _ns_has_canary(nspath, canary):
     return proc.returncode == 0
 
 
-def _join_gate_script(pidfile, mountinfo="/proc/self/mountinfo"):
-    """sh proving the joined ns before the payload. (S114-round8)
+def _ns_pin_proof_script():
+    """sh proving the pinned ns BEFORE the join. (NEW-1-round8)
 
-    The script reads the canary from the CURRENT pidfile record
-    (field 3) and demands `canary-<secret>` in the JOINED
-    namespace's mountinfo before exec'ing "$@" (the payload,
-    argv intact). The secret crosses no cmdline (ps-visible);
-    root reads the 0600 record inside the join. Any failure —
-    missing/unreadable pidfile, malformed record, absent
-    canary — refuses BEFORE the payload runs. `mountinfo` is a
-    test seam only; production always proves the joined view.
+    $0 is the keeper ns path, $1 the verified nsid, $2.. the
+    payload. The script opens the ns path (an open file
+    description PINS the namespace object: a pid recycle
+    after the open cannot move the fd), demands the opened
+    description IS the keeper namespace (readlink shows
+    mnt:[<verified nsid>]), and only then joins THROUGH the
+    pinned description (/proc/self/fd/3 — never a re-resolved
+    pathname, so there is no check-then-use gap) before
+    exec'ing the payload with argv intact.
+
+    Everything here — sh, readlink, nsenter — resolves on
+    the HOST side (no join has happened yet when sudo runs
+    this script), so a recycled-into attacker mount namespace
+    cannot substitute covered binaries or paths: the S114
+    in-join canary gate trusted joined-ns-resolved
+    sh/cut/grep, and covered replacements sailed it (NEW-1).
+    The sudo boundary closes fds, so the open must happen
+    inside this same sudo invocation (root opens what the
+    unprivileged controller cannot: EACCES, verified live).
+    The nsid was bound to (link + canary mount + starttime
+    anchors) at bind time, so ino equality with the pinned
+    description is the whole proof — the canary is not
+    re-read on the route path. Any failure (ns path gone,
+    identity mismatch, empty payload) refuses BEFORE any
+    join or effect.
     """
     return (
-        f"C=$(cut -d' ' -f3 '{pidfile}' 2>/dev/null); "
-        f"[ -n \"$C\" ] && grep -q \"canary-$C\" "
-        f"'{mountinfo}' && exec \"$@\"")
+        "[ $# -ge 2 ] && WANT=$1 && shift && "
+        "exec 3<\"$0\" && "
+        "[ \"$(readlink /proc/self/fd/3)\" = \"mnt:[$WANT]\" ] && "
+        "exec nsenter --mount=/proc/self/fd/3 \"$@\"")
 
 
 def _gated_nsenter_argv(nspath, argv):
-    """sudo+nsenter argv with the in-join canary gate. (S114-round8)
+    """sudo+nsenter argv with the pinned-ns proof. (NEW-1-round8)
 
     The keeper can die and its pid recycle between any
     pathname pre-check and the join, so the pre-check alone
     can never be the authority — and an unprivileged
     controller cannot retain the root keeper's ns fd directly
     (opening it fails EACCES, verified live). Instead the
-    join proves itself: the SAME nsenter invocation runs the
-    canary gate inside the joined namespace before the
-    payload, so a recycled pid's namespace (lacking the
-    secret mount) refuses without running any effect.
+    SAME sudo invocation opens the ns path as root (pinning
+    the namespace object), proves the pinned description is
+    the verified keeper ns (nsid bound at bind time), and
+    joins through the pinned fd — all binaries host-resolved,
+    no joined-ns trust (NEW-1). A recycled pid's namespace
+    (a live ns with a different ino) refuses without running
+    any effect. Raises AdmissionError when the ns path
+    carries no verified identity (unbound: never joined).
     """
-    pidfile, _candir = _keeper_paths()
-    return ["sudo", "-n", "nsenter", f"--mount={nspath}",
-            "sh", "-c", _join_gate_script(pidfile), "nsgate",
-            *argv]
+    identity = _MOUNT_NS_IDENTITY
+    if identity is None:
+        raise AdmissionError(
+            "keeper ns unbound (no verified identity); "
+            "refusing routed join")
+    _pid, nsid, _starttime, _canary = identity
+    return ["sudo", "-n", "sh", "-c", _ns_pin_proof_script(),
+            nspath, str(nsid), *argv]
 
 
 def _keeper_starttime(pid):
@@ -874,8 +900,9 @@ def _keeper_routing_verified():
     path without identity is unbound and fails.
 
     S114-round8: this is the cheap fail-fast only — the
-    in-join canary gate (same nsenter invocation as the
-    effect) is the authority against recycle-after-check.
+    pinned-ns proof (same sudo invocation opens and verifies
+    before the join: NEW-1-round8) is the authority against
+    recycle-after-check.
     """
     if _MOUNT_NS is None or _MOUNT_NS == "direct":
         return False
@@ -1493,9 +1520,12 @@ def _reexec_inside_ns():
     os.execvp raises OSError when the exec itself fails —
     both fail the command loudly, never run it outside.
 
-    S114-round8: the join runs the in-join canary gate before
-    runuser — a recycled pid's namespace refuses without
-    ever starting the controller there.
+    NEW-1-round8: the join runs the pinned-ns proof before
+    runuser (same sudo invocation opens and verifies the
+    bound ns through a pinned fd, all binaries host-resolved)
+    — a recycled pid's namespace refuses without ever
+    starting the controller there. Raises AdmissionError when
+    the bound ns carries no verified identity (unbound).
     """
     nspath = _MOUNT_NS
     euid = os.geteuid()
@@ -1511,10 +1541,14 @@ def _reexec_inside_ns():
         prog = os.path.abspath(prog)
     env = [f"TMPDIR={os.environ.get('TMPDIR', '/tmp')}",
            f"HOME={pw.pw_dir}"]
-    pidfile, _candir = _keeper_paths()
-    argv = ["sudo", "-n", "env", *env, "nsenter",
-           f"--mount={nspath}", "sh", "-c",
-           _join_gate_script(pidfile), "nsgate",
+    identity = _MOUNT_NS_IDENTITY
+    if identity is None:
+        raise AdmissionError(
+            "keeper ns unbound (no verified identity); "
+            "refusing re-exec join")
+    _pid, nsid, _starttime, _canary = identity
+    argv = ["sudo", "-n", "env", *env, "sh", "-c",
+           _ns_pin_proof_script(), nspath, str(nsid),
            "runuser", "-u", pw.pw_name,
            "--", prog, script, *sys.argv[1:]]
     os.execvp("sudo", argv)
@@ -1525,8 +1559,8 @@ def _dump_ns_mount_table(nspath):
 
     Raw subprocess (foundation primitive). Returns decoded
     text; raises AdmissionError when the dump cannot run.
-    S114-round8: bound-context dumps run behind the in-join
-    canary gate (observations feed effects).
+    NEW-1-round8: bound-context dumps run behind the
+    pinned-ns proof (observations feed effects).
     """
     try:
         proc = subprocess.run(
