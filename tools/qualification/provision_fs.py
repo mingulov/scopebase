@@ -150,6 +150,16 @@ class ProcUnknown(AdmissionError):
     """
 
 
+class NsLinkUnknown(ProcUnknown):
+    """The keeper ns link is unverifiable. (S134-round9)
+
+    Timeout, exec failure, or a nonzero readlink exit with a
+    live pid: the keeper may be alive, so replacement is
+    refused — only proven absence (a None link read) permits
+    respawn.
+    """
+
+
 class ProcIdentityChanged(AdmissionError):
     """The pinned number is proven to be a different process. (S21-round5)
 
@@ -765,34 +775,61 @@ def _read_ns_link(pid):
     """Host-side readlink of a keeper candidate's mount ns.
 
     Raw subprocess (foundation primitive, like
-    _ns_has_canary): the keeper runs as root, so an
+    _ns_has_canary_pinned): the keeper runs as root, so an
     unprivileged os.readlink of /proc/<pid>/ns/mnt always
     fails with EACCES — the link must be read elevated.
-    Returns the link target (e.g. "mnt:[4026534942]") or
-    None when unreadable (dead pid, no sudo); never raises.
+
+    Tri-state (S134-round9): the link target on success;
+    None ONLY when the pid is proven dead (readlink failed
+    AND kill(pid, 0) reports ESRCH — hidepid-proof and
+    locale-independent, since existence is a syscall errno,
+    not stderr text); NsLinkUnknown for every unverifiable
+    outcome (timeout, exec failure, nonzero exit with a live
+    pid — EPERM and success both prove life). Unknown
+    refuses replacement; only proven absence respawns.
     """
     try:
         proc = subprocess.run(
             ["sudo", "-n", "readlink", f"/proc/{pid}/ns/mnt"],
             capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise NsLinkUnknown(
+            f"mount-ns link unreadable for pid {pid}: {exc}")
+    if proc.returncode == 0:
+        return proc.stdout.strip()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip()
+    except OSError as exc:
+        raise NsLinkUnknown(
+            f"mount-ns link unreadable for pid {pid}: {exc}")
+    raise NsLinkUnknown(
+        f"mount-ns link unreadable for pid {pid} (live)")
 
 
-def _ns_has_canary(nspath, canary):
-    """True when the joined ns shows our canary mount. (S17-round5)
+def _ns_has_canary_pinned(nspath, nsid, canary):
+    """True when the PINNED ns shows our canary mount. (S126-round9)
 
     Raw subprocess (foundation primitive — must not depend on
-    _MOUNT_NS state or run_sudo). Raises AdmissionError when
-    the check itself cannot run; a missing canary is False
-    (stale/wrong ns → respawn), never an error.
+    _MOUNT_NS state or run_sudo). The canary grep runs behind
+    the same-invocation pin proof as the NEW-1 route
+    (_ns_pin_proof_script): the sudo invocation opens the ns
+    path (pinning the namespace object), demands the pinned
+    description IS the ns the link read observed, and only
+    then joins through the pinned fd — a keeper that died and
+    recycled between the link read and this dispatch refuses
+    before any join, instead of resolving grep in the
+    replacement ns. The pin binds the observed nsid, never
+    the canary it is establishing (no circularity). Raises
+    AdmissionError when the check itself cannot run; a
+    missing canary (or a pin refusal) is False (stale/wrong
+    ns → respawn), never an error.
     """
     try:
         proc = subprocess.run(
-            ["sudo", "-n", "nsenter", f"--mount={nspath}",
+            ["sudo", "-n", "sh", "-c",
+             _ns_pin_proof_script(), nspath, str(nsid),
              "grep", "-q", f"canary-{canary}",
              "/proc/self/mountinfo"],
             capture_output=True, timeout=30)
@@ -921,15 +958,16 @@ def _verify_recorded_keeper(state):
     the pid must be alive in the recorded namespace (elevated
     link read) AND the namespace must show our canary mount
     (pid/nsid reuse alone cannot pass). Never raises for a
-    dead/wrong keeper (returns None); the canary check's own
-    execution failure propagates as AdmissionError.
+    dead/wrong keeper (returns None); the link read's
+    unknown outcome (S134-round9) and the canary check's own
+    execution failure propagate as AdmissionError.
     """
     pid, nsid, canary = state
     nspath = f"/proc/{pid}/ns/mnt"
     live = _read_ns_link(pid)
     if live != f"mnt:[{nsid}]":
         return None
-    if not _ns_has_canary(nspath, canary):
+    if not _ns_has_canary_pinned(nspath, nsid, canary):
         return None
     return nspath
 
@@ -1044,10 +1082,16 @@ def _preserve_keeper_evidence(pidfile, pid, nsid, canary, reason):
     path = f"{pidfile}.unresolved"
     line = (f"{pid} {nsid} {canary} {reason}\n").encode(
         "ascii", "replace")
+    # S141-round9: O_NONBLOCK plus same-descriptor owner/type
+    # validation (mirroring _read_keeper_record) — an
+    # owner-owned FIFO without a reader must refuse, never
+    # block rollback (ensure holds the singleton lock here).
+    # Regular files are unaffected (writes never block).
     try:
         fd = os.open(path,
                      os.O_WRONLY | os.O_CREAT | os.O_APPEND
-                     | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                     | os.O_NOFOLLOW | os.O_CLOEXEC
+                     | os.O_NONBLOCK, 0o600)
     except OSError:
         return False
     try:
@@ -1056,6 +1100,8 @@ def _preserve_keeper_evidence(pidfile, pid, nsid, canary, reason):
         except OSError:
             return False
         if st.st_uid != os.geteuid():
+            return False
+        if not stat.S_ISREG(st.st_mode):
             return False
         try:
             while line:
@@ -1104,15 +1150,21 @@ def _spawn_keeper(euid, candir, publish_to):
                 "mount-ns canary dir alien; refusing")
     except OSError as exc:
         raise AdmissionError(f"mount-ns canary dir: {exc}")
+    # S135-round9: candir crosses as $1 (quoted "$1"),
+    # never interpolated — private-keeper callers derive it
+    # from TMPDIR-honoring mkdtemp, so spaces and $() in the
+    # path must not reach root shell parsing. (C is od+tr
+    # hex, so canary-$C needs no quoting.)
     script = (
         "mount --make-rprivate / && "
         "C=$(head -c 16 /dev/urandom | od -An -tx1 | "
         "tr -d ' \\n') && "
-        f"mount -t tmpfs canary-$C {candir} && "
+        "mount -t tmpfs canary-$C \"$1\" && "
         "echo \"READY $BASHPID $C\" && exec sleep infinity")
     try:
         child = subprocess.Popen(
-            ["sudo", "-n", "unshare", "-m", "bash", "-c", script],
+            ["sudo", "-n", "unshare", "-m", "bash", "-c",
+             script, "keeper", candir],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True)
     except OSError as exc:
@@ -1122,9 +1174,13 @@ def _spawn_keeper(euid, candir, publish_to):
     # evidence — every fail() below carries it unless the
     # caller passes explicit evidence (publication already
     # does). Grows as verification learns (pid+canary, then
-    # nsid); pre-READY failures still report the wrapper pid
-    # only, since no keeper identity exists yet.
-    known = None
+    # nsid).
+    # S133-round9: unresolved launch custody from Popen on —
+    # pre-READY failures (selector/read setup, garbage READY)
+    # name the wrapper pid explicitly with unknown keeper
+    # fields, so an unproven rollback always leaves a marker
+    # (never "nothing provisioned" over a live keeper).
+    known = (child.pid, "unknown", "unknown")
 
     def fail(msg, evidence=None):
         # S120-round8: an omitted evidence carries the
@@ -1181,8 +1237,18 @@ def _spawn_keeper(euid, candir, publish_to):
             if evidence is not None:
                 # S103-round7: the sudo pid above misdirects
                 # manual retirement — name the keeper itself.
-                detail += (f" [keeper pid={evidence[0]} "
-                           f"nsid={evidence[1]}; retire by hand]")
+                if evidence[1] == "unknown":
+                    # S133-round9: pre-READY launch — no
+                    # keeper identity exists yet; say so
+                    # explicitly, never a bare wrapper pid.
+                    detail += (
+                        f" [pre-READY launch (wrapper pid="
+                        f"{evidence[0]}); keeper identity "
+                        f"unknown; retire by hand]")
+                else:
+                    detail += (f" [keeper pid={evidence[0]} "
+                               f"nsid={evidence[1]}; retire "
+                               f"by hand]")
                 if preserved is False:
                     detail += (" [keeper evidence NOT "
                                "preserved; manual recovery "
@@ -1225,7 +1291,13 @@ def _spawn_keeper(euid, candir, publish_to):
     # must match it, else the pid died and recycled mid-verify
     # and the anchor would bind a stranger's starttime.
     pre = _keeper_starttime(pid)
-    link = _read_ns_link(pid)
+    # S134-round9: an unverifiable link is unknown, never
+    # absent — roll the fresh tree back inside fail(), never
+    # leak it by letting the check escape.
+    try:
+        link = _read_ns_link(pid)
+    except AdmissionError as exc:
+        fail(f"mount-ns keeper ns unreadable: {exc}")
     if (link is None or not link.startswith("mnt:[")
             or not link.endswith("]")
             or not link[5:-1].isdigit()):
@@ -1240,7 +1312,7 @@ def _spawn_keeper(euid, candir, publish_to):
     # ours (a recycled pid's namespace lacks canary-<secret>).
     nspath = f"/proc/{pid}/ns/mnt"
     try:
-        fresh_ok = _ns_has_canary(nspath, canary)
+        fresh_ok = _ns_has_canary_pinned(nspath, nsid, canary)
     except AdmissionError as exc:
         fail(f"mount-ns keeper canary check failed: {exc}")
     if not fresh_ok:
@@ -3045,9 +3117,16 @@ def reconcile_mount_effect(manifest, run_root, role, target, fingerprint,
             else:
                 detail = ("mount outcome uncertain after "
                           "effect; custody kept pending")
-            _refresh_mount_custody(manifest, role, target, kept,
-                                   detail,
-                                   observed_target=observed)
+            # S127-round9: a binding-verification refusal
+            # persists manual-only custody — the occupant was
+            # never bound to our upper, so no later cleanup
+            # may adopt it on the copyable canary alone.
+            _refresh_mount_custody(
+                manifest, role, target, kept, detail,
+                observed_target=observed,
+                manual_only=(kind == "uncertain"
+                             and "(binding unverified)"
+                             in (failure or "")))
             return None
     try:
         table = read_mount_table()
@@ -3131,7 +3210,8 @@ def mount_pending(manifest, target):
 
 
 def _refresh_mount_custody(manifest, role, target, fingerprint,
-                           detail, observed_target=None):
+                           detail, observed_target=None,
+                           manual_only=False):
     """Refresh a mount pending record with full evidence. (S62-round4)
 
     The replacement carries the fingerprint's mount ID (known
@@ -3141,6 +3221,9 @@ def _refresh_mount_custody(manifest, role, target, fingerprint,
     proved. Single atomic persist via refresh_pending_acquisition.
     S74: `observed_target` records a moved mount's observed
     mountpoint for ID-keyed recovery.
+    S127-round9: `manual_only` (sticky once set — a refresh
+    never clears it) confines the record to manual
+    retirement; cleanup refuses automatic adoption.
     """
     old = {}
     for entry in manifest.get("pending_acquisitions", []):
@@ -3157,6 +3240,8 @@ def _refresh_mount_custody(manifest, role, target, fingerprint,
     for key in ("canary", "loop_backing"):
         if key in old:
             entry[key] = old[key]
+    if manual_only or old.get("manual_only"):
+        entry["manual_only"] = True
     if observed_target is not None:
         entry["observed_target"] = observed_target
     entry["detail"] = detail[:256]
@@ -6585,6 +6670,20 @@ def cleanup_pending_acquisitions(manifest, run_root):
                                        expect_mnt_id=rows[0].get(
                                            "mnt_id")):
                     adoptable = False
+            if entry.get("manual_only"):
+                # S127-round9: binding never verified (an S108
+                # unpinned / pin-probe refusal persisted
+                # through reconciliation) — the occupant,
+                # however well it matches the copyable
+                # canary, is never auto-retired. (The
+                # empty-target and known-ID arms above keep
+                # their own loud-retained reports; this gate
+                # covers every path to adoption.)
+                failures.append(
+                    f"pending mount {target}: binding never "
+                    f"verified; manual retirement required; "
+                    f"left in place")
+                continue
             if adoptable:
                 failure = cleanup_one_mount({
                     "target": target, "mnt_id": rows[0]["mnt_id"],
@@ -8138,6 +8237,18 @@ def _normalize_mount_failure(target, rc, out, err):
     if ("FAILED-UNCERTAIN:" in text or rc in (0, 124)
             or (rc == 1 and "FAILED" not in text)
             or rc not in (0, 1, 124, 127)):
+        # S127-round9: a binding-verification refusal (S108
+        # unpinned report, pin-probe refusal) is proven
+        # unverified — never ordinary uncertainty. The marker
+        # is matched here on the full helper text (before
+        # truncation) so reconciliation can persist
+        # manual-only custody through it.
+        if ("lacks held-upper binding" in text
+                or "unpinned moved candidate" in text
+                or "pin probe" in text):
+            return (f"mount {str(target)[:100]} effect "
+                    f"uncertain after create (binding "
+                    f"unverified): {tail(text)[:200]}")
         return (f"mount {str(target)[:100]} effect uncertain "
                 f"after create: {tail(text)[:200]}")
     # rc==127 (sudo never ran the helper), or rc==1 with a

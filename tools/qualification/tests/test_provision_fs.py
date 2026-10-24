@@ -7604,6 +7604,96 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertEqual(
                 retire.call_args[0][0]["mnt_id"], mid)
 
+    # S127-round9: a refused overlay (binding never verified:
+    # the S108 unpinned report or a pin-probe refusal) keeps
+    # MANUAL-ONLY pending custody through reconciliation —
+    # returning the refused clone to the recorded target must
+    # NOT let later cleanup retire it on the copyable canary
+    # alone. Ordinary ID-less + canary custody (no refusal
+    # marker) still retires: see
+    # test_pending_overlay_cleanup_requires_canary above.
+    def test_refused_overlay_never_auto_retires_in_cleanup(self):
+        from unittest import mock
+        reports = [
+            # S108 unpinned moved-overlay report.
+            ("FAILED-UNCERTAIN: mount /t pin failed (fresh "
+             "mount not pinnable (gone)); unpinned moved "
+             "candidate (mnt=42 observed at '/escaped') lacks "
+             "held-upper binding; left in place; manual "
+             "retirement required"),
+            # Pin-probe refusal at the recorded target.
+            ("FAILED-UNCERTAIN: mount /t pin probe absent "
+             "from our upper (pinned mount does not drain "
+             "there); left in place"),
+        ]
+        for text in reports:
+            with self.subTest(text=text[:40]):
+                with tempfile.TemporaryDirectory() as tmp:
+                    merged = os.path.join(tmp, "merged")
+                    os.makedirs(merged)
+                    canary = "abc123"
+                    Path(merged,
+                         provision.MOUNT_CANARY_NAME
+                         ).write_bytes(canary.encode("ascii"))
+                    mid = real_mnt_id(merged)
+                    doc = provision.fresh_manifest(tmp, True)
+                    doc["pending_acquisitions"] = [{
+                        "kind": "mount", "key": merged,
+                        "role": "ov", "target": merged,
+                        "fstype": "overlay",
+                        "source": "overlay",
+                        "expect_super": [],
+                        "canary": canary,
+                        "detail": "pre-admission"}]
+                    failure = (
+                        provision._normalize_mount_failure(
+                            merged, 1, text, ""))
+                    self.assertIn("effect uncertain", failure)
+                    self.assertIn("binding unverified",
+                                  failure)
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            return_value=[]):
+                        adopted = (
+                            provision.reconcile_mount_effect(
+                                doc, tmp, "ov", merged,
+                                {"fstype": "overlay",
+                                 "source": "overlay",
+                                 "expect_super": []},
+                                canary=(
+                                    provision.MOUNT_CANARY_NAME,
+                                    canary),
+                                failure=failure))
+                    self.assertIsNone(adopted)
+                    kept = doc["pending_acquisitions"]
+                    self.assertEqual(len(kept), 1)
+                    self.assertTrue(kept[0].get("manual_only"))
+                    self.assertEqual(kept[0].get("canary"),
+                                     canary)
+                    # The refused clone returns to the recorded
+                    # target showing the copied token: cleanup
+                    # must refuse, never retire.
+                    row = {"target": merged, "mnt_id": mid,
+                           "root": "/", "fstype": "overlay",
+                           "source": "overlay",
+                           "super": "rw,lowerdir=/dev/fd/9"}
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            return_value=[row]), \
+                            mock.patch.object(
+                                provision, "cleanup_one_mount",
+                                return_value=None) as retire:
+                        failures = (
+                            provision
+                            .cleanup_pending_acquisitions(
+                                doc, tmp))
+                    retire.assert_not_called()
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("manual", failures[0])
+                    self.assertIn("left in place", failures[0])
+                    self.assertEqual(
+                        len(doc["pending_acquisitions"]), 1)
+
     # S72-round5: a recorded mount ID that is gone from the
     # whole table is never swapped for a same-fingerprint
     # occupant's — the replacement is refused (even with a
@@ -8390,7 +8480,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[77]") as link, \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True) as check, \
                     mock.patch.object(
                         provision, "_keeper_starttime",
@@ -8402,13 +8492,17 @@ class MountNsTests(unittest.TestCase):
                 nspath = provision.ensure_mount_ns()
             link.assert_called_once_with(4321)
             check.assert_called_once_with(
-                "/proc/4321/ns/mnt", canary)
+                "/proc/4321/ns/mnt", 77, canary)
             self.assertEqual(nspath, "/proc/4321/ns/mnt")
             self.assertEqual(provision._MOUNT_NS_IDENTITY,
                              (4321, 77, 777, canary))
             self.assertEqual(
                 Path(pidfile).read_text(), f"4321 77 {canary}\n")
 
+    # S134-round9: respawn requires PROVEN death — the real
+    # link read runs (failed readlink plus the kernel's ESRCH
+    # for an absurd pid), not a stubbed None. The unknown arm
+    # below proves refusal instead.
     def test_ensure_respawns_on_dead_keeper(self):
         from unittest import mock
         old_ns = provision._MOUNT_NS
@@ -8420,18 +8514,21 @@ class MountNsTests(unittest.TestCase):
         provision._MOUNT_NS_IDENTITY = None
         canary = "cd" * 16
         fresh = "ef" * 16
+        dead_pid = 2 ** 30
+        dead = mock.Mock(returncode=1, stdout="", stderr="")
         with tempfile.TemporaryDirectory() as tmp:
             pidfile = os.path.join(tmp, "ns.pid")
-            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            Path(pidfile).write_text(
+                f"{dead_pid} 77 {canary}\n")
             os.chmod(pidfile, 0o600)
             with mock.patch.object(
                     provision, "_keeper_paths",
                     return_value=(pidfile, tmp)), \
                     mock.patch.object(
-                        provision, "_read_ns_link",
-                        return_value=None), \
+                        provision.subprocess, "run",
+                        return_value=dead), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         side_effect=AssertionError(
                             "checked dead")) as check, \
                     mock.patch.object(
@@ -8446,6 +8543,43 @@ class MountNsTests(unittest.TestCase):
             self.assertEqual(nspath, "/proc/111/ns/mnt")
             self.assertEqual(provision._MOUNT_NS_IDENTITY,
                              (111, 22, 999, fresh))
+
+    # S134-round9: an unverifiable link read (transient sudo
+    # failure here, against a provably LIVE pid) refuses
+    # replacement — no spawn runs over the old keeper and
+    # its bound fixtures.
+    def test_ensure_refuses_on_unknown_ns_link(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        canary = "cd" * 16
+        live_pid = os.getpid()
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(
+                f"{live_pid} 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision.subprocess, "run",
+                        side_effect=OSError("sudo lost")), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        side_effect=AssertionError(
+                            "respawned on unknown")) as spawn:
+                with self.assertRaises(
+                        provision.NsLinkUnknown):
+                    provision.ensure_mount_ns()
+            spawn.assert_not_called()
+            self.assertIsNone(provision._MOUNT_NS)
+            self.assertIsNone(provision._MOUNT_NS_IDENTITY)
 
     def test_ensure_respawns_on_canary_mismatch(self):
         from unittest import mock
@@ -8469,7 +8603,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[77]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=False), \
                     mock.patch.object(
                         provision, "_spawn_keeper",
@@ -8514,7 +8648,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[77]") as link, \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True) as check, \
                     mock.patch.object(
                         provision, "_spawn_keeper",
@@ -8529,10 +8663,56 @@ class MountNsTests(unittest.TestCase):
                               mock.call(4321)])
             link.assert_called_once_with(4321)
             check.assert_called_once_with(
-                "/proc/4321/ns/mnt", canary)
+                "/proc/4321/ns/mnt", 77, canary)
             self.assertEqual(nspath, "/proc/4321/ns/mnt")
             self.assertEqual(provision._MOUNT_NS_IDENTITY,
                              (4321, 77, 222, canary))
+
+    # S126-round9: bootstrap canary verification must prove
+    # the pinned namespace BEFORE the join (same-invocation
+    # open+verify+join, as the NEW-1 route proof) — the raw
+    # nsenter --mount={nspath} join trusts a pid that may
+    # have recycled since the link read, resolving grep in
+    # the replacement ns. The pin binds the recorded nsid
+    # (never the canary it is establishing: no circularity).
+    # Regression: replacement between link observation and
+    # verification dispatch refuses.
+    def test_verify_recorded_keeper_pins_before_canary(self):
+        from unittest import mock
+        canary = "cd" * 16
+        state = (4321, 77, canary)
+        refused = mock.Mock(returncode=1, stdout=b"",
+                            stderr=b"")
+        passed = mock.Mock(returncode=0, stdout=b"",
+                           stderr=b"")
+        with mock.patch.object(
+                provision, "_read_ns_link",
+                return_value="mnt:[77]"), \
+                mock.patch.object(
+                    provision.subprocess, "run",
+                    return_value=refused) as run:
+            self.assertIsNone(
+                provision._verify_recorded_keeper(state))
+        argv = run.call_args[0][0]
+        # The join runs behind the pin proof: the same sudo
+        # invocation opens the ns path, demands the recorded
+        # nsid, and joins through the pinned fd — never a
+        # re-resolved pathname join.
+        self.assertEqual(argv[:3], ["sudo", "-n", "sh"])
+        self.assertIn("exec 3<", " ".join(argv))
+        self.assertIn("77", argv)
+        self.assertNotIn("nsenter", argv)
+        self.assertFalse(
+            any(item.startswith("--mount=") for item in argv))
+        with mock.patch.object(
+                provision, "_read_ns_link",
+                return_value="mnt:[77]"), \
+                mock.patch.object(
+                    provision.subprocess, "run",
+                    return_value=passed):
+            self.assertEqual(
+                provision._verify_recorded_keeper(state),
+                "/proc/4321/ns/mnt")
 
     # S100-round6: the starttime anchor reads the world-readable
     # field and fails closed on gone/unparseable pids.
@@ -8627,7 +8807,7 @@ class MountNsTests(unittest.TestCase):
                             provision, "_read_ns_link",
                             return_value="mnt:[77]") as link, \
                         mock.patch.object(
-                            provision, "_ns_has_canary",
+                            provision, "_ns_has_canary_pinned",
                             return_value=True) as check, \
                         mock.patch.object(
                             provision, "_keeper_starttime",
@@ -8706,7 +8886,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[55]") as link, \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True) as check, \
                     mock.patch.object(
                         provision, "_keeper_starttime",
@@ -8718,7 +8898,7 @@ class MountNsTests(unittest.TestCase):
             self.assertEqual(result, (7777, 55, canary, 31337))
             link.assert_called_once_with(7777)
             check.assert_called_once_with(
-                "/proc/7777/ns/mnt", canary)
+                "/proc/7777/ns/mnt", 55, canary)
             self.assertIn(child, provision._KEEPERS)
             self.assertEqual(len(provision._KEEPERS), before + 1)
             retired.assert_not_called()
@@ -8737,6 +8917,83 @@ class MountNsTests(unittest.TestCase):
             st = os.stat(candir)
             self.assertTrue(stat.S_ISDIR(st.st_mode))
             self.assertEqual(stat.S_IMODE(st.st_mode), 0o700)
+
+    # S135-round9: the keeper script must not interpolate the
+    # canary dir into root shell text — private-keeper
+    # callers derive it from TMPDIR-honoring mkdtemp, so
+    # spaces break parsing and $() becomes root shell syntax.
+    # candir crosses as a separate argv element, quoted as
+    # "$1". The captured script is executed with stub
+    # mount/sleep: the evil path must arrive as one mount
+    # argument and no substitution may run.
+    def test_spawn_keeper_candir_shell_safe(self):
+        from unittest import mock
+        canary = "ef" * 16
+        child = mock.Mock()
+        child.stdout.readline.return_value = (
+            f"READY 7777 {canary}\n")
+        fake_sel = mock.Mock()
+        fake_sel.select.return_value = [True]
+        with tempfile.TemporaryDirectory() as tmp:
+            evil = os.path.join(tmp, "with space",
+                                "x$(touch PWNED)")
+            os.makedirs(evil)
+            candir = os.path.join(evil, "candir")
+            pidfile = os.path.join(tmp, "ns.pid")
+            with mock.patch.object(
+                    provision.subprocess, "Popen",
+                    return_value=child) as popen, \
+                    mock.patch.object(
+                        provision.selectors,
+                        "DefaultSelector",
+                        return_value=fake_sel), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[55]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary_pinned",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        return_value=31337):
+                provision._spawn_keeper(
+                    os.geteuid(), candir, pidfile)
+            argv = popen.call_args[0][0]
+            script = argv[6]
+            # Live probe first: run the captured script with
+            # stub mount/sleep and no privilege.
+            bindir = os.path.join(tmp, "bin")
+            os.makedirs(bindir)
+            for name, body in (
+                    ("mount", "#!/bin/sh\n"
+                     "printf '<%s>\\n' \"$@\" >> \"$MOUNT_LOG\"\n"),
+                    ("sleep", "#!/bin/sh\nexit 0\n")):
+                path = os.path.join(bindir, name)
+                Path(path).write_text(body)
+                os.chmod(path, 0o755)
+            log = os.path.join(tmp, "mount.log")
+            env = dict(os.environ)
+            env["PATH"] = bindir + os.pathsep + env.get(
+                "PATH", "")
+            env["MOUNT_LOG"] = log
+            proc = subprocess.run(
+                ["bash", "-c", script, "keeper", candir],
+                capture_output=True, text=True, timeout=30,
+                env=env, cwd=tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("READY", proc.stdout)
+            # No substitution ran, and the evil path arrived
+            # as one mount argument.
+            self.assertFalse(os.path.exists(
+                os.path.join(tmp, "PWNED")))
+            self.assertIn(f"<{candir}>\n",
+                          Path(log).read_text())
+            # Structural pin: candir crosses as its own argv
+            # element, never interpolated into script text.
+            self.assertEqual(argv[7:], ["keeper", candir])
+            self.assertIn('"$1"', script)
+            self.assertNotIn(candir, script)
+            self.assertNotIn(tmp, script)
 
     def test_spawn_keeper_garbage_and_timeout_refuse(self):
         from unittest import mock
@@ -8797,7 +9054,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[66]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=False), \
                     mock.patch.object(
                         provision, "kill_tree",
@@ -8810,6 +9067,45 @@ class MountNsTests(unittest.TestCase):
                         os.path.join(tmp, "canary"),
                         os.path.join(tmp, "ns.pid"))
             self.assertEqual(len(provision._KEEPERS), before)
+        retired.assert_called_once_with(
+            "keeper-spawn", child.pid, 10)
+        child.wait.assert_called_once_with(timeout=10)
+
+    # S134-round9: an unverifiable fresh-link read rolls the
+    # new tree back inside fail() — the check must not escape
+    # with a live keeper (ProcUnknown stands in for the
+    # NsLinkUnknown subclass here; the wrap catches
+    # AdmissionError).
+    def test_spawn_keeper_unknown_ns_link_rolls_back(self):
+        from unittest import mock
+        canary = "aa" * 16
+        child = mock.Mock()
+        child.stdout.readline.return_value = (
+            f"READY 8888 {canary}\n")
+        fake_sel = mock.Mock()
+        fake_sel.select.return_value = [True]
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                    provision.subprocess, "Popen",
+                    return_value=child), \
+                    mock.patch.object(
+                        provision.selectors,
+                        "DefaultSelector",
+                        return_value=fake_sel), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        side_effect=provision.ProcUnknown(
+                            "link lost")), \
+                    mock.patch.object(
+                        provision, "kill_tree",
+                        return_value=True) as retired:
+                with self.assertRaisesRegex(
+                        provision.AdmissionError,
+                        "ns unreadable"):
+                    provision._spawn_keeper(
+                        os.geteuid(),
+                        os.path.join(tmp, "canary"),
+                        os.path.join(tmp, "ns.pid"))
         retired.assert_called_once_with(
             "keeper-spawn", child.pid, 10)
         child.wait.assert_called_once_with(timeout=10)
@@ -8841,7 +9137,7 @@ class MountNsTests(unittest.TestCase):
                             provision, "_read_ns_link",
                             return_value=link), \
                         mock.patch.object(
-                            provision, "_ns_has_canary",
+                            provision, "_ns_has_canary_pinned",
                             return_value=canary_ok), \
                         mock.patch.object(
                             provision, "_keeper_starttime",
@@ -9017,7 +9313,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[66]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True), \
                     mock.patch.object(
                         provision, "_keeper_starttime",
@@ -9060,7 +9356,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[77]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True), \
                     mock.patch.object(
                         provision, "_keeper_starttime",
@@ -9105,7 +9401,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[77]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True), \
                     mock.patch.object(
                         provision, "_spawn_keeper",
@@ -9527,7 +9823,7 @@ class MountNsTests(unittest.TestCase):
                             provision, "_read_ns_link",
                             return_value="mnt:[55]"), \
                         mock.patch.object(
-                            provision, "_ns_has_canary",
+                            provision, "_ns_has_canary_pinned",
                             return_value=True), \
                         mock.patch.object(
                             provision, "_keeper_starttime",
@@ -9593,7 +9889,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[55]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=True), \
                     mock.patch.object(
                         provision, "_keeper_starttime",
@@ -9642,7 +9938,7 @@ class MountNsTests(unittest.TestCase):
                             provision, "_read_ns_link",
                             return_value="mnt:[55]"), \
                         mock.patch.object(
-                            provision, "_ns_has_canary",
+                            provision, "_ns_has_canary_pinned",
                             return_value=True), \
                         mock.patch.object(
                             provision, "_keeper_starttime",
@@ -9703,7 +9999,7 @@ class MountNsTests(unittest.TestCase):
                         provision, "_read_ns_link",
                         return_value="mnt:[66]"), \
                     mock.patch.object(
-                        provision, "_ns_has_canary",
+                        provision, "_ns_has_canary_pinned",
                         return_value=False), \
                     mock.patch.object(
                         provision, "kill_tree",
@@ -9727,11 +10023,16 @@ class MountNsTests(unittest.TestCase):
     # roll back inside the same custody boundary — the tree
     # is retired and the failure reports as AdmissionError,
     # never an escaping raw exception with a live keeper.
+    # S133-round9: the same arms with an UNPROVEN rollback
+    # (failed or raising kill_tree) leave unresolved launch
+    # custody — a marker naming the wrapper pid with unknown
+    # keeper fields — never silence over a live keeper.
     def test_spawn_keeper_spawn_io_rolls_back(self):
         from unittest import mock
 
-        def attempt(select=None, line=None):
+        def attempt(select=None, line=None, retire=True):
             child = mock.Mock()
+            child.pid = 424242
             if line is not None:
                 child.stdout.readline.return_value = line
             else:
@@ -9743,7 +10044,12 @@ class MountNsTests(unittest.TestCase):
                     "selector lost")
             else:
                 fake_sel.select.return_value = select
+            if isinstance(retire, Exception):
+                kill_kw = {"side_effect": retire}
+            else:
+                kill_kw = {"return_value": retire}
             with tempfile.TemporaryDirectory() as tmp:
+                pidfile = os.path.join(tmp, "ns.pid")
                 with mock.patch.object(
                         provision.subprocess, "Popen",
                         return_value=child), \
@@ -9753,19 +10059,35 @@ class MountNsTests(unittest.TestCase):
                             return_value=fake_sel), \
                         mock.patch.object(
                             provision, "kill_tree",
-                            return_value=True) as retired:
+                            **kill_kw) as retired:
                     with self.assertRaises(
-                            provision.AdmissionError):
+                            provision.AdmissionError) as ctx:
                         provision._spawn_keeper(
                             os.geteuid(),
                             os.path.join(tmp, "canary"),
-                            os.path.join(tmp, "ns.pid"))
+                            pidfile)
+                marker = f"{pidfile}.unresolved"
+                if retire is True:
+                    self.assertFalse(os.path.exists(marker))
+                else:
+                    message = str(ctx.exception)
+                    self.assertIn("not proven gone", message)
+                    self.assertIn("unknown", message)
+                    seen = Path(marker).read_text()
+                    self.assertIn("424242", seen)
+                    self.assertIn("unknown", seen)
             retired.assert_called_once_with(
                 "keeper-spawn", child.pid, 10)
             child.wait.assert_called_with(timeout=10)
 
         attempt(select=None)
         attempt(select=[True])
+        attempt(select=None, retire=False)
+        attempt(select=[True], retire=False)
+        attempt(select=None,
+                retire=OSError("signals lost"))
+        attempt(select=[True],
+                retire=RuntimeError("rollback blew up"))
 
     # S103-round6 G1-I7: the evidence writer reports whether
     # the record landed, so callers can surface a failure.
@@ -9786,29 +10108,85 @@ class MountNsTests(unittest.TestCase):
                     7777, 55, "ef" * 16, "test-reason"),
                 False)
 
-    def test_read_ns_link_none_on_failure(self):
-        # Dead pid (nonzero exit), missing sudo (OSError) and
-        # sudo hang (timeout) all read as None — never raise —
-        # so the caller falls through to respawn.
+    # S141-round9: the unresolved-evidence writer must not
+    # block on a preplanted owner-owned FIFO without a
+    # reader (rollback runs under ensure's singleton lock)
+    # — nonblocking open plus same-descriptor owner/type
+    # validation (mirroring _read_keeper_record) refuses it.
+    def test_preserve_keeper_evidence_refuses_fifo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            os.mkfifo(f"{pidfile}.unresolved")
+            self.assertIs(
+                provision._preserve_keeper_evidence(
+                    pidfile, 7777, 55, "ef" * 16,
+                    "test-reason"),
+                False)
+
+    # S134-round9: the ns-link read is tri-state — a link on
+    # success, None ONLY for a proven-dead pid (readlink
+    # failed AND kill(pid, 0) reports ESRCH: absence proved
+    # by syscall errno, never inferred), and NsLinkUnknown
+    # for every unverifiable outcome (timeout, exec failure,
+    # nonzero exit with a live pid). Unknown refuses
+    # replacement; only proven absence respawns.
+    def test_read_ns_link_absent_vs_unknown(self):
         from unittest import mock
-        proc = mock.Mock(returncode=1, stdout="")
+        proc = mock.Mock(returncode=0,
+                         stdout="mnt:[77]\n", stderr="")
         with mock.patch.object(
                 provision.subprocess, "run",
                 return_value=proc) as run:
-            self.assertIsNone(provision._read_ns_link(4321))
+            self.assertEqual(
+                provision._read_ns_link(4321), "mnt:[77]")
         argv = run.call_args[0][0]
         self.assertEqual(
             argv, ["sudo", "-n", "readlink",
                   "/proc/4321/ns/mnt"])
+        dead = mock.Mock(returncode=1, stdout="", stderr="")
+        with mock.patch.object(
+                provision.subprocess, "run",
+                return_value=dead), \
+                mock.patch.object(
+                    provision.os, "kill",
+                    side_effect=ProcessLookupError(
+                        3, "No such process")):
+            # Proven death reads as None (respawn permitted).
+            self.assertIsNone(provision._read_ns_link(4321))
+        with mock.patch.object(
+                provision.subprocess, "run",
+                return_value=dead), \
+                mock.patch.object(
+                    provision.os, "kill",
+                    side_effect=PermissionError(
+                        1, "Operation not permitted")):
+            # Live-but-unreadable is unknown: refuse.
+            with self.assertRaises(
+                    provision.NsLinkUnknown):
+                provision._read_ns_link(4321)
+        with mock.patch.object(
+                provision.subprocess, "run",
+                return_value=dead), \
+                mock.patch.object(
+                    provision.os, "kill", return_value=None):
+            # Signallable (alive) with a failed readlink is
+            # unknown too.
+            with self.assertRaises(
+                    provision.NsLinkUnknown):
+                provision._read_ns_link(4321)
         with mock.patch.object(
                 provision.subprocess, "run",
                 side_effect=OSError("no sudo")):
-            self.assertIsNone(provision._read_ns_link(4321))
+            with self.assertRaises(
+                    provision.NsLinkUnknown):
+                provision._read_ns_link(4321)
         with mock.patch.object(
                 provision.subprocess, "run",
                 side_effect=provision.subprocess.TimeoutExpired(
                     "sudo", 30)):
-            self.assertIsNone(provision._read_ns_link(4321))
+            with self.assertRaises(
+                    provision.NsLinkUnknown):
+                provision._read_ns_link(4321)
 
     # NEW-1-round8: every nsenter join proves the bound
     # namespace from OUTSIDE (same sudo invocation opens the
