@@ -114,11 +114,14 @@ impl FixtureRoot {
             Mode::empty(),
         )
         .map_err(io::Error::from)?;
-        require_exclusive_parent(&parent_fd)?;
+        require_exclusive_parent(parent_fd.as_fd(), "fixture parent")?;
         let cname = CString::new(name)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "bad root name"))?;
         // mkdirat, not create_dir: fails (EEXIST) when present, like before.
-        rfs::mkdirat(&parent_fd, &cname, Mode::from_bits_truncate(0o777))
+        // S60: restrictive creation mode — the pre-chmod window is
+        // 0755&~umask, never 0777&~umask; the fchmod below still pins
+        // exactly 0755 regardless of umask.
+        rfs::mkdirat(&parent_fd, &cname, Mode::from_bits_truncate(0o755))
             .map_err(io::Error::from)?;
         // S48: transactional acquisition. The just-created empty
         // directory is ours alone (exclusive parent, mkdirat
@@ -127,8 +130,17 @@ impl FixtureRoot {
         let root_fd = open_created(&parent_fd, &cname, AtFlags::REMOVEDIR)?;
         // S14: fresh roots are 0755 regardless of ambient umask, so
         // they nest as exclusive parents and no umask ever admits
-        // group/other writers.
-        rfs::fchmod(&root_fd, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+        // group/other writers. S60: the chmod runs under rollback —
+        // FixtureRoot (the owner) does not exist yet. The scope ends
+        // the borrows before the fds move into Self.
+        {
+            let mut rollback = UnlinkArmed::armed(parent_fd.as_fd(), &cname);
+            fchmod_created(
+                &mut rollback,
+                root_fd.as_fd(),
+                Mode::from_bits_truncate(0o755),
+            )?;
+        }
         Ok(Self {
             path: parent.join(name),
             parent: parent_fd,
@@ -173,10 +185,13 @@ impl FixtureRoot {
         let pieces = self.split(rel)?;
         let dir = self.open_parent_dir(&pieces)?;
         let name = piece_cstr(pieces[pieces.len() - 1])?;
-        match rfs::mkdirat(dir.as_fd(), &name, Mode::from_bits_truncate(0o777)) {
+        match rfs::mkdirat(dir.as_fd(), &name, Mode::from_bits_truncate(0o755)) {
             // S14: fresh dirs are 0755 regardless of umask (see
             // create). Reused dirs keep their modes: not ours to
             // dictate, and the gate judges them if nested under.
+            // S60: restrictive creation mode plus chmod rollback —
+            // a denied chmod removes the fresh dir instead of
+            // leaving residue its caller never owned.
             Ok(()) => {
                 let fresh = rfs::openat(
                     dir.as_fd(),
@@ -185,7 +200,14 @@ impl FixtureRoot {
                     Mode::empty(),
                 )
                 .map_err(io::Error::from)?;
-                rfs::fchmod(&fresh, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+                {
+                    let mut rollback = UnlinkArmed::armed(dir.as_fd(), &name);
+                    fchmod_created(
+                        &mut rollback,
+                        fresh.as_fd(),
+                        Mode::from_bits_truncate(0o755),
+                    )?;
+                }
             }
             Err(rustix::io::Errno::EXIST) => {
                 // Present: verify it is a real directory, since
@@ -212,7 +234,17 @@ impl FixtureRoot {
     /// directory lost its name (a swap-and-replace between verify and
     /// unlink leaves our fd linked and fails instead of silently
     /// deleting the replacement).
+    ///
+    /// S13: mutation exclusion gates the destruction. The parent's
+    /// exclusivity is re-verified both before clearing (fail fast,
+    /// tree left fully in place) and immediately before the unlink
+    /// (tight window): only an exclusive parent excludes a foreign
+    /// swapper from the verify/unlink window. Clearing itself refuses
+    /// non-exclusive nested directories (see `clear_dir`); the
+    /// link-count proof stays as the backstop.
     pub fn close(self) -> io::Result<()> {
+        // Fail fast on a loosened parent: nothing is cleared.
+        require_exclusive_parent(self.parent.as_fd(), "fixture parent")?;
         clear_dir(self.root.as_fd())?;
         // Refuse a planted replacement BEFORE unlinking: the name
         // must still address our own directory.
@@ -232,6 +264,10 @@ impl FixtureRoot {
             ));
         }
         drop(live);
+        #[cfg(test)]
+        fire_close_swap_hook();
+        // Tight window: no foreign swapper can be inside it.
+        require_exclusive_parent(self.parent.as_fd(), "fixture parent")?;
         rfs::unlinkat(&self.parent, &self.name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
         prove_unlinked(self.root.as_fd(), "fixture root")?;
         Ok(())
@@ -305,7 +341,17 @@ impl FixtureRoot {
 /// Multi-linked entries (hardlinks — never created by `FixtureRoot`,
 /// so always foreign evidence) refuse the same way: the inode would
 /// survive the unlink, and "removed" would be a lie.
+///
+/// S13: mutation exclusion before deletion. Each traversed directory
+/// proves exclusive (euid-owned, no group/other write) before any
+/// entry inside it is unlinked: in a shared directory another UID
+/// could rename the held entry away and plant a replacement between
+/// the hold and the unlink, and the post-unlink proof would only
+/// detect the foreign deletion after it happened. Recursion carries
+/// the gate to every level; the root's own name is gated by
+/// `close`'s parent re-verification.
 fn clear_dir(dir: BorrowedFd<'_>) -> io::Result<()> {
+    require_exclusive_parent(dir, "fixture directory")?;
     let entries = rfs::Dir::read_from(dir).map_err(io::Error::from)?;
     for entry in entries {
         let entry = entry.map_err(io::Error::from)?;
@@ -378,21 +424,79 @@ fn euid() -> io::Result<u32> {
     ))
 }
 
-/// S14: prove the pinned parent is mutation-exclusive to us: owned
-/// by our euid with no group/other write bit. An ACL write grant to
-/// anyone would surface in the mask-backed group bits and trip the
-/// same test, so the mode check covers ACLs too. Without this, both
-/// the mkdir/open acquisition window and the verify/unlink
-/// destruction window below admit a foreign swapper.
-fn require_exclusive_parent(parent_fd: &OwnedFd) -> io::Result<()> {
-    let st = rfs::fstat(parent_fd).map_err(io::Error::from)?;
+/// S14: prove the pinned directory is mutation-exclusive to us:
+/// owned by our euid with no group/other write bit. An ACL write
+/// grant to anyone would surface in the mask-backed group bits and
+/// trip the same test, so the mode check covers ACLs too. Without
+/// this, both the mkdir/open acquisition window and the
+/// verify/unlink destruction window admit a foreign swapper.
+///
+/// S13: the same gate guards every deletion container: `close`
+/// re-verifies the parent before clearing and again immediately
+/// before the unlink, and `clear_dir` verifies each traversed
+/// directory before unlinking inside it. Shared directories refuse
+/// with `PermissionDenied` instead of deleting through a swappable
+/// window.
+fn require_exclusive_parent(parent: BorrowedFd<'_>, what: &str) -> io::Result<()> {
+    let st = rfs::fstat(parent).map_err(io::Error::from)?;
     if st.st_uid != euid()? || st.st_mode & 0o022 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "fixture parent not exclusive: stage a private 0700 directory",
+            format!("{what} not exclusive: stage a private 0700 directory"),
         ));
     }
     Ok(())
+}
+
+/// S13-round3: forced-substitution hook for the close window. Fires
+/// once per arming, between the identity re-verify and the
+/// deletion-time exclusivity check, then auto-disarms (take
+/// semantics) so a stale hook can never affect another test. Only
+/// the forced-window test arms it; production builds have no hook.
+///
+/// S79-round4: the hook binds to the ARMING THREAD, keyed per
+/// thread. A process-global slot lets a parallel test's ordinary
+/// `close` consume the hook first (mangling the forced test's
+/// fixture and failing its assertions on correct production
+/// code) — and a second arming test would overwrite the first
+/// one's hook. Each thread arms, fires, and clears only its own
+/// entry; foreign threads never observe it.
+#[cfg(test)]
+static CLOSE_SWAP_HOOK: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<std::thread::ThreadId, Box<dyn FnOnce() + Send>>>,
+> = std::sync::OnceLock::new();
+
+/// S79-round4: the per-thread hook table (see above).
+#[cfg(test)]
+fn close_swap_hooks() -> &'static std::sync::Mutex<
+    std::collections::HashMap<std::thread::ThreadId, Box<dyn FnOnce() + Send>>,
+> {
+    CLOSE_SWAP_HOOK.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// S13-round3: arm (or clear, with `None`) the close-window hook.
+#[cfg(test)]
+pub(crate) fn set_close_swap_hook(hook: Option<Box<dyn FnOnce() + Send>>) {
+    let mut guard = close_swap_hooks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    match hook {
+        Some(hook) => guard.insert(std::thread::current().id(), hook),
+        None => guard.remove(&std::thread::current().id()),
+    };
+}
+
+/// S13-round3: run the armed close-window hook, if any — only the
+/// calling thread's own entry (S79-round4).
+#[cfg(test)]
+fn fire_close_swap_hook() {
+    let hook = close_swap_hooks()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&std::thread::current().id());
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 /// S48: open a just-created name, removing it when the open
@@ -424,6 +528,72 @@ fn open_created(parent_fd: &OwnedFd, name: &CString, cleanup: AtFlags) -> io::Re
     }
 }
 
+/// S60: rollback for a just-created directory, armed at creation
+/// and disarmed once an owner holds it. Every initialization step
+/// between (open, chmod) runs under the guard, so a failed step —
+/// or a future added one — strands nothing. The armed drop is
+/// best-effort; call sites that can still report unlink explicitly
+/// with a combined error (see `open_created`'s idiom) and treat the
+/// guard as the backstop.
+struct UnlinkArmed<'a> {
+    parent: BorrowedFd<'a>,
+    name: &'a CString,
+    armed: bool,
+}
+
+impl<'a> UnlinkArmed<'a> {
+    fn armed(parent: BorrowedFd<'a>, name: &'a CString) -> Self {
+        Self {
+            parent,
+            name,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for UnlinkArmed<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = rfs::unlinkat(self.parent, self.name, AtFlags::REMOVEDIR);
+        }
+    }
+}
+
+/// S60: chmod a just-created directory under its rollback guard.
+/// Success disarms (an owner holds the name from here on); failure
+/// removes the directory and reports the chmod error, combined with
+/// the cleanup outcome when removal itself fails.
+fn fchmod_created(guard: &mut UnlinkArmed<'_>, fd: BorrowedFd<'_>, mode: Mode) -> io::Result<()> {
+    match rfs::fchmod(fd, mode) {
+        Ok(()) => {
+            guard.disarm();
+            Ok(())
+        }
+        Err(errno) => {
+            guard.disarm();
+            let chmod = io::Error::from(errno);
+            if let Err(removed) =
+                rfs::unlinkat(guard.parent, guard.name, AtFlags::REMOVEDIR).map_err(io::Error::from)
+            {
+                return Err(io::Error::new(
+                    chmod.kind(),
+                    format!("dir chmod failed: {chmod} (cleanup: {removed})"),
+                ));
+            }
+            // Named stage: distinguishes the chmod refusal from any
+            // other PermissionDenied the construction can report.
+            Err(io::Error::new(
+                chmod.kind(),
+                format!("fresh dir chmod refused: {chmod}"),
+            ))
+        }
+    }
+}
+
 /// S13: prove the held inode lost its name. Unlinking a swapped-in
 /// replacement leaves OUR inode linked and refuses instead of
 /// reporting success over a foreign deletion.
@@ -451,10 +621,19 @@ fn open_child_dir(parent: BorrowedFd<'_>, name: &CString) -> io::Result<OwnedFd>
     match rfs::openat(parent, name, flags, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(rustix::io::Errno::NOENT) => {
-            rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o777)).map_err(io::Error::from)?;
+            // S60: restrictive creation mode plus chmod rollback
+            // (see create).
+            rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
             let fresh = rfs::openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)?;
             // S14: fresh intermediate dirs are 0755 (see create).
-            rfs::fchmod(&fresh, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+            {
+                let mut rollback = UnlinkArmed::armed(parent, name);
+                fchmod_created(
+                    &mut rollback,
+                    fresh.as_fd(),
+                    Mode::from_bits_truncate(0o755),
+                )?;
+            }
             Ok(fresh)
         }
         Err(errno) => Err(io::Error::from(errno)),

@@ -11,7 +11,9 @@
 //! is fallible (`put_line`/`err_line`); a dead stdout exits 1, a dead
 //! stderr keeps the already-determined code. R34: smoke validates its
 //! predicted paths before creating anything and always retires its root.
-use linux_observe_reference::adapter::{run_scenario, script_value, ObserveReferenceAdapter};
+use linux_observe_reference::adapter::{
+    run_scenario, script_value, ObserveReferenceAdapter, ScenarioOutcome,
+};
 use scopebase_linux::conformance::FixtureRoot;
 use scopebase_testkit::cli;
 use scopebase_testkit::ConformanceAdapter;
@@ -46,17 +48,37 @@ impl Staging {
                 "scopebase-staging-{tag}-{}-{n}",
                 std::process::id()
             ));
-            match std::fs::create_dir(&dir) {
+            // S60: restrictive creation mode — the pre-chmod window is
+            // 0700&~umask, never 0777&~umask.
+            let created = {
+                use std::os::unix::fs::DirBuilderExt as _;
+                std::fs::DirBuilder::new().mode(0o700).create(&dir)
+            };
+            match created {
                 Ok(()) => {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
-                    return Some(Self { path: Some(dir) });
+                    return Self::finish(dir, |dir| {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(_) => return None,
             }
         }
         None
+    }
+
+    /// S60: the guard arms BEFORE the fallible permission step, so a
+    /// denied chmod removes the fresh directory instead of stranding
+    /// it. The step is injected for tests; production passes the real
+    /// `set_permissions`.
+    fn finish(
+        dir: std::path::PathBuf,
+        chmod: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+    ) -> Option<Self> {
+        let staging = Self { path: Some(dir) };
+        chmod(staging.path()).ok()?;
+        Some(staging)
     }
 
     fn path(&self) -> &std::path::Path {
@@ -137,13 +159,14 @@ fn run(args: &[String]) -> i32 {
             };
             let script = format!("case=pid;pid={pid};");
             match run_scenario("acquire", script.as_bytes(), None) {
-                Some(body) => {
+                ScenarioOutcome::Output(body) => {
                     if !cli::put_line(&body) {
                         return output_failed();
                     }
                     0
                 }
-                None => {
+                ScenarioOutcome::UnknownCaseOrParameter
+                | ScenarioOutcome::SpawnFailed(_) => {
                     cli::err_line("observe refused");
                     1
                 }
@@ -221,15 +244,19 @@ fn smoke() -> i32 {
         ),
     ] {
         match run_scenario(op, script.as_bytes(), None) {
-            Some(got) => {
+            ScenarioOutcome::Output(got) => {
                 if got != expected {
                     failed = true;
                 }
                 lines.push(format!("{op}: {got}"));
             }
-            None => {
+            ScenarioOutcome::UnknownCaseOrParameter => {
                 failed = true;
                 lines.push(format!("{op}: refused"));
+            }
+            ScenarioOutcome::SpawnFailed(error) => {
+                failed = true;
+                lines.push(format!("{op}: spawn failed: {error}"));
             }
         }
     }
@@ -320,5 +347,50 @@ mod tests {
             "doppelganger name passes through exactly: {empty}"
         );
         assert!(!doppel.exists(), "prediction created nothing");
+    }
+
+    /// S60: a denied permission step removes the fresh directory —
+    /// the guard was armed before the fallible chmod, not after.
+    #[test]
+    fn s60_failed_chmod_leaves_no_residue() {
+        let dir = std::env::temp_dir().join(format!(
+            "s60-staging-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let out = Staging::finish(dir.clone(), |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected chmod denial",
+            ))
+        });
+        assert!(out.is_none(), "denied chmod must refuse staging");
+        assert!(
+            !dir.exists(),
+            "denied chmod stranded the staging dir: {}",
+            dir.display()
+        );
+    }
+
+    /// S60: the accepted path still guards (drop retires the dir).
+    #[test]
+    fn s60_ok_chmod_keeps_guarded_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "s60-staging-ok-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let staging = Staging::finish(dir.clone(), |_| Ok(())).expect("ok chmod keeps staging");
+        assert!(dir.exists(), "accepted staging must hold its dir");
+        drop(staging);
+        assert!(!dir.exists(), "guard drop must retire the dir");
     }
 }

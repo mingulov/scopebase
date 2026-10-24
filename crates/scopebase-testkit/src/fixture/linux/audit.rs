@@ -226,9 +226,150 @@ fn yama_note() -> String {
 /// Prove this environment can trace an owned child before auditing.
 /// Returns the Yama note on success; refusal names the exact cause.
 pub fn preflight() -> Result<String, AuditError> {
-    if !cfg!(target_arch = "x86_64") {
-        return Err(AuditError::new("tracer needs x86_64 registers"));
+    preflight_inner()
+}
+
+/// S53: the register probe is x86_64-only at compile time, like the
+/// tracer itself: a runtime `cfg!` cannot gate name resolution, and
+/// `libc::PTRACE_GETREGS` does not exist on aarch64.
+#[cfg(target_arch = "x86_64")]
+fn preflight_inner() -> Result<String, AuditError> {
+    preflight_x86_64()
+}
+
+/// S53: non-x86_64 builds refuse without referencing x86_64-only
+/// ptrace requests.
+#[cfg(not(target_arch = "x86_64"))]
+fn preflight_inner() -> Result<String, AuditError> {
+    Err(AuditError::new("tracer needs x86_64 registers"))
+}
+
+/// True when the calling thread's errno is `want`. Reads errno
+/// immediately: callers must invoke it before any other libc call.
+#[cfg(target_arch = "x86_64")]
+fn last_errno_is(want: libc::c_int) -> bool {
+    // SAFETY: errno location for this thread.
+    unsafe { libc::__errno_location().read() == want }
+}
+
+/// The outcome of signaling a preflight child exactly once.
+#[cfg(target_arch = "x86_64")]
+enum PreflightSignal {
+    /// The signal was delivered, or delivery failed while the process
+    /// still exists: proceed to the bounded reap loop.
+    Pending,
+    /// No such process at signal time (already reaped): nothing to
+    /// signal and no custody to report.
+    Gone,
+}
+
+/// S68: signal the preflight child through stable process authority.
+/// A pidfd pins the task across number recycling, so the SIGKILL can
+/// never land on a recycled same-UID process; it also survives a
+/// filter that denies only `SYS_kill`. `ESRCH` anywhere means the
+/// child was already reaped (auto-reap or a competing reaper) and
+/// the number is unreserved — never signal it. Numeric kill is only
+/// the environmental pidfd-failure fallback, guarded by a
+/// last-moment ECHILD re-check; every caller classifies ECHILD
+/// before reaching here.
+#[cfg(target_arch = "x86_64")]
+fn signal_preflight_child(pid: libc::pid_t) -> PreflightSignal {
+    // SAFETY: pidfd_open on an owned (not-yet-ECHILD) child number.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
+    if fd >= 0 {
+        // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
+        let sent = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                fd,
+                libc::SIGKILL,
+                0,
+                0,
+            )
+        };
+        let gone = sent != 0 && last_errno_is(libc::ESRCH);
+        // SAFETY: fd owned by this scope.
+        unsafe { libc::close(fd) };
+        if gone {
+            return PreflightSignal::Gone;
+        }
+        return PreflightSignal::Pending;
     }
+    if last_errno_is(libc::ESRCH) {
+        return PreflightSignal::Gone;
+    }
+    // Environmental pidfd failure (e.g. EMFILE): re-check ECHILD at
+    // the last moment, then numeric kill. The re-check keeps the
+    // race to a reap landing between these two syscalls.
+    let mut status = 0;
+    // SAFETY: valid status out-pointer for an owned child.
+    let recheck = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    if recheck == pid || (recheck < 0 && last_errno_is(libc::ECHILD)) {
+        return PreflightSignal::Gone;
+    }
+    // SAFETY: SIGKILL to an owned, still-reserved child number.
+    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 && last_errno_is(libc::ESRCH) {
+        return PreflightSignal::Gone;
+    }
+    PreflightSignal::Pending
+}
+
+/// S52: retire a preflight child after a failed parent step. The
+/// child may be stopped (CONT denied) or unwaitable (wait denied),
+/// so SIGKILL first, then a bounded reap. Returns true when the pid
+/// is proven gone.
+///
+/// S68-round4: ECHILD classifies BEFORE any signal — the first reap
+/// attempt may already report it (auto-reap under `SIGCHLD=SIG_IGN`
+/// or a competing reaper), and the number is then unreserved.
+/// S52-round4: only `ESRCH` proves absence. Any other existence-probe
+/// failure (`EPERM` under a kill-denying filter, ...) means
+/// present-but-unobservable — never gone. The SIGKILL result is no
+/// longer ignored: `ESRCH` short-circuits to gone.
+#[cfg(target_arch = "x86_64")]
+fn retire_preflight_child(pid: libc::pid_t) -> bool {
+    let mut status = 0;
+    // SAFETY: valid status out-pointer for an owned child.
+    let first = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    if first == pid {
+        return true;
+    }
+    if first < 0 && last_errno_is(libc::ECHILD) {
+        return true;
+    }
+    if matches!(
+        signal_preflight_child(pid),
+        PreflightSignal::Gone
+    ) {
+        return true;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if waited == pid {
+            return true;
+        }
+        if waited < 0 {
+            if last_errno_is(libc::ECHILD) {
+                return true;
+            }
+        } else if waited == 0 {
+            // SAFETY: signal 0 probes existence without effect.
+            if unsafe { libc::kill(pid, 0) } != 0 && last_errno_is(libc::ESRCH) {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn preflight_x86_64() -> Result<String, AuditError> {
     let mut pipe = [0; 2];
     // SAFETY: valid out-pointer; ends checked below.
     if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
@@ -268,7 +409,25 @@ pub fn preflight() -> Result<String, AuditError> {
             if error.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(AuditError::new(format!("preflight wait: {error}")));
+            // S68-round4: ECHILD classifies before any signal: the
+            // child was already reaped (auto-reap under
+            // SIGCHLD=SIG_IGN or a competing reaper) and the number
+            // is unreserved — refuse without signaling it. No
+            // unresolved custody: no child is left to retire.
+            if error.raw_os_error() == Some(libc::ECHILD) {
+                return Err(AuditError::new(format!("preflight wait: {error}")));
+            }
+            // S52: an unwaitable child is not a gone child: kill
+            // it before refusing, or a stopped orphan lingers.
+            let retired = retire_preflight_child(pid);
+            return Err(AuditError::new(format!(
+                "preflight wait: {error}{}",
+                if retired {
+                    String::new()
+                } else {
+                    "; preflight child not proven reaped".to_string()
+                }
+            )));
         }
         if libc::WIFEXITED(status) || libc::WIFSIGNALED(status) {
             break;
@@ -285,8 +444,23 @@ pub fn preflight() -> Result<String, AuditError> {
                 ) == 0
             };
         }
+        // S52: an ignored CONT failure strands the child
+        // stopped and the next waitpid blocks forever. Check the
+        // resume, retire the child, and refuse instead.
         // SAFETY: continue an owned ptrace-stopped child.
-        unsafe { libc::ptrace(libc::PTRACE_CONT, pid, 0, 0) };
+        let resumed = unsafe { libc::ptrace(libc::PTRACE_CONT, pid, 0, 0) };
+        if resumed != 0 {
+            let error = std::io::Error::last_os_error();
+            let retired = retire_preflight_child(pid);
+            return Err(AuditError::new(format!(
+                "preflight resume: {error}{}",
+                if retired {
+                    String::new()
+                } else {
+                    "; preflight child not proven reaped".to_string()
+                }
+            )));
+        }
     }
     if got != 1 {
         return Err(AuditError::new(format!(
@@ -319,7 +493,27 @@ pub fn audit_subject(
     if !cfg!(target_arch = "x86_64") {
         return Err(AuditError::new("tracer needs x86_64 registers"));
     }
-    audit_subject_x86_64(program, args, config)
+    audit_subject_x86_64(program, args, config, None)
+}
+
+/// S05-round3: test-only entry point with a post-entry arm hook. The
+/// hook runs once, in the tracer thread, right after the first
+/// mmap-family entry sample is recorded — the only point that can
+/// deterministically fail the MATCHING exit sample (a seccomp filter
+/// armed anywhere earlier fails the entry instead; anywhere later
+/// races the exit). The denial driver arms its GETREGS denial here.
+/// Production callers use [`audit_subject`].
+#[doc(hidden)]
+pub fn audit_subject_with_entry_hook(
+    program: &Path,
+    args: &[String],
+    config: &AuditConfig,
+    arm: &dyn Fn(),
+) -> Result<AuditReport, AuditError> {
+    if !cfg!(target_arch = "x86_64") {
+        return Err(AuditError::new("tracer needs x86_64 registers"));
+    }
+    audit_subject_x86_64(program, args, config, Some(arm))
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -327,6 +521,7 @@ fn audit_subject_x86_64(
     program: &Path,
     args: &[String],
     config: &AuditConfig,
+    arm: Option<&dyn Fn()>,
 ) -> Result<AuditReport, AuditError> {
     use std::os::unix::process::CommandExt as _;
     // R05: the deadline must exist before the subject does. An
@@ -365,7 +560,7 @@ fn audit_subject_x86_64(
         threads_seen: 0,
     };
     let mut main_reaped = false;
-    let outcome = trace_loop(pid, config, deadline, &mut report, &mut main_reaped);
+    let outcome = trace_loop(pid, config, deadline, &mut report, &mut main_reaped, arm);
     // R26: signal the main only while it is provably unreaped. The
     // tracer reaps through raw waitpid, which never updates Child's
     // private status: killing after our own reap would signal a
@@ -407,10 +602,15 @@ fn audit_subject_x86_64(
 }
 
 #[cfg(not(target_arch = "x86_64"))]
+// S53-round4: signature-compatible with the x86_64 implementation.
+// The `cfg!` early returns above do not remove the four-argument
+// calls from type checking, so the stub must accept the same
+// arity (verified by the scoped cross-target check).
 fn audit_subject_x86_64(
     _program: &Path,
     _args: &[String],
     _config: &AuditConfig,
+    _arm: Option<&dyn Fn()>,
 ) -> Result<AuditReport, AuditError> {
     Err(AuditError::new("tracer needs x86_64 registers"))
 }
@@ -571,7 +771,11 @@ fn trace_loop(
     deadline: Instant,
     report: &mut AuditReport,
     main_reaped: &mut bool,
+    arm: Option<&dyn Fn()>,
 ) -> Result<(), AuditError> {
+    // S05-round3: the test-only arm hook fires once, after the first
+    // recorded mmap-family entry, and never on the None path.
+    let mut arm_pending = arm.is_some();
     // Only the main thread exists yet; every birth below joins this set.
     let mut tids: HashMap<libc::pid_t, TidState> = HashMap::new();
     tids.insert(pid, TidState::default());
@@ -728,6 +932,18 @@ fn trace_loop(
                             state.in_syscall = true;
                             state.pending = pending;
                             state.newborn_sigstop = false;
+                        }
+                        // S05-round3: a RECORDED mmap-family entry —
+                        // the matching exit sample is now pending, so
+                        // a denial armed here fails that exit and
+                        // nothing earlier.
+                        if arm_pending
+                            && tids.get(&tid).is_some_and(|state| state.pending.is_some())
+                        {
+                            arm_pending = false;
+                            if let Some(hook) = arm {
+                                hook();
+                            }
                         }
                     }
                     Err(error) => {
@@ -1882,6 +2098,7 @@ mod tests {
             Instant::now() + Duration::from_secs(30),
             &mut report,
             &mut reaped,
+            None,
         )
         .expect("true traces");
         assert!(reaped, "exit leg did not flag the reaped main");
@@ -1898,6 +2115,7 @@ mod tests {
             Instant::now() + Duration::from_secs(30),
             &mut report,
             &mut reaped,
+            None,
         )
         .expect("signalled main traces");
         assert!(reaped, "signal leg did not flag the reaped main");
@@ -1914,6 +2132,7 @@ mod tests {
             Instant::now() + Duration::from_millis(300),
             &mut report,
             &mut reaped,
+            None,
         )
         .expect_err("sleep must time out");
         assert!(

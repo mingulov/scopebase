@@ -27,13 +27,16 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import secrets
 import selectors
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCHEMA_MANIFEST = "tt04-fs-manifest-v1"
@@ -51,8 +54,28 @@ READY_MAX_BYTES = 4096
 SMALL_CAP = 65536
 # Chroot payload copy ceiling (busybox is ~1-2 MiB).
 COPY_CAP = 16 << 20
-# LOOP_CLR_FD ioctl number (linux/loop.h), stable across arches.
-LOOP_CLR_FD = 0x4C81
+# LOOP_CLR_FD ioctl number (linux/loop.h: 0x4C01, stable across
+# arches). S17-round3: this was 0x4C81 — every CLR failed EINVAL
+# and only mocked tests covered it; the live retire test pins
+# the true constant against the kernel.
+LOOP_CLR_FD = 0x4C01
+# LOOP_CTL_GET_FREE (loop-control) and LOOP_CONFIGURE ioctl numbers
+# (linux/loop.h), stable across arches. Used by the attach-loop
+# create helper (S15); verified live against the kernel.
+LOOP_CTL_GET_FREE = 0x4C82
+LOOP_CONFIGURE = 0x4C0A
+# MS_RELATIME mount flag (linux/mount.h: 1<<21); the mount-fs
+# helper passes it explicitly like mount(8) defaults.
+MS_RELATIME = 1 << 21
+# Overlay extra mount options allowed through mount-fs (S15):
+# plain key[=value] items; anything else is refused rather
+# than passed to the kernel data string.
+_OVERLAY_EXTRA_RE = re.compile(r"[A-Za-z0-9_=,.-]+")
+# LOOP_GET_STATUS64 ioctl number (linux/loop.h), stable across
+# arches, plus the loop_info64 size. Only lo_device/lo_inode (the
+# first two u64) are read: the kernel-held backing identity.
+LOOP_GET_STATUS64 = 0x4C05
+LOOP_INFO64_SIZE = 232
 
 ALLOWED_ROOTS = ("/tmp", "/var/tmp", "/dev/shm")
 
@@ -92,6 +115,16 @@ CELLS = [
 
 class AdmissionError(Exception):
     pass
+
+
+class LoopIdUnavailable(AdmissionError):
+    """LOOP_GET_STATUS64 unreadable: unknown, never detached.
+
+    S18/S23: a subclass of AdmissionError, so existing handlers
+    keep their refuse/retain behavior, while identity checks catch
+    it specifically to fall back to the (sound-for-stable-states)
+    sysfs pathname verification.
+    """
 
 
 class ProcAbsent(AdmissionError):
@@ -552,6 +585,19 @@ class RootAuthority:
     """A held run-root directory plus its recorded identity."""
 
     def __init__(self, path):
+        # S15-round3: refuse to bind under a parent anyone
+        # untrusted can rename in (best-effort stat of the
+        # parent spelling; the (dev,ino) authority below is the
+        # binding, this gate just declines hostile soil).
+        parent = os.path.dirname(path) or "."
+        try:
+            pst = os.stat(parent)
+        except OSError as exc:
+            raise RootAuthorityError(
+                f"run-root parent not statable: {parent}: {exc}")
+        refusal = _run_root_parent_refusal(pst, parent)
+        if refusal is not None:
+            raise RootAuthorityError(refusal)
         try:
             fd = os.open(
                 path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -897,6 +943,85 @@ def guard_verify():
         _ROOT_GUARD.verify()
 
 
+def _trusted_parent_owners():
+    """UIDs trusted to own a shared run-root/manifest parent. (S76)
+
+    Us plus root, plus — inside a sudo helper — the invoking
+    controller (SUDO_UID): a controller-admitted parent stays
+    admissible when the privileged helper re-binds the same
+    directory, instead of turning foreign-owned at the UID
+    transition and refusing every privileged operation for an
+    already admitted root. The controller is the authorized
+    operator for this invocation (it named this run-root), and
+    the (dev,ino) verify brackets still detect mid-run swaps;
+    only genuinely foreign owners refuse. SUDO_UID honors only
+    a well-formed numeric UID; outside sudo it is absent and
+    the set is unchanged. Honoring it for a non-root euid is
+    harmless: unprivileged callers fail the privileged effects
+    themselves at the kernel boundary.
+    """
+    owners = {os.geteuid(), 0}
+    sudo_uid = os.environ.get("SUDO_UID", "")
+    if sudo_uid.isdigit():
+        owners.add(int(sudo_uid))
+    return owners
+
+
+def _manifest_parent_refusal(pst, parent, label="manifest parent"):
+    """Refusal reason for a manifest parent stat, or None when accepted.
+
+    S25-round3: a sticky parent's foreign owner bypasses the sticky
+    bit (directory owners may rename anyone's entries), and a
+    group-writable parent's foreign owner renames directly — either
+    can substitute the temp file after the identity proof and before
+    the publish rename. Whenever the parent grants rename rights
+    beyond its owner (group or world write bits), the owner must be
+    trusted: us, root, or the sudo-invoking controller (S76).
+    Group members stay trusted by the S25 doctrine, and unshared
+    parents need no owner check (only the owner and root can mutate
+    them at all).
+
+    S25-round4: the owner check no longer depends on the write
+    bits. A foreign-owned 0755/01755 parent is equally unsafe
+    for a privileged caller — root (or DAC override) creates
+    the temp file, and the parent owner renames over it after
+    the identity proof, before the rename — so every parent
+    needs a trusted owner. For unprivileged callers this only
+    moves the refusal earlier (creation would fail later
+    anyway); for privileged callers it closes the hole.
+    """
+    if not stat.S_ISDIR(pst.st_mode):
+        return (f"{label} not a directory: "
+                f"{parent[:80]!r}")
+    if pst.st_uid not in _trusted_parent_owners():
+        return (f"{label} has a foreign owner: "
+                f"{parent[:80]!r} (owner {pst.st_uid}); "
+                f"use a private directory")
+    if ((pst.st_mode & stat.S_IWOTH)
+            and not (pst.st_mode & stat.S_ISVTX)):
+        return (f"{label} is shared and unprotected: "
+                f"{parent[:80]!r} (mode {oct(pst.st_mode & 0o7777)}); "
+                f"use a private directory")
+    return None
+
+
+def _run_root_parent_refusal(pst, parent):
+    """Refusal reason for a run-root parent stat, or None when accepted.
+
+    S15-round3: the run-root bind requires a contained parent —
+    the same doctrine as manifest parents. A directory anyone
+    untrusted can rename in lets an attacker swap the run-root
+    pathname between the guard's verify brackets; the (dev,ino)
+    authority still detects the swap, but binding under such a
+    parent is refused outright instead of merely detected.
+    Sticky+trusted-owner shared parents (/tmp-style) stay
+    accepted: strict owner-only parents would forbid the
+    disposable roots themselves.
+    """
+    return _manifest_parent_refusal(pst, parent,
+                                    label="run-root parent")
+
+
 def save_manifest(manifest, path):
     """Atomically replace the manifest (tmp write, fsync, rename).
 
@@ -919,6 +1044,15 @@ def save_manifest(manifest, path):
     race in every parent: the temp identity is proven (fstat at
     write vs lstat at publish) before the rename, and cleanup
     unlinks only the proven temp.
+
+    S25-round3: shared parents (group or world writable) additionally
+    require a trusted owner — us or root. A sticky directory's
+    foreign owner bypasses the sticky bit and could substitute the
+    temp after the identity proof, before the rename; such parents
+    refuse at the gate (see ``_manifest_parent_refusal``).
+    S25-round4: every parent needs a trusted owner, independently
+    of the write bits — a foreign-owned unshared parent is unsafe
+    for privileged callers (see ``_manifest_parent_refusal``).
     """
     parent = os.path.dirname(os.path.abspath(path)) or "."
     base = os.path.basename(os.path.abspath(path))
@@ -936,15 +1070,9 @@ def save_manifest(manifest, path):
         except OSError as exc:
             raise AdmissionError(
                 f"manifest parent not statable: {parent[:80]!r}: {exc}")
-        if not stat.S_ISDIR(pst.st_mode):
-            raise AdmissionError(
-                f"manifest parent not a directory: {parent[:80]!r}")
-        if ((pst.st_mode & stat.S_IWOTH)
-                and not (pst.st_mode & stat.S_ISVTX)):
-            raise AdmissionError(
-                f"manifest parent is shared and unprotected: "
-                f"{parent[:80]!r} (mode {oct(pst.st_mode & 0o7777)}); "
-                f"use a private directory")
+        refusal = _manifest_parent_refusal(pst, parent)
+        if refusal is not None:
+            raise AdmissionError(refusal)
         tmp = f".tt04-manifest-{secrets.token_hex(8)}"
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -1001,7 +1129,8 @@ def _persist_now(manifest):
         save_manifest(manifest, _PERSIST)
 
 
-def record_mount(manifest, run_root, role, target, expect_super=()):
+def record_mount(manifest, run_root, role, target, expect_super=(),
+                 expected=None):
     table = read_mount_table()
     rows = find_mounts(table, target)
     if not rows:
@@ -1010,6 +1139,15 @@ def record_mount(manifest, run_root, role, target, expect_super=()):
         raise AdmissionError(
             f"ambiguous stacked mount at {target}: refusing record")
     row = rows[0]
+    if expected is not None and not mount_fingerprint_matches(
+            row, expected):
+        # S62: a sole foreign replacement after a successful
+        # create must not be adopted — the row has to match the
+        # retained acquisition identity (source/type/super).
+        raise AdmissionError(
+            f"mount at {target} does not match expected "
+            f"acquisition ({row['fstype']},{row['source']}); "
+            f"refusing record")
     if len(manifest["mounts"]) >= MAX_MOUNTS:
         raise AdmissionError("mount cap exceeded")
     manifest["mounts"].append({
@@ -1055,6 +1193,36 @@ def drop_pending_proc(manifest, role, pid):
     _persist_now(manifest)
 
 
+def refresh_pending_proc(manifest, role, pid, starttime, detail):
+    """Replace a pending-proc record in memory; persist once. (S21-round4)
+
+    A drop followed by a record persists twice, and a crash (or
+    a failed second save) between them leaves a live process
+    absent from the durable pending set. Refresh removes the
+    matching record and appends its replacement in memory, then
+    persists a single atomic manifest — the durable set holds
+    the old or the new record, never neither. A None starttime
+    preserves the prior record's (the process was never
+    re-observed); a retry by a stale identity fails closed on
+    starttime mismatch.
+    """
+    old_start = None
+    kept = []
+    for entry in manifest.get("pending_procs", []):
+        if entry.get("role") == role and entry.get("pid") == pid:
+            old_start = entry.get("starttime")
+            continue
+        kept.append(entry)
+    manifest["pending_procs"] = kept
+    manifest["pending_procs"].append({
+        "role": role, "pid": pid,
+        "starttime": (starttime if starttime is not None
+                      else old_start),
+        "detail": detail[:256],
+    })
+    _persist_now(manifest)
+
+
 def record_pending_acquisition(manifest, entry):
     """Persist an uncertain kernel acquisition. (S16/S23)
 
@@ -1070,6 +1238,23 @@ def drop_pending_acquisition(manifest, kind, key):
     manifest["pending_acquisitions"] = [
         entry for entry in manifest.get("pending_acquisitions", [])
         if not (entry.get("kind") == kind and entry.get("key") == key)]
+    _persist_now(manifest)
+
+
+def refresh_pending_acquisition(manifest, kind, key, entry):
+    """Replace a pending record in memory; persist once. (S62-round4)
+
+    A drop followed by a record persists twice, and a crash (or
+    a failed second save) between them leaves the live object
+    absent from the durable pending set. Refresh removes the
+    matching record and appends its replacement in memory, then
+    persists a single atomic manifest — the durable set holds
+    the old or the new record, never neither.
+    """
+    manifest["pending_acquisitions"] = [
+        old for old in manifest.get("pending_acquisitions", [])
+        if not (old.get("kind") == kind and old.get("key") == key)]
+    manifest["pending_acquisitions"].append(entry)
     _persist_now(manifest)
 
 
@@ -1146,6 +1331,14 @@ def provision_btrfs(manifest, run_root):
         if proc.returncode != 0:
             skip(f"btrfs snapshot refused: {tail(proc.stderr)}")
             return
+        # S13: externally created subvolumes inherit ambient modes;
+        # narrow them (never widen) so the deletion gate admits the
+        # tree this cell just built.
+        for sub in ("svA", "svB", "snapA"):
+            sub_path = auth.abspath(f"btrfs/{sub}")
+            mode = os.stat(sub_path).st_mode
+            if mode & 0o022:
+                os.chmod(sub_path, mode & ~0o022)
         manifest["evidence"]["btrfs_subvolumes"] = ["svA", "svB", "snapA"]
         record_file(manifest, "btrfs-svA-f", auth.abspath("btrfs/svA/f"))
         record_file(manifest, "btrfs-svB-f", auth.abspath("btrfs/svB/f"))
@@ -1172,27 +1365,32 @@ def strip_deleted_suffix(path):
 def verify_loop_backing(loop, image, image_st):
     """True when the kernel's live loop association is our image.
 
-    S18: compares the (dev, ino) of the backing path the kernel
-    reports for `loop` against the fstat of the held image
-    descriptor — never a bare pathname stat taken after the
-    attach reply. Any mismatch, missing association, or
-    unreadable backing refuses.
+    S18-round3: kernel backing identity first —
+    read_loop_backing_id compares the loop's held (dev, ino)
+    against the fstat of the held image descriptor with no
+    pathname resolution, so a deleted-B/restored-A swap cannot
+    spoof it. When the device node is unreadable the sysfs
+    pathname fallback governs (sound for stable states; deleted
+    backings refuse as unprovable). Any mismatch, missing
+    association, or unreadable backing refuses.
     """
     if not loop or not str(loop).startswith("/dev/loop"):
         return False
     try:
+        ident = read_loop_backing_id(loop)
+    except LoopIdUnavailable:
+        ident = "unavailable"
+    if ident is None:
+        return False
+    if ident != "unavailable":
+        return ((ident[0], ident[1])
+                == (image_st.st_dev, image_st.st_ino))
+    try:
         live = read_loop_backing(loop)
     except AdmissionError:
         return False
-    if live is None:
-        return False
-    try:
-        st = os.stat(strip_deleted_suffix(live))
-    except OSError:
-        return False
-    return ((st.st_dev, st.st_ino) == (image_st.st_dev, image_st.st_ino)
-            and os.path.normpath(strip_deleted_suffix(live))
-            == os.path.normpath(image))
+    return sysfs_backing_matches(live, image, image_st.st_dev,
+                                 image_st.st_ino)
 
 
 def adopt_loop(manifest, image, loop, image_st):
@@ -1207,12 +1405,28 @@ def adopt_loop(manifest, image, loop, image_st):
 
 
 def scan_loop_by_backing(dev, ino):
-    """Every /dev/loopN whose live backing is (dev, ino). (S23)
+    """Every /dev/loopN whose live backing is (dev, ino), plus whether
+    the scan assessed every candidate.
 
-    Deleted backings ("path (deleted)") never match a live
-    image: their pathnames no longer stat.
+    S23-round3: returns (matches, incomplete). Kernel backing
+    identity decides whenever the device node is readable — a
+    deleted backing still identifies its true inode, so an
+    attached-but-unlinked image is found, not skipped. A candidate
+    the scan cannot assess (unreadable kernel status plus an
+    unstatable pathname — ENOENT after an unlink, EACCES) marks
+    the scan incomplete instead of silently skipping: callers
+    retain custody on incomplete scans, and only a complete empty
+    scan proves absence.
+
+    S23-round4: a missing device node is unassessable, never
+    detached — removing /dev/loopN leaves the kernel loop (and
+    its sysfs backing) live, so a sysfs-live candidate whose
+    node cannot be opened marks the scan incomplete (or adopts
+    through the pathname fallback when the backing stats to
+    the query identity).
     """
     matches = []
+    incomplete = False
     try:
         names = os.listdir("/sys/block")
     except OSError as exc:
@@ -1228,12 +1442,28 @@ def scan_loop_by_backing(dev, ino):
         if live is None:
             continue
         try:
-            st = os.stat(strip_deleted_suffix(live))
+            ident = read_loop_backing_id(loop)
+        except LoopIdUnavailable:
+            ident = "unavailable"
+        if ident is None:
+            continue
+        if ident != "unavailable":
+            if (ident[0], ident[1]) == (dev, ino):
+                matches.append(loop)
+            continue
+        if live.endswith(" (deleted)"):
+            # Unlinked backing, unassessable without kernel status:
+            # the loop may still hold our image.
+            incomplete = True
+            continue
+        try:
+            st = os.stat(live)
         except OSError:
+            incomplete = True
             continue
         if (st.st_dev, st.st_ino) == (dev, ino):
             matches.append(loop)
-    return matches
+    return (matches, incomplete)
 
 
 def reconcile_loop_attach(manifest, image, dev, ino):
@@ -1242,10 +1472,17 @@ def reconcile_loop_attach(manifest, image, dev, ino):
     Returns the adopted loop name, or None when no effect took
     place (pending dropped) or the outcome stays uncertain
     (pending retained). (S23)
+
+    S23-round3: only a COMPLETE scan adopts or clears. An
+    incomplete scan retains pending custody even with matches in
+    hand — another loop may hold the same image, and a dropped
+    record would strand a live attachment with no recovery path.
     """
     try:
-        matches = scan_loop_by_backing(dev, ino)
+        matches, incomplete = scan_loop_by_backing(dev, ino)
     except AdmissionError:
+        return None
+    if incomplete:
         return None
     if len(matches) == 1:
         manifest["evidence"]["ext4_loop"] = matches[0]
@@ -1263,6 +1500,13 @@ def reconcile_loop_attach(manifest, image, dev, ino):
 
 
 def mount_fingerprint_matches(row, fingerprint):
+    # S15-round3: the mount-fs helper reports the mount ID it
+    # post-verified; when the caller carries it, the row must
+    # be that mount — not merely the same source/type at the
+    # target. (Uncertain paths omit it: no report exists.)
+    if (fingerprint.get("mnt_id") is not None
+            and row["mnt_id"] != fingerprint["mnt_id"]):
+        return False
     if row["fstype"] != fingerprint.get("fstype"):
         return False
     if row["source"] != fingerprint.get("source"):
@@ -1273,14 +1517,192 @@ def mount_fingerprint_matches(row, fingerprint):
     return True
 
 
-def reconcile_mount_effect(manifest, run_root, role, target, fingerprint):
+def _loop_still_ours(loop, backing):
+    """True when `loop` is still bound to the recorded image. (S15)
+
+    Guards uncertain-path ext4 adoption: the mount row names
+    the loop device, and only a loop still bound to our image
+    proves the occupant is ours. Anything unreadable or
+    rebound refuses.
+    """
+    try:
+        live = read_loop_backing(loop)
+    except AdmissionError:
+        return False
+    if live is None:
+        return False
+    return loop_backing_verified(loop, live, backing)
+
+
+def _mount_matches_loop(target, loop):
+    """True when the live filesystem at `target` sits on `loop`. (S71)
+
+    Connects the mount row to the retained loop source: the
+    mounted filesystem's device ID must equal the loop node's
+    own device ID. A foreign loop occupying our target while
+    our loop stays correctly bound (loop A ours, loop B
+    mounted) mismatches and retains uncertainty — shape plus a
+    separately bound loop never adopts. Live kernel evidence
+    at decision time (not the table snapshot's major:minor,
+    which the parser does not retain); anything unreadable,
+    unstatable, or mismatched refuses. A concurrent target
+    swap can only mismatch (uncertainty) or land on the same
+    device (still ours): fail-closed either way.
+    """
+    try:
+        mounted = os.stat(target).st_dev
+    except OSError:
+        return False
+    try:
+        node = os.stat(loop, follow_symlinks=False)
+    except OSError:
+        return False
+    if not stat.S_ISBLK(node.st_mode):
+        return False
+    return mounted == node.st_rdev
+
+
+# S81-round4: single spelling of the overlay mount canary,
+# shared by the controller (plant + uncertain-path adoption)
+# and the helper (post-mount binding). A skew between the two
+# sides would fail every overlay mount.
+MOUNT_CANARY_NAME = ".tt04-mount-canary"
+
+# S17-round4: advisory inter-helper lock for mount-table
+# mutations. Every mount-fs create and every retire-mount
+# detach holds LOCK_EX on this run-root file across its
+# validate→effect→prove section, so two concurrent helpers
+# can never stack at, move, or detach the same mountpoint
+# under each other.
+MOUNT_EXCLOCK_NAME = ".tt04-mount-lock"
+
+
+def _mount_exclock_acquire(run_root):
+    """Take the run-root mount-mutation lock. (S17-round4)
+
+    Serializes this tool's own mount-table mutations: without
+    it, a concurrent helper can stack a foreign mount at our
+    target (or move ours away) after our validation, and our
+    umount detaches the foreign top while the post-effect
+    table read still shows ours as gone — a foreign detach
+    misreported as our discharge. The lock is advisory among
+    our own helpers only (a privileged third party racing
+    mount(2)/umount(2) directly is out of scope); flock
+    releases on crash, and sections are one helper call.
+    Raises _HelperFail when the lock cannot be taken.
+    """
+    path = os.path.join(run_root, MOUNT_EXCLOCK_NAME)
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise _HelperFail(f"mount lock unavailable: {exc}")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise _HelperFail(f"mount lock unavailable: {exc}")
+    return fd
+
+
+def _mount_exclock_release(fd):
+    """Release a lock from _mount_exclock_acquire; never raises."""
+    try:
+        os.close(fd)  # closing releases the flock
+    except OSError:
+        pass
+
+
+def _canary_matches(target, name, content):
+    """True when the pre-mount canary shows through `target`. (S15)
+
+    Guards uncertain-path overlay adoption: super options no
+    longer spell the layer paths (fd-bound layers record as
+    /dev/fd/N), so a random canary written to upper before the
+    effect proves the live mount binds our upper. The binding
+    is the unguessable content, so a plain O_NOFOLLOW read
+    suffices — symlinks, FIFOs, oversized or wrong content all
+    refuse.
+    """
+    try:
+        fd = os.open(os.path.join(target, name),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                     | os.O_CLOEXEC)
+    except OSError:
+        return False
+    try:
+        chunks = []
+        total = 0
+        while True:
+            try:
+                chunk = os.read(fd, 1024)
+            except OSError:
+                return False
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > 1024:
+                return False
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        want = content.encode("ascii")
+    except (UnicodeError, AttributeError):
+        return False
+    return b"".join(chunks) == want
+
+
+def reconcile_mount_effect(manifest, run_root, role, target, fingerprint,
+                           loop=None, loop_backing=None,
+                           canary=None, failure=None):
     """Adopt, clear, or retain a mount of uncertain outcome. (S23)
 
     Returns the adopted row, or None when the mount is absent
     (pending dropped) or the outcome stays uncertain (pending
     retained: stacked or foreign occupants are never adopted and
     never removed here).
+
+    S15-round3: uncertain paths carry no helper report, so
+    adoption additionally requires the ext4 loop to still bind
+    our image (`loop`/`loop_backing`) or the overlay pre-mount
+    canary to show through (`canary` as (name, content)). A
+    /dev/fd/N row source matches a recorded loop-device source
+    (the kernel echoes fd-bound operands literally); the loop
+    binding check below is what makes that adoption sound.
+
+    S74: `failure` is the mount_fs_via_helper report. A moved
+    or otherwise post-effect-uncertain outcome keeps pending
+    custody with the reported recovery identity (mount ID,
+    observed mountpoint) — pending is never discharged from
+    target absence when the effect may have fired. Only a
+    refused-class failure (no effect possible) reaches the
+    adopt-or-drop logic below.
     """
+    if failure is not None:
+        kind, mnt_id, observed = _classify_mount_failure(failure)
+        if kind in ("moved", "uncertain"):
+            kept = dict(fingerprint)
+            if mnt_id is not None:
+                kept["mnt_id"] = mnt_id
+            if kind == "moved":
+                where = (f"observed {observed} " if observed
+                         is not None else "location unknown ")
+                detail = (f"target moved during mount "
+                          f"({where}mnt={mnt_id}); custody kept "
+                          f"pending; manual retirement required")
+            else:
+                detail = ("mount outcome uncertain after "
+                          "effect; custody kept pending")
+            _refresh_mount_custody(manifest, role, target, kept,
+                                   detail,
+                                   observed_target=observed)
+            return None
     try:
         table = read_mount_table()
     except AdmissionError:
@@ -1290,18 +1712,91 @@ def reconcile_mount_effect(manifest, run_root, role, target, fingerprint):
         drop_pending_acquisition(manifest, "mount", target)
         _persist_now(manifest)
         return None
-    if len(rows) == 1 and mount_fingerprint_matches(rows[0], fingerprint):
-        record_mount(manifest, run_root, role, target,
-                     fingerprint.get("expect_super", []))
-        drop_pending_acquisition(manifest, "mount", target)
-        _persist_now(manifest)
-        return rows[0]
-    return None
+    if len(rows) != 1:
+        return None
+    if mount_fingerprint_matches(rows[0], fingerprint):
+        adopt_fp = fingerprint
+        fd_inferred = False
+    elif (loop is not None and loop_backing is not None
+            and _fd_spelling_loop_shape(rows[0], fingerprint)):
+        # The kernel echoes fd-bound operands literally: adopt
+        # under the OBSERVED spelling (the loop binding and
+        # mount correspondence gates below are what make this
+        # sound).
+        adopt_fp = dict(fingerprint, source=rows[0]["source"])
+        fd_inferred = True
+    else:
+        return None
+    if loop is not None and not _loop_still_ours(
+            loop, loop_backing):
+        return None
+    if fd_inferred and not _mount_matches_loop(target, loop):
+        # S71: the fd spelling names no device — the mounted
+        # filesystem itself must sit on our recorded loop, or a
+        # foreign loop occupying our target adopts while ours
+        # stays correctly bound elsewhere.
+        return None
+    if canary is not None and not _canary_matches(
+            target, canary[0], canary[1]):
+        return None
+    record_mount(manifest, run_root, role, target,
+                 adopt_fp.get("expect_super", []),
+                 expected=adopt_fp)
+    drop_pending_acquisition(manifest, "mount", target)
+    _persist_now(manifest)
+    return rows[0]
+
+
+def _fd_spelling_loop_shape(row, fingerprint):
+    """Shape-only: fd-spelling row for a recorded loop mount. (S15)
+
+    True when the row's fstype matches, the recorded source is
+    a loop device, and the row source is an fd spelling. Never
+    sufficient alone — callers must also prove the loop still
+    binds the recorded image (see _loop_still_ours).
+    """
+    return (row["fstype"] == fingerprint.get("fstype")
+            and str(fingerprint.get("source", "")).startswith(
+                "/dev/loop")
+            and str(row.get("source", "")).startswith("/dev/fd/"))
 
 
 def mount_pending(manifest, target):
     return any(e.get("kind") == "mount" and e.get("key") == target
                for e in manifest.get("pending_acquisitions", []))
+
+
+def _refresh_mount_custody(manifest, role, target, fingerprint,
+                           detail, observed_target=None):
+    """Refresh a mount pending record with full evidence. (S62-round4)
+
+    The replacement carries the fingerprint's mount ID (known
+    from the helper report at every rollback site) plus the
+    prior record's binding evidence (overlay canary, ext4 loop
+    backing) — recovery keeps every identity the acquisition
+    proved. Single atomic persist via refresh_pending_acquisition.
+    S74: `observed_target` records a moved mount's observed
+    mountpoint for ID-keyed recovery.
+    """
+    old = {}
+    for entry in manifest.get("pending_acquisitions", []):
+        if entry.get("kind") == "mount" and entry.get("key") == target:
+            old = entry
+            break
+    entry = {"kind": "mount", "key": target, "role": role,
+             "target": target,
+             "fstype": fingerprint.get("fstype"),
+             "source": fingerprint.get("source"),
+             "expect_super": fingerprint.get("expect_super", [])}
+    if fingerprint.get("mnt_id") is not None:
+        entry["mnt_id"] = fingerprint["mnt_id"]
+    for key in ("canary", "loop_backing"):
+        if key in old:
+            entry[key] = old[key]
+    if observed_target is not None:
+        entry["observed_target"] = observed_target
+    entry["detail"] = detail[:256]
+    refresh_pending_acquisition(manifest, "mount", target, entry)
 
 
 def rollback_owned_mount(manifest, run_root, role, target, fingerprint):
@@ -1315,13 +1810,12 @@ def rollback_owned_mount(manifest, run_root, role, target, fingerprint):
     try:
         table = read_mount_table()
     except AdmissionError as exc:
-        record_pending_acquisition(manifest, {
-            "kind": "mount", "key": target, "role": role,
-            "target": target, "fstype": fingerprint.get("fstype"),
-            "source": fingerprint.get("source"),
-            "expect_super": fingerprint.get("expect_super", []),
-            "detail": f"rollback table unreadable: {exc}",
-        })
+        # S62: replace semantics — pending custody is still held
+        # (admission-first ordering), so refresh the record in
+        # place instead of duplicating it.
+        _refresh_mount_custody(
+            manifest, role, target, fingerprint,
+            f"rollback table unreadable: {exc}")
         return "rollback table unreadable; custody kept pending"
     if not find_mounts(table, target):
         drop_pending_acquisition(manifest, "mount", target)
@@ -1332,13 +1826,10 @@ def rollback_owned_mount(manifest, run_root, role, target, fingerprint):
         drop_pending_acquisition(manifest, "mount", target)
         _persist_now(manifest)
         return "owned mount rolled back"
-    record_pending_acquisition(manifest, {
-        "kind": "mount", "key": target, "role": role,
-        "target": target, "fstype": fingerprint.get("fstype"),
-        "source": fingerprint.get("source"),
-        "expect_super": fingerprint.get("expect_super", []),
-        "detail": failure[:256],
-    })
+    # S62: replace, not duplicate — the pre-admission pending
+    # record is still held; refresh it with the refusal detail.
+    _refresh_mount_custody(manifest, role, target, fingerprint,
+                           failure)
     return f"rollback refused ({failure}); custody kept pending"
 
 
@@ -1375,9 +1866,15 @@ def provision_ext4(manifest, run_root):
         except OSError as exc:
             cell["reason"] = f"ext4 image not truncatable: {exc}"
             return
-        rc, _, err = run_sudo(["mkfs.ext4", "-q", "-F", image])
-        if rc != 0:
-            cell["reason"] = f"mkfs.ext4 refused: {tail(err)}"
+        # S15-round3: the format runs inside the privileged
+        # helper, which re-verifies the image identity itself and
+        # formats via /dev/fd/N — the caller's pathname never
+        # reaches a privileged resolver.
+        img_st = os.fstat(img_fd)
+        failure = make_ext4_via_helper(
+            run_root, auth, image, img_st.st_dev, img_st.st_ino)
+        if failure is not None:
+            cell["reason"] = failure
             return
         # S18: the image descriptor stays open across attachment;
         # the recorded backing identity is this open file, and the
@@ -1388,13 +1885,15 @@ def provision_ext4(manifest, run_root):
             "image": image, "dev": image_st.st_dev,
             "ino": image_st.st_ino,
         })
-        rc, out, err = run_sudo(
-            ["losetup", "--find", "--show", image])
-        loop = None
-        if rc == 0 and out.strip():
-            candidate = out.strip().split()[0]
-            if verify_loop_backing(candidate, image, image_st):
-                loop = candidate
+        # S15-round3: the attach runs inside the privileged
+        # helper (native LOOP_CONFIGURE on a verified fd); the
+        # caller still re-verifies the live association before
+        # adoption.
+        loop, failure = attach_loop_via_helper(
+            run_root, auth, image, image_st.st_dev,
+            image_st.st_ino)
+        if failure is None:
+            if verify_loop_backing(loop, image, image_st):
                 adopt_loop(manifest, image, loop, image_st)
             else:
                 cell["reason"] = (
@@ -1418,56 +1917,76 @@ def provision_ext4(manifest, run_root):
                         "identity matches several loops; "
                         "acquisition kept pending")
                 else:
-                    cell["reason"] = f"losetup refused: {tail(err)}"
+                    cell["reason"] = failure
                 return
         backing = manifest["evidence"]["ext4_loop_backing"]
         mnt = auth.mkdir("ext4/mnt", exist_ok=True)
+        # S15-round3: creation-time observations for the mount-fs
+        # helper, which re-verifies each identity itself and
+        # mounts on /dev/fd/N — no caller pathname reaches a
+        # privileged resolver. Ownership is folded into the
+        # helper (fchown on a mount-correspondent fd).
+        mnt_st = os.stat(mnt)
         record_pending_acquisition(manifest, {
             "kind": "mount", "key": mnt, "role": "ext4-fs01",
             "target": mnt, "fstype": "ext4", "source": loop,
             "expect_super": [],
+            # S15-round3: proves an fd-spelling occupant is
+            # ours when the helper report was lost (timeout).
+            "loop_backing": dict(backing),
         })
-        rc, _, err = run_sudo(["mount", "-t", "ext4", loop, mnt])
-        if rc == 0:
-            drop_pending_acquisition(manifest, "mount", mnt)
+        reported, failure = mount_fs_via_helper(
+            run_root, auth, mnt, mnt_st.st_dev, mnt_st.st_ino,
+            "ext4", loop=loop,
+            backing=(backing["dev"], backing["ino"]),
+            own=(os.geteuid(), os.getegid()))
+        if failure is None:
+            # S62: admission commits before pending custody is
+            # dropped, and the sole row must match the retained
+            # acquisition identity — the helper's reported mount
+            # ID and super spelling join the fingerprint, so a
+            # foreign replacement after a successful create is
+            # refused, never adopted.
+            expected = {"fstype": "ext4",
+                        "source": reported[1],
+                        "mnt_id": reported[0],
+                        "expect_super": [reported[2]]}
             try:
-                record_mount(manifest, run_root, "ext4-fs01", mnt)
+                record_mount(manifest, run_root, "ext4-fs01", mnt,
+                             expect_super=[reported[2]],
+                             expected=expected)
             except AdmissionError as exc:
                 # S16: admission refused (stacked/foreign) — roll
                 # back only what is provably ours; the helper
                 # refuses anything else and custody stays pending.
                 note = rollback_owned_mount(
-                    manifest, run_root, "ext4-fs01", mnt, {
-                        "fstype": "ext4", "source": loop,
-                        "expect_super": [],
-                    })
+                    manifest, run_root, "ext4-fs01", mnt,
+                    expected)
                 detach_verified_loop(manifest, run_root, loop, backing)
                 cell["reason"] = (
                     f"ext4 mount not admitted ({exc}); {note}")
                 return
+            drop_pending_acquisition(manifest, "mount", mnt)
         else:
             adopted = reconcile_mount_effect(
                 manifest, run_root, "ext4-fs01", mnt, {
                     "fstype": "ext4", "source": loop,
                     "expect_super": [],
-                })
+                }, loop=loop, loop_backing=backing,
+                failure=failure)
             if adopted is None:
                 if mount_pending(manifest, mnt):
                     detach_verified_loop(
                         manifest, run_root, loop, backing)
                     cell["reason"] = (
-                        "ext4 mount outcome uncertain; custody kept "
+                        "ext4 mount outcome uncertain "
+                        f"({failure[:160]}); custody kept "
                         "pending")
                 else:
                     detach_verified_loop(
                         manifest, run_root, loop, backing)
-                    cell["reason"] = f"ext4 mount refused: {tail(err)}"
+                    cell["reason"] = failure
                 return
-        rc, _, err = run_sudo(
-            ["chown", f"{os.geteuid()}:{os.getegid()}", mnt])
-        if rc != 0:
-            cell["reason"] = f"ext4 chown refused: {tail(err)}"
-            return
         auth.write_bytes("ext4/mnt/a.bin", pattern_bytes(21, 8192))
         auth.link("ext4/mnt/a.bin", "ext4/mnt/alias.bin")
         auth.write_bytes("ext4/mnt/b.bin", pattern_bytes(22, 8192))
@@ -1515,55 +2034,89 @@ def mount_overlay(manifest, run_root, role, opts, cell_name, lower_base=None):
             # run-root authority); plain writes, identity-bound at
             # the aux record.
             aux_lower = Path(lower_parent) / "lower"
-            aux_lower.mkdir(parents=True, exist_ok=True)
+            # S13: the aux tree is deletion-gated (exclusive), so
+            # its mode is pinned at creation.
+            os.makedirs(aux_lower, mode=0o755, exist_ok=True)
             (aux_lower / "shared.txt").write_bytes(b"lower-original\n")
             (aux_lower / "lower-only.txt").write_bytes(b"lower-only\n")
         lower = os.path.join(lower_parent, "lower")
         upper = os.path.join(base, "upper")
         work = os.path.join(base, "work")
         merged = os.path.join(base, "merged")
-        optline = (f"lowerdir={lower},upperdir={upper},"
-                   f"workdir={work}{opts}")
-        fingerprint = {
-            "fstype": "overlay", "source": "overlay",
-            "expect_super": [f"lowerdir={lower}",
-                             f"upperdir={upper}",
-                             f"workdir={work}"],
-        }
+        # S15-round3: creation-time observations for the mount-fs
+        # helper, which re-verifies each identity itself and
+        # mounts on /dev/fd/N — no caller pathname reaches a
+        # privileged resolver. The pre-mount canary binds
+        # uncertain-path adoption to our upper.
+        canary = secrets.token_hex(16)
+        auth.write_bytes(f"{role}/upper/{MOUNT_CANARY_NAME}",
+                         canary.encode("ascii"))
+        layer_ids = {}
+        for name, path in (("lower", lower), ("upper", upper),
+                           ("work", work)):
+            st = os.stat(path)
+            layer_ids[name] = (path, st.st_dev, st.st_ino)
+        merged_st = os.stat(merged)
+        aux = None
+        if lower_base is not None:
+            ast = os.stat(lower_base)
+            aux = (lower_base, ast.st_dev, ast.st_ino)
         record_pending_acquisition(manifest, {
             "kind": "mount", "key": merged, "role": role,
-            "target": merged, **fingerprint,
+            "target": merged, "fstype": "overlay",
+            "source": "overlay", "expect_super": [],
+            "canary": canary,
         })
-        rc, _, err = run_sudo([
-            "mount", "-t", "overlay", "overlay",
-            "-o", optline, merged])
-        if rc == 0:
-            drop_pending_acquisition(manifest, "mount", merged)
+        reported, failure = mount_fs_via_helper(
+            run_root, auth, merged, merged_st.st_dev,
+            merged_st.st_ino, "overlay",
+            layers=[("lower", *layer_ids["lower"]),
+                    ("upper", *layer_ids["upper"]),
+                    ("work", *layer_ids["work"])],
+            extra_opts=opts, aux=aux, canary=canary)
+        if failure is None:
+            # S62: admission commits before pending custody is
+            # dropped, and the sole row must match the retained
+            # acquisition fingerprint — the helper's reported
+            # mount ID and super spelling join it, so a foreign
+            # replacement after a successful create is refused,
+            # never adopted.
+            expected = {"fstype": "overlay",
+                        "source": reported[1],
+                        "mnt_id": reported[0],
+                        "expect_super": [reported[2]]}
             try:
                 record_mount(manifest, run_root, role, merged,
-                             expect_super=fingerprint["expect_super"])
+                             expect_super=[reported[2]],
+                             expected=expected)
             except AdmissionError as exc:
                 # S16: roll back only the mount we can prove is
                 # ours; anything else stays pending, never unmounted.
                 note = rollback_owned_mount(
-                    manifest, run_root, role, merged, fingerprint)
+                    manifest, run_root, role, merged, expected)
                 cell.update(status="unsupported",
                             reason=f"overlay mount not admitted ({exc}); "
                                    f"{note}")
                 return False
+            drop_pending_acquisition(manifest, "mount", merged)
         else:
             adopted = reconcile_mount_effect(
-                manifest, run_root, role, merged, fingerprint)
+                manifest, run_root, role, merged, {
+                    "fstype": "overlay", "source": "overlay",
+                    "expect_super": [],
+                }, canary=(MOUNT_CANARY_NAME, canary),
+                failure=failure)
             if adopted is None:
                 if mount_pending(manifest, merged):
                     cell.update(status="unsupported", reason=(
-                        f"overlay mount outcome uncertain ({role}); "
+                        f"overlay mount outcome uncertain "
+                        f"({role}: {failure[:160]}); "
                         f"custody kept pending"))
                 else:
                     cell.update(status="unsupported", reason=(
                         f"overlay mount refused ({role}{opts or ''}): "
-                        f"{tail(err)}"))
-                    manifest["evidence"][f"{role}_refusal"] = tail(err)
+                        f"{failure}"))
+                    manifest["evidence"][f"{role}_refusal"] = failure
                 return False
         for entry in manifest["mounts"]:
             if entry["target"] == merged:
@@ -1718,13 +2271,16 @@ def child_pids(ppid):
 
 
 def pin_proc(pid):
-    """Hold a pidfd for `pid`, pinning it against reuse. (S22)
+    """Hold a pidfd for `pid`. (S22)
 
-    The returned fd must stay open from observation through the
-    signal: while it is held the kernel cannot recycle the pid,
-    so even a numeric kill (including the sudo path) cannot be
-    redirected at a reused process. Raises ProcAbsent when the
-    pid is provably gone, ProcUnknown when it cannot be pinned.
+    The returned fd addresses the task, not the number:
+    signals must go through pidfd_send_signal on this fd (see
+    signal_owned), never os.kill — the kernel MAY recycle the
+    numeric pid after exit+reap while the fd is held, and only
+    the descriptor-bound signal fails closed (ESRCH) instead
+    of redirecting at whoever reused the number. Raises
+    ProcAbsent when the pid is provably gone, ProcUnknown when
+    it cannot be pinned.
     """
     if not hasattr(os, "pidfd_open"):
         raise ProcUnknown(f"proc {pid} unpinnable: no pidfd_open")
@@ -1738,6 +2294,43 @@ def pin_proc(pid):
         if exc.errno in (errno.ESRCH, errno.ENOENT):
             raise ProcAbsent(f"proc {pid} absent")
         raise ProcUnknown(f"proc {pid} unpinnable: {exc}")
+
+
+# Linux pidfd_send_signal number (asm-generic, synced to x86,
+# x86-64, arm64 and riscv; the kernel guarantees these). Used
+# only when the libc wrapper is absent.
+_PIDFD_SEND_SIGNAL_NR = 424
+
+
+def _pidfd_send_signal(pin_fd, signum):
+    """Signal the task pinned by `pin_fd`; None ok else errno. (S22)
+
+    pidfd_send_signal addresses the pinned task, never the
+    numeric pid: exit+reap+reuse between observation and
+    signal yields ESRCH instead of a redirected signal.
+    Prefers the libc wrapper; falls back to the raw syscall
+    number when the wrapper is absent (glibc < 2.32).
+    """
+    libc = _libc_handle()
+    try:
+        send = libc.pidfd_send_signal
+    except AttributeError:
+        send = None
+    if send is not None:
+        send.argtypes = [ctypes.c_int, ctypes.c_int,
+                         ctypes.c_void_p, ctypes.c_uint]
+        send.restype = ctypes.c_int
+        if send(pin_fd, signum, None, 0) == 0:
+            return None
+        return ctypes.get_errno()
+    libc.syscall.argtypes = [ctypes.c_long, ctypes.c_long,
+                             ctypes.c_long, ctypes.c_long,
+                             ctypes.c_long]
+    libc.syscall.restype = ctypes.c_long
+    if libc.syscall(_PIDFD_SEND_SIGNAL_NR, pin_fd, signum,
+                    0, 0) == 0:
+        return None
+    return ctypes.get_errno()
 
 
 def stat_state_start(pid):
@@ -1851,7 +2444,8 @@ def readline_bounded(stream, timeout, max_bytes):
 
 
 def spawn_sleeper(helper, target_file, report, wrapper, manifest=None,
-                  role="sleeper-wrapper", ready_timeout=READY_TIMEOUT,
+                  role="sleeper-wrapper", leaf_role=None,
+                  ready_timeout=READY_TIMEOUT,
                   ready_max_bytes=READY_MAX_BYTES):
     """Start an owned mapping sleeper; returns (wrapper_pid, sleeper_pid).
 
@@ -1864,6 +2458,14 @@ def spawn_sleeper(helper, target_file, report, wrapper, manifest=None,
     the whole tree, checks the kill result, and — when the tree
     cannot be proven gone — persists the unresolved wrapper
     before raising.
+
+    S21-round3: the pending-to-admitted handoff is transactional.
+    The wrapper pending stays armed across the return, and the
+    leaf pending is armed here too (``leaf_role`` names it, and is
+    required whenever a manifest is given): the caller admits
+    both ends and only then drops both pendings. A record_proc
+    failure in between keeps both pendings, so no live process
+    loses custody.
     """
     target_file = os.path.realpath(target_file)
     guard_verify()
@@ -1881,7 +2483,6 @@ def spawn_sleeper(helper, target_file, report, wrapper, manifest=None,
         raise
     # The child holds its own copy; ours would leak one fd per spawn.
     log.close()
-    armed = False
     if manifest is not None:
         try:
             _, start = stat_state_start(child.pid)
@@ -1890,23 +2491,26 @@ def spawn_sleeper(helper, target_file, report, wrapper, manifest=None,
         record_pending_proc(
             manifest, role, child.pid, start,
             "sleeper wrapper armed before readiness")
-        armed = True
 
     def fail(message):
         # R21: kill the whole tree, not just the wrapper — a
         # half-spawned leaf would otherwise run on unrecorded.
-        # S21: the kill result is checked, never ignored.
+        # S21: the kill result is checked, never ignored; the
+        # armed record refreshes in place on failure (never a
+        # drop-then-record window) and drops only when the
+        # tree is proven gone. (S21-round4.)
         gone = kill_tree(role, child.pid)
         try:
             child.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             pass
         if manifest is not None:
-            drop_pending_proc(manifest, role, child.pid)
             if not gone:
-                record_pending_proc(
+                refresh_pending_proc(
                     manifest, role, child.pid, None,
                     f"sleeper tree not proven gone: {message}")
+            else:
+                drop_pending_proc(manifest, role, child.pid)
         raise AdmissionError(message)
 
     try:
@@ -1930,8 +2534,20 @@ def spawn_sleeper(helper, target_file, report, wrapper, manifest=None,
         # R21: ready but no stable leaf to record — guard the
         # sleeper by killing the tree before refusing.
         fail(f"sleeper for {target_file} has no stable leaf: {exc}")
-    if manifest is not None and armed:
-        drop_pending_proc(manifest, role, child.pid)
+    if manifest is not None:
+        # S21-round3: arm the leaf pending before returning; the
+        # wrapper pending (armed above) stays too. The caller drops
+        # both only after admitting both ends.
+        if leaf_role is None:
+            raise AdmissionError(
+                "spawn_sleeper with a manifest requires leaf_role")
+        try:
+            _, leaf_start = stat_state_start(sleeper)
+        except (ProcAbsent, ProcUnknown):
+            leaf_start = None
+        record_pending_proc(
+            manifest, leaf_role, sleeper, leaf_start,
+            "sleeper leaf armed before admission")
     guard_verify()
     return (child.pid, sleeper)
 
@@ -1977,16 +2593,24 @@ def provision_sleepers(manifest, run_root):
             helper, os.path.join(view, "data.txt"),
             auth.abspath("ns/mnt.report"),
             bind_view_wrapper(alt, view), manifest,
-            role="mnt-sleeper-wrapper")
+            role="mnt-sleeper-wrapper", leaf_role="mnt-sleeper")
         record_proc(manifest, "mnt-sleeper-wrapper", mnt_wrap)
         record_proc(manifest, "mnt-sleeper", mnt_sleep)
+        # S21-round3: transactional handoff — both pendings drop
+        # only after both ends admit; an admission failure above
+        # keeps both for cleanup retry.
+        drop_pending_proc(manifest, "mnt-sleeper-wrapper", mnt_wrap)
+        drop_pending_proc(manifest, "mnt-sleeper", mnt_sleep)
         time_wait_report(auth.abspath("ns/mnt.report"))
         pid_wrap, pid_sleep = spawn_sleeper(
             helper, mapped, auth.abspath("ns/pid.report"),
             ["sudo", "-n", "unshare", "-p", "-f", "--mount-proc"],
-            manifest, role="pidns-sleeper-wrapper")
+            manifest, role="pidns-sleeper-wrapper",
+            leaf_role="pidns-sleeper")
         record_proc(manifest, "pidns-sleeper-wrapper", pid_wrap)
         record_proc(manifest, "pidns-sleeper", pid_sleep)
+        drop_pending_proc(manifest, "pidns-sleeper-wrapper", pid_wrap)
+        drop_pending_proc(manifest, "pidns-sleeper", pid_sleep)
         time_wait_report(auth.abspath("ns/pid.report"))
         # Pure pidns sleeper: --mount-proc implies a fresh mount
         # namespace, so a second sleeper without it isolates the pidns
@@ -1994,9 +2618,12 @@ def provision_sleepers(manifest, run_root):
         pure_wrap, pure_sleep = spawn_sleeper(
             helper, mapped, auth.abspath("ns/pure.report"),
             ["sudo", "-n", "unshare", "-p", "-f"],
-            manifest, role="pure-pidns-wrapper")
+            manifest, role="pure-pidns-wrapper",
+            leaf_role="pure-pidns-sleeper")
         record_proc(manifest, "pure-pidns-wrapper", pure_wrap)
         record_proc(manifest, "pure-pidns-sleeper", pure_sleep)
+        drop_pending_proc(manifest, "pure-pidns-wrapper", pure_wrap)
+        drop_pending_proc(manifest, "pure-pidns-sleeper", pure_sleep)
         time_wait_report(auth.abspath("ns/pure.report"))
         nested = try_nested_pidns(manifest, auth, helper)
         provision_churn(manifest, run_root)
@@ -2031,7 +2658,8 @@ def try_nested_pidns(manifest, auth, helper):
             auth.abspath("ns/nested.report"),
             ["sudo", "-n", "unshare", "-p", "-f", "--mount-proc",
              "unshare", "-p", "-f", "--mount-proc"],
-            manifest, role="nested-pidns-sleeper-wrapper")
+            manifest, role="nested-pidns-sleeper-wrapper",
+            leaf_role="nested-pidns-sleeper")
     except (OSError, AdmissionError):
         manifest["evidence"]["nested_pidns"] = "unsupported: nested unshare refused"
         return False
@@ -2039,44 +2667,87 @@ def try_nested_pidns(manifest, auth, helper):
         ident = proc_identity(sleep)
     except AdmissionError as exc:
         # S21: never blindly signal an unobservable pid; persist
-        # custody and let cleanup report/retry it.
-        retire_fresh_proc("nested-pidns-sleeper", sleep, manifest)
-        retire_fresh_proc("nested-pidns-sleeper-wrapper", wrap, manifest)
+        # custody and let cleanup report/retry it. Each end
+        # retires independently: an identity-change refusal
+        # proves whoever was there gone-or-foreign, so the
+        # other end still retires. Each spawn pending stays
+        # armed across its retirement (which refreshes in
+        # place on failure) and drops only on proven gone —
+        # never dropped before its replacement commits.
+        # (S21-round3, S21-round4.)
+        for rrole, rpid in (("nested-pidns-sleeper", sleep),
+                            ("nested-pidns-sleeper-wrapper", wrap)):
+            try:
+                gone = retire_fresh_proc(rrole, rpid, manifest)
+            except AdmissionError:
+                # Identity changed under the pin: the spawned
+                # process is proven gone (a new occupant is a
+                # stranger that was never signalled). Drop the
+                # stale record.
+                drop_pending_proc(manifest, rrole, rpid)
+                continue
+            if gone:
+                drop_pending_proc(manifest, rrole, rpid)
         manifest["evidence"]["nested_pidns"] = (
             f"unsupported: identity unreadable ({exc})")
         return False
     if len(ident["nspid"]) < 3:
+        # S21-round4: custody transfers from the spawn pendings
+        # to the tree kill — both records stay armed across the
+        # kill and drop only when the tree is proven gone;
+        # otherwise each refreshes in place with the failure.
         if not kill_tree("nested-pidns", wrap):
             try:
                 _, wrap_start = stat_state_start(wrap)
             except (ProcAbsent, ProcUnknown):
                 wrap_start = None
-            record_pending_proc(
+            refresh_pending_proc(
                 manifest, "nested-pidns-sleeper-wrapper", wrap,
                 wrap_start, "unsupported tree not proven gone")
+            # S21-round3: the unproven member may be the leaf —
+            # pend it too, so every unresolved process keeps a
+            # record.
+            try:
+                _, sleep_start = stat_state_start(sleep)
+            except (ProcAbsent, ProcUnknown):
+                sleep_start = None
+            refresh_pending_proc(
+                manifest, "nested-pidns-sleeper", sleep,
+                sleep_start, "unsupported tree not proven gone")
+        else:
+            drop_pending_proc(
+                manifest, "nested-pidns-sleeper-wrapper", wrap)
+            drop_pending_proc(manifest, "nested-pidns-sleeper",
+                              sleep)
         manifest["evidence"]["nested_pidns"] = (
             f"unsupported: NSpid depth {len(ident['nspid'])} < 3")
         return False
     record_proc(manifest, "nested-pidns-sleeper-wrapper", wrap)
     record_proc(manifest, "nested-pidns-sleeper", sleep)
+    # S21-round3: transactional handoff (see provision_sleepers).
+    drop_pending_proc(manifest, "nested-pidns-sleeper-wrapper", wrap)
+    drop_pending_proc(manifest, "nested-pidns-sleeper", sleep)
     time_wait_report(auth.abspath("ns/nested.report"))
     manifest["evidence"]["nested_pidns"] = "provisioned"
     return True
 
 
 def signal_owned(pid, signum, pin_fd, expected_start):
-    """Signal an owned PID while its pidfd pin is held. (S21/S22)
+    """Signal an owned PID through its pidfd pin. (S21/S22)
 
-    `pin_fd` must be an open pidfd for `pid`: it is fstat'ed, the
-    live starttime is re-verified against `expected_start` under
-    the pin, and only then is the signal sent. The pin stays open
-    across the sudo escalation too, so a reused pid can never
-    receive the signal. Returns True when a signal was sent,
-    False when the process was already gone. Raises
-    AdmissionError on identity change, ProcUnknown when the pid
-    cannot be observed.
+    `pin_fd` must be an open pidfd for `pid`: it is fstat'ed,
+    the live starttime is re-verified against `expected_start`,
+    and only then is the signal sent with pidfd_send_signal —
+    which addresses the pinned task, never the numeric pid, so
+    exit+reap+reuse between the observation and the signal
+    yields ESRCH (gone) instead of a redirected signal. The
+    EPERM escalation re-pins and re-verifies inside the
+    privileged helper (same guarantee — the pin is opened,
+    verified, and used inside that one process). Returns True
+    when a signal was sent, False when the process was already
+    gone. Raises AdmissionError on identity change, ProcUnknown
+    when the pid cannot be observed.
     """
-    import signal as _signal
     if pin_fd is None:
         raise AdmissionError(
             f"refusing to signal pid {pid}: no retained pidfd")
@@ -2095,25 +2766,111 @@ def signal_owned(pid, signum, pin_fd, expected_start):
         raise AdmissionError(
             f"refusing to signal pid {pid}: starttime changed "
             f"(live={start} expected={expected_start})")
-    try:
-        os.kill(pid, signum)
+    err = _pidfd_send_signal(pin_fd, signum)
+    if err is None:
         return True
-    except ProcessLookupError:
+    if err in (errno.ESRCH, errno.ENOENT):
         return False
-    except PermissionError:
-        pass
-    except OSError as exc:
-        if exc.errno in (errno.ESRCH, errno.ENOENT):
-            return False
-        if exc.errno not in (errno.EPERM, errno.EACCES):
-            raise ProcUnknown(
-                f"signal to pid {pid} failed: {exc}")
+    if err not in (errno.EPERM, errno.EACCES):
+        raise ProcUnknown(
+            f"signal to pid {pid} failed: {os.strerror(err)}")
     # Root-spawned sleepers cannot be signalled by the observer
-    # uid; the pin stays open across this escalation, so the
-    # numeric sudo kill cannot be redirected at a reused pid.
-    name = _signal.Signals(signum).name
-    run_sudo(["kill", f"-{name}", str(pid)])
-    return True
+    # uid; the privileged helper re-pins the pid, re-verifies
+    # the expected starttime, and signals through its own held
+    # pidfd — no numeric kill at any stage.
+    return _signal_via_helper(pid, expected_start, signum)
+
+
+def _signal_via_helper(pid, expected_start, signum):
+    """Escalated pidfd-bound signal; True sent, False gone. (S22)
+
+    The helper opens its own pidfd for `pid`, verifies the
+    expected starttime, and signals through the held
+    descriptor — reuse between this caller's observation and
+    the privileged effect cannot redirect the signal (the
+    verification or the descriptor-bound signal fails
+    closed). Identity change raises AdmissionError; anything
+    else unobservable raises ProcUnknown.
+    """
+    helper = os.path.abspath(__file__)
+    rc, out, err = run_sudo(
+        [sys.executable, helper, "signal-proc",
+         "--pid", str(pid), "--starttime", str(expected_start),
+         "--signum", str(signum)],
+        timeout=120)
+    if rc == 0 and out.startswith("signalled "):
+        return True
+    if rc == 0 and out.startswith("proc-gone "):
+        return False
+    if "identity changed" in (out or ""):
+        raise AdmissionError(
+            f"refusing to signal pid {pid}: {tail(out or err)}")
+    raise ProcUnknown(
+        f"signal to pid {pid} failed: {tail(out or err)}")
+
+
+def signal_proc_command(args):
+    """Privileged-internal: signal one verified pid via pidfd. (S22)
+
+    Never invoked by hand: signal_owned re-execs this file
+    under sudo when the observer uid gets EPERM, so the
+    privileged signal re-pins the pid itself, re-verifies the
+    expected starttime, and signals through the held pidfd —
+    the pin is opened, verified, and used inside this one
+    process, so pid reuse between the caller's observation and
+    the effect cannot redirect the signal. Prints `signalled
+    <pid>` or `proc-gone <pid>` (exit 0); `FAILED: <reason>`
+    exit 1 (unobservable, or identity changed — the caller
+    tells them apart by the marker).
+    """
+    try:
+        pid = int(args.pid)
+        starttime = int(args.starttime)
+        signum = int(args.signum)
+    except (TypeError, ValueError):
+        print("FAILED: bad signal-proc argv")
+        return 1
+    if pid <= 0 or signum <= 0 or signum > 64 or starttime < 0:
+        print("FAILED: bad signal-proc argv")
+        return 1
+    try:
+        pin = pin_proc(pid)
+    except ProcAbsent:
+        print(f"proc-gone {pid}")
+        return 0
+    except ProcUnknown as exc:
+        print(f"FAILED: {exc}")
+        return 1
+    try:
+        try:
+            state, start = stat_state_start(pid)
+        except ProcAbsent:
+            print(f"proc-gone {pid}")
+            return 0
+        except ProcUnknown as exc:
+            print(f"FAILED: {exc}")
+            return 1
+        if state == "Z":
+            print(f"proc-gone {pid}")
+            return 0
+        if start != starttime:
+            print(f"FAILED: identity changed (live={start} "
+                  f"expected={starttime})")
+            return 1
+        err = _pidfd_send_signal(pin, signum)
+    finally:
+        try:
+            os.close(pin)
+        except OSError:
+            pass
+    if err is None:
+        print(f"signalled {pid}")
+        return 0
+    if err in (errno.ESRCH, errno.ENOENT):
+        print(f"proc-gone {pid}")
+        return 0
+    print(f"FAILED: signal failed: {os.strerror(err)}")
+    return 1
 
 
 def kill_tree(role, root_pid, timeout=10):
@@ -2121,11 +2878,12 @@ def kill_tree(role, root_pid, timeout=10):
 
     Used when a spawn produced live processes but no stable leaf
     to record: killing the wrapper alone would orphan the leaf.
-    Every pid is pinned with a pidfd before observation and the
-    pins stay open through every signal, so pid reuse cannot
-    redirect the kill (S22). Returns True only when the whole
-    tree is proven gone; unobservable members or survivors yield
-    False, never a silent True (S21).
+    Every pid is signalled through its pidfd pin
+    (pidfd_send_signal, never a numeric kill), so pid reuse
+    between observation and signal cannot redirect the kill
+    (S22). Returns True only when the whole tree is proven
+    gone; unobservable members or survivors yield False, never
+    a silent True (S21).
     """
     import signal as _signal
     import time as _time
@@ -2280,6 +3038,16 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
     process is NOT blindly signalled: its custody is persisted as
     pending (when a manifest is given) and False is returned.
     Returns True only when the pid is proven gone.
+
+    S21-round3: a False (survivor) result persists custody too —
+    every unsuccessful retirement keeps a pending record,
+    including plain survival.
+
+    S21-round4: custody persists by refresh (replace in memory,
+    persist once), so a pre-existing spawn pending is never
+    dropped before its replacement commits — callers keep the
+    spawn record armed across the call and drop only on a
+    proven-gone True.
     """
     try:
         pin = pin_proc(pid)
@@ -2287,7 +3055,7 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
         return True
     except ProcUnknown as exc:
         if manifest is not None:
-            record_pending_proc(manifest, role, pid, None, str(exc))
+            refresh_pending_proc(manifest, role, pid, None, str(exc))
         return False
     try:
         try:
@@ -2296,7 +3064,7 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
             return True
         except ProcUnknown as exc:
             if manifest is not None:
-                record_pending_proc(manifest, role, pid, None, str(exc))
+                refresh_pending_proc(manifest, role, pid, None, str(exc))
             return False
         if state == "Z":
             return True
@@ -2306,11 +3074,18 @@ def retire_fresh_proc(role, pid, manifest=None, timeout=10):
         except OSError:
             pass
     try:
-        return kill_owned(role, pid, start, timeout)
+        gone = kill_owned(role, pid, start, timeout)
     except ProcUnknown as exc:
         if manifest is not None:
-            record_pending_proc(manifest, role, pid, start, str(exc))
+            refresh_pending_proc(manifest, role, pid, start, str(exc))
         return False
+    if not gone and manifest is not None:
+        # S21-round3: the survivor keeps a pending record with the
+        # observed identity, so cleanup retries it by name.
+        refresh_pending_proc(
+            manifest, role, pid, start,
+            "retirement did not prove the process gone")
+    return gone
 
 
 CHURN_DRIVER_PY = r"""
@@ -2320,7 +3095,8 @@ bind_dev, bind_ino = int(sys.argv[4]), int(sys.argv[5])
 point = os.path.join(root, "churn", "point")
 payload_a = os.path.join(root, "churn", "payload-a")
 payload_b = os.path.join(root, "churn", "payload-b")
-os.makedirs(os.path.dirname(point), exist_ok=True)
+# S13: churn dirs are deletion-gated (exclusive); pin the mode.
+os.makedirs(os.path.dirname(point), mode=0o755, exist_ok=True)
 ledger = open(os.path.join(root, "churn", "ledger.log"), "a", buffering=1)
 try:
     _libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -2698,7 +3474,9 @@ def create_command(args):
                          f"create: {tail(err)}")
     manifest = fresh_manifest(run_root, args.privileged)
     try:
-        Path(run_root).mkdir(parents=True, exist_ok=False)
+        # S13: the run root is deletion-gated (exclusive), so its
+        # mode is pinned at creation, atomically with the mkdir.
+        os.makedirs(run_root, mode=0o755, exist_ok=False)
     except FileExistsError:
         return fail2(f"already provisioned: run-root {run_root} exists; "
                      "run cleanup first")
@@ -2947,22 +3725,38 @@ def _umount2(target):
     return ctypes.get_errno()
 
 
-def _loop_clr_fd(loop):
-    """In-process LOOP_CLR_FD; returns None on success, else errno."""
+def _loop_get_status_on(fd):
+    """(dev, ino) of the backing bound to held loop fd `fd`.
+
+    S17-round3: LOOP_GET_STATUS64 addressed to an already-open
+    device description — no pathname resolution, so a
+    device-node swap between validation and effect cannot
+    redirect the read. Returns None only when provably
+    detached (ENXIO); raises LoopIdUnavailable when the status
+    cannot be read — unknown, never detached.
+    """
+    buf = bytearray(LOOP_INFO64_SIZE)
     try:
-        fd = os.open(loop, os.O_RDWR | os.O_NONBLOCK)
+        fcntl.ioctl(fd, LOOP_GET_STATUS64, buf, True)
+    except OSError as exc:
+        if exc.errno == errno.ENXIO:
+            return None
+        raise LoopIdUnavailable(f"loop status unreadable: {exc}")
+    dev, ino = struct.unpack_from("<QQ", buf)
+    return (dev, ino)
+
+
+def _loop_clr_fd_on(fd):
+    """In-process LOOP_CLR_FD on held loop fd `fd`.
+
+    S17-round3: the detach addresses the same open device
+    description the final validation read — no re-open, no
+    re-resolution. Returns None on success, else errno.
+    """
+    try:
+        fcntl.ioctl(fd, LOOP_CLR_FD)
     except OSError as exc:
         return exc.errno or errno.EIO
-    try:
-        try:
-            fcntl.ioctl(fd, LOOP_CLR_FD)
-        except OSError as exc:
-            return exc.errno or errno.EIO
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
     return None
 
 
@@ -2970,13 +3764,49 @@ def retire_mount_now(target, expected, run_root):
     """Validate and detach one mount in this process. (S17)
 
     `expected` carries target/fstype/source/expect_super and,
-    when recorded, mnt_id/root. The live table is read for
-    validation, read AGAIN immediately before the effect (a
-    substitution between the two refuses), the detach runs
-    in-process via umount2, and a post-effect read proves the
-    target clear. Returns None on success (or when already
+    when recorded, mnt_id/root. The target directory's mount
+    ID is snapshotted at open (the descriptor is closed before
+    the effect — any open fd on the mount, O_PATH included,
+    pins umount EBUSY, verified live); every table observation
+    must agree with that snapshot (a replica replacement the
+    record alone would admit refuses); the detach runs
+    in-process via umount2; and the post-proof scans the WHOLE
+    table for our mount ID — a move-away keeps it live
+    elsewhere, so target-scoped "clear" never stands for
+    discharged. Returns None on success (or when already
     absent), else a failure string; anything uncertain is
     retained, never detached.
+
+    S17-round3: the kernel offers no fd-bound detach —
+    umount2 on a /proc/self/fd path resolves to the TOP mount
+    at that location exactly like the pathname (verified
+    live) — so the effect stays pathname-addressed and the
+    binding is established by the snapshot correspondence
+    before it and the mount-ID proof after it. Residuals: a
+    party privileged enough to stack at the target between
+    the final observation and the detach (one in-process step,
+    no rendezvous) can have its own top mount detached while
+    ours stays live — detected by the post-proof, custody
+    retained; and a move-away landing before the first
+    observation is invisible to rollback-style records (no
+    recorded ID to scan for). Both interposers can detach
+    mounts directly, so the confusion grants nothing beyond
+    their existing privilege.
+
+    S17-round4: stacking by OUR OWN concurrent helpers is now
+    excluded by the run-root mount-mutation lock
+    (MOUNT_EXCLOCK_NAME), held across the whole helper call in
+    both mount-fs and retire-mount — and a foreign row
+    appearing at the target across the detach raises the
+    occupant-changed alarm above instead of reporting
+    discharged. What remains is a privileged third party
+    racing mount(2)/umount(2) directly inside the microsecond
+    effect window: still detected when our row survives or a
+    foreign row persists at the target, still unobservable
+    when the foreign top appears and vanishes between the two
+    table reads. That last sliver is inherent to any
+    table-diff post-proof and grants nothing beyond root's
+    existing mount privilege.
     """
     if not target or not contained(target, run_root):
         return f"foreign mount target refused: {target[:60]!r}"
@@ -2988,39 +3818,109 @@ def retire_mount_now(target, expected, run_root):
     if expected.get("root") is not None:
         record["root"] = expected["root"]
     try:
+        probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY
+                        | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        try:
+            table = read_mount_table()
+        except AdmissionError as exc:
+            return f"mount table unreadable: {exc}"
+        if find_mounts(table, target):
+            return (f"mount {target} path vanished but mount "
+                    f"live; refusing")
+        # S17-round4: the path vanished (renamed away) — a
+        # recorded mount ID that is still live anywhere in the
+        # table is a moved mount, not a discharge.
+        if record.get("mnt_id") is not None:
+            live = [row for row in table
+                    if row.get("mnt_id") == record["mnt_id"]]
+            if live:
+                return (f"mount {target} moved (mnt="
+                        f"{record['mnt_id']} live at "
+                        f"{live[0]['target']}); manual "
+                        f"retirement required")
+        return None
+    except OSError as exc:
+        return (f"mount {target} target not openable ({exc}); "
+                f"refusing")
+    try:
+        try:
+            snap_mnt = _mnt_id_of(probe)
+        except OSError as exc:
+            return (f"mount {target} descriptor identity "
+                    f"unreadable ({exc}); refusing")
+    finally:
+        try:
+            os.close(probe)
+        except OSError:
+            pass
+    try:
         table = read_mount_table()
     except AdmissionError as exc:
         return f"mount table unreadable: {exc}"
     if not find_mounts(table, target):
+        if record.get("mnt_id") is not None:
+            gone = [entry for entry in table
+                    if entry["mnt_id"] == record["mnt_id"]]
+            if gone:
+                return (f"mount {target} still live at "
+                        f"{gone[0]['target']}; custody retained")
         return None
     try:
-        admit_mount(record, table, run_root)
+        row = admit_mount(record, table, run_root)
     except AdmissionError as exc:
-        return f"mount {target} replacement refused ({exc}); left in place"
+        return (f"mount {target} replacement refused ({exc}); "
+                f"left in place")
+    if row["mnt_id"] != snap_mnt:
+        return (f"mount {target} identity changed between "
+                f"open and validation (table={row['mnt_id']} "
+                f"snapshot={snap_mnt}); refusing")
     try:
         effect_table = read_mount_table()
     except AdmissionError as exc:
         return f"mount table unreadable before effect: {exc}"
     try:
-        admit_mount(record, effect_table, run_root)
+        row = admit_mount(record, effect_table, run_root)
     except AdmissionError as exc:
-        return (f"mount {target} changed between validation and "
-                f"effect ({exc}); refusing")
-    err = _umount2(target)
-    if err is not None:
-        if err in (errno.ENOENT, errno.ENXIO, errno.EINVAL):
-            # Lost a race with a cooperative unmount: verify.
-            pass
-        else:
-            return (f"umount {target} refused: "
-                    f"{os.strerror(err)}")
+        return (f"mount {target} changed between validation "
+                f"and effect ({exc}); refusing")
+    if row["mnt_id"] != snap_mnt:
+        return (f"mount {target} changed between validation "
+                f"and effect (table={row['mnt_id']} "
+                f"snapshot={snap_mnt}); refusing")
+    umount_err = _umount2(target)
+    # The umount result is advisory: the post-proof decides.
+    # Our mount ID must be gone from the WHOLE table — a
+    # move-away is still ours, still live.
     try:
         after = read_mount_table()
     except AdmissionError as exc:
         return f"mount table unreadable after effect: {exc}"
-    if find_mounts(after, target):
-        return (f"mount {target} still live after detach; "
-                f"custody retained")
+    live = [entry for entry in after
+            if entry["mnt_id"] == snap_mnt]
+    if live:
+        where = live[0]["target"]
+        detail = f" at {where}" if where != target else ""
+        note = (f" (umount: {os.strerror(umount_err)})"
+                if umount_err else "")
+        return (f"mount {target} still live after detach"
+                f"{detail}{note}; custody retained")
+    # S17-round4: interposition alarm — our row is gone, but a
+    # foreign row sits at our target that was not there before
+    # the effect. Either a racer stacked at our mountpoint
+    # after we detached ours (benign but loud), or ours was
+    # unmounted concurrently and our umount detached the
+    # foreign top. Either way the occupant is not provably
+    # ours: retain custody.
+    before_here = {row.get("mnt_id") for row in effect_table
+                   if row.get("target") == target}
+    for row in find_mounts(after, target):
+        if row.get("mnt_id") not in before_here:
+            return (f"mount {target} occupant changed "
+                    f"across detach (foreign mnt="
+                    f"{row.get('mnt_id')} appeared, ours "
+                    f"discharged); interposed mutation "
+                    f"suspected; custody retained")
     return None
 
 
@@ -3048,35 +3948,54 @@ def retire_mount_via_helper(run_root, target, fingerprint):
     return f"mount {target} retire refused: rc={rc} {tail(out or err)}"
 
 
-def loop_backing_verified(live, backing):
-    """True when a just-read backing value is the recorded one.
+def loop_backing_verified(loop, live, backing):
+    """True when the loop's live backing is the recorded one.
 
-    Takes the already-read sysfs value so each validation step
-    reads exactly once.
+    S18-round3: takes the loop device plus the already-read sysfs
+    value (one sysfs read per validation step, as before). Kernel
+    backing identity governs whenever the device node reports a
+    binding — the held (dev, ino) decides, so a deleted/restored
+    swap cannot spoof it. A detached-at-ioctl device and an
+    unreadable node both fall through to the already-read sysfs
+    value (deleted backings refuse as unprovable): the surrounding
+    validate/effect/post-effect reads converge genuine detachment
+    to success exactly as before, while a rebound loop fails the
+    string match.
     """
     if live is None:
         return False
     if not isinstance(backing, dict) or not backing.get("path"):
         return False
-    live_path = strip_deleted_suffix(live)
-    if os.path.normpath(live_path) != os.path.normpath(backing["path"]):
-        return False
     try:
-        st = os.stat(live_path)
-    except OSError:
-        return False
-    return (st.st_dev, st.st_ino) == (backing.get("dev"),
-                                      backing.get("ino"))
+        ident = read_loop_backing_id(loop)
+    except LoopIdUnavailable:
+        ident = None
+    if ident is not None:
+        return ((ident[0], ident[1]) == (backing.get("dev"),
+                                        backing.get("ino")))
+    return sysfs_backing_matches(live, backing["path"],
+                                 backing.get("dev"),
+                                 backing.get("ino"))
 
 
 def retire_loop_now(loop, backing, run_root):
     """Validate and detach one loop device in this process. (S17)
 
-    Same validation/effect/post-effect discipline as
-    retire_mount_now, with the detach via LOOP_CLR_FD. Returns
-    None on success (or when already detached), else a failure
-    string. A device whose live backing differs from the record
-    is a reused name: refused, never detached.
+    S17-round3: the final kernel-identity validation, the
+    LOOP_CLR_FD effect, and the post-proof all address ONE
+    held device fd — no pathname re-resolution between
+    validation and effect, so a device-node swap at the final
+    boundary cannot redirect the detach onto a foreign
+    association. Returns None on success (or when already
+    detached), else a failure string. A device whose live
+    backing differs from the record is a reused name:
+    refused, never detached.
+
+    Residual: a party privileged enough to re-associate the
+    device between the final GET and the CLR (adjacent ioctls,
+    no rendezvous) could substitute the cleared association —
+    but that party can detach loop devices directly, so the
+    confusion grants nothing beyond its existing privilege.
     """
     if not loop or not str(loop).startswith("/dev/loop"):
         return f"foreign loop device refused: {str(loop)[:60]!r}"
@@ -3090,34 +4009,56 @@ def retire_loop_now(loop, backing, run_root):
         return str(exc)
     if live is None:
         return None
-    if not loop_backing_verified(live, backing):
+    if not sysfs_backing_matches(live, backing["path"],
+                                 backing.get("dev"),
+                                 backing.get("ino")):
         return (f"loop {loop} backing changed "
                 f"(live={live[:60]!r}); refusing detach")
     try:
-        effect = read_loop_backing(loop)
-    except AdmissionError as exc:
-        return str(exc)
-    if effect is None:
-        return None
-    if not loop_backing_verified(effect, backing):
-        return (f"loop {loop} backing changed between validation "
-                f"and effect; refusing detach")
-    err = _loop_clr_fd(loop)
-    if err is not None and err != errno.ENXIO:
-        return f"loop {loop} detach refused: {os.strerror(err)}"
+        fd = os.open(loop, os.O_RDWR | os.O_NONBLOCK
+                     | os.O_CLOEXEC)
+    except OSError as exc:
+        return (f"loop {loop} device not openable ({exc}); "
+                f"refusing detach")
     try:
-        after = read_loop_backing(loop)
-    except AdmissionError as exc:
-        return str(exc)
-    if after is None:
+        try:
+            ident = _loop_get_status_on(fd)
+        except LoopIdUnavailable as exc:
+            return (f"loop {loop} status unreadable ({exc}); "
+                    f"refusing detach")
+        if ident is None:
+            return None
+        if ((ident[0], ident[1]) != (backing.get("dev"),
+                                    backing.get("ino"))):
+            return (f"loop {loop} backing changed between "
+                    f"validation and effect; refusing detach")
+        clr_err = _loop_clr_fd_on(fd)
+        # The CLR result is advisory: the post-proof on the
+        # same fd decides. (ENXIO from the CLR — a cooperative
+        # detach winning the race — converges to success when
+        # the binding is provably gone.)
+        try:
+            after = _loop_get_status_on(fd)
+        except LoopIdUnavailable as exc:
+            return (f"loop {loop} status unreadable after detach "
+                    f"({exc}); custody retained")
+        if after is None:
+            return None
+        if ((after[0], after[1]) == (backing.get("dev"),
+                                    backing.get("ino"))):
+            note = (f" (detach: {os.strerror(clr_err)})"
+                    if clr_err else "")
+            return (f"loop {loop} still attached after detach"
+                    f"{note}; custody retained")
+        # Detached and already rebound by another party: our
+        # obligation is discharged; the new association is not
+        # ours to touch.
         return None
-    if loop_backing_verified(after, backing):
-        return (f"loop {loop} still attached after detach; "
-                f"custody retained")
-    # Detached and already reused by another party: our
-    # obligation is discharged; the new association is not ours
-    # to touch.
-    return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def retire_loop_via_helper(run_root, loop, backing):
@@ -3180,6 +4121,18 @@ def cleanup_one_mount(entry, run_root):
     except AdmissionError as exc:
         return f"mount table unreadable: {exc}"
     if not find_mounts(table, target):
+        # S17-round4: nothing at the recorded target — but a
+        # recorded mount ID that is still live anywhere (a
+        # move-away, including outside the run root) is a
+        # moved mount, not a discharge.
+        if entry.get("mnt_id") is not None:
+            live = [row for row in table
+                    if row.get("mnt_id") == entry["mnt_id"]]
+            if live:
+                return (f"mount {target} moved (mnt="
+                        f"{entry['mnt_id']} live at "
+                        f"{live[0]['target']}); manual "
+                        f"retirement required")
         return None
     try:
         admit_mount(entry, table, run_root)
@@ -3215,6 +4168,68 @@ def read_loop_backing(loop):
             f"{exc}")
 
 
+def read_loop_backing_id(loop):
+    """(dev, ino) of the loop's kernel-held backing file.
+
+    S18/S23: LOOP_GET_STATUS64 on a retained O_RDONLY device
+    descriptor — kernel object identity with no pathname
+    resolution, so a deleted backing still reports its true inode
+    and a restored impostor at the old name cannot spoof it.
+    Returns None only when provably detached (ENXIO on the held
+    fd); raises LoopIdUnavailable when the status cannot be
+    read (EACCES on the node, I/O errors) — unknown, never
+    detached.
+
+    S23-round4: a missing device node raises too — removing
+    /dev/loopN does not detach the kernel loop, whose sysfs
+    backing may still be live. Callers treat this as
+    unassessable (incomplete scans, refused detaches), never
+    as a detached verdict.
+    """
+    try:
+        fd = os.open(loop, os.O_RDONLY | os.O_NOFOLLOW
+                     | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise LoopIdUnavailable(
+            f"loop {loop} device node missing: unknown, never "
+            f"detached")
+    except OSError as exc:
+        raise LoopIdUnavailable(
+            f"loop {loop} not openable: {exc}")
+    try:
+        return _loop_get_status_on(fd)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def sysfs_backing_matches(live, path, dev, ino):
+    """Pathname fallback for loop backing identity. (S18)
+
+    Sound for every STABLE state: a " (deleted)" backing is
+    unprovable via pathname — the live name may hold a restored
+    impostor (the deleted-B/restored-A counterexample) — and
+    refuses outright. A live name must spell the expected path
+    and stat to the expected identity. Residual: a transient
+    rename winning the sysfs-read/stat race inside one call;
+    callers prefer read_loop_backing_id (kernel identity, no
+    race) whenever the device node is readable.
+    """
+    if live is None:
+        return False
+    if live.endswith(" (deleted)"):
+        return False
+    if os.path.normpath(live) != os.path.normpath(path):
+        return False
+    try:
+        st = os.stat(live)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) == (dev, ino)
+
+
 def cleanup_loop_device(loop, backing, run_root):
     """Detach one recorded loop device. Returns None on success (or
     when already detached), else a failure string. A device whose
@@ -3237,18 +4252,39 @@ def cleanup_loop_device(loop, backing, run_root):
     if not isinstance(backing, dict) or not backing.get("path"):
         return (f"loop {loop} has no recorded backing; refusing detach "
                 f"(live={live[:60]!r})")
-    live_path = strip_deleted_suffix(live)
-    if os.path.normpath(live_path) != os.path.normpath(backing["path"]):
-        return (f"loop {loop} backing changed (live={live[:60]!r}); "
-                f"refusing detach")
+    # S18-round3: kernel backing identity governs (no pathname
+    # resolution). A detached-at-ioctl device is already gone. The
+    # already-read sysfs value is the fallback with the original
+    # sub-case reports — except a " (deleted)" backing, which is
+    # unprovable via pathname (the live name may hold a restored
+    # impostor) and refuses outright instead of stripping.
     try:
-        st = os.stat(live_path)
-    except OSError as exc:
-        return (f"loop {loop} backing unverifiable ({exc}); "
-                f"refusing detach")
-    if (st.st_dev, st.st_ino) != (backing.get("dev"), backing.get("ino")):
-        return (f"loop {loop} backing identity changed "
-                f"(live=({st.st_dev},{st.st_ino})); refusing detach")
+        ident = read_loop_backing_id(loop)
+    except LoopIdUnavailable:
+        ident = "unavailable"
+    if ident is None:
+        return None
+    if ident != "unavailable":
+        if ((ident[0], ident[1]) != (backing.get("dev"),
+                                    backing.get("ino"))):
+            return (f"loop {loop} backing identity changed "
+                    f"(live=({ident[0]},{ident[1]})); refusing detach")
+    else:
+        if live.endswith(" (deleted)"):
+            return (f"loop {loop} backing deleted from under record "
+                    f"(live={live[:60]!r}); refusing detach")
+        if os.path.normpath(live) != os.path.normpath(backing["path"]):
+            return (f"loop {loop} backing changed (live={live[:60]!r}); "
+                    f"refusing detach")
+        try:
+            st = os.stat(live)
+        except OSError as exc:
+            return (f"loop {loop} backing unverifiable ({exc}); "
+                    f"refusing detach")
+        if (st.st_dev, st.st_ino) != (backing.get("dev"),
+                                      backing.get("ino")):
+            return (f"loop {loop} backing identity changed "
+                    f"(live=({st.st_dev},{st.st_ino})); refusing detach")
     return retire_loop_via_helper(run_root, loop, backing)
 
 
@@ -3301,7 +4337,114 @@ def cleanup_churn_point(churn, run_root):
     })
 
 
-def fd_clear_dir(fd, rel="", mounts=frozenset(), root_dev=None):
+def _require_exclusive_dir(fd, what):
+    """Prove open directory fd `fd` mutation-exclusive to trusted owners.
+
+    S13: owned by a trusted remover with no group/other write
+    bit. Raises OSError otherwise: in a shared directory
+    another UID could rename a held entry away and plant a
+    replacement between the hold and the unlink, and the
+    post-unlink proof would only detect the foreign deletion
+    after it happened. A foreign owner raises EACCES (a
+    permission failure the caller may retry privileged); a
+    loose mode is a hard refusal (privilege cannot close a
+    swappable window).
+
+    S75: the trusted set is the S76 controller identity — us,
+    root, or the sudo-invoking owner — so the exclusion policy
+    survives the caller-to-root cleanup transition: the
+    privileged remover accepts the controller's exclusive
+    directories instead of rejecting the normal user's tree.
+    Capability still rests with the kernel (an unprivileged
+    caller admitted past the gate fails its unlinks with
+    EACCES and escalates as before).
+    """
+    st = os.fstat(fd)
+    allowed = _trusted_parent_owners()
+    if st.st_uid not in allowed:
+        raise OSError(
+            errno.EACCES,
+            f"{what} owned by uid {st.st_uid}, not a trusted "
+            f"remover owner {sorted(allowed)}: privileged "
+            f"removal may proceed")
+    if st.st_mode & 0o022:
+        raise OSError(
+            f"{what} not exclusive "
+            f"(mode={oct(st.st_mode & 0o7777)}): "
+            f"refusing removal through a swappable directory")
+
+
+def _removal_excluded(parent_fd, root_fd):
+    """Exclusion verdict for unlinking a held root ("" when excluded).
+
+    S13: an exclusive parent excludes foreign swappers outright;
+    otherwise a sticky parent holding a trusted entry excludes
+    them (sticky rename needs entry or parent ownership, and
+    both ends are trusted). Anything else is an unsupported
+    shared directory and the unlink must refuse. A
+    foreign-owned entry yields a "denied: " verdict (privileged
+    removal may proceed); a swappable window yields a hard
+    refusal (no privilege level makes deleting through it
+    safe).
+
+    S13-round4: the sticky exception additionally requires a
+    trusted parent owner. A sticky directory's foreign owner
+    bypasses the sticky bit and may replace our entry despite
+    it, so the final rmdir would delete the replacement while
+    the post-unlink proof only detects it afterwards.
+
+    S75: the owner comparisons use the S76 controller identity
+    (us, root, or the sudo-invoking owner), so the verdict
+    survives the caller-to-root cleanup transition: the
+    privileged remover accepts the controller's exclusive
+    parent and entry instead of rejecting the normal user's
+    tree. Only genuinely foreign owners yield "denied:" (or a
+    hard refusal past a swappable window).
+    """
+    pst = os.fstat(parent_fd)
+    euid = os.geteuid()
+    allowed = _trusted_parent_owners()
+    if pst.st_uid in allowed and not pst.st_mode & 0o022:
+        return ""
+    rst = os.fstat(root_fd)
+    # Sticky rename needs entry or parent ownership: both ends
+    # trusted (either may be the sudo-invoking controller for
+    # a privileged remover) excludes every foreign swapper.
+    if (pst.st_mode & stat.S_ISVTX and rst.st_uid in allowed
+            and pst.st_uid in allowed):
+        return ""
+    if rst.st_uid not in allowed:
+        return (f"denied: entry owned by uid {rst.st_uid}, not a "
+                f"trusted remover owner {sorted(allowed)}: "
+                f"privileged removal may proceed")
+    return (
+        f"removal not excluded (parent uid={pst.st_uid} "
+        f"mode={oct(pst.st_mode & 0o7777)}): refusing unlink "
+        f"through a swappable directory")
+
+
+def _mnt_id_of(fd):
+    """Mount ID of an open descriptor via /proc/self/fdinfo. (S27)
+
+    S27-round3: descriptor-bound mount identity for the traversal
+    guard — works on O_PATH holds (verified: fdinfo carries
+    mnt_id for them) as well as plain opens. Raises OSError when
+    the identity cannot be established; callers treat that as a
+    boundary (refuse), never as same-mount.
+    """
+    try:
+        with open(f"/proc/self/fdinfo/{fd}", "r") as handle:
+            for line in handle:
+                if line.startswith("mnt_id:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError) as exc:
+        raise OSError(
+            f"mount identity unreadable for fd {fd}: {exc}")
+    raise OSError(f"mount identity missing for fd {fd}")
+
+
+def fd_clear_dir(fd, rel="", mounts=frozenset(), root_dev=None,
+                 root_mnt=None):
     """Recursively remove every entry under open dir fd `fd`
     (fd-relative; never resolves a path). (R15)
 
@@ -3325,12 +4468,29 @@ def fd_clear_dir(fd, rel="", mounts=frozenset(), root_dev=None):
     device change against `root_dev` is an independent backstop
     for cross-filesystem mounts; the target set additionally
     covers same-filesystem binds, which share the device.
+
+    S13-round3: mutation exclusion before deletion. Each
+    traversed directory proves exclusive before any entry inside
+    it is unlinked; recursion carries the gate to every level. A
+    mounted directory is foreign content whatever its mode, so
+    the mount-boundary check precedes the gate.
+
+    S27-round3: descriptor-bound mount check on every child
+    directory. The target snapshot cannot see a bind mounted
+    after it, and a same-filesystem bind shares the device — but
+    never the mount ID. The root's mount ID is read once from
+    its held fd; each child hold must carry the same ID before
+    descent, or the walk refuses instead of clearing foreign
+    content.
     """
-    if root_dev is None:
-        root_dev = os.fstat(fd).st_dev
     if rel in mounts:
         raise OSError(
             f"mount boundary at {rel or '.'!r}: refusing traversal")
+    _require_exclusive_dir(fd, f"tree directory {rel or '.'!r}")
+    if root_dev is None:
+        root_dev = os.fstat(fd).st_dev
+    if root_mnt is None:
+        root_mnt = _mnt_id_of(fd)
     for name in os.listdir(fd):
         child_rel = f"{rel}/{name}" if rel else name
         if child_rel in mounts:
@@ -3348,6 +4508,14 @@ def fd_clear_dir(fd, rel="", mounts=frozenset(), root_dev=None):
         try:
             st = os.fstat(held)
             if stat.S_ISDIR(st.st_mode):
+                # S27-round3: mount identity on the held
+                # descriptor, before the device backstop and
+                # before descent — a post-snapshot same-fs bind
+                # shares the device but never this ID.
+                if _mnt_id_of(held) != root_mnt:
+                    raise OSError(
+                        f"mount boundary at {name!r} (mount id "
+                        f"differs from tree): refusing traversal")
                 if st.st_dev != root_dev:
                     raise OSError(
                         f"mount boundary at {name!r} (device "
@@ -3356,7 +4524,8 @@ def fd_clear_dir(fd, rel="", mounts=frozenset(), root_dev=None):
                     ".", os.O_RDONLY | os.O_DIRECTORY,
                     dir_fd=held)
                 try:
-                    fd_clear_dir(child, child_rel, mounts, root_dev)
+                    fd_clear_dir(child, child_rel, mounts, root_dev,
+                                 root_mnt)
                 finally:
                     os.close(child)
                 os.rmdir(name, dir_fd=fd)
@@ -3404,11 +4573,18 @@ def remove_pinned_tree(parent_fd, name, expected, tree_path=None):
     caller can retry privileged, while replacements refuse.
 
     S14 note: unlike FixtureRoot/cleanup_run, this tool pins
-    foreign-owned sticky parents (/dev/shm tt04 roots) by design,
-    so the exclusive-parent gate does not apply here; recorded
-    (dev, ino) identity checks are its mechanism. The S13
-    per-entry proof in fd_clear_dir applies regardless of parent
-    shape.
+    foreign-owned sticky parents (/dev/shm tt04 roots) by design.
+    S13-round3: the exclusion gate applies in sticky-aware form —
+    an exclusive parent, or a sticky parent holding a trusted
+    entry; anything else refuses before unlinking. Recorded
+    (dev, ino) identity checks plus the per-entry proof in
+    fd_clear_dir stay as backstops.
+    S13-round4: the sticky exception needs a trusted parent owner
+    as well (root-owned /dev/shm stays admitted) — see
+    ``_removal_excluded``.
+    S75: both ends use the S76 controller identity, so the
+    verdict survives the caller-to-root transition — see
+    ``_removal_excluded``.
 
     S27: when `tree_path` (the absolute path of this tree) is
     given, the live mount targets below it are computed fresh and
@@ -3429,6 +4605,12 @@ def remove_pinned_tree(parent_fd, name, expected, tree_path=None):
         if (st.st_dev, st.st_ino) != expected:
             return (f"identity changed: live=({st.st_dev},{st.st_ino}) "
                     f"expected={expected}; replacement refused")
+        # S13-round3: fail fast on an unexcluded parent before
+        # clearing anything; re-verified tightly before the unlink
+        # below.
+        excluded = _removal_excluded(parent_fd, root_fd)
+        if excluded:
+            return excluded
         mounts = frozenset()
         if tree_path is not None:
             try:
@@ -3459,6 +4641,11 @@ def remove_pinned_tree(parent_fd, name, expected, tree_path=None):
             return (f"identity changed before unlink: "
                     f"live=({got.st_dev},{got.st_ino}); "
                     f"replacement refused")
+        # S13-round3: tight window — exclusion re-verified
+        # immediately before the unlink.
+        excluded = _removal_excluded(parent_fd, root_fd)
+        if excluded:
+            return excluded
         try:
             os.rmdir(name, dir_fd=parent_fd)
         except OSError as exc:
@@ -3579,6 +4766,41 @@ def cleanup_pending_procs(manifest):
     return failures
 
 
+def _moved_mount_report(entry, fingerprint, row, target):
+    """Manual-recovery report for an ID-found moved mount. (S74)
+
+    The pending record carries a mount ID the helper verified
+    (moved report) or a refresh preserved (rollback refusal);
+    the table still shows that ID, but at another mountpoint.
+    The binding gates are re-checked live at the new location:
+    a proven-ours occupant reports manual retirement with the
+    live location; anything else is left in place, never
+    unmounted.
+    """
+    loc = row["target"]
+    checks = []
+    if entry.get("canary") is not None:
+        checks.append(_canary_matches(loc, MOUNT_CANARY_NAME,
+                                      entry["canary"]))
+    if entry.get("loop_backing") is not None:
+        source = fingerprint.get("source") or ""
+        checks.append(
+            _loop_still_ours(source, entry["loop_backing"])
+            and _mount_matches_loop(loc, source))
+    if checks and all(checks):
+        return (f"pending mount {target}: moved (mnt="
+                f"{entry['mnt_id']} live at {loc}); manual "
+                f"retirement required")
+    if not checks:
+        return (f"pending mount {target}: mount-ID "
+                f"{entry['mnt_id']} live at {loc} without "
+                f"binding evidence; verify the occupant before "
+                f"retiring; manual retirement required")
+    return (f"pending mount {target}: mount-ID {entry['mnt_id']} "
+            f"live at {loc} but occupant not provably ours; "
+            f"left in place")
+
+
 def cleanup_pending_acquisitions(manifest, run_root):
     """Reconcile uncertain acquisitions; returns failure strings."""
     failures = []
@@ -3596,10 +4818,15 @@ def cleanup_pending_acquisitions(manifest, run_root):
                                 "manual retirement required")
                 continue
             try:
-                matches = scan_loop_by_backing(
+                matches, incomplete = scan_loop_by_backing(
                     backing.get("dev"), backing.get("ino"))
             except AdmissionError as exc:
                 failures.append(f"pending loop: {exc}")
+                continue
+            if incomplete:
+                failures.append(
+                    f"pending loop {backing['path']}: backing scan "
+                    f"incomplete; manual retirement required")
                 continue
             if not matches:
                 continue
@@ -3624,11 +4851,53 @@ def cleanup_pending_acquisitions(manifest, run_root):
             except AdmissionError as exc:
                 failures.append(f"pending mount {target}: {exc}")
                 continue
+            if entry.get("mnt_id") is not None:
+                # S74: ID-keyed recovery — a moved mount (or a
+                # mount that moved after a pending refresh
+                # preserved its ID) is found wherever it sits.
+                # At the recorded target the normal path below
+                # runs (adopt-or-report); elsewhere the binding
+                # gates are re-checked and retirement is manual.
+                live = [row for row in table
+                        if row.get("mnt_id") == entry["mnt_id"]]
+                if live and live[0]["target"] != target:
+                    failures.append(_moved_mount_report(
+                        entry, fingerprint, live[0], target))
+                    continue
             rows = find_mounts(table, target)
             if not rows:
                 continue
-            if (len(rows) == 1
-                    and mount_fingerprint_matches(rows[0], fingerprint)):
+            adoptable = (
+                len(rows) == 1
+                and mount_fingerprint_matches(rows[0], fingerprint))
+            if not adoptable and (
+                    len(rows) == 1
+                    and entry.get("loop_backing") is not None
+                    and _fd_spelling_loop_shape(
+                        rows[0], fingerprint)
+                    and _loop_still_ours(
+                        fingerprint["source"],
+                        entry["loop_backing"])
+                    and _mount_matches_loop(
+                        target, fingerprint["source"])):
+                # S15-round3: the helper mounted on an fd-bound
+                # source but its report was lost (timeout) — the
+                # kernel's literal /dev/fd/N spelling plus the
+                # loop's live binding to our recorded image
+                # proves the occupant is ours.
+                # S71-round4: plus the mounted filesystem itself
+                # sitting on that loop — shape plus a separately
+                # bound loop never adopts a foreign occupant.
+                adoptable = True
+            if adoptable and entry.get("canary") is not None:
+                # S72-round4: the pending entry carries the
+                # acquisition canary — the current occupant must
+                # show it through, or a foreign same-type overlay
+                # at our target is adopted and unmounted.
+                if not _canary_matches(target, MOUNT_CANARY_NAME,
+                                       entry["canary"]):
+                    adoptable = False
+            if adoptable:
                 failure = cleanup_one_mount({
                     "target": target, "mnt_id": rows[0]["mnt_id"],
                     "fstype": rows[0]["fstype"],
@@ -3794,6 +5063,12 @@ def cleanup_command(args):
         if find_mounts(table, entry.get("target", "")):
             failures.append(f"mount still live: {entry.get('target')}")
     recorded = {e.get("target") for e in manifest["mounts"]}
+    # S74: moved-but-custodied mounts are known by their
+    # observed location — not unrecorded strays.
+    for pending in manifest.get("pending_acquisitions", []):
+        if pending.get("kind") == "mount" and pending.get(
+                "observed_target"):
+            recorded.add(pending["observed_target"])
     for row in table:
         target = row["target"]
         if contained(target, run_root) and target not in recorded:
@@ -3941,7 +5216,13 @@ def retire_mount_command(args):
     }
     if args.mount_root is not None:
         expected["root"] = args.mount_root
-    failure = retire_mount_now(args.target, expected, run_root)
+    # S17-round4: serialize against concurrent mount-fs creates
+    # (and fellow detaches) across validate→effect→prove.
+    lock_fd = _mount_exclock_acquire(run_root)
+    try:
+        failure = retire_mount_now(args.target, expected, run_root)
+    finally:
+        _mount_exclock_release(lock_fd)
     if failure is not None:
         print(f"FAILED: {failure}")
         return 1
@@ -3970,6 +5251,1013 @@ def retire_loop_command(args):
         return 1
     print(f"retired-loop {args.loop}")
     return 0
+
+
+class _HelperFail(Exception):
+    """Privileged-create-helper refusal; the command prints FAILED."""
+
+
+class _HelperUncertain(_HelperFail):
+    """mount(2) returned 0 but post-verification is inconclusive.
+
+    S74: the effect fired, so the caller must keep pending
+    custody — never discharge from target absence. The command
+    prints FAILED-UNCERTAIN.
+    """
+
+
+class _HelperMoved(_HelperFail):
+    """The verified occupant sits at a moved target. (S74)
+
+    mount(2) returned 0 on the held target FD, the post-effect
+    row passed every binding gate, but its mountpoint is no
+    longer the verified name — the target was renamed around
+    the effect. Carries the acquired mount ID and the observed
+    mountpoint so the caller retains ID-keyed recovery
+    custody. The command prints FAILED-MOVED.
+    """
+
+    def __init__(self, mnt_id, observed, reason):
+        super().__init__(reason)
+        self.mnt_id = mnt_id
+        self.observed = observed
+
+
+def _bind_helper_root(run_root_arg, dev, ino):
+    """Re-establish the caller's run-root authority in this process.
+
+    S15-round3: create helpers (make-ext4, attach-loop, mount-fs)
+    take no caller-side validation on trust — they bind the
+    run-root themselves and require its live identity to equal
+    the (dev, ino) the caller recorded from its held guard. The
+    argv pathname is a hint; the (dev, ino) equality is the
+    barrier between the caller's last verification and the
+    privileged effect. Returns (run_root, guard); the caller
+    closes the guard. Raises _HelperFail on any mismatch.
+    """
+    run_root = check_run_root(run_root_arg)
+    if run_root is None:
+        raise _HelperFail(
+            f"foreign run-root: {str(run_root_arg)[:80]!r}")
+    try:
+        guard = RootAuthority(run_root)
+    except RootAuthorityError as exc:
+        raise _HelperFail(str(exc))
+    if (guard.dev, guard.ino) != (dev, ino):
+        guard.close()
+        raise _HelperFail(
+            f"run-root identity mismatch: live=({guard.dev},"
+            f"{guard.ino}) expected=({dev},{ino}); refusing")
+    return (run_root, guard)
+
+
+def _open_verified_operand(run_root, path, dev, ino, kind):
+    """Open an absolute operand with no following, verifying identity.
+
+    S15-round3: `kind` is "regular" or "dir". The operand must be
+    contained in `run_root` (callers pass aux roots separately
+    where layers legitimately live outside), must open with
+    O_NOFOLLOW, and must fstat to the expected (dev, ino) with
+    the expected kind. Anything else raises _HelperFail.
+    Returns the open fd; the caller closes it.
+    """
+    if not path or not os.path.isabs(path):
+        raise _HelperFail(f"operand not absolute: {str(path)[:80]!r}")
+    if not contained(os.path.normpath(path), run_root):
+        raise _HelperFail(
+            f"operand outside run-root: {str(path)[:80]!r}")
+    flags = os.O_NOFOLLOW | os.O_CLOEXEC
+    if kind == "dir":
+        flags |= os.O_RDONLY | os.O_DIRECTORY
+    else:
+        flags |= os.O_RDWR
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise _HelperFail(
+            f"operand not openable: {str(path)[:80]!r}: {exc}")
+    try:
+        st = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise _HelperFail(
+            f"operand not statable: {str(path)[:80]!r}: {exc}")
+    good = (stat.S_ISDIR(st.st_mode) if kind == "dir"
+            else stat.S_ISREG(st.st_mode))
+    if (st.st_dev, st.st_ino) != (dev, ino) or not good:
+        os.close(fd)
+        raise _HelperFail(
+            f"operand identity mismatch: {str(path)[:80]!r} "
+            f"live=({st.st_dev},{st.st_ino}) "
+            f"expected=({dev},{ino}); refusing")
+    return fd
+
+
+def make_ext4_command(args):
+    """Privileged-internal: mkfs.ext4 on a verified image file. (S15)
+
+    Never invoked by hand: provision_ext4 re-execs this file
+    under sudo so the privileged format verifies its operand
+    itself, in the same process that formats, operating on
+    /dev/fd/N — no pathname resolution between verification
+    and effect. Prints `made-ext4 <image>` or `FAILED:
+    <reason>`; exit 0/1.
+    """
+    try:
+        run_root, guard = _bind_helper_root(
+            args.run_root, args.root_dev, args.root_ino)
+        try:
+            fd = _open_verified_operand(
+                run_root, args.image, args.dev, args.ino,
+                "regular")
+            try:
+                mkfs = shutil.which("mkfs.ext4")
+                if mkfs is None:
+                    raise _HelperFail("missing mkfs.ext4 tool")
+                try:
+                    proc = subprocess.run(
+                        [mkfs, "-q", "-F", f"/dev/fd/{fd}"],
+                        capture_output=True, text=True,
+                        timeout=300, pass_fds=[fd])
+                except subprocess.TimeoutExpired:
+                    raise _HelperFail("mkfs.ext4 timed out")
+                except OSError as exc:
+                    raise _HelperFail(
+                        f"mkfs.ext4 exec failed: {exc}")
+                if proc.returncode != 0:
+                    raise _HelperFail(
+                        f"mkfs.ext4 refused: {tail(proc.stderr)}")
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        finally:
+            guard.close()
+    except _HelperFail as exc:
+        print(f"FAILED: {exc}")
+        return 1
+    print(f"made-ext4 {args.image}")
+    return 0
+
+
+def make_ext4_via_helper(run_root, guard, image, dev, ino):
+    """Format one verified image through the privileged helper.
+
+    Returns None on success, else a failure string. The helper
+    re-verifies the run-root and image identities in-process,
+    so caller observations going stale cannot redirect the
+    format. (S15)
+    """
+    helper = os.path.abspath(__file__)
+    rc, out, err = run_sudo(
+        [sys.executable, helper, "make-ext4",
+         "--run-root", run_root,
+         "--root-dev", str(guard.dev),
+         "--root-ino", str(guard.ino),
+         "--image", image,
+         "--dev", str(dev), "--ino", str(ino)],
+        timeout=330)
+    if rc == 0 and out.startswith("made-ext4 "):
+        return None
+    return f"mkfs.ext4 refused: rc={rc} {tail(out or err)}"
+
+
+def attach_loop_command(args):
+    """Privileged-internal: bind a loop device to a verified image. (S15)
+
+    Never invoked by hand: provision_ext4 re-execs this file
+    under sudo so the privileged attach opens the image itself,
+    verifies the caller's (dev, ino), and configures a free
+    loop device natively (LOOP_CONFIGURE on the held fd) — the
+    caller's pathname never reaches a privileged resolver, and
+    no external losetup binary resolves operands. The live
+    association is verified (LOOP_GET_STATUS64) before the
+    report. Prints `attached-loop /dev/loopN` or `FAILED:
+    <reason>`; exit 0/1.
+    """
+    try:
+        run_root, guard = _bind_helper_root(
+            args.run_root, args.root_dev, args.root_ino)
+        try:
+            img_fd = _open_verified_operand(
+                run_root, args.image, args.dev, args.ino,
+                "regular")
+            try:
+                loop = _configure_free_loop(
+                    img_fd, args.dev, args.ino)
+            finally:
+                try:
+                    os.close(img_fd)
+                except OSError:
+                    pass
+        finally:
+            guard.close()
+    except _HelperFail as exc:
+        print(f"FAILED: {exc}")
+        return 1
+    print(f"attached-loop {loop}")
+    return 0
+
+
+def _configure_free_loop(img_fd, expect_dev, expect_ino):
+    """Bind a free /dev/loopN to held image fd `img_fd`. (S15)
+
+    Returns the bound device path. The configured device fd is
+    retained through the post-verify read — no pathname
+    re-resolution between configure and validation, so a
+    device-node swap cannot forge a mismatch.
+
+    S73: the post-verify never clears. A mismatch means the
+    device was rebound after our configure (the live
+    association is foreign now) or the expectation was stale
+    (the live association is still ours — the caller's
+    reconcile adopts it); an unreadable status means ownership
+    is unestablished. Rollback may retire only an association
+    whose ownership remains established, so both refuse and
+    leave the device in place for reconcile — never a
+    reopen-by-name CLR of a foreign or unverified association.
+    Raises _HelperFail when no free device exists, the
+    configure fails, or the post-verify refuses.
+    """
+    try:
+        ctl = os.open("/dev/loop-control",
+                      os.O_RDWR | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _HelperFail(f"loop-control not openable: {exc}")
+    try:
+        try:
+            num = fcntl.ioctl(ctl, LOOP_CTL_GET_FREE)
+        except OSError as exc:
+            raise _HelperFail(f"no free loop device: {exc}")
+    finally:
+        try:
+            os.close(ctl)
+        except OSError:
+            pass
+    loop = f"/dev/loop{num}"
+    try:
+        loop_fd = os.open(loop, os.O_RDWR | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _HelperFail(f"loop {loop} not openable: {exc}")
+    try:
+        config = (struct.pack("<II", img_fd, 0) + bytes(232)
+                  + bytes(64))
+        try:
+            fcntl.ioctl(loop_fd, LOOP_CONFIGURE, config)
+        except OSError as exc:
+            raise _HelperFail(
+                f"loop {loop} configure failed: {exc}")
+        try:
+            ident = _loop_get_status_on(loop_fd)
+        except LoopIdUnavailable as exc:
+            raise _HelperFail(
+                f"loop {loop} association unverifiable ({exc}); "
+                f"left in place for reconcile")
+        if ident is None:
+            raise _HelperFail(
+                f"loop {loop} detached after configure; left "
+                f"for reconcile")
+        if ident != (expect_dev, expect_ino):
+            raise _HelperFail(
+                f"loop {loop} association mismatch: live={ident} "
+                f"expected=({expect_dev},{expect_ino}); left in "
+                f"place (foreign or rebound, never cleared)")
+    finally:
+        try:
+            os.close(loop_fd)
+        except OSError:
+            pass
+    return loop
+
+
+def attach_loop_via_helper(run_root, guard, image, dev, ino):
+    """Attach a loop to one verified image through the helper.
+
+    Returns (loop, None) on success, else (None, failure).
+    The helper verifies the image identity in-process and
+    reports the bound device; the caller still re-verifies the
+    live association before adoption. (S15)
+    """
+    helper = os.path.abspath(__file__)
+    rc, out, err = run_sudo(
+        [sys.executable, helper, "attach-loop",
+         "--run-root", run_root,
+         "--root-dev", str(guard.dev),
+         "--root-ino", str(guard.ino),
+         "--image", image,
+         "--dev", str(dev), "--ino", str(ino)],
+        timeout=120)
+    if rc == 0 and out.startswith("attached-loop /dev/loop"):
+        candidate = out.split()[1] if len(out.split()) > 1 else ""
+        if candidate.startswith("/dev/loop"):
+            return (candidate, None)
+    return (None,
+            f"losetup refused: rc={rc} {tail(out or err)}")
+
+
+def _mount2(source, target, fstype, flags, data):
+    """In-process mount(2); returns None on success, else errno. (S15)"""
+    libc = _libc_handle()
+    libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
+                           ctypes.c_char_p, ctypes.c_ulong,
+                           ctypes.c_char_p]
+    libc.mount.restype = ctypes.c_int
+    rc = libc.mount(os.fsencode(source), os.fsencode(target),
+                    os.fsencode(fstype), flags,
+                    None if data is None else os.fsencode(data))
+    if rc == 0:
+        return None
+    return ctypes.get_errno()
+
+
+def _parse_layer_spec(spec):
+    """Parse one NAME=ABS_PATH:DEV:INO layer spec. (S15)
+
+    Raises _HelperFail on any malformed spec.
+    """
+    try:
+        name, rest = spec.split("=", 1)
+        path, dev, ino = rest.rsplit(":", 2)
+        dev = int(dev)
+        ino = int(ino)
+    except (ValueError, AttributeError):
+        raise _HelperFail(f"malformed layer spec: {spec[:80]!r}")
+    if name not in ("lower", "upper", "work"):
+        raise _HelperFail(f"bad layer name: {name[:20]!r}")
+    if not path or not os.path.isabs(path):
+        raise _HelperFail(f"layer path not absolute: {spec[:80]!r}")
+    return (name, path, dev, ino)
+
+
+def mount_fs_command(args):
+    """Privileged-internal: mount one verified filesystem. (S15)
+
+    Never invoked by hand: provision_ext4/mount_overlay re-exec
+    this file under sudo so the privileged mount opens every
+    operand itself (target dir, loop device, overlay layers),
+    verifies each (dev, ino) against the caller's creation-time
+    observation, and calls mount(2) on /dev/fd/N operands — no
+    pathname resolution between verification and effect. The
+    live row is post-verified (row selection plus acquisition
+    binding: loop-device correspondence for ext4, upper-canary
+    content for overlay) and reported; with --own-uid/gid
+    the fresh root is fchown'd through a mount-ID-correspondent
+    fd (no pathname chown), only after the binding passes.
+    Prints `mounted <target> mnt=<id> source=<src> super=<opts>`
+    or `FAILED: <reason>`; exit 0/1.
+
+    S74: post-effect failures carry their own taxonomy so the
+    caller never discharges custody it still holds. `FAILED-
+    UNCERTAIN: <reason>` means mount(2) returned 0 but the
+    occupant could not be proven (missing, ambiguous, or
+    binding-refused row) — keep pending. `FAILED-MOVED:
+    mnt=<id> observed=<esc-target> <reason>` means the
+    occupant passed every gate at a renamed mountpoint — keep
+    pending with the reported mount ID for recovery.
+    """
+    try:
+        run_root, guard = _bind_helper_root(
+            args.run_root, args.root_dev, args.root_ino)
+        # S17-round4: serialize against concurrent retire-mount
+        # detaches (and vice versa); _HelperFail maps to FAILED.
+        lock_fd = _mount_exclock_acquire(run_root)
+        try:
+            target_fd = _open_verified_operand(
+                run_root, args.target, args.target_dev,
+                args.target_ino, "dir")
+            try:
+                if args.fstype == "ext4":
+                    row = _mount_ext4_now(
+                        args, run_root, target_fd)
+                elif args.fstype == "overlay":
+                    row = _mount_overlay_now(
+                        args, run_root, target_fd)
+                else:
+                    raise _HelperFail(
+                        f"unsupported fstype: "
+                        f"{str(args.fstype)[:20]!r}")
+            finally:
+                try:
+                    os.close(target_fd)
+                except OSError:
+                    pass
+            if args.own_uid is not None:
+                _own_fresh_root(args, run_root, row)
+        finally:
+            _mount_exclock_release(lock_fd)
+            guard.close()
+    except _HelperMoved as exc:
+        # S74: structured moved report — the escaped observed
+        # target stays single-line (S77 codec); both fields are
+        # capped so the line survives the caller's error tail.
+        observed = _escape_report_field(str(exc.observed))[:150]
+        print(f"FAILED-MOVED: mnt={exc.mnt_id} observed={observed} "
+              f"{str(exc)[:120]}")
+        return 1
+    except _HelperUncertain as exc:
+        print(f"FAILED-UNCERTAIN: {exc}")
+        return 1
+    except _HelperFail as exc:
+        print(f"FAILED: {exc}")
+        return 1
+    print(_format_mounted_line(
+        args.target, row["mnt_id"],
+        row["source"], row["super"]))
+    return 0
+
+
+def _mount_ext4_now(args, run_root, target_fd):
+    """mount(2) one ext4 loop fs on held fds; return the live row.
+
+    S15-round4: the loop device is opened once — its kernel
+    backing is validated through that same held descriptor
+    (LOOP_GET_STATUS64, no pathname re-resolution) and the
+    mount sources /dev/fd/N of it. A device-node substitution
+    between a validate-open and a separate mount-open cannot
+    redirect the filesystem source: there is no second open.
+    """
+    if not args.loop or not args.loop.startswith("/dev/loop"):
+        raise _HelperFail(
+            f"foreign loop device: {str(args.loop)[:40]!r}")
+    try:
+        loop_fd = os.open(args.loop,
+                          os.O_RDWR | os.O_NOFOLLOW
+                          | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise _HelperFail(
+            f"loop {args.loop} not bound; refusing mount")
+    except OSError as exc:
+        raise _HelperFail(f"loop {args.loop} not openable: {exc}")
+    try:
+        try:
+            ident = _loop_get_status_on(loop_fd)
+        except LoopIdUnavailable as exc:
+            raise _HelperFail(
+                f"loop {args.loop} backing unverifiable ({exc}); "
+                f"refusing mount")
+        if ident is None:
+            raise _HelperFail(
+                f"loop {args.loop} not bound; refusing mount")
+        if ident != (args.backing_dev, args.backing_ino):
+            raise _HelperFail(
+                f"loop {args.loop} backing not ours "
+                f"(live={ident}); refusing mount")
+        try:
+            # S74: pre-effect snapshot for diff selection — a
+            # target renamed around the effect is still found at
+            # its observed mountpoint. Unreadable here is a plain
+            # refusal: mount(2) never runs.
+            pre = _snapshot_mount_rows()
+        except AdmissionError as exc:
+            raise _HelperFail(
+                f"mount table unreadable before mount: {exc}")
+        err = _mount2(f"/dev/fd/{loop_fd}",
+                      f"/dev/fd/{target_fd}", "ext4",
+                      MS_RELATIME, None)
+    finally:
+        try:
+            os.close(loop_fd)
+        except OSError:
+            pass
+    if err is not None:
+        raise _HelperFail(
+            f"mount {args.target} failed: {os.strerror(err)}")
+    return _post_verify_mount(args.target, "ext4", args.loop,
+                              loop=args.loop, pre=pre)
+
+
+def _mount_overlay_now(args, run_root, target_fd):
+    """mount(2) one overlay stack on held fds; return the live row."""
+    # S81-round4: overlay post-mount binding is mandatory — the
+    # row alone cannot survive a replacement in the window.
+    # Required before any effect, like the layer count.
+    if not args.canary:
+        raise _HelperFail(
+            "overlay mount requires a canary for post-mount binding")
+    specs = args.layer or []
+    if len(specs) != 3:
+        raise _HelperFail(
+            f"overlay needs 3 layers, got {len(specs)}")
+    aux_root = None
+    if args.aux_root is not None:
+        aux_root = _verify_aux_root(args)
+    layers = {}
+    for spec in specs:
+        name, path, dev, ino = _parse_layer_spec(spec)
+        if name in layers:
+            raise _HelperFail(f"duplicate layer: {name}")
+        under_run = contained(os.path.normpath(path), run_root)
+        under_aux = (aux_root is not None and contained(
+            os.path.normpath(path), aux_root))
+        if not (under_run or under_aux):
+            raise _HelperFail(
+                f"layer {name} outside run-root and aux-root: "
+                f"{path[:80]!r}")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY
+                         | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            raise _HelperFail(
+                f"layer {name} not openable: {exc}")
+        try:
+            st = os.fstat(fd)
+        except OSError as exc:
+            os.close(fd)
+            raise _HelperFail(
+                f"layer {name} not statable: {exc}")
+        if ((st.st_dev, st.st_ino) != (dev, ino)
+                or not stat.S_ISDIR(st.st_mode)):
+            os.close(fd)
+            raise _HelperFail(
+                f"layer {name} identity mismatch: "
+                f"live=({st.st_dev},{st.st_ino}) "
+                f"expected=({dev},{ino}); refusing")
+        layers[name] = fd
+    try:
+        extra = args.extra_opts or ""
+        if extra and not _OVERLAY_EXTRA_RE.fullmatch(extra):
+            raise _HelperFail(
+                f"bad overlay extra opts: {extra[:60]!r}")
+        data = (f"lowerdir=/dev/fd/{layers['lower']},"
+                f"upperdir=/dev/fd/{layers['upper']},"
+                f"workdir=/dev/fd/{layers['work']}{extra}")
+        # S74: pre-effect snapshot for diff selection (see the
+        # ext4 path); unreadable here refuses before mount(2).
+        try:
+            pre = _snapshot_mount_rows()
+        except AdmissionError as exc:
+            raise _HelperFail(
+                f"mount table unreadable before mount: {exc}")
+        err = _mount2("overlay", f"/dev/fd/{target_fd}",
+                      "overlay", MS_RELATIME, data)
+    finally:
+        for fd in layers.values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    if err is not None:
+        raise _HelperFail(
+            f"mount {args.target} failed: {os.strerror(err)}")
+    return _post_verify_mount(args.target, "overlay", "overlay",
+                              canary=args.canary, pre=pre)
+
+
+def _verify_aux_root(args):
+    """Verify a declared aux root's identity; return its path."""
+    aux = check_run_root(args.aux_root)
+    if aux is None:
+        raise _HelperFail(
+            f"foreign aux-root: {str(args.aux_root)[:80]!r}")
+    try:
+        fd = os.open(aux, os.O_RDONLY | os.O_DIRECTORY
+                     | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _HelperFail(f"aux-root not openable: {exc}")
+    try:
+        st = os.fstat(fd)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if (st.st_dev, st.st_ino) != (args.aux_dev, args.aux_ino):
+        raise _HelperFail(
+            f"aux-root identity mismatch: live=({st.st_dev},"
+            f"{st.st_ino}); refusing")
+    return aux
+
+
+def _snapshot_mount_rows():
+    """Pre-effect mount-table snapshot as row tuples. (S74)
+
+    The post-verify diff selects our effect by table
+    difference, so a target renamed around mount(2) is still
+    found at its observed mountpoint.
+    """
+    return frozenset(
+        (row["mnt_id"], row["target"], row["fstype"],
+         row["source"], row["super"], row["root"])
+        for row in read_mount_table())
+
+
+def _verify_mount_row(row, at, fstype, source, loop=None,
+                      canary=None):
+    """Refusal reason for a candidate post-effect row, or None. (S74)
+
+    The row gates shared by the pathname and table-diff
+    selection paths: expected fstype/source (a /dev/fd/N
+    spelling matches a device source — the kernel records
+    fd-bound operands literally) plus the acquisition
+    binding (loop-device correspondence for ext4, upper
+    canary for overlay), checked live at `at`. A passing row
+    is proven ours independently of any pathname.
+    """
+    if row["fstype"] != fstype:
+        return (f"mount {at} occupant not ours "
+                f"({row['fstype']},{row['source']}); left in place")
+    if row["source"] != source and not (
+            source.startswith("/dev/")
+            and row["source"].startswith("/dev/fd/")):
+        return (f"mount {at} occupant not ours "
+                f"({row['fstype']},{row['source']}); left in place")
+    if loop is not None and not _mount_matches_loop(at, loop):
+        return f"mount {at} occupant not on {loop}; left in place"
+    if canary is not None and not _canary_matches(
+            at, MOUNT_CANARY_NAME, canary):
+        return f"mount {at} canary mismatch; left in place"
+    return None
+
+
+def _post_verify_mount(target, fstype, source, loop=None,
+                       canary=None, pre=None):
+    """The live row for a just-created mount, or raise. (S15)
+
+    Exactly one row at the target, with the expected fstype
+    and source; anything else (absent, stacked, foreign) is a
+    FAILED mount, never reported as success. A /dev/fd/N
+    source spelling matches a device source: the kernel
+    records our fd-bound operand literally, and the row
+    appeared synchronously with our mount(2) (mount ran only
+    after every operand verified, and failure returns before
+    this read). No rollback detach here: an unverified
+    occupant is never unmounted — the caller keeps pending
+    custody.
+
+    S81-round4: row selection alone cannot survive a
+    privileged unmount/remount inside the post-read window —
+    the replacement row carries a plausible fstype/source
+    and the old code reported its mount ID, then fchown'd
+    the stranger (whose fd-vs-row check passes, both sides
+    already wrong). Acquisition identity now binds to
+    retained authority independently of the mutable
+    pathname observation: ext4 requires the mounted
+    filesystem to sit on our recorded loop device (`loop`),
+    overlay requires our unguessable upper canary to show
+    through (`canary`). A failing binding refuses before
+    any chown or report — the caller keeps pending custody
+    and the stranger is left in place.
+
+    S74-round4: every raise below is post-effect (mount(2)
+    returned 0), so failures are _HelperUncertain — the
+    caller must keep pending custody — never plain
+    pre-effect refusals. When `pre` (a _snapshot_mount_rows
+    set taken immediately before the effect) is given, the
+    occupant is additionally selected by table difference:
+    exactly one added row passing the gates is ours wherever
+    it sits; at a renamed mountpoint that is a _HelperMoved
+    report (mount ID plus observed target for ID-keyed
+    recovery) instead of a false failure. With no
+    diff-selected occupant the pathname proof below runs
+    unchanged (a same-name replacement fails its gates
+    there with the established reasons).
+    """
+    _test_post_mount_delay()
+    try:
+        table = read_mount_table()
+    except AdmissionError as exc:
+        raise _HelperUncertain(
+            f"mount table unreadable after mount: {exc}")
+    if pre is not None:
+        added = [row for row in table
+                 if (row["mnt_id"], row["target"], row["fstype"],
+                     row["source"], row["super"],
+                     row["root"]) not in pre]
+        passing = [row for row in added
+                   if _verify_mount_row(
+                       row, row["target"], fstype, source,
+                       loop, canary) is None]
+        if len(passing) == 1:
+            row = passing[0]
+            if len(find_mounts(table, row["target"])) != 1:
+                raise _HelperUncertain(
+                    f"ambiguous stacked mount at {row['target']} "
+                    f"after create")
+            if row["target"] != target:
+                raise _HelperMoved(
+                    row["mnt_id"], row["target"],
+                    f"target moved during mount (mountpoint now "
+                    f"{row['target'][:80]!r})")
+            return row
+        if len(passing) > 1:
+            raise _HelperUncertain(
+                f"ambiguous mount effects after create "
+                f"({len(passing)} matching new occupants); "
+                f"left in place")
+    rows = find_mounts(table, target)
+    if not rows:
+        raise _HelperUncertain(
+            f"mount {target} missing after create")
+    if len(rows) > 1:
+        raise _HelperUncertain(
+            f"ambiguous stacked mount at {target} after create")
+    refusal = _verify_mount_row(rows[0], target, fstype, source,
+                                loop, canary)
+    if refusal is not None:
+        raise _HelperUncertain(refusal)
+    return rows[0]
+
+
+def _test_post_mount_delay():
+    """Test-only post-mount pause for replacement tests. (S81)
+
+    Reads S81_HELPER_POST_MOUNT_DELAY_MS (bounded, garbage
+    means none) and sleeps before the first post-read, so the
+    live suite can plant a foreign replacement inside the
+    window deterministically. Production `run_sudo` passes no
+    environment (plain `sudo -n` with env_reset), so this
+    never fires outside `sudo env ...` test invocations.
+    """
+    try:
+        delay_ms = int(os.environ.get(
+            "S81_HELPER_POST_MOUNT_DELAY_MS", "0"))
+    except ValueError:
+        return
+    delay_ms = max(0, min(delay_ms, 30_000))
+    if delay_ms:
+        time.sleep(delay_ms / 1000.0)
+
+
+def _own_fresh_root(args, run_root, row):
+    """fchown the fresh mount root to --own-uid/gid. (S15)
+
+    The root is opened fresh (post-mount it is the filesystem
+    root, not the covered mountpoint) and bound by mount-ID
+    correspondence to the post-verified row — never a blind
+    pathname chown.
+    """
+    if args.own_gid is None:
+        raise _HelperFail("own-gid required with own-uid")
+    if not contained(os.path.normpath(args.target), run_root):
+        raise _HelperFail(
+            f"own target outside run-root: "
+            f"{str(args.target)[:80]!r}")
+    try:
+        fd = os.open(args.target, os.O_RDONLY | os.O_DIRECTORY
+                     | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise _HelperFail(f"fresh root not openable: {exc}")
+    try:
+        try:
+            ident = _mnt_id_of(fd)
+        except OSError as exc:
+            raise _HelperFail(
+                f"fresh root identity unreadable ({exc}); "
+                f"refusing chown")
+        if ident != row["mnt_id"]:
+            raise _HelperFail(
+                f"fresh root mount mismatch (fd={ident} "
+                f"row={row['mnt_id']}); refusing chown")
+        try:
+            os.fchown(fd, args.own_uid, args.own_gid)
+        except OSError as exc:
+            raise _HelperFail(f"fresh root chown failed: {exc}")
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def mount_fs_via_helper(run_root, guard, target, target_dev,
+                        target_ino, fstype, loop=None,
+                        backing=None, layers=(), extra_opts="",
+                        aux=None, own=None, canary=None):
+    """Mount one verified filesystem through the helper. (S15)
+
+    `backing` is (dev, ino) for ext4; `layers` is a list of
+    (name, path, dev, ino); `aux` is (path, dev, ino) or None;
+    `own` is (uid, gid) or None; `canary` is the overlay
+    post-mount binding content (S81, required for overlay).
+    Returns ((mnt_id, source, super), None) on success — the
+    helper's post-verified observation, which joins the
+    adoption fingerprint — else (None, failure).
+    """
+    helper = os.path.abspath(__file__)
+    argv = [sys.executable, helper, "mount-fs",
+           "--run-root", run_root,
+           "--root-dev", str(guard.dev),
+           "--root-ino", str(guard.ino),
+           "--target", target,
+           "--target-dev", str(target_dev),
+           "--target-ino", str(target_ino),
+           "--fstype", fstype]
+    if fstype == "ext4":
+        argv += ["--loop", loop,
+                "--backing-dev", str(backing[0]),
+                "--backing-ino", str(backing[1])]
+    else:
+        for name, path, dev, ino in layers:
+            argv += ["--layer", f"{name}={path}:{dev}:{ino}"]
+        if extra_opts:
+            argv += ["--extra-opts", extra_opts]
+    if aux is not None:
+        argv += ["--aux-root", aux[0],
+                "--aux-dev", str(aux[1]),
+                "--aux-ino", str(aux[2])]
+    if own is not None:
+        argv += ["--own-uid", str(own[0]),
+                "--own-gid", str(own[1])]
+    if canary is not None:
+        argv += ["--canary", canary]
+    rc, out, err = run_sudo(argv, timeout=120)
+    if rc == 0 and out.startswith("mounted "):
+        parsed = _parse_mounted_line(out, target)
+        if parsed is not None:
+            return (parsed, None)
+        # rc==0 means the helper verified the occupant at the
+        # requested target — reconcile may still adopt it, so
+        # this stays a reconcilable (refused-class) report.
+        return (None, f"mount {target} report unparseable: "
+                      f"{tail(out or err)}")
+    return (None, _normalize_mount_failure(target, rc, out, err))
+
+
+def _parse_moved_report(text):
+    """(mnt_id, observed) from a FAILED-MOVED helper line, or None.
+
+    S74: `observed` is None when the escaped target does not
+    decode (truncated mid-escape): the mount ID still
+    identifies the effect for recovery.
+    """
+    match = re.search(
+        r"FAILED-MOVED:\s+mnt=(\d+)\s+observed=(\S+)", text or "")
+    if match is None:
+        return None
+    try:
+        mnt_id = int(match.group(1))
+    except ValueError:
+        return None
+    return (mnt_id, _unescape_report_field(match.group(2)))
+
+
+def _normalize_mount_failure(target, rc, out, err):
+    """Classify a failed mount-fs invocation. (S74)
+
+    Post-effect outcomes (a moved occupant, an inconclusive
+    post-read, a timeout, a helper crash) keep pending
+    custody; only pre-effect refusals (plain FAILED, sudo
+    exec failure) may reconcile-drop on target absence. The
+    normalized strings are the _classify_mount_failure
+    contract; the refused shape is unchanged.
+    """
+    text = f"{out or ''}\n{err or ''}"
+    moved = _parse_moved_report(text)
+    if moved is not None:
+        mnt_id, observed = moved
+        if observed is None:
+            # The ID survived but the location did not decode:
+            # deliberately not the parseable moved shape, so
+            # classification degrades to uncertain-with-ID.
+            return (f"mount {str(target)[:100]} moved during "
+                    f"create (mnt={mnt_id} observed-unknown): "
+                    f"{tail(text)[:200]}")
+        seen = _escape_report_field(observed)[:150]
+        return (f"mount {str(target)[:100]} moved during create "
+                f"(mnt={mnt_id} observed={seen}): "
+                f"{tail(text)[:200]}")
+    if ("FAILED-UNCERTAIN:" in text or rc in (0, 124)
+            or (rc == 1 and "FAILED" not in text)
+            or rc not in (0, 1, 124, 127)):
+        return (f"mount {str(target)[:100]} effect uncertain "
+                f"after create: {tail(text)[:200]}")
+    # rc==127 (sudo never ran the helper), or rc==1 with a
+    # plain pre-effect FAILED report: no effect is possible.
+    return (f"mount {target} refused: rc={rc} {tail(out or err)}")
+
+
+def _classify_mount_failure(failure):
+    """(kind, mnt_id, observed) for a mount failure string. (S74)
+
+    `failure` is a mount_fs_via_helper report: "moved" (the
+    target was renamed around the effect — ID-keyed recovery
+    custody), "uncertain" (the effect may have fired: timeout,
+    crash, or an inconclusive helper post-read — never
+    discharge), or "refused" (no effect possible: pre-effect
+    refusal, sudo exec failure, or an rc==0 report the helper
+    had verified and reconcile may adopt). Unparseable moved
+    reports degrade to uncertain, keeping the mount ID when
+    it survived.
+    """
+    text = failure or ""
+    if "moved during create" in text:
+        match = re.search(
+            r"moved during create \(mnt=(\d+) observed=(\S+)\)",
+            text)
+        if match is not None:
+            observed = _unescape_report_field(match.group(2))
+            if observed is not None:
+                return ("moved", int(match.group(1)), observed)
+            return ("uncertain", int(match.group(1)), None)
+        orphan = re.search(r"moved during create \(mnt=(\d+)",
+                           text)
+        if orphan is not None:
+            return ("uncertain", int(orphan.group(1)), None)
+        return ("uncertain", None, None)
+    if "effect uncertain after create" in text:
+        return ("uncertain", None, None)
+    return ("refused", None, None)
+
+
+_REPORT_ESCAPES = {
+    "\\": "\\134",
+    " ": "\\040",
+    "\t": "\\011",
+    "\n": "\\012",
+    "\v": "\\013",
+    "\f": "\\014",
+    "\r": "\\015",
+}
+
+_REPORT_UNESCAPES = {v[1:]: k for k, v in _REPORT_ESCAPES.items()}
+
+
+def _escape_report_field(text):
+    """Escape one helper-report field. (S77)
+
+    Kernel-mountinfo-style octal escapes for the framing
+    separators (backslash, space, every ASCII line/field
+    separator): an admitted LF-containing pathname survives
+    the single-line success report instead of splitting it.
+    """
+    return "".join(_REPORT_ESCAPES.get(char, char) for char in text)
+
+
+def _unescape_report_field(text):
+    """Decode one helper-report field, or None. (S77)
+
+    Unknown escapes refuse (mirroring `unescape_mountinfo`):
+    a report we cannot decode exactly is unparseable, never
+    guessed at.
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char != "\\":
+            out.append(char)
+            i += 1
+            continue
+        esc = text[i + 1:i + 4]
+        if len(esc) != 3 or esc not in _REPORT_UNESCAPES:
+            return None
+        out.append(_REPORT_UNESCAPES[esc])
+        i += 4
+    return "".join(out)
+
+
+def _format_mounted_line(target, mnt_id, source, super_opts):
+    """Format the helper success report with escaped fields. (S77)"""
+    return (f"mounted {_escape_report_field(target)} "
+            f"mnt={mnt_id} "
+            f"source={_escape_report_field(source)} "
+            f"super={_escape_report_field(super_opts)}")
+
+
+def _parse_mounted_line(out, target):
+    """Parse `mounted <target> mnt=<id> source=<src> super=<opts>`. (S15)
+
+    Returns (mnt_id, source, super) when the line is
+    well-formed AND names the requested target, else None.
+    Right-anchored field search, so targets containing spaces
+    or field-like spellings still parse exactly.
+    S77-round4: the whole response parses as one frame (no
+    `splitlines` truncation — an escaped target never carries
+    a raw line separator, and a raw one refuses); fields
+    unescape after the split, unknown escapes refuse.
+    """
+    body = out[:-1] if out.endswith("\n") else out
+    if "\n" in body or "\r" in body:
+        return None
+    if not body.startswith("mounted "):
+        return None
+    rest = body[len("mounted "):]
+    mnt_at = rest.rfind(" mnt=")
+    source_at = rest.rfind(" source=")
+    super_at = rest.rfind(" super=")
+    if (mnt_at < 0 or source_at < 0 or super_at < 0
+            or not mnt_at < source_at < super_at):
+        return None
+    raw_target = rest[:mnt_at]
+    raw_source = rest[source_at + len(" source="):super_at]
+    raw_super = rest[super_at + len(" super="):]
+    for field in (raw_source, raw_super):
+        if not field or " " in field or "\t" in field:
+            return None
+    try:
+        mnt_id = int(rest[mnt_at + len(" mnt="):source_at])
+    except ValueError:
+        return None
+    decoded_target = _unescape_report_field(raw_target)
+    decoded_source = _unescape_report_field(raw_source)
+    decoded_super = _unescape_report_field(raw_super)
+    if (decoded_target is None or decoded_source is None
+            or decoded_super is None):
+        return None
+    if decoded_target != target:
+        return None
+    return (mnt_id, decoded_source, decoded_super)
 
 
 def main(argv=None):
@@ -4010,6 +6298,67 @@ def main(argv=None):
     loop_cmd.add_argument("--backing-path", required=True)
     loop_cmd.add_argument("--backing-dev", required=True, type=int)
     loop_cmd.add_argument("--backing-ino", required=True, type=int)
+    sig_cmd = sub.add_parser(
+        "signal-proc",
+        help="privileged-internal pidfd-bound signal (invoked "
+             "via sudo by signal_owned on EPERM, never by hand)")
+    sig_cmd.add_argument("--pid", required=True)
+    sig_cmd.add_argument("--starttime", required=True)
+    sig_cmd.add_argument("--signum", required=True)
+    make_cmd = sub.add_parser(
+        "make-ext4",
+        help="privileged-internal verified mkfs (invoked via sudo "
+             "by provision_ext4, never by hand)")
+    make_cmd.add_argument("--run-root", required=True)
+    make_cmd.add_argument("--root-dev", required=True, type=int)
+    make_cmd.add_argument("--root-ino", required=True, type=int)
+    make_cmd.add_argument("--image", required=True)
+    make_cmd.add_argument("--dev", required=True, type=int)
+    make_cmd.add_argument("--ino", required=True, type=int)
+    attach_cmd = sub.add_parser(
+        "attach-loop",
+        help="privileged-internal verified loop attach (invoked "
+             "via sudo by provision_ext4, never by hand)")
+    attach_cmd.add_argument("--run-root", required=True)
+    attach_cmd.add_argument("--root-dev", required=True, type=int)
+    attach_cmd.add_argument("--root-ino", required=True, type=int)
+    attach_cmd.add_argument("--image", required=True)
+    attach_cmd.add_argument("--dev", required=True, type=int)
+    attach_cmd.add_argument("--ino", required=True, type=int)
+    mount_cmd = sub.add_parser(
+        "mount-fs",
+        help="privileged-internal verified mount (invoked via "
+             "sudo by provision_ext4/mount_overlay, never by "
+             "hand)")
+    mount_cmd.add_argument("--run-root", required=True)
+    mount_cmd.add_argument("--root-dev", required=True, type=int)
+    mount_cmd.add_argument("--root-ino", required=True, type=int)
+    mount_cmd.add_argument("--target", required=True)
+    mount_cmd.add_argument("--target-dev", required=True, type=int)
+    mount_cmd.add_argument("--target-ino", required=True, type=int)
+    mount_cmd.add_argument("--fstype", required=True)
+    mount_cmd.add_argument("--loop", required=False, default=None)
+    mount_cmd.add_argument("--backing-dev", required=False, type=int,
+                           default=None)
+    mount_cmd.add_argument("--backing-ino", required=False, type=int,
+                           default=None)
+    mount_cmd.add_argument("--layer", action="append", default=[])
+    mount_cmd.add_argument("--extra-opts", required=False,
+                           default="")
+    mount_cmd.add_argument("--aux-root", required=False,
+                           default=None)
+    mount_cmd.add_argument("--aux-dev", required=False, type=int,
+                           default=None)
+    mount_cmd.add_argument("--aux-ino", required=False, type=int,
+                           default=None)
+    mount_cmd.add_argument("--own-uid", required=False, type=int,
+                           default=None)
+    mount_cmd.add_argument("--own-gid", required=False, type=int,
+                           default=None)
+    # S81-round4: overlay post-mount binding canary (required for
+    # overlay; the controller plants it in upper before spawn).
+    mount_cmd.add_argument("--canary", required=False,
+                           default=None)
     args = parser.parse_args(argv)
     if args.command == "plan":
         return plan_command(args)
@@ -4023,6 +6372,14 @@ def main(argv=None):
         return retire_mount_command(args)
     if args.command == "retire-loop":
         return retire_loop_command(args)
+    if args.command == "make-ext4":
+        return make_ext4_command(args)
+    if args.command == "attach-loop":
+        return attach_loop_command(args)
+    if args.command == "mount-fs":
+        return mount_fs_command(args)
+    if args.command == "signal-proc":
+        return signal_proc_command(args)
     return cleanup_command(args)
 
 

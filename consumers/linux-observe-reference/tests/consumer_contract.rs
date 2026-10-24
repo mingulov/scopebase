@@ -268,6 +268,61 @@ fn unknown_op_unsupported_bad_script_invalid_output() {
     assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
 }
 
+// S59: a valid spawn-observe input whose child would not start is
+// an operational Refused with the raw errno preserved — never
+// InvalidOutput ("unknown case or parameter"): the case and the
+// parameters were known; the spawn itself failed.
+#[test]
+fn spawn_failure_is_operational_refused_with_errno() {
+    // ENOENT: well-formed child param, no such executable.
+    let err = run("spawn-observe", b"case=child;child=/nonexistent-s59-child-xyz;")
+        .expect_err("missing executable refuses operationally");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(*err.errno(), Some(2));
+    assert_eq!(err.stage().as_str(), "collect");
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    assert!(
+        String::from_utf8_lossy(err.diagnostic_bytes()).contains("spawn"),
+        "diagnostic must name the spawn: {:?}",
+        err.diagnostic_bytes()
+    );
+    // EACCES twin: existing but non-executable file (000 denies
+    // exec even to root, so the twin is uid-proof).
+    // S66-round4: staged inside the exclusively owned root — never a
+    // predictable shared-temp name a preplanted symlink could
+    // redirect — with dev+ino identity pinned across the permission
+    // change, so a swap between chmod and spawn is detected instead
+    // of executed.
+    let root = owned_root("s59");
+    let blocked = root
+        .write_file("noexec", b"not an executable")
+        .expect("noexec fixture");
+    let before = std::fs::metadata(&blocked).expect("fixture stat");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after = std::fs::metadata(&blocked).expect("post-chmod stat");
+        assert_eq!(
+            (after.dev(), after.ino()),
+            (before.dev(), before.ino()),
+            "fixture identity must survive its own chmod"
+        );
+    }
+    let script = format!("case=child;child={};", blocked.display());
+    let err = run("spawn-observe", script.as_bytes()).expect_err("non-executable refuses");
+    root.close().expect("cleanup");
+    assert_eq!(*err.category(), CaseErrorCategory::Refused);
+    assert_eq!(*err.errno(), Some(13));
+    assert_eq!(err.step_id().as_ref().map(Label::as_str), Some("only-step"));
+    // Control: a missing child parameter is still InvalidOutput —
+    // parameter shape and spawn failure stay distinct.
+    let err = run("spawn-observe", b"case=child;").expect_err("missing child invalid");
+    assert_eq!(*err.category(), CaseErrorCategory::InvalidOutput);
+}
+
 /// R33: an otherwise-valid invocation under an alien script
 /// dialect is pre-read UnsupportedSchema — even with an empty
 /// fixture, which proves the dialect admits before any slot is

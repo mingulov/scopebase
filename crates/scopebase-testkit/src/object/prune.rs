@@ -1132,7 +1132,7 @@ pub fn prune_dead_code_with_report(
         .ok_or_else(|| refuse(ErrorKind::InvalidInput, "missing symtab"))?;
     let funcs = collect_funcs(&image, text_idx, &mut work, &mut retained, limits)?;
     let relocs = collect_relocs(&image, &mut work, &mut retained, limits)?;
-    check_call_coverage(&image, &relocs, &mut work)?;
+    check_call_coverage(&image, &relocs, &mut work, &mut retained, limits)?;
     let roots = entry_roots(&image, text_idx, &relocs, &mut work)?;
     let live = reachable(&image, text_idx, &funcs, &relocs, &roots, &mut work)?;
     let dead: Vec<&Func> = funcs.iter().filter(|func| !live[func.sym_idx]).collect();
@@ -1348,7 +1348,20 @@ fn check_call_coverage(
     image: &Image<'_>,
     relocs: &[Reloc],
     work: &mut u64,
+    retained: &mut usize,
+    limits: &Limits,
 ) -> Result<(), OperationError> {
+    // S09-round4: index once (charged per build step, admitted
+    // per entry) so the coverage walk stays proportional to
+    // instructions instead of calls-times-relocs — the repair
+    // entry matches the guard scan's discipline (S65 retention
+    // admission included).
+    let mut covered_offsets = std::collections::BTreeSet::new();
+    for reloc in relocs.iter().filter(|reloc| reloc.typ == R_BPF_64_32) {
+        charge(work, 1)?;
+        retain(retained, limits, size_of::<(usize, u64)>())?;
+        covered_offsets.insert((reloc.target_sect, reloc.offset));
+    }
     for section in &image.sections {
         if !section.executable() {
             continue;
@@ -1385,12 +1398,7 @@ fn check_call_coverage(
             if source == 0 {
                 continue;
             }
-            let covered = relocs.iter().any(|reloc| {
-                reloc.typ == R_BPF_64_32
-                    && reloc.target_sect == section.index
-                    && reloc.offset == at as u64
-            });
-            if !covered {
+            if !covered_offsets.contains(&(section.index, at as u64)) {
                 return Err(refuse(
                     ErrorKind::Unsupported,
                     format!("unrelocated call site at {}+{at:#x}", section.label()),
@@ -2842,6 +2850,18 @@ fn check_path_guard(
         }
         let end = value.saturating_add(size);
         let site_relocs: &[&Reloc] = by_sect.get(&sect_idx).map(Vec::as_slice).unwrap_or(&empty);
+        // S09: index once (charged per entry) so the coverage
+        // check below is O(log n) per call site. The old per-call
+        // linear scan was uncharged O(N) per call — quadratic in
+        // one function with many relocated calls.
+        // S65: the index storage is admitted into retention like
+        // every other per-entry allocation.
+        let mut reloc_offsets = std::collections::BTreeSet::new();
+        for reloc in site_relocs.iter() {
+            charge(work, 1)?;
+            retain(retained, limits, size_of::<u64>())?;
+            reloc_offsets.insert(reloc.offset);
+        }
         for reloc in site_relocs {
             // S09: charge every inspected row, in or out of range:
             // the per-function filter scans the section's relocs.
@@ -2945,7 +2965,7 @@ fn check_path_guard(
                 continue;
             }
             if slot[0] == OP_CALL && image.data.src_reg(slot[1]) != 0 {
-                let covered = site_relocs.iter().any(|r| r.offset == at);
+                let covered = reloc_offsets.contains(&at);
                 if !covered {
                     push_section_finding(
                         violations,
@@ -3108,15 +3128,49 @@ fn check_opt_out(
     Ok(())
 }
 
-/// S03: whether the opcode writes its dst register. Stores address
-/// memory through dst instead of writing it, except atomic 0xDB which
-/// returns the old value into dst. Jumps never reach here (they abort
-/// the walk first) and report no write.
-fn writes_dst(op: u8) -> bool {
+/// S03: whether the instruction may overwrite register `target`.
+/// Stores address memory through dst instead of writing it. Both
+/// atomic widths (0xDB DW and 0xC3 W) decode by full-width imm
+/// selector (filter.h BPF_ATOMIC): plain ALU (ADD/OR/AND/XOR)
+/// and STORE_REL write memory only, FETCH/XCHG overwrite SRC
+/// with the old value, LOAD_ACQ overwrites DST, CMPXCHG
+/// overwrites R0, and an unrecognized selector conservatively
+/// clobbers. Absolute loads write R0, never dst. Jumps never
+/// reach here (they abort the walk first) and report a clobber
+/// if they do.
+fn writes_reg(op: u8, regs: u8, imm: i32, data: Data, target: u8) -> bool {
     match op & 7 {
-        0 | 1 | 4 | 7 => true,
-        3 => op == 0xDB,
-        _ => false,
+        0 => {
+            if op == OP_LD_IMM64 {
+                data.dst_reg(regs) == target
+            } else {
+                // Absolute/indirect loads write R0; anything else
+                // in class 0 is rejected by the kernel, and R0 is
+                // the sound over-approximation for our r2/r3 walks.
+                target == 0
+            }
+        }
+        1 | 4 | 7 => data.dst_reg(regs) == target,
+        2 => false,
+        3 => {
+            // S03-round4: W-width atomics (0xC3) clobber SRC on
+            // FETCH/XCHG exactly like DW (0xDB); plain STX stores
+            // only touch memory. S63: match the full imm —
+            // truncating to u8 misreads LOAD_ACQ (0x100) as ADD.
+            // S64: XCHG is 0xe0|BPF_FETCH = 0xe1; bare 0xe0 is
+            // not a valid selector and stays conservative.
+            if op != 0xDB && op != 0xC3 {
+                return false;
+            }
+            match imm {
+                0x00 | 0x40 | 0x50 | 0xa0 | 0x110 => false,
+                0xf1 => target == 0,
+                0x100 => data.dst_reg(regs) == target,
+                0x01 | 0x41 | 0x51 | 0xa1 | 0xe1 => data.src_reg(regs) == target,
+                _ => true,
+            }
+        }
+        _ => true,
     }
 }
 
@@ -3144,12 +3198,19 @@ fn jump_lands_between(
     call: usize,
     work: &mut u64,
 ) -> Result<bool, OperationError> {
-    for (index, (op, _, off, _)) in slots.iter().enumerate() {
+    for (index, (op, _, off, imm)) in slots.iter().enumerate() {
         charge(work, 1)?;
         if !matches!(op & 7, 5 | 6) || *op == OP_CALL || *op == 0x95 {
             continue;
         }
-        let target = index as i64 + 1 + i64::from(*off);
+        // S50: JMP32 long jump (0x06) displaces by imm32 with
+        // off==0 (filter.h:446-454); every other jump uses off16.
+        // Decoding 0x06 by off certifies a skipped definition.
+        let target = if *op == 0x06 {
+            index as i64 + 1 + i64::from(*imm)
+        } else {
+            index as i64 + 1 + i64::from(*off)
+        };
         if target > def as i64 && target <= call as i64 {
             return Ok(true);
         }
@@ -3240,7 +3301,7 @@ fn check_program(
             if breaks_straight_line(prev_op) {
                 break;
             }
-            if !writes_dst(prev_op) || data.dst_reg(prev_regs) != 3 {
+            if !writes_reg(prev_op, prev_regs, prev_imm, data, 3) {
                 continue;
             }
             if prev_op == 0xB7 || prev_op == 0xB4 {
@@ -3265,11 +3326,11 @@ fn check_program(
             if is_wide_second(&slots, previous) {
                 continue;
             }
-            let (prev_op, prev_regs, _, _) = slots[previous];
+            let (prev_op, prev_regs, _, prev_imm) = slots[previous];
             if breaks_straight_line(prev_op) {
                 break;
             }
-            if !writes_dst(prev_op) || data.dst_reg(prev_regs) != 2 {
+            if !writes_reg(prev_op, prev_regs, prev_imm, data, 2) {
                 continue;
             }
             if prev_op == OP_LD_IMM64 && data.src_reg(prev_regs) == 0 {

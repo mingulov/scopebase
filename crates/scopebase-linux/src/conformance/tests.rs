@@ -486,3 +486,186 @@ fn fixture_root_create_cleans_up_after_open_failure() {
     );
     drop_staging(&stage);
 }
+
+/// S13-round3: a forced substitution loosened into the close window
+/// deletes nothing. The hook fires between the identity re-verify
+/// and the deletion-time exclusivity check: it swaps an empty
+/// foreign directory into the root name AND loosens the parent to
+/// 0777 (the exact cross-UID scenario, forced deterministically).
+/// The late gate refuses; the foreign directory, our cleared
+/// original, and both names all survive. Pre-gate code unlinked the
+/// foreign directory here and only refused afterwards.
+#[test]
+fn fixture_root_close_forced_window_swap_deletes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = staging("s13window");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("owned.txt", b"owned").expect("owned write");
+    // Foreign EMPTY directory, planted beside the root: rmdir can
+    // only take an empty victim, so this is the exact S13 shape.
+    // Its recorded identity is the canary (existence alone could
+    // mask a delete-and-recreate).
+    let foreign_src = base.join("foreign-src");
+    std::fs::create_dir(&foreign_src).expect("foreign dir");
+    let foreign_meta = std::fs::metadata(&foreign_src).expect("foreign stat");
+    use std::os::unix::fs::MetadataExt;
+    let foreign_id = (foreign_meta.dev(), foreign_meta.ino());
+    let hook_base = base.clone();
+    set_close_swap_hook(Some(Box::new(move || {
+        // Forced S13 schedule: swap the foreign dir into the name,
+        // then loosen the parent (either order trips the late gate).
+        std::fs::rename(hook_base.join("root"), hook_base.join("orig")).expect("swap original");
+        std::fs::rename(hook_base.join("foreign-src"), hook_base.join("root"))
+            .expect("swap foreign in");
+        std::fs::set_permissions(&hook_base, std::fs::Permissions::from_mode(0o777))
+            .expect("loosen parent");
+    })));
+    let err = root.close().expect_err("late gate refuses the loosened window");
+    // Identity first: pre-gate code deleted the foreign directory
+    // here and only refused afterwards — this assert names the
+    // deletion directly.
+    let live_meta = std::fs::metadata(base.join("root")).expect("swapped name stats");
+    assert_eq!(
+        (live_meta.dev(), live_meta.ino()),
+        foreign_id,
+        "close deleted the swapped-in foreign directory"
+    );
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string().contains("not exclusive"),
+        "unexpected error: {err}"
+    );
+    // The forcing landed: the parent is loosened.
+    assert_eq!(
+        std::fs::metadata(&base).expect("parent stat").permissions().mode() & 0o777,
+        0o777,
+        "hook did not loosen the parent"
+    );
+    // Our cleared original stands under its swapped-aside name.
+    assert!(base.join("orig").is_dir(), "original dir entry vanished");
+    assert!(
+        !base.join("orig").join("owned.txt").exists(),
+        "clearing did not run before the refusal"
+    );
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).expect("retighten");
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}
+
+/// S79-round4: the close-window hook binds to its arming thread.
+/// A foreign thread's ordinary `close`, completed while the hook
+/// is armed, must neither consume nor fire it: the intended close
+/// still takes the forced schedule (late-gate refusal, parent
+/// loosened, foreign victim intact). Pre-fix the foreign close
+/// fired the hook early — mangling this fixture (the swap ran
+/// against the wrong close) and failing the assertions below on
+/// correct production code.
+#[test]
+fn fixture_root_close_hook_ignores_foreign_thread_close() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = staging("s79thread");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("owned.txt", b"owned").expect("owned write");
+    let foreign_src = base.join("foreign-src");
+    std::fs::create_dir(&foreign_src).expect("foreign dir");
+    let hook_base = base.clone();
+    set_close_swap_hook(Some(Box::new(move || {
+        std::fs::rename(hook_base.join("root"), hook_base.join("orig")).expect("swap original");
+        std::fs::rename(hook_base.join("foreign-src"), hook_base.join("root"))
+            .expect("swap foreign in");
+        std::fs::set_permissions(&hook_base, std::fs::Permissions::from_mode(0o777))
+            .expect("loosen parent");
+    })));
+    // Foreign ordinary close on another thread, fully completed
+    // while our hook is armed (joined: deterministic order).
+    let alien_base = staging("s79alien");
+    let alien = std::thread::spawn(move || {
+        let alien_root = FixtureRoot::create(&alien_base, "alien").expect("alien root");
+        alien_root.close().expect("alien close succeeds");
+        alien_base
+    })
+    .join()
+    .expect("alien thread");
+    // The hook survived: our close still takes the forced schedule.
+    let err = root.close().expect_err("late gate refuses the loosened window");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string().contains("not exclusive"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        std::fs::metadata(&base).expect("parent stat").permissions().mode() & 0o777,
+        0o777,
+        "hook did not fire on the intended close"
+    );
+    assert!(
+        !base.join("orig").join("owned.txt").exists(),
+        "clearing did not run before the refusal"
+    );
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).expect("retighten");
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+    std::fs::remove_dir_all(&alien).expect("alien cleanup");
+}
+
+/// S13-round3: a loosened nested directory refuses before deleting
+/// inside it. Another UID could rename under a group/other-writable
+/// directory, so clearing refuses with the nested content fully
+/// intact. Pre-gate code cleared and removed the whole tree here.
+#[test]
+fn fixture_root_close_refuses_shared_nested_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = staging("s13nested");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("sub/precious.txt", b"precious")
+        .expect("nested write");
+    std::fs::set_permissions(
+        base.join("root").join("sub"),
+        std::fs::Permissions::from_mode(0o777),
+    )
+    .expect("loosen nested dir");
+    let err = root.close().expect_err("shared nested dir refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string().contains("not exclusive"),
+        "unexpected error: {err}"
+    );
+    // Nothing under the shared directory was touched; the root stands.
+    assert_eq!(
+        std::fs::read(base.join("root").join("sub").join("precious.txt")).expect("reads"),
+        b"precious",
+        "refused close deleted nested content"
+    );
+    assert!(base.join("root").is_dir(), "refused close unlinked the root");
+    std::fs::set_permissions(
+        base.join("root").join("sub"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("retighten");
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}
+
+/// S13-round3: a parent loosened after creation refuses before
+/// clearing anything (fail fast, tree fully in place). Pre-gate code
+/// cleared and removed the whole tree here.
+#[test]
+fn fixture_root_close_refuses_loosened_parent() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = staging("s13parent");
+    let root = FixtureRoot::create(&base, "root").expect("root");
+    root.write_file("owned.txt", b"owned").expect("owned write");
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).expect("loosen");
+    let err = root.close().expect_err("loosened parent refuses");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        err.to_string().contains("not exclusive"),
+        "unexpected error: {err}"
+    );
+    // Fail fast: the tree is fully in place, not even cleared.
+    assert_eq!(
+        std::fs::read(base.join("root").join("owned.txt")).expect("reads"),
+        b"owned",
+        "fail-fast close cleared content"
+    );
+    assert!(base.join("root").is_dir(), "refused close unlinked the root");
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).expect("retighten");
+    std::fs::remove_dir_all(&base).expect("base cleanup");
+}

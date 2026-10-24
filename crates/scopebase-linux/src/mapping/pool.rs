@@ -150,6 +150,12 @@ pub(crate) struct Shared {
 /// reference-counted so concurrent drains can each hold one while
 /// blocked: firing clones the Arc under the slot lock and invokes it
 /// after release, never holding the slot across the call.
+///
+/// S12-round3 exception: `check_take_gap` fires INSIDE the state lock,
+/// between the empty check and the anchor take — that is its purpose
+/// (proving no install can land between them). Its contract is
+/// inverted: it must never block or take any pool lock (try_lock
+/// probes and channel-free recording only).
 #[cfg(test)]
 type ClaimHook = Arc<dyn Fn(u64) + Send + Sync>;
 #[cfg(test)]
@@ -171,6 +177,10 @@ pub(crate) struct TestHooks {
     pub(crate) after_retire_counters: Mutex<Option<UnitHook>>,
     /// In `release_anchor_if_empty` when the anchor is actually released.
     pub(crate) anchor_releasing: Mutex<Option<UnitHook>>,
+    /// S12-round3: in `release_anchor_if_empty` after the empty
+    /// check, before the anchor take, WITH the state lock held.
+    /// Inside-the-lock contract (see above): never block.
+    pub(crate) check_take_gap: Mutex<Option<UnitHook>>,
 }
 
 #[cfg(test)]
@@ -181,6 +191,7 @@ impl TestHooks {
             before_commit: Mutex::new(None),
             after_retire_counters: Mutex::new(None),
             anchor_releasing: Mutex::new(None),
+            check_take_gap: Mutex::new(None),
         }
     }
 }
@@ -217,6 +228,17 @@ fn fire_after_retire_counters(shared: &Shared) {
 #[cfg(test)]
 fn fire_anchor_releasing(shared: &Shared) {
     let hook = shared.test_hooks.anchor_releasing.lock().unwrap().clone();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// S12-round3: fire the inside-the-lock check/take probe. The caller
+/// holds the state lock; the hook must never block (see the slot
+/// contract above).
+#[cfg(test)]
+fn fire_check_take_gap(shared: &Shared) {
+    let hook = shared.test_hooks.check_take_gap.lock().unwrap().clone();
     if let Some(hook) = hook {
         hook();
     }
@@ -610,11 +632,40 @@ fn lock_anchor(shared: &Shared) -> MutexGuard<'_, Option<Arc<Shared>>> {
 pub(crate) fn release_anchor_if_empty(shared: &Shared) {
     let state = lock_report(shared);
     if !state.occupied() && state.active_ops == 0 {
+        // S12-round3: the probe fires between check and take with the
+        // state lock held — no install can land here.
+        #[cfg(test)]
+        fire_check_take_gap(shared);
         lock_anchor(shared).take();
         drop(state);
         #[cfg(test)]
         fire_anchor_releasing(shared);
     }
+}
+
+/// S12-round3: the FORMER check-unlock-take order as a test-only
+/// mutant. The occupancy check and the anchor take run under
+/// SEPARATE lock holdings with `gap` between (locks down); the
+/// mutant test installs racing custody in the gap and proves the
+/// anchor is erased under live custody. Production
+/// `release_anchor_if_empty` above holds the state lock across both
+/// steps, so the same racing install is observed and kept.
+#[cfg(test)]
+pub(crate) fn release_anchor_check_unlock_take<T>(
+    shared: &Shared,
+    gap: impl FnOnce() -> T,
+) -> T {
+    let empty = {
+        let state = lock_report(shared);
+        !state.occupied() && state.active_ops == 0
+    };
+    // Locks down: the harmful window the fix closed.
+    let out = gap();
+    if empty {
+        lock_anchor(shared).take();
+        fire_anchor_releasing(shared);
+    }
+    out
 }
 
 /// RAII active-operation registration: `close` cannot report clean shutdown
@@ -1607,6 +1658,118 @@ mod tests {
         let permit2 = permit2_holder.lock().unwrap().take().unwrap();
         permit2.retire();
         assert!(weak.upgrade().is_none(), "empty domain releases its anchor");
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn former_check_unlock_take_loses_racing_install() {
+        // S12-round3: the former order as a mutant. The racing
+        // install lands IN the check/take gap (locks down, forced by
+        // direct call every run — not scheduled) and the take erases
+        // the anchor R2's install just placed. Asserts the harmful
+        // combination: anchor slot empty while R2 custody is live.
+        // The fixed release (previous test) keeps the anchor on the
+        // same racing install; the probe test below pins the fix in
+        // production code.
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(2, 2 * page());
+        let (path, held) = test_held("mutant-loses");
+        let (mut permit1, addr1) = activate_one(&pool, &held);
+        let mut guard1 = super::super::custody::TestCleanupGuard::new(addr1, page());
+        let racer_pool = pool.clone();
+        let weak = Arc::downgrade(&pool.shared);
+        drop(pool);
+        assert!(
+            weak.upgrade().is_some(),
+            "occupied drop installs the anchor"
+        );
+        // Retire R1 exactly like ActivePermit::retire up to the
+        // release step, which the mutant below replaces.
+        unsafe { rustix::mm::munmap(addr1, page()) }.unwrap();
+        guard1.disarm();
+        {
+            let mut state = lock_report(&permit1.shared);
+            state.active_mappings = state.active_mappings.saturating_sub(1);
+            state.active_bytes = state.active_bytes.saturating_sub(permit1.bytes);
+        }
+        permit1.settled = true;
+        let shared = Arc::clone(&permit1.shared);
+        drop(permit1);
+        const R2_TOKEN: *mut c_void = 0x4000 as *mut c_void;
+        let held2 = Arc::clone(&held);
+        let permit2 = release_anchor_check_unlock_take(&shared, || {
+            let reservation = Reservation::reserve(&racer_pool.shared, page()).unwrap();
+            let permit = reservation.activate(R2_TOKEN, page(), held2);
+            drop(racer_pool);
+            permit
+        });
+        // The harmful combination: R2 live, anchor erased.
+        assert!(
+            shared.anchor.lock().unwrap().is_none(),
+            "mutant take erased the racing install's anchor"
+        );
+        assert_eq!(
+            lock_report(&shared).active_mappings,
+            1,
+            "R2 custody live under the erased anchor"
+        );
+        drop(shared);
+        // Cleanup: retire R2 (the fixed release, whose take is a
+        // no-op on the empty slot) and prove the domain drains.
+        permit2.retire();
+        assert!(weak.upgrade().is_none(), "domain drains after R2 retires");
+        std::fs::remove_file(path).unwrap();
+        super::super::custody::inject_unmap_failures(0);
+    }
+
+    #[test]
+    fn release_check_and_take_hold_state_lock() {
+        // S12-round3: the production release holds the state lock
+        // across the check AND the take. The probe fires between them
+        // and must observe WouldBlock (held), never Ok (gap): a
+        // regressed check-unlock-take order reports the gap and fails
+        // here deterministically (RED-verified by moving the fire
+        // call outside the lock hold).
+        let _table = crate::FD_TABLE.lock().unwrap();
+        super::super::custody::inject_unmap_failures(0);
+        let pool = test_pool(1, page());
+        let (path, held) = test_held("probe-held");
+        let (permit1, addr1) = activate_one(&pool, &held);
+        let mut guard1 = super::super::custody::TestCleanupGuard::new(addr1, page());
+        let weak = Arc::downgrade(&pool.shared);
+        drop(pool);
+        let shared = weak.upgrade().unwrap();
+        let probe = Arc::new(Mutex::new(String::new()));
+        let probe_hook = Arc::clone(&probe);
+        let probe_shared = Arc::clone(&shared);
+        *shared.test_hooks.check_take_gap.lock().unwrap() = Some(Arc::new(move || {
+            // Inside-the-lock contract: try_lock only, never block.
+            // (std mutexes are not reentrant: WouldBlock from the
+            // holding thread itself is the "held" reading.)
+            let verdict = match probe_shared.state.try_lock() {
+                Err(std::sync::TryLockError::WouldBlock) => "held",
+                Ok(_) => "GAP",
+                Err(std::sync::TryLockError::Poisoned(_)) => "POISONED",
+            };
+            *probe_hook.lock().unwrap() = verdict.to_string();
+        }));
+        drop(shared);
+        unsafe { rustix::mm::munmap(addr1, page()) }.unwrap();
+        guard1.disarm();
+        permit1.retire();
+        assert_eq!(
+            *probe.lock().unwrap(),
+            "held",
+            "state lock must span check and take with no gap"
+        );
+        // Uninstall the probe: its closure holds an Arc cycle that
+        // would retain the domain past the anchor release.
+        let shared = weak.upgrade().unwrap();
+        *shared.test_hooks.check_take_gap.lock().unwrap() = None;
+        drop(shared);
+        assert!(weak.upgrade().is_none(), "empty domain releases");
         std::fs::remove_file(path).unwrap();
         super::super::custody::inject_unmap_failures(0);
     }

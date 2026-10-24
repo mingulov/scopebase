@@ -16,6 +16,10 @@ object = ["dep:scopebase-bpf", "scopebase-bpf/btf"]
 toolchain = ["object", "dep:libc"]
 bpf-host-json = ["bpf-host", "scopebase-bpf/json"]
 linux-fixtures = ["dep:scopebase-linux", "scopebase-linux/mapping", "dep:rustix", "dep:libc"]
+# S78-round4: seccomp-only fixture surface (`fixture::linux::seccomp`)
+# with no scopebase-linux edge, so scopebase-linux's own dev-dependency
+# does not unify mapping/process back into its minimal test builds.
+seccomp-fixture = ["dep:libc"]
 [dependencies]
 scopebase-bpf = { version = "=0.1.0", path = "../scopebase-bpf", default-features = false, optional = true }
 scopebase-linux = { version = "=0.1.0", path = "../scopebase-linux", default-features = false, optional = true }
@@ -117,6 +121,11 @@ required-features = ["linux-fixtures"]
 [[bin]]
 name = "scopebase-tt03-seccomp-probe"
 path = "src/bin/scopebase-tt03-seccomp-probe.rs"
+required-features = ["linux-fixtures"]
+
+[[bin]]
+name = "scopebase-tc02-invoke-denial"
+path = "src/bin/scopebase-tc02-invoke-denial.rs"
 required-features = ["linux-fixtures"]
 
 [[bin]]

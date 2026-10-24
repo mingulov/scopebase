@@ -46,6 +46,13 @@ fn refused(detail: impl Into<String>) -> OperatorError {
 /// the manifest read through the pinned fd is missing/corrupt, or
 /// when `expected_run_id` disagrees. On success the whole tree is
 /// gone and the returned report names the validated run id.
+///
+/// S13: mutation exclusion gates the destruction. The parent's
+/// exclusivity is verified at acquisition and re-verified
+/// immediately before the unlink (tight window): only an exclusive
+/// parent excludes a foreign swapper from the re-verify/unlink
+/// window. Clearing refuses non-exclusive nested directories (see
+/// `clear_dir`); the link-count proof stays as the backstop.
 pub fn cleanup_run(
     dir: &Path,
     expected_run_id: Option<&str>,
@@ -68,7 +75,7 @@ pub fn cleanup_run(
         Mode::empty(),
     )
     .map_err(|e| refused(format!("run dir parent not openable: {e}")))?;
-    require_exclusive_parent(parent_fd.as_fd())?;
+    require_exclusive_parent(parent_fd.as_fd(), "run dir parent")?;
     let root_fd = rustix::fs::openat(
         &parent_fd,
         name_c.as_c_str(),
@@ -116,6 +123,13 @@ pub fn cleanup_run(
         return Err(refused("run dir replaced before removal"));
     }
     drop(live);
+    #[cfg(test)]
+    fire_unlink_window_hook();
+    // S13: tight window — the parent proved exclusive at acquisition;
+    // prove it again here, immediately before the unlink, so a
+    // loosened parent refuses instead of deleting through a
+    // swappable window.
+    require_exclusive_parent(parent_fd.as_fd(), "run dir parent")?;
     rustix::fs::unlinkat(&parent_fd, name_c.as_c_str(), AtFlags::REMOVEDIR)
         .map_err(|e| refused(format!("run dir not removable: {e}")))?;
     // Prove OUR directory lost its name: a swap-and-replace between
@@ -132,19 +146,41 @@ pub fn cleanup_run(
     })
 }
 
-/// S14: prove the pinned parent is mutation-exclusive to us:
+/// S14: prove the pinned directory is mutation-exclusive to us:
 /// owned by our euid with no group/other write bit (the
 /// mask-backed mode check covers ACL grants too). Without this,
 /// the verify/unlink destruction window below admits a foreign
 /// swapper. Mirrors `scopebase_linux::conformance`'s gate; this
 /// crate has `rustix/process`, so the euid is native.
-fn require_exclusive_parent(parent: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
-    let st = rustix::fs::fstat(parent)
-        .map_err(|e| refused(format!("run dir parent not statable: {e}")))?;
+///
+/// S13: the same gate guards every deletion container: the parent
+/// is verified at acquisition and re-verified immediately before
+/// the unlink, and `clear_dir` verifies each traversed directory
+/// before unlinking inside it.
+/// S56: the shared exclusivity rule — euid-owned with no group/other
+/// write bit. Cleanup and acquisition agree on it: cleanup refuses
+/// shared parents, so acquisition refuses to create under them and
+/// no successful run is uncleanable-by-policy. Returns the refusal
+/// detail on violation, `None` when exclusive.
+pub(crate) fn exclusive_parent_violation(
+    dir: std::os::fd::BorrowedFd<'_>,
+    what: &str,
+) -> Result<Option<String>, OperatorError> {
+    let st = rustix::fs::fstat(dir).map_err(|e| refused(format!("{what} not statable: {e}")))?;
     if st.st_uid != rustix::process::geteuid().as_raw() || st.st_mode & 0o022 != 0 {
-        return Err(refused(
-            "run dir parent not exclusive: stage run dirs under a private 0700 directory",
-        ));
+        return Ok(Some(format!(
+            "{what} not exclusive: stage run dirs under a private 0700 directory"
+        )));
+    }
+    Ok(None)
+}
+
+fn require_exclusive_parent(
+    dir: std::os::fd::BorrowedFd<'_>,
+    what: &str,
+) -> Result<(), OperatorError> {
+    if let Some(detail) = exclusive_parent_violation(dir, what)? {
+        return Err(refused(detail));
     }
     Ok(())
 }
@@ -163,6 +199,35 @@ fn prove_unlinked(held: std::os::fd::BorrowedFd<'_>, what: &str) -> Result<(), O
 fn dev_ino(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<(u64, u64)> {
     let st = rustix::fs::fstat(fd)?;
     Ok((st.st_dev, st.st_ino))
+}
+
+/// S13-round3: forced-window hook for the unlink re-check. Fires
+/// once per arming, between the identity re-verify and the
+/// deletion-time exclusivity check, then auto-disarms (take
+/// semantics) so a stale hook can never affect another test. Only
+/// the forced-window test arms it; production builds have no hook.
+#[cfg(test)]
+static UNLINK_WINDOW_HOOK: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
+/// S13-round3: arm (or clear, with `None`) the unlink-window hook.
+#[cfg(test)]
+pub(crate) fn set_unlink_window_hook(hook: Option<Box<dyn FnOnce() + Send>>) {
+    *UNLINK_WINDOW_HOOK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = hook;
+}
+
+/// S13-round3: run the armed unlink-window hook, if any.
+#[cfg(test)]
+fn fire_unlink_window_hook() {
+    let hook = UNLINK_WINDOW_HOOK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
 }
 
 fn dev_ino_nlink(fd: std::os::fd::BorrowedFd<'_>) -> std::io::Result<u64> {
@@ -226,6 +291,10 @@ fn read_at(
 /// inode would survive the unlink, and "removed" would be a lie.
 /// Mirrors `scopebase_linux::conformance`'s walk.
 fn clear_dir(dir: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
+    // S13: mutation exclusion before deletion — each traversed
+    // directory proves exclusive before any entry inside it is
+    // unlinked (see `scopebase_linux::conformance::clear_dir`).
+    require_exclusive_parent(dir, "run dir")?;
     let entries = rustix::fs::Dir::read_from(dir)
         .map_err(|e| refused(format!("run dir not listable: {e}")))?;
     for entry in entries {
@@ -273,4 +342,82 @@ fn clear_dir(dir: std::os::fd::BorrowedFd<'_>) -> Result<(), OperatorError> {
         prove_unlinked(held.as_fd(), "run entry")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S13-round3: a parent loosened inside the unlink window refuses
+    /// before unlinking. The hook fires between the identity
+    /// re-verify and the deletion-time exclusivity check (the exact
+    /// S13 schedule, forced deterministically): the late gate
+    /// refuses, and the cleared run directory stands. Pre-gate code
+    /// unlinked the run here.
+    #[test]
+    fn unlink_window_loosening_refuses_before_unlink() {
+        let base = std::env::temp_dir().join(format!(
+            "s13-unlink-window-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let run = base.join("run");
+        std::fs::create_dir(&run).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(
+            run.join(RUN_MANIFEST_FILE),
+            r#"{"schema":"operator-run-manifest-v1","run_id":"13131313131313131313131313131313","profile":"p"}"#,
+        )
+        .unwrap();
+        std::fs::write(run.join("filler.txt"), b"run-owned").unwrap();
+        let hook_base = base.clone();
+        set_unlink_window_hook(Some(Box::new(move || {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    &hook_base,
+                    std::fs::Permissions::from_mode(0o777),
+                )
+                .unwrap();
+            }
+        })));
+        let err = cleanup_run(&run, None).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+        assert!(
+            err.detail().contains("not exclusive"),
+            "unexpected detail: {}",
+            err.detail()
+        );
+        // The forcing landed (parent loosened) and the run stands.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&base).unwrap().permissions().mode() & 0o777,
+                0o777,
+                "hook did not loosen the parent"
+            );
+        }
+        assert!(run.is_dir(), "refused cleanup unlinked the run");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

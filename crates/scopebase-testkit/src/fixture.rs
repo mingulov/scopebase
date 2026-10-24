@@ -13,7 +13,10 @@ use std::{
         Arc,
     },
 };
-#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "linux-fixtures", feature = "seccomp-fixture")
+))]
 pub mod linux;
 /// Independently owned observer that may outlive a mutable fixture borrow.
 /// A reference captured from the fixture cannot satisfy the owned probe lifetime:

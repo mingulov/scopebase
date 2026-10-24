@@ -196,6 +196,7 @@ impl ObserveReferenceAdapter {
         step: Option<Label>,
         stage: &Label,
         diagnostic: &str,
+        errno: Option<i32>,
     ) -> CaseError {
         let l = invocation.limits();
         CaseError::new(
@@ -205,7 +206,10 @@ impl ObserveReferenceAdapter {
                 // RB4 (R02): fitted stage tag (see cause).
                 stage: stage.truncate(l.label_bytes()),
                 category: CaseErrorCategory::Refused,
-                errno: None,
+                // S59: operational failures preserve the raw errno
+                // (a spawn that failed after valid admission names
+                // its errno instead of collapsing to InvalidOutput).
+                errno,
                 diagnostic_bytes: fit_bytes(diagnostic.as_bytes(), l.diagnostic_bytes()),
                 cause: self.cause(l),
                 completed_steps: Vec::new(),
@@ -295,13 +299,29 @@ impl ConformanceAdapter for ObserveReferenceAdapter {
                 "LX11:missing script slot",
             ));
         };
-        let Some(text) = run_scenario(op, raw, None) else {
-            return Err(self.invalid_output(
-                invocation,
-                Some(step.step_id().clone()),
-                &self.stage_admission,
-                "LX11:unknown case or parameter",
-            ));
+        let text = match run_scenario(op, raw, None) {
+            ScenarioOutcome::Output(text) => text,
+            ScenarioOutcome::UnknownCaseOrParameter => {
+                return Err(self.invalid_output(
+                    invocation,
+                    Some(step.step_id().clone()),
+                    &self.stage_admission,
+                    "LX11:unknown case or parameter",
+                ));
+            }
+            // S59: valid input whose child would not start is an
+            // operational refusal with the raw errno — never
+            // InvalidOutput.
+            ScenarioOutcome::SpawnFailed(error) => {
+                let errno = error.raw_os_error();
+                return Err(self.refusal(
+                    invocation,
+                    Some(step.step_id().clone()),
+                    &self.stage_collect,
+                    &format!("LX11:spawn failed: {error}"),
+                    errno,
+                ));
+            }
         };
         self.observed(invocation, step.step_id(), &text)
             .map_err(|_| {
@@ -310,6 +330,7 @@ impl ConformanceAdapter for ObserveReferenceAdapter {
                     Some(step.step_id().clone()),
                     &self.stage_collect,
                     "LX11:observation bounds",
+                    None,
                 )
             })
     }
@@ -399,11 +420,6 @@ fn proc_limits() -> ProcLimits {
     }
 }
 
-/// Run one operation/case scenario over explicit caller parameters. `None`
-/// names an unknown operation or case, a malformed script or a missing
-/// parameter; every executed Linux contract refusal is a
-/// `Some(refuse=...;)` body. The reserved `body` slot stays `None`: live
-/// observations read the real /proc, never fixture bytes.
 /// F28: script values cannot carry the `;` frame delimiter. Callers pass
 /// interpolated values through here and refuse them on `None` instead of
 /// building a corrupted script that silently reselects another target.
@@ -415,19 +431,52 @@ pub fn script_value(value: &str) -> Option<&str> {
     }
 }
 
-pub fn run_scenario(op: &str, script: &[u8], _body: Option<&[u8]>) -> Option<String> {
-    let script = parse_script(script)?;
+/// S59: scenario outcome — parameter rejection stays separate from
+/// operational failure, and the spawn error survives with its errno
+/// instead of collapsing to "unknown case or parameter".
+#[derive(Debug)]
+pub enum ScenarioOutcome {
+    /// Rendered observation body (executed Linux contract refusals
+    /// are `refuse=...;` bodies).
+    Output(String),
+    /// Unknown operation or case, malformed script, or missing
+    /// parameter: malformed operation data.
+    UnknownCaseOrParameter,
+    /// Valid input whose child would not spawn: operational failure
+    /// with the underlying error preserved.
+    SpawnFailed(std::io::Error),
+}
+
+/// Run one operation/case scenario over explicit caller parameters.
+/// The reserved `body` slot stays `None`: live observations read the
+/// real /proc, never fixture bytes.
+pub fn run_scenario(op: &str, script: &[u8], _body: Option<&[u8]>) -> ScenarioOutcome {
+    let Some(script) = parse_script(script) else {
+        return ScenarioOutcome::UnknownCaseOrParameter;
+    };
     match (op, script.case) {
-        ("acquire-self", "self") => Some(acquire_self()),
-        ("acquire", "dead") => Some(acquire_dead()),
-        ("acquire", "pid") => acquire_pid(param(&script, "pid")?),
-        ("spawn-observe", "child") => spawn_observe(param(&script, "child")?),
-        ("maps-self", "self") => Some(maps_self()),
-        ("mounts-self", "self") => Some(mounts_self()),
+        ("acquire-self", "self") => ScenarioOutcome::Output(acquire_self()),
+        ("acquire", "dead") => ScenarioOutcome::Output(acquire_dead()),
+        ("acquire", "pid") => match param(&script, "pid").and_then(acquire_pid) {
+            Some(body) => ScenarioOutcome::Output(body),
+            None => ScenarioOutcome::UnknownCaseOrParameter,
+        },
+        ("spawn-observe", "child") => match param(&script, "child") {
+            Some(child) => match spawn_observe(child) {
+                Ok(body) => ScenarioOutcome::Output(body),
+                Err(error) => ScenarioOutcome::SpawnFailed(error),
+            },
+            None => ScenarioOutcome::UnknownCaseOrParameter,
+        },
+        ("maps-self", "self") => ScenarioOutcome::Output(maps_self()),
+        ("mounts-self", "self") => ScenarioOutcome::Output(mounts_self()),
         ("mapping", "empty" | "unmapped" | "incoherent") => {
-            Some(mapping_case(script.case, param(&script, "path")?))
+            match param(&script, "path") {
+                Some(path) => ScenarioOutcome::Output(mapping_case(script.case, path)),
+                None => ScenarioOutcome::UnknownCaseOrParameter,
+            }
         }
-        _ => None,
+        _ => ScenarioOutcome::UnknownCaseOrParameter,
     }
 }
 
@@ -507,22 +556,24 @@ fn acquire_dead() -> String {
     }
 }
 
-fn spawn_observe(child: &str) -> Option<String> {
+fn spawn_observe(child: &str) -> Result<String, std::io::Error> {
+    // S59: a spawn failure is operational (valid input, failed
+    // effect) — the error returns typed instead of collapsing to
+    // "unknown case or parameter".
     let mut spawned = std::process::Command::new(child)
         .arg("child")
         .arg("30")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .spawn()?;
     let pid_raw = spawned.id() as i32;
     let outcome = observe_live_child(pid_raw);
     // SIGKILL then reap: the child is always in interruptible sleep.
     let _ = spawned.kill();
     let reaped = spawned.wait().is_ok();
     let gone = std::fs::metadata(format!("/proc/{pid_raw}")).is_err();
-    Some(match outcome {
+    Ok(match outcome {
         Ok(mut ledger) => {
             ledger.record("reaped", &reaped.to_string());
             ledger.record("gone", &gone.to_string());

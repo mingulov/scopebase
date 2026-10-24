@@ -317,6 +317,19 @@ const BIRTH_WORST_FDS: u64 = 5;
 const MAPS_WORST_FDS: u64 = 15;
 const MAP_FILES_WORST_FDS: u64 = 11;
 const MOUNTINFO_WORST_FDS: u64 = 15;
+/// S10: a full strict acquisition's success cost (six steps: creator
+/// guard, pre-sample, pidfd, retained directory, namespace capture,
+/// view guard — NOT the 5-FD birth re-verification). Locked at 21 by
+/// the `process_observation` acquisition-inventory test; update
+/// deliberately if acquisition gains an open.
+const ACQUIRE_WORST_FDS: u64 = 21;
+/// S10: calibration's worst case is its three acquiring sub-operations
+/// on their success paths — a fresh strict self acquisition, its maps
+/// read, and the calibration mapping's own map_files identity
+/// (stat/mmap/unmap open no FDs; the reservation is a pool slot, not
+/// a descriptor). Compositional so a deliberately updated
+/// sub-operation constant propagates here by construction.
+const CALIBRATION_WORST_FDS: u64 = ACQUIRE_WORST_FDS + MAPS_WORST_FDS + MAP_FILES_WORST_FDS;
 
 /// R11: refuse before running unless the sub-operation's whole worst
 /// case fits the remaining budget. Acquisitions happen inside `run`,
@@ -383,6 +396,24 @@ fn is_observer_member(member: crate::error::ProcMember) -> bool {
     )
 }
 
+/// S11: true when the error carries an observer-side origin member
+/// (our view or authentication broke; the target was never
+/// observed). Member-less errors are not observer-origin: they keep
+/// the historical `Reason`-only routing.
+#[cfg(feature = "process")]
+fn is_observer_origin(error: &LinuxError) -> bool {
+    error
+        .process_context()
+        .and_then(crate::error::ProcessErrorContext::member)
+        .is_some_and(is_observer_member)
+}
+
+/// Non-process builds have no origin members at all.
+#[cfg(not(feature = "process"))]
+fn is_observer_origin(_error: &LinuxError) -> bool {
+    false
+}
+
 /// Route a target sub-operation error: disappearance, denial, birth/view
 /// change and unclear liveness become verdicts; control stops, caller
 /// budgets, config faults and environmental or unreadable failures pass
@@ -394,14 +425,8 @@ fn is_observer_member(member: crate::error::ProcMember) -> bool {
 /// failure however verdict-shaped its `Reason` is. Member-less errors
 /// keep the historical `Reason`-only routing.
 fn route_target_error(error: &LinuxError) -> Result<TargetVerdict, ()> {
-    #[cfg(feature = "process")]
-    if let Some(member) = error
-        .process_context()
-        .and_then(crate::error::ProcessErrorContext::member)
-    {
-        if is_observer_member(member) {
-            return Err(());
-        }
+    if is_observer_origin(error) {
+        return Err(());
     }
     match error.reason() {
         Reason::Denied => Ok(TargetVerdict::Inconclusive(InconclusiveKind::TargetDenied)),
@@ -496,6 +521,42 @@ enum AssocEvidence {
     KeyPath,
 }
 
+/// Outcome of classifying a failed map_files association: either the
+/// observation continues down the key path, or it is decided here.
+enum AssocFailure {
+    KeyPath,
+    Done(Result<MappingOutcome, MappingFailure>),
+}
+
+/// S11: classify a failed map_files association. Origin first: an
+/// observer-side failure (our view or authentication broke — e.g.
+/// the observer-directory guard denied mid-call) routes through the
+/// origin-aware router as an observer `MappingFailure`, never into
+/// target evidence — even when its `Reason` matches a fallback below.
+/// A target-side denial proceeds down the key path; a target-side
+/// disappearance splits by inode (a missing entry for a file-backed
+/// line means the VMA changed under the read; an anonymous line never
+/// had one and simply names no file).
+fn classify_assoc_error(
+    ctx: &mut OpCtx,
+    error: LinuxError,
+    anon_inode_zero: bool,
+) -> AssocFailure {
+    if !is_observer_origin(&error) {
+        if error.reason() == Reason::Denied {
+            return AssocFailure::KeyPath;
+        }
+        if error.reason() == Reason::Disappeared {
+            return AssocFailure::Done(Ok(if anon_inode_zero {
+                ctx.mismatch(MismatchKind::KeyMismatch)
+            } else {
+                ctx.mismatch(MismatchKind::RangeChanged)
+            }));
+        }
+    }
+    AssocFailure::Done(route_or_fail(ctx, error))
+}
+
 fn run_observation(
     request: &MappingRequest<'_>,
     held_stat: &StatObservation,
@@ -568,17 +629,10 @@ fn run_observation(
                 AssocEvidence::Contradictory
             }
         }
-        Err(error) if error.reason() == Reason::Denied => AssocEvidence::KeyPath,
-        Err(error) if error.reason() == Reason::Disappeared => {
-            // A missing entry for a file-backed line means the VMA changed
-            // under the read; an anonymous line never had one and simply
-            // names no file.
-            if shape_before.key.inode() == 0 {
-                return Ok(ctx.mismatch(MismatchKind::KeyMismatch));
-            }
-            return Ok(ctx.mismatch(MismatchKind::RangeChanged));
-        }
-        Err(error) => return route_or_fail(ctx, error),
+        Err(error) => match classify_assoc_error(ctx, error, shape_before.key.inode() == 0) {
+            AssocFailure::KeyPath => AssocEvidence::KeyPath,
+            AssocFailure::Done(outcome) => return outcome,
+        },
     };
 
     // Key path when exact association is denied: retained, calibrated or
@@ -594,6 +648,14 @@ fn run_observation(
             } else if let MappingPolicy::AllowPrivateCalibration { max_mapped_bytes } =
                 request.policy
             {
+                // S10: MappingLimits is an admission ceiling, not
+                // post-effect accounting. Calibration's whole worst
+                // case must fit the REMAINING budget before any of it
+                // runs; a refused calibration performs zero
+                // acquisitions (no mapping, no observation, no reads).
+                if let Err(ceiling) = preadmit_fds(ctx, CALIBRATION_WORST_FDS) {
+                    return Err(ctx.failure_full(None, ceiling, None));
+                }
                 match calibration::calibrate(
                     &request.held,
                     guard.domain(),
@@ -931,7 +993,8 @@ fn read_fdinfo_mnt_id(
             Ok(count) => break count,
         }
     };
-    syscalls += 1; // close
+    // S45: no charge for the RAII close — ResourceCharges counts
+    // explicit syscall attempts only (see error.rs).
     drop(file);
     if count == buf.len() {
         ctx.record_direct(syscalls, 1);
@@ -1182,6 +1245,189 @@ mod tests {
         );
     }
 
+    /// S11-round3: origin gates every assoc fallback. A verdict-shaped
+    /// `Reason` on an observer-side member (e.g. the
+    /// observer-directory guard denied mid-call) routes as an
+    /// observer failure through the production classifier — never
+    /// into key-path evidence or an inode-split verdict. Target-side
+    /// and member-less errors keep the historical fallbacks.
+    #[test]
+    #[cfg(feature = "process")]
+    fn assoc_fallbacks_refuse_observer_origin() {
+        use crate::error::ProcMember::*;
+        let control = OperationControl::unlimited();
+        // Target-side denial proceeds down the key path.
+        let mut ctx = op_ctx(&control, 1024);
+        assert!(
+            matches!(
+                classify_assoc_error(
+                    &mut ctx,
+                    error_with_member(Reason::Denied, MapFiles),
+                    false
+                ),
+                AssocFailure::KeyPath
+            ),
+            "target-side Denied must stay key-path evidence"
+        );
+        // Member-less denial keeps the historical key path.
+        let mut ctx = op_ctx(&control, 1024);
+        assert!(
+            matches!(
+                classify_assoc_error(&mut ctx, error_with(Reason::Denied), false),
+                AssocFailure::KeyPath
+            ),
+            "member-less Denied must stay key-path evidence"
+        );
+        // Observer-guard denial is an observer failure, never
+        // key-path evidence.
+        for member in [ObserverDirectory, ObserverStatus, Root, CreatorPidfd] {
+            let mut ctx = op_ctx(&control, 1024);
+            match classify_assoc_error(
+                &mut ctx,
+                error_with_member(Reason::Denied, member),
+                false,
+            ) {
+                AssocFailure::Done(Err(failure)) => assert_eq!(
+                    failure.error().reason(),
+                    Reason::Denied,
+                    "{member:?}/Denied must surface its own reason"
+                ),
+                AssocFailure::KeyPath => {
+                    panic!("{member:?}/Denied must not reach the key path")
+                }
+                AssocFailure::Done(Ok(_)) => {
+                    panic!("{member:?}/Denied must not become a verdict")
+                }
+            }
+        }
+        // Target-side disappearance keeps the inode split.
+        let mut ctx = op_ctx(&control, 1024);
+        match classify_assoc_error(
+            &mut ctx,
+            error_with_member(Reason::Disappeared, MapFiles),
+            true,
+        ) {
+            AssocFailure::Done(Ok(MappingOutcome::Mismatch(evidence))) => assert_eq!(
+                evidence.kind(),
+                MismatchKind::KeyMismatch,
+                "anonymous disappearance stays KeyMismatch"
+            ),
+            _ => panic!("target-side anonymous disappearance must stay KeyMismatch"),
+        }
+        let mut ctx = op_ctx(&control, 1024);
+        match classify_assoc_error(
+            &mut ctx,
+            error_with_member(Reason::Disappeared, MapFiles),
+            false,
+        ) {
+            AssocFailure::Done(Ok(MappingOutcome::Mismatch(evidence))) => assert_eq!(
+                evidence.kind(),
+                MismatchKind::RangeChanged,
+                "file-backed disappearance stays RangeChanged"
+            ),
+            _ => panic!("target-side file disappearance must stay RangeChanged"),
+        }
+        // Observer-side disappearance is a failure, not a verdict.
+        let mut ctx = op_ctx(&control, 1024);
+        match classify_assoc_error(
+            &mut ctx,
+            error_with_member(Reason::Disappeared, ObserverDirectory),
+            false,
+        ) {
+            AssocFailure::Done(Err(failure)) => assert_eq!(
+                failure.error().reason(),
+                Reason::Disappeared
+            ),
+            _ => panic!("observer-side disappearance must not become a verdict"),
+        }
+        // Post-fork shape (WrongContext/CreatorPidfd) is a failure.
+        let mut ctx = op_ctx(&control, 1024);
+        match classify_assoc_error(
+            &mut ctx,
+            error_with_member(Reason::WrongContext, CreatorPidfd),
+            false,
+        ) {
+            AssocFailure::Done(Err(failure)) => assert_eq!(
+                failure.error().reason(),
+                Reason::WrongContext
+            ),
+            _ => panic!("post-fork WrongContext must not become a verdict"),
+        }
+        // Member-less WrongContext keeps the historical ViewChanged.
+        let mut ctx = op_ctx(&control, 1024);
+        match classify_assoc_error(&mut ctx, error_with(Reason::WrongContext), false) {
+            AssocFailure::Done(Ok(MappingOutcome::Mismatch(evidence))) => assert_eq!(
+                evidence.kind(),
+                MismatchKind::ViewChanged
+            ),
+            _ => panic!("member-less WrongContext must stay ViewChanged"),
+        }
+    }
+
+    /// S11-round3: a post-fork observation through the production
+    /// `observe_mapping` path is an observer-side `MappingFailure`,
+    /// never a target `ViewChanged` mismatch. The forged creator is
+    /// our own parent pid — the exact pid pair a forked child would
+    /// present — and the failure must carry the CreatorPidfd origin.
+    /// The member-less former shape routed Ok(ViewChanged) here.
+    #[test]
+    #[cfg(feature = "process")]
+    fn post_fork_observe_mapping_is_observer_failure() {
+        use crate::process::{ObserverEpoch, Pid};
+        let control = OperationControl::unlimited();
+        let epoch = ObserverEpoch::new(proc_limits(), &control).expect("epoch on own process");
+        let pid = Pid::new(std::process::id() as i32).expect("own pid");
+        let mut process =
+            crate::process::ProcessObservation::acquire(pid, &epoch, proc_limits(), &control)
+                .expect("acquire self");
+        // Post-fork state: creator (parent) != current (self).
+        let parent = Pid::new(
+            rustix::process::getppid()
+                .expect("parent pid")
+                .as_raw_nonzero()
+                .get(),
+        )
+        .expect("positive parent pid");
+        assert_ne!(parent, pid, "test must not be its own parent");
+        process.forge_post_fork_epoch(epoch.forge_post_fork_creator(parent));
+        let (path, held) = fdinfo_held("postfork");
+        let pool = pool::MappingPool::new(pool::MappingPoolLimits {
+            max_mappings: 0,
+            max_mapped_bytes: 0,
+        })
+        .expect("no-new pool");
+        let page = rustix::param::page_size() as u64;
+        let failure = observe_mapping(
+            MappingRequest {
+                pool: &pool,
+                held,
+                process: &process,
+                range: MapRange::new(page, 2 * page).expect("page range"),
+                policy: MappingPolicy::NoNewTargetMappings,
+                retained: None,
+                limits: MappingLimits {
+                    proc: proc_limits(),
+                    max_mount_refreshes: 1,
+                    max_open_fds: 1024,
+                    max_live_mappings: 0,
+                },
+            },
+            &control,
+        )
+        .expect_err("post-fork observation must fail, not mismatch");
+        assert_eq!(failure.error().reason(), Reason::WrongContext);
+        assert_eq!(
+            failure
+                .error()
+                .process_context()
+                .and_then(crate::error::ProcessErrorContext::member),
+            Some(crate::error::ProcMember::CreatorPidfd),
+            "creator mismatch must keep its observer origin"
+        );
+        pool.close(&control).expect("pool closes");
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn policy_coherence_matrix() {
         let base = MappingLimits {
@@ -1347,6 +1593,13 @@ mod tests {
         let _table = crate::FD_TABLE.lock().unwrap();
         let control = OperationControl::unlimited();
         let process = self_observation(&control);
+        // S10: the strict acquisition behind calibration's worst case
+        // (six steps, not the 5-FD re-verification below).
+        assert_eq!(
+            process.acquisition_charges().fd_acquisitions(),
+            ACQUIRE_WORST_FDS,
+            "guard + pre-sample + pidfd + dir + namespaces + view"
+        );
         let birth = process.verify_birth(&control).expect("birth on live self");
         assert_eq!(
             birth.charges().fd_acquisitions(),
@@ -1518,9 +1771,10 @@ mod tests {
         }
     }
 
-    /// R12: a successful fdinfo read charges open + read + close +
-    /// cross-check stat (4 syscalls, 1 acquisition). The old fixed
-    /// post-success (3, 1) never counted the stat.
+    /// R12: a successful fdinfo read charges open + read +
+    /// cross-check statat (3 syscalls, 1 acquisition); the RAII
+    /// close is uncharged (S45). The old fixed post-success
+    /// (3, 1) never counted the stat.
     #[test]
     fn fdinfo_success_charges_every_syscall() {
         use std::os::fd::AsFd;
@@ -1531,7 +1785,7 @@ mod tests {
         let _mnt_id = read_fdinfo_mnt_id(held.as_fd(), &stat, &mut ctx, &control, 4096)
             .expect("fdinfo resolves");
         assert_eq!(ctx.charges.len(), 1);
-        assert_eq!(ctx.charges[0].syscalls, 4, "open + read + close + statat");
+        assert_eq!(ctx.charges[0].syscalls, 3, "open + read + statat (S45: RAII close uncharged)");
         assert_eq!(ctx.charges[0].fd_acquisitions(), 1);
         assert_eq!(ctx.fd_spent, 1);
         std::fs::remove_file(path).unwrap();
@@ -1551,7 +1805,7 @@ mod tests {
             .expect_err("foreign stat must refuse");
         assert_eq!(err.reason(), Reason::WrongContext);
         assert_eq!(ctx.charges.len(), 1);
-        assert_eq!(ctx.charges[0].syscalls, 4, "open + read + close + statat");
+        assert_eq!(ctx.charges[0].syscalls, 3, "open + read + statat (S45: RAII close uncharged)");
         assert_eq!(ctx.charges[0].fd_acquisitions(), 1, "the open is kept");
         assert_eq!(ctx.fd_spent, 1);
         std::fs::remove_file(path_a).unwrap();

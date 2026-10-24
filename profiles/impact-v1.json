@@ -76,7 +76,10 @@
     {"id": "qual-tests",
      "argv": ["python3", "-m", "unittest", "discover", "-s", "tools/qualification/tests"]},
     {"id": "planning-docs",
-     "argv": ["python3", "tools/check_planning_docs.py"]}
+     "argv": ["python3", "tools/check_planning_docs.py"]},
+    {"id": "check-i686-testkit",
+     "argv": ["cargo", "check", "--offline", "-p", "scopebase-testkit",
+              "--target", "i686-unknown-linux-gnu"]}
   ],
   "profile_gates": {
     "held-file-v1":

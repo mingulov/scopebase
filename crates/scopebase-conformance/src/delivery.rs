@@ -9,6 +9,7 @@
 //! package coordinates; anything else is refused before the engine starts, so
 //! a differently resolved downstream library is never certified here.
 
+use crate::cleanup;
 use crate::closure::{self, MANIFEST_FILE};
 use crate::error::{OperatorError, OperatorErrorKind};
 use crate::receipt;
@@ -292,8 +293,16 @@ impl ConformanceAdapter for DeliveryAdapter {
                 Some(triple) => (triple.1.to_string(), triple.2.to_string()),
                 None => return Err(self.unsupported(i, b"unknown delivery schema")),
             };
-        let mut values = Vec::new();
-        let mut completed = Vec::new();
+        // S61: entire-script preflight before the first input access
+        // (TT02 dialect amendment, like the S34 capture adapters).
+        // Every step's operation, arity and shape validate here, so
+        // a late unsupported step rejects pre-read UnsupportedSchema
+        // instead of executing — and consuming — its predecessors.
+        // S61: entire-script preflight before the first input access
+        // (TT02 dialect amendment, like the S34 capture adapters).
+        // Every step's operation, arity and shape validate here, so
+        // a late unsupported step rejects pre-read UnsupportedSchema
+        // instead of executing — and consuming — its predecessors.
         for step in i.script().steps() {
             if step.operation().as_str() != operation
                 || step.inputs().len() != 1
@@ -301,6 +310,10 @@ impl ConformanceAdapter for DeliveryAdapter {
             {
                 return Err(self.unsupported(i, b"unknown delivery operation"));
             }
+        }
+        let mut values = Vec::new();
+        let mut completed = Vec::new();
+        for step in i.script().steps() {
             let slot = &step.inputs()[0];
             let input = f.input(slot).ok_or_else(|| {
                 self.failed(
@@ -632,18 +645,101 @@ fn preflight_run_inputs(
         .get("ledger_templates")
         .cloned()
         .unwrap_or_default();
+    // S58: absent templates render nothing; a present non-object is
+    // malformed, never silently empty.
+    let templates: Vec<(String, serde_json::Value)> = match &ledger_templates {
+        serde_json::Value::Null => Vec::new(),
+        serde_json::Value::Object(map) => {
+            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        }
+        _ => {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                "ledger templates are not an object",
+            ));
+        }
+    };
+    // S58: ledger admission budget. Delivery pins default limits (see
+    // the contract load below), so the preflight charges against
+    // them: each entry becomes one staged file plus one bundle
+    // artifact (cardinality), rendered bytes are retained through
+    // staging (aggregate peak), and the run-id expansion is admitted
+    // before its allocation.
+    let blimits = RunLimits::default();
+    if templates.len() as u64 > blimits.artifacts() {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            format!(
+                "ledger templates exceed artifact budget {}: {}",
+                blimits.artifacts(),
+                templates.len()
+            ),
+        ));
+    }
+    let mut ledger_roles: std::collections::BTreeMap<&str, &str> =
+        std::collections::BTreeMap::new();
+    if let Some(artifacts) = template.get("artifacts").and_then(|a| a.as_array()) {
+        for artifact in artifacts {
+            if let (Some(id), Some(role)) = (
+                artifact.get("id").and_then(|i| i.as_str()),
+                artifact.get("role").and_then(|r| r.as_str()),
+            ) {
+                ledger_roles.insert(id, role);
+            }
+        }
+    }
     let mut generated: std::collections::BTreeMap<String, (u64, String)> =
         std::collections::BTreeMap::new();
     let mut rendered: Vec<(String, CString, Vec<u8>)> = Vec::new();
-    for (file_id, path_value) in ledger_templates.as_object().cloned().unwrap_or_default() {
-        admit_ledger_file_id(&file_id)?;
+    let mut rendered_sum: u64 = 0;
+    for (file_id, path_value) in &templates {
+        admit_ledger_file_id(file_id)?;
+        // S58: every alias must reference a fixture-ledger
+        // artifact. Unreferenced aliases render unbounded staged
+        // waste; a mistyped id would overwrite another artifact's
+        // pins with rendered bytes below.
+        match ledger_roles.get(file_id.as_str()) {
+            Some(role) if *role == "fixture_ledger" => {}
+            Some(role) => {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!(
+                        "ledger template {file_id} is not a fixture-ledger artifact (role {role})"
+                    ),
+                ));
+            }
+            None => {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("ledger template {file_id} names no contract artifact"),
+                ));
+            }
+        }
         let rel = path_value.as_str().ok_or_else(|| {
             OperatorError::new(
                 OperatorErrorKind::BrokenPackage,
                 format!("ledger template path is not a string: {file_id}"),
             )
         })?;
-        let raw = closure.read(rel)?;
+        // S58-round4: admit the raw read against the per-file
+        // vector budget and the REMAINING aggregate allowance
+        // before allocating it. Previously a member materialized in
+        // full under the 64MiB member cap while predecessors stayed
+        // retained, and the peak check below only fired afterward.
+        let remaining = blimits
+            .retained_bytes()
+            .checked_sub(rendered_sum)
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!(
+                        "ledger {file_id} retained total exceeds budget {}",
+                        blimits.retained_bytes()
+                    ),
+                )
+            })?;
+        let raw_cap = blimits.vector_bytes().min(remaining);
+        let raw = closure.read_capped(rel, raw_cap)?;
         let text = std::str::from_utf8(&raw).map_err(|_| {
             OperatorError::new(
                 OperatorErrorKind::BrokenPackage,
@@ -656,7 +752,66 @@ fn preflight_run_inputs(
                 format!("ledger template lacks a run-id slot: {rel}"),
             ));
         }
+        // S58: admit the expansion before allocating it: each slot
+        // grows by (run id − slot) bytes, checked.
+        let slots = text.matches("@RUN_ID@").count() as u64;
+        let growth = slots
+            .checked_mul(
+                (run_id.len() as u64)
+                    .checked_sub("@RUN_ID@".len() as u64)
+                    .unwrap_or(0),
+            )
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("ledger template {file_id} expansion overflows"),
+                )
+            })?;
+        let projected = (raw.len() as u64).checked_add(growth).ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger template {file_id} expansion overflows"),
+            )
+        })?;
+        if projected > blimits.vector_bytes() {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!(
+                    "ledger {file_id} rendered {projected} exceeds vector budget {}",
+                    blimits.vector_bytes()
+                ),
+            ));
+        }
+        // True retained peak: rendered bytes so far plus this
+        // entry's raw and rendered copies (the raw drops after its
+        // iteration, so only the live peak is charged).
+        let peak = rendered_sum
+            .checked_add(raw.len() as u64)
+            .and_then(|n| n.checked_add(projected))
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("ledger {file_id} retained peak overflows"),
+                )
+            })?;
+        if peak > blimits.retained_bytes() {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!(
+                    "ledger {file_id} would exceed retained budget {}",
+                    blimits.retained_bytes()
+                ),
+            ));
+        }
         let bytes = text.replace("@RUN_ID@", run_id).into_bytes();
+        rendered_sum = rendered_sum
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("ledger {file_id} retained total overflows"),
+                )
+            })?;
         let staged_name = CString::new(format!("{file_id}.json")).map_err(|_| {
             OperatorError::new(
                 OperatorErrorKind::BrokenPackage,
@@ -667,7 +822,7 @@ fn preflight_run_inputs(
             file_id.clone(),
             (bytes.len() as u64, Digest256::of_bytes(&bytes).as_str()),
         );
-        rendered.push((file_id, staged_name, bytes));
+        rendered.push((file_id.clone(), staged_name, bytes));
     }
 
     // Assemble the bound contract from the template plus measured values.
@@ -721,6 +876,23 @@ fn preflight_run_inputs(
     let bundle_manifest = VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
         .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
 
+    // S58: the assembled inputs stay retained together (rendered
+    // ledgers plus contract and manifest bytes) — the total holds
+    // the same retained budget the per-entry peak charged.
+    let retained_total = rendered_sum
+        .checked_add(contract_bytes.len() as u64)
+        .and_then(|n| n.checked_add(manifest_bytes.len() as u64))
+        .unwrap_or(u64::MAX);
+    if retained_total > blimits.retained_bytes() {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            format!(
+                "run inputs retained {retained_total} exceed retained budget {}",
+                blimits.retained_bytes()
+            ),
+        ));
+    }
+
     Ok(PreflightArtifacts {
         rendered,
         contract_bytes,
@@ -748,6 +920,25 @@ pub enum DeliveryHookPhase {
     /// After all staging writes, before any staged or closure
     /// vector is opened.
     AfterStaging,
+    /// S42: inside acquisition, after the output `mkdirat`, before
+    /// its `openat`. Lets a test force the acquire-open failure
+    /// window (e.g. drop all permissions on the fresh dir).
+    AfterOutputMkdir,
+    /// S42: after the output dir is acquired, before staging
+    /// creation. Lets a test force the staging-mkdir failure
+    /// window (e.g. drop write permission on the acquired dir).
+    AfterAcquire,
+    /// S42: after the staging `mkdirat`, before its `openat`. Lets
+    /// a test force the staging-open failure window.
+    AfterStagingMkdir,
+    /// S42: after staging is opened, before the creating manifest
+    /// is written. Lets a test force the manifest-write failure
+    /// window (e.g. plant a directory at the manifest name).
+    BeforeManifest,
+    /// S69-round4: before the output parent's final `mkdirat`
+    /// attempt. Lets a test force the check-to-create plant window
+    /// (e.g. plant a symlink at the parent name).
+    BeforeParentMkdir,
 }
 
 /// S36: test-only entry point with a substitution hook.
@@ -896,35 +1087,56 @@ fn run_delivery_inner(
     // R36: acquire fresh run ownership exclusively (exactly one of
     // two concurrent runs wins) and hold it: every write below is
     // descriptor-relative to the acquired dir, never path-resolved.
-    let acquired = acquire_output_dir(&request.output_dir)?;
-    let staging_fd = rustix::fs::mkdirat(
+    let mut acquired = acquire_output_dir(&request.output_dir, hook)?;
+    // S42: every pre-manifest failure below rolls the acquisition
+    // back: rollback success restores "nothing happened" (the
+    // original error returns and the name is retriable); rollback
+    // failure reports unresolved custody naming the run path.
+    let rollback = |acquired: &AcquiredDir, original: OperatorError| -> OperatorError {
+        match acquired.rollback_pre_manifest() {
+            Ok(()) => original,
+            Err(custody) => custody,
+        }
+    };
+    if let Some(hook) = hook {
+        hook(DeliveryHookPhase::AfterAcquire);
+    }
+    if let Err(e) = rustix::fs::mkdirat(
         acquired.fd.as_fd(),
         c"staging",
         rustix::fs::Mode::from_bits_truncate(0o700),
-    )
-    .map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::Engine,
-            format!("cannot create run staging: {e}"),
-        )
-    })
-    .and_then(|()| {
-        rustix::fs::openat(
-            &acquired.fd,
-            c"staging",
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|e| {
+    ) {
+        return Err(rollback(
+            &acquired,
             OperatorError::new(
                 OperatorErrorKind::Engine,
-                format!("cannot open run staging: {e}"),
-            )
-        })
-    })?;
+                format!("cannot create run staging: {e}"),
+            ),
+        ));
+    }
+    if let Some(hook) = hook {
+        hook(DeliveryHookPhase::AfterStagingMkdir);
+    }
+    let staging_fd = match rustix::fs::openat(
+        &acquired.fd,
+        c"staging",
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(e) => {
+            return Err(rollback(
+                &acquired,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("cannot open run staging: {e}"),
+                ),
+            ));
+        }
+    };
 
     // S42: the creating-run manifest is the first post-acquire
     // effect, before any fallible staging write: a run that fails
@@ -939,12 +1151,20 @@ fn run_delivery_inner(
         "mapping_policy": request.mapping_policy,
         "state": "creating",
     });
-    write_sealed(
+    if let Some(hook) = hook {
+        hook(DeliveryHookPhase::BeforeManifest);
+    }
+    if let Err(e) = write_sealed(
         acquired.fd.as_fd(),
         c"run-manifest.json",
         &serde_json::to_vec_pretty(&creating).unwrap(),
-    )
-    .map_err(|e| engine_error(format!("cannot write creating manifest: {e}")))?;
+    ) {
+        return Err(rollback(
+            &acquired,
+            engine_error(format!("cannot write creating manifest: {e}")),
+        ));
+    }
+    acquired.commit();
 
     // Stage the preflighted ledger vectors: validated and rendered
     // before acquisition, only the writes happen here.
@@ -1057,12 +1277,20 @@ fn run_delivery_inner(
         &request.mapping_policy,
         &run_id,
     )?;
-    write_sealed(
-        acquired.fd.as_fd(),
-        c"receipt.json",
-        &serde_json::to_vec_pretty(&envelope).unwrap(),
-    )
-    .map_err(|e| engine_error(format!("cannot write receipt: {e}")))?;
+    let receipt_bytes = serde_json::to_vec_pretty(&envelope).unwrap();
+    // S57: the writer enforces the same envelope bound the verifier
+    // reads under — a receipt that cannot verify is refused here,
+    // with the run's evidence, instead of stranding an unverifiable
+    // artifact.
+    if !closure::receipt_envelope_fits(u64::try_from(receipt_bytes.len()).unwrap_or(u64::MAX)) {
+        return Err(engine_error(format!(
+            "receipt envelope {} exceeds the verifiable bound {}",
+            receipt_bytes.len(),
+            closure::MAX_RECEIPT_BYTES
+        )));
+    }
+    write_sealed(acquired.fd.as_fd(), c"receipt.json", &receipt_bytes)
+        .map_err(|e| engine_error(format!("cannot write receipt: {e}")))?;
     let run_manifest = serde_json::json!({
         "schema": "operator-run-manifest-v1",
         "run_id": run_id,
@@ -1101,6 +1329,10 @@ struct AcquiredDir {
     fd: OwnedFd,
     id: (u64, u64),
     display: PathBuf,
+    /// S42: set once the creating manifest is durably written. From
+    /// then on the run owns a directory cleanup accepts, so failure
+    /// paths (and the drop backstop) must NOT remove it.
+    committed: bool,
 }
 
 impl AcquiredDir {
@@ -1139,6 +1371,255 @@ impl AcquiredDir {
         }
         Ok(())
     }
+
+    /// S42: the creating manifest is written — the acquisition is
+    /// now a cleanable run, never rollback debris.
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+
+    /// S42: remove a pre-manifest acquisition. Only the known
+    /// pre-manifest inventory is removed — `staging/`, the manifest
+    /// target, our sealed tmp files — and only after the FULL entry
+    /// list proves nothing foreign is present (unknown entries
+    /// refuse before any removal, so rollback never deletes foreign
+    /// data). Identity changes and removal failures report
+    /// unresolved custody naming the run path.
+    fn rollback_pre_manifest(&self) -> Result<(), OperatorError> {
+        let custody = |why: String| {
+            OperatorError::new(
+                OperatorErrorKind::UnresolvedCustody,
+                format!(
+                    "run {} left without cleanup custody: {why}",
+                    self.display.display()
+                ),
+            )
+        };
+        // Reopen by name and bind to our inode: children are listed
+        // and removed through this descriptor, so a swapped name
+        // refuses instead of deleting through it.
+        let live = rustix::fs::openat(
+            &self.parent,
+            self.name.as_c_str(),
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|e| custody(format!("run dir not re-openable: {e}")))?;
+        let live_id = rustix::fs::fstat(&live)
+            .map(|st| (st.st_dev, st.st_ino))
+            .map_err(|e| custody(format!("run dir not statable: {e}")))?;
+        if live_id != self.id {
+            return Err(custody("run dir replaced before rollback".to_string()));
+        }
+        // Inventory first: every entry must be known before anything
+        // is removed.
+        let tmp_prefix = format!(".tmp-{}-", std::process::id());
+        let mut known: Vec<CString> = Vec::new();
+        let mut entries = rustix::fs::Dir::read_from(&live)
+            .map_err(|e| custody(format!("run dir not listable: {e}")))?;
+        while let Some(entry) = entries
+            .next()
+            .map(|r| r.map_err(|e| custody(format!("run dir entry unreadable: {e}"))))
+            .transpose()?
+        {
+            let bytes = entry.file_name().to_bytes();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            let ours_tmp = bytes.starts_with(tmp_prefix.as_bytes());
+            if bytes != b"staging" && bytes != b"run-manifest.json" && !ours_tmp {
+                return Err(custody(format!(
+                    "foreign entry during rollback: {}",
+                    entry.file_name().to_string_lossy()
+                )));
+            }
+            known.push(
+                CString::new(bytes)
+                    .map_err(|_| custody("run dir entry not a file name".to_string()))?,
+            );
+        }
+        for name in &known {
+            // Files unlink plain; `staging/` and a planted
+            // manifest-directory remove with REMOVEDIR (which also
+            // refuses a non-empty staging instead of recursing).
+            match rustix::fs::unlinkat(&live, name.as_c_str(), rustix::fs::AtFlags::empty()) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::ISDIR) => {
+                    rustix::fs::unlinkat(&live, name.as_c_str(), rustix::fs::AtFlags::REMOVEDIR)
+                        .map_err(|e| {
+                            custody(format!(
+                                "known entry {} not removable: {e}",
+                                name.to_string_lossy()
+                            ))
+                        })?;
+                }
+                Err(e) => {
+                    return Err(custody(format!(
+                        "known entry {} not removable: {e}",
+                        name.to_string_lossy()
+                    )));
+                }
+            }
+        }
+        rustix::fs::unlinkat(
+            &self.parent,
+            self.name.as_c_str(),
+            rustix::fs::AtFlags::REMOVEDIR,
+        )
+        .map_err(|e| custody(format!("run dir not removable: {e}")))?;
+        Ok(())
+    }
+}
+
+impl Drop for AcquiredDir {
+    /// S42 backstop: a pre-commit unwind (or a missed explicit path)
+    /// still removes the acquisition. Explicit failure paths report
+    /// rollback errors to the caller; the drop only best-efforts —
+    /// after a successful explicit rollback the name is already
+    /// gone, and after commit this is a no-op.
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.rollback_pre_manifest();
+        }
+    }
+}
+
+/// S69-round4: create the output parent chain over retained
+/// descriptors, returning the final parent open `NOFOLLOW`. Only a
+/// final component whose own `mkdirat` reports creation is newly
+/// owned, and only a newly owned final parent is chmodded 0700 —
+/// through its own fd, never by path. Intermediates follow
+/// `create_dir_all` parity (missing ones are created `0777&~umask`,
+/// symlinks followed); the final component never follows (a
+/// planted or pre-existing symlink refuses at the `NOFOLLOW` open,
+/// as before, and is never chmodded).
+fn create_output_parent(
+    parent: &Path,
+    hook: Option<&dyn Fn(DeliveryHookPhase)>,
+) -> Result<OwnedFd, OperatorError> {
+    use rustix::fs::{Mode, OFlags};
+    let missing = |e: rustix::io::Errno| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("cannot create output parent {}: {e}", parent.display()),
+        )
+    };
+    let mut dir = rustix::fs::open(
+        if parent.is_absolute() { "/" } else { "." },
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(missing)?;
+    let mut pieces: Vec<&std::ffi::OsStr> = Vec::new();
+    for comp in parent.components() {
+        use std::path::Component;
+        match comp {
+            Component::Normal(name) => pieces.push(name),
+            Component::ParentDir => pieces.push(std::ffi::OsStr::new("..")),
+            // Anchored above (absolute) or vacuous (`.`): nothing to do.
+            Component::RootDir | Component::CurDir => {}
+            Component::Prefix(_) => {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::Usage,
+                    format!("output parent has no anchor: {}", parent.display()),
+                ));
+            }
+        }
+    }
+    let Some((leaf, intermediates)) = pieces.split_last() else {
+        // `.`, `/`, or empty: the anchor itself is the parent and it
+        // pre-exists by definition — never chmodded.
+        return Ok(dir);
+    };
+    for piece in intermediates {
+        let name = CString::new(piece.as_bytes()).map_err(|_| {
+            OperatorError::new(
+                OperatorErrorKind::Usage,
+                format!("output parent is not portable: {}", parent.display()),
+            )
+        })?;
+        // Intermediates follow symlinks (`create_dir_all` parity).
+        match rustix::fs::openat(
+            &dir,
+            name.as_c_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(next) => dir = next,
+            Err(rustix::io::Errno::NOENT) => {
+                rustix::fs::mkdirat(&dir, name.as_c_str(), Mode::from_bits_truncate(0o777))
+                    .map_err(missing)?;
+                dir = rustix::fs::openat(
+                    &dir,
+                    name.as_c_str(),
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(missing)?;
+            }
+            Err(e) => return Err(missing(e)),
+        }
+    }
+    if leaf.as_bytes() == b".." {
+        // A trailing `..` names an existing ancestor by definition —
+        // never created, never chmodded (the old path chmod hit the
+        // resolved directory here).
+        return rustix::fs::openat(
+            &dir,
+            c"..",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(missing);
+    }
+    let leaf_c = CString::new(leaf.as_bytes()).map_err(|_| {
+        OperatorError::new(
+            OperatorErrorKind::Usage,
+            format!("output parent is not portable: {}", parent.display()),
+        )
+    })?;
+    if let Some(fire) = hook {
+        fire(DeliveryHookPhase::BeforeParentMkdir);
+    }
+    let newly_owned = match rustix::fs::mkdirat(&dir, leaf_c.as_c_str(), Mode::from_bits_truncate(0o700)) {
+        Ok(()) => true,
+        // A planted or pre-existing name of any kind: not ours, gates
+        // as-is below — never chmodded.
+        Err(rustix::io::Errno::EXIST) => false,
+        Err(e) => return Err(missing(e)),
+    };
+    let fd = rustix::fs::openat(
+        &dir,
+        leaf_c.as_c_str(),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!("cannot open output parent {}: {e}", parent.display()),
+        )
+    })?;
+    if newly_owned {
+        // Proven-new by the `mkdirat` above, chmodded through the
+        // just-opened fd: no path re-resolution, no swap window past
+        // a `µs` plant racing this call sequence (which still only
+        // flips modes on an attacker-owned dir, never inherits it —
+        // the exclusivity gate below judges the fd as-is).
+        rustix::fs::fchmod(&fd, Mode::from_bits_truncate(0o700)).map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                format!(
+                    "cannot secure created output parent {}: {e}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    Ok(fd)
 }
 
 /// R36: acquire fresh run ownership. The run dir is created
@@ -1146,7 +1627,10 @@ impl AcquiredDir {
 /// concurrent runs racing the same output cannot both proceed: the
 /// loser refuses with a usage error. An existing name of any kind
 /// refuses — delivery never inherits another directory.
-fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
+fn acquire_output_dir(
+    raw: &Path,
+    hook: Option<&dyn Fn(DeliveryHookPhase)>,
+) -> Result<AcquiredDir, OperatorError> {
     let name = raw
         .file_name()
         .filter(|n| *n != "." && *n != "..")
@@ -1166,26 +1650,30 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
             "output dir name is not a single component",
         )
     })?;
-    std::fs::create_dir_all(parent).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!("cannot create output parent {}: {e}", parent.display()),
-        )
-    })?;
-    let parent_fd = rustix::fs::open(
-        parent,
-        rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::DIRECTORY
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::CLOEXEC,
-        rustix::fs::Mode::empty(),
-    )
-    .map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::MissingInput,
-            format!("cannot open output parent {}: {e}", parent.display()),
-        )
-    })?;
+    // S56: a parent we create ourselves is made exclusive (0700):
+    // the producer enforces the same policy cleanup requires, and
+    // an auto-created parent must not refuse the run it was created
+    // for. Pre-existing parents are never chmodded — they gate
+    // as-is below.
+    // S69-round4: the old exists-check plus path chmod let a symlink
+    // planted between the check and the creation redirect the chmod
+    // onto a foreign target. Creation now walks component-wise over
+    // retained descriptors: only a final component whose own
+    // `mkdirat` reports creation is chmodded, through its own fd —
+    // a planted name reports `EEXIST` and gates as-is, never
+    // chmodded. (This also drops the old `"a/.."` hole, where the
+    // path chmod hit the resolved directory instead of anything
+    // created.)
+    let parent_fd = create_output_parent(parent, hook)?;
+    // S56: the producer enforces the same exclusivity cleanup
+    // requires (shared rule in `cleanup`), before creating
+    // anything: a run under a shared parent would succeed but never
+    // be cleanable. Refusing here leaves no residue.
+    if let Some(detail) =
+        cleanup::exclusive_parent_violation(parent_fd.as_fd(), "output parent")?
+    {
+        return Err(OperatorError::new(OperatorErrorKind::Usage, detail));
+    }
     match rustix::fs::mkdirat(
         &parent_fd,
         name_c.as_c_str(),
@@ -1208,7 +1696,14 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
             ));
         }
     }
-    let fd = rustix::fs::openat(
+    if let Some(hook) = hook {
+        hook(DeliveryHookPhase::AfterOutputMkdir);
+    }
+    // S42: every post-mkdir failure below rolls the fresh directory
+    // back: success restores "nothing happened" (the original error
+    // returns and the name is retriable); a failed removal reports
+    // unresolved custody instead of stranding a manifest-less dir.
+    let fd = match rustix::fs::openat(
         &parent_fd,
         name_c.as_c_str(),
         rustix::fs::OFlags::RDONLY
@@ -1216,36 +1711,64 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
             | rustix::fs::OFlags::NOFOLLOW
             | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
-    )
-    .map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::Engine,
-            format!("cannot open fresh output dir: {e}"),
-        )
-    })?;
+    ) {
+        Ok(fd) => fd,
+        Err(e) => {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("cannot open fresh output dir: {e}"),
+                ),
+            ));
+        }
+    };
     // Prove the opened dir is the one `mkdirat` created: fresh dirs
     // are empty, `0700`, and owned by us. (A same-uid actor swapping
     // in their own empty `0700` dir inside this window stays inside
     // the operator's trust boundary; every later effect is
     // fd-relative to this descriptor regardless.)
-    let st = rustix::fs::fstat(&fd).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::Engine,
-            format!("fresh output dir not statable: {e}"),
-        )
-    })?;
+    let st = match rustix::fs::fstat(&fd) {
+        Ok(st) => st,
+        Err(e) => {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("fresh output dir not statable: {e}"),
+                ),
+            ));
+        }
+    };
     if st.st_uid != rustix::process::getuid().as_raw() || st.st_mode & 0o777 != 0o700 {
-        return Err(OperatorError::new(
-            OperatorErrorKind::Engine,
-            "fresh output dir ownership mismatch",
+        return Err(rollback_fresh_mkdir(
+            &parent_fd,
+            &name_c,
+            raw,
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                "fresh output dir ownership mismatch",
+            ),
         ));
     }
-    let mut entries = rustix::fs::Dir::read_from(fd.as_fd()).map_err(|e| {
-        OperatorError::new(
-            OperatorErrorKind::Engine,
-            format!("fresh output dir not listable: {e}"),
-        )
-    })?;
+    let mut entries = match rustix::fs::Dir::read_from(fd.as_fd()) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("fresh output dir not listable: {e}"),
+                ),
+            ));
+        }
+    };
     if entries.any(|entry| {
         entry
             .map(|e| {
@@ -1254,9 +1777,17 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
             })
             .unwrap_or(true)
     }) {
-        return Err(OperatorError::new(
-            OperatorErrorKind::Engine,
-            "fresh output dir is not empty",
+        // A raced foreign entry fails the removal below with
+        // ENOTEMPTY — honestly reported as unresolved custody, never
+        // deleted.
+        return Err(rollback_fresh_mkdir(
+            &parent_fd,
+            &name_c,
+            raw,
+            OperatorError::new(
+                OperatorErrorKind::Engine,
+                "fresh output dir is not empty",
+            ),
         ));
     }
     Ok(AcquiredDir {
@@ -1265,7 +1796,44 @@ fn acquire_output_dir(raw: &Path) -> Result<AcquiredDir, OperatorError> {
         id: (st.st_dev, st.st_ino),
         fd,
         display: raw.to_path_buf(),
+        committed: false,
     })
+}
+
+/// S42: remove a just-created output dir after a post-`mkdirat`
+/// failure inside acquisition. Removal success restores "nothing
+/// happened" (the original error returns, the name is retriable);
+/// removal failure reports unresolved custody naming the run path.
+/// The `mkdirat`-to-`unlinkat` adjacency is inside the same-uid
+/// trust boundary the freshness proof above documents. A swapped
+/// non-directory occupant (symlink, file) is unlinked by name —
+/// reclaiming a name our `mkdirat` created, never followed — while
+/// a non-empty directory refuses custody rather than recursing.
+fn rollback_fresh_mkdir(
+    parent: &OwnedFd,
+    name: &CString,
+    raw: &Path,
+    original: OperatorError,
+) -> OperatorError {
+    let custody = |e: rustix::io::Errno| {
+        OperatorError::new(
+            OperatorErrorKind::UnresolvedCustody,
+            format!(
+                "run {} left without cleanup custody: cannot remove fresh output dir: {e}",
+                raw.display()
+            ),
+        )
+    };
+    match rustix::fs::unlinkat(parent, name.as_c_str(), rustix::fs::AtFlags::REMOVEDIR) {
+        Ok(()) => original,
+        Err(rustix::io::Errno::NOTDIR) => {
+            match rustix::fs::unlinkat(parent, name.as_c_str(), rustix::fs::AtFlags::empty()) {
+                Ok(()) => original,
+                Err(e) => custody(e),
+            }
+        }
+        Err(e) => custody(e),
+    }
 }
 
 /// R36: create one file exclusively under a held directory and write

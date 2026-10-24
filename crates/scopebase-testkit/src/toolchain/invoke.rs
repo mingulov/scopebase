@@ -153,15 +153,21 @@ pub fn run_pinned(
         bounds,
         std::thread::Builder::new().name("invoke-stdout".to_string()),
         std::thread::Builder::new().name("invoke-stderr".to_string()),
+        None,
+        None,
     )
 }
 
 /// S33: test-only entry point with injectable reader-thread builders,
 /// so the second-reader-failure branch is forced (a denied builder),
 /// not wished for. Production callers use [`run_pinned`].
+/// S67-round4: `observe_gate` runs once after both readers spawn and
+/// before the first observation, so the WNOWAIT-denial branch runs
+/// with a proven-started tool (the gate waits for the fixture's
+/// pidfile). Production passes None.
 #[doc(hidden)]
-// Eight args: run_pinned's six plus the two injected builders; a
-// struct would obscure the one-to-one delegation.
+// Nine args: run_pinned's six plus the two injected builders plus
+// the two test gates; a struct would obscure the delegation.
 #[allow(clippy::too_many_arguments)]
 pub fn run_pinned_with_builders(
     closure: &CompilerClosure,
@@ -172,6 +178,8 @@ pub fn run_pinned_with_builders(
     bounds: &NestedBounds,
     stdout_builder: std::thread::Builder,
     stderr_builder: std::thread::Builder,
+    stderr_gate: Option<Box<dyn FnOnce() + Send>>,
+    observe_gate: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<NestedOutput, OperationError> {
     if closure.find(tool_id).is_none() {
         return Err(invalid("tool id not pinned in closure"));
@@ -268,6 +276,12 @@ pub fn run_pinned_with_builders(
             return Err(backend(error, Stage::Execute));
         }
     };
+    // S33-round3: test-only gate before the second reader spawn, so
+    // the failure branch runs with a proven-live descendant (the
+    // gate waits for the fixture's pidfile). Production passes None.
+    if let Some(gate) = stderr_gate {
+        gate();
+    }
     let stderr_reader = match spawn_capped_reader_on(
         stderr_builder,
         stderr,
@@ -303,6 +317,11 @@ pub fn run_pinned_with_builders(
     // returns Some). Only raw `Duration` params (audit/target sites)
     // can carry an unrepresentable span.
     let deadline = Instant::now() + Duration::from_millis(bounds.timeout_ms);
+    // S67-round4: test-only gate before the first observation (see
+    // the `stderr_gate` precedent above). Production passes None.
+    if let Some(gate) = observe_gate {
+        gate();
+    }
 
     loop {
         if stdout_hit.load(Ordering::SeqCst) || stderr_hit.load(Ordering::SeqCst) {
@@ -311,14 +330,36 @@ pub fn run_pinned_with_builders(
             let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
             return Err(capped_error(&out, &err));
         }
-        match child
-            .try_wait()
-            .map_err(|error| backend(error, Stage::Execute))?
-        {
-            Some(status) => {
-                // S33: the child is reaped but its forked descendants
-                // may hold the pipes; settle bounded either way.
+        let observed = match exited_no_reap(&child) {
+            Ok(observed) => observed,
+            Err(error) => {
+                // S67-round4: a failed observation (e.g. a caller
+                // filter denying the WNOWAIT waitid while allowing
+                // reap and signaling) must still retire the tool and
+                // settle the readers — never drop a live Child and
+                // two reader handles with no recovery path.
+                let observation = backend(error, Stage::Execute);
                 kill_tool_group(group);
+                let retired = kill_and_wait(&mut child);
+                let settled = settle_pair(stdout_reader, stderr_reader);
+                return Err(observe_failure(observation, retired.err(), settled.err()));
+            }
+        };
+        match observed {
+            Some(_) => {
+                // S51: the leader is observed-but-unreaped — a
+                // zombie that keeps its pid AND its process-group
+                // membership reserved. Kill the group FIRST (while
+                // the number cannot be reused), then reap. The old
+                // try_wait-then-killpg order reaped first: with the
+                // group empty, the pgid number was free for reuse
+                // and the SIGKILL could hit a new same-UID group.
+                kill_tool_group(group);
+                let status = child
+                    .wait()
+                    .map_err(|error| backend(error, Stage::Execute))?;
+                // S33: forked descendants may hold the pipes;
+                // settle bounded either way.
                 let (out, err) = settle_pair(stdout_reader, stderr_reader)?;
                 if out.overrun || err.overrun {
                     return Err(capped_error(&out, &err));
@@ -466,6 +507,57 @@ fn claim_tool_group(child: u32) {
     }
 }
 
+/// S51: observe (without reaping) whether `child` has exited. On
+/// unix a WNOWAIT wait leaves an exited child as a zombie, which
+/// keeps both its pid and its process-group membership reserved —
+/// so a group signal issued after this observation cannot hit a
+/// reused pgid. The caller must reap (or kill) the child
+/// afterwards. Off unix this is `try_wait` (no group signal is
+/// ever sent there, so no reservation hazard exists).
+fn exited_no_reap(
+    child: &std::process::Child,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        // WNOWAIT is a waitid(2) facility (waitpid rejects it with
+        // EINVAL); WEXITED reports only dead children, never stops.
+        // SAFETY: waitid with a valid siginfo out-pointer for an
+        // owned child pid; the union accessors below read the
+        // child-wait fields of a waitid-filled siginfo.
+        unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            let result = libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            );
+            if result < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if info.si_pid() == 0 {
+                return Ok(None);
+            }
+            let raw = match info.si_code {
+                code if code == libc::CLD_EXITED => info.si_status() << 8,
+                code if code == libc::CLD_KILLED => info.si_status() & 0x7f,
+                code if code == libc::CLD_DUMPED => (info.si_status() & 0x7f) | 0x80,
+                _ => {
+                    return Err(std::io::Error::other(
+                        "unexpected waitid child state",
+                    ));
+                }
+            };
+            Ok(Some(std::process::ExitStatus::from_raw(raw)))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        child.try_wait()
+    }
+}
+
 /// S33: SIGKILL the tool process group: the child plus any forked
 /// descendants holding pipes. Idempotent (ESRCH is fine); not
 /// available off unix, where settlement still bounds the wait.
@@ -534,6 +626,33 @@ fn settle_pair(
     Ok((out, err))
 }
 
+/// S67-round4: combine an observation failure with bounded-retirement
+/// fallout. Clean retirement returns the observation error unchanged;
+/// an unretired tool or unsettled readers join the report, so
+/// unresolved ownership is explicit, never silently dropped.
+fn observe_failure(
+    observation: OperationError,
+    retire: Option<OperationError>,
+    settle: Option<OperationError>,
+) -> OperationError {
+    if retire.is_none() && settle.is_none() {
+        return observation;
+    }
+    let mut detail = format!("tool observation failed ({observation})");
+    if let Some(retire) = retire {
+        detail.push_str(&format!("; tool retirement failed ({retire})"));
+    }
+    if let Some(settle) = settle {
+        detail.push_str(&format!("; {settle}"));
+    }
+    OperationError::new(
+        ErrorKind::Backend,
+        Stage::Execute,
+        observation.raw_os_error(),
+        Some(Box::new(Detail(detail))),
+    )
+}
+
 /// S33: unsettled-reader error. Partial bytes already collected are
 /// untrustworthy (truncated by detachment) and never returned.
 fn unsettled(name: &'static str) -> OperationError {
@@ -597,6 +716,110 @@ fn capped_error(stdout: &CappedOutput, stderr: &CappedOutput) -> OperationError 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S51: the no-reap observation leaves an exited child as a
+    /// reserved zombie (still in /proc, state Z, group intact)
+    /// until the caller reaps it — the reservation a group signal
+    /// issued between observe and reap relies on. `try_wait`
+    /// cannot provide this: it reaps, freeing the pgid number.
+    #[cfg(unix)]
+    #[test]
+    fn no_reap_observation_keeps_leader_reserved() {
+        let mut child = std::process::Command::new("/bin/true")
+            .spawn()
+            .expect("true spawns");
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let observed = loop {
+            match exited_no_reap(&child).expect("observation runs") {
+                Some(status) => break status,
+                None => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "true never exited"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        };
+        assert!(observed.success());
+        // Still reserved: present in /proc as a zombie with its
+        // group membership intact.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .expect("unreaped child still reserved in /proc");
+        let state = stat.rsplit(')').next().unwrap_or("").trim_start().chars().next();
+        assert_eq!(state, Some('Z'), "expected zombie, stat: {stat}");
+        let group = unsafe { libc::getpgid(pid as libc::pid_t) };
+        assert!(group > 0, "zombie leader keeps its group");
+        child.wait().expect("reap runs");
+        assert!(
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_err(),
+            "reaped pid must be gone"
+        );
+    }
+
+    /// S67-round4: the observation-failure combiner returns the
+    /// observation error unchanged on clean retirement, and joins
+    /// unretired-tool / unsettled-reader fallout into the report
+    /// otherwise — unresolved ownership is explicit, with the
+    /// observation errno preserved. Fallout errors ride as their
+    /// `Display` (stage/kind/errno, like the spawn-failure
+    /// combiner), so distinguishing errnos prove inclusion.
+    #[test]
+    fn observe_failure_combines_retirement_fallout() {
+        use std::error::Error as _;
+        let observation = backend(
+            std::io::Error::from_raw_os_error(1),
+            Stage::Execute,
+        );
+        // Clean retirement: unchanged.
+        let clean = observe_failure(
+            backend(std::io::Error::from_raw_os_error(1), Stage::Execute),
+            None,
+            None,
+        );
+        assert_eq!(clean.kind(), ErrorKind::Backend);
+        assert_eq!(clean.stage(), Stage::Execute);
+        assert_eq!(clean.raw_os_error(), Some(1));
+        // Retirement fallout joins the report.
+        let retire = backend(std::io::Error::from_raw_os_error(3), Stage::Execute);
+        let settle = backend(std::io::Error::from_raw_os_error(5), Stage::Execute);
+        let combined = observe_failure(observation, Some(retire), Some(settle));
+        assert_eq!(combined.kind(), ErrorKind::Backend);
+        assert_eq!(combined.stage(), Stage::Execute);
+        assert_eq!(
+            combined.raw_os_error(),
+            Some(1),
+            "observation errno is preserved"
+        );
+        let detail = format!("{}", combined.source().expect("combined detail"));
+        assert!(
+            detail.contains("tool observation failed"),
+            "observation leads: {detail}"
+        );
+        assert!(
+            detail.contains("tool retirement failed"),
+            "unretired tool joins: {detail}"
+        );
+        assert!(
+            detail.contains("os error 3") && detail.contains("os error 5"),
+            "both fallout errors ride along: {detail}"
+        );
+        // Settle-only fallout still rebuilds (no silent drop).
+        let settle_only = observe_failure(
+            backend(std::io::Error::from_raw_os_error(1), Stage::Execute),
+            None,
+            Some(backend(
+                std::io::Error::from_raw_os_error(5),
+                Stage::Execute,
+            )),
+        );
+        let detail = format!("{}", settle_only.source().expect("settle detail"));
+        assert!(
+            detail.contains("os error 5") && !detail.contains("tool retirement failed"),
+            "settle-only fallout is exact: {detail}"
+        );
+    }
 
     /// Scripted reader: yields one partial chunk, then a hard read error.
     struct FailAfterPartial {

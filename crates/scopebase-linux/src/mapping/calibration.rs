@@ -203,14 +203,14 @@ pub(crate) fn calibrate(
                 );
             }
         }
-        Err(error) => match error.reason() {
+        Err(error) => {
+            if !admit_key_only(&error) {
+                return abort_calibration(permit, failed(error, charges));
+            }
             // F13: tolerated, but the attempt's spend still counts: the
             // read ran and acquired before it was denied or vanished.
-            Reason::Denied | Reason::Disappeared | Reason::Inconclusive => {
-                charges.push(error.charges().clone());
-            }
-            _ => return abort_calibration(permit, failed(error, charges)),
-        },
+            charges.push(error.charges().clone());
+        }
     }
     drop(this);
     match super::custody::unmap_raw(addr, map_len) {
@@ -233,6 +233,24 @@ pub(crate) fn calibrate(
             })
         }
     }
+}
+
+/// S11-round4: admit a failed map_files identity read into key-only
+/// calibration. Same origin-aware admission as the outer assoc
+/// classifier: an observer-side failure (our view or authentication
+/// broke mid-call — e.g. the observer-directory guard denied before
+/// the target entry was ever touched) aborts calibration instead of
+/// degrading to a key, however verdict-shaped its `Reason` is. Only
+/// target-side or member-less denial/disappearance/inconclusive keep
+/// the historical key-only fallback.
+fn admit_key_only(error: &LinuxError) -> bool {
+    if super::is_observer_origin(error) {
+        return false;
+    }
+    matches!(
+        error.reason(),
+        Reason::Denied | Reason::Disappeared | Reason::Inconclusive
+    )
 }
 
 fn failed(error: LinuxError, mut charges: Vec<ResourceCharges>) -> MappingFailure {
@@ -298,5 +316,167 @@ mod tests {
         assert_eq!(calibration_len(4095, 4096), Some(4095));
         assert_eq!(calibration_len(4096, 4096), Some(4096));
         assert_eq!(calibration_len(1 << 30, 4096), Some(4096));
+    }
+
+    /// S11-round4: calibration's map_files association fallback uses the
+    /// same origin-aware admission as the outer assoc classifier. Every
+    /// tolerated `Reason` on an observer-side member (our view broke
+    /// mid-call — e.g. the observer-directory guard denied before the
+    /// target entry was touched) refuses key-only calibration; only
+    /// target-side or member-less failures keep the historical
+    /// fallback. Drives the real admission branch (no
+    /// self-observation trigger produces a tolerated reason on an
+    /// observer member today — LSM/remount transients could — so the
+    /// branch is covered here and the production abort path below).
+    #[test]
+    #[cfg(feature = "process")]
+    fn key_only_admission_refuses_observer_origin() {
+        use crate::error::{CleanupDisposition, ProcMember, ProcOperation, ProcessErrorContext};
+        fn error_with_member(reason: Reason, member: ProcMember) -> LinuxError {
+            let mut error = super::super::pool::pool_error(
+                Stage::MapCalibration,
+                reason,
+                CleanupDisposition::Complete,
+            );
+            error.process = Some(ProcessErrorContext::new(
+                ProcOperation::ReadMapFiles,
+                Some(member),
+            ));
+            error
+        }
+        fn bare(reason: Reason) -> LinuxError {
+            super::super::pool::pool_error(Stage::MapCalibration, reason, CleanupDisposition::Complete)
+        }
+        use ProcMember::*;
+        let tolerated = [Reason::Denied, Reason::Disappeared, Reason::Inconclusive];
+        // Observer-side members: never key-only evidence.
+        for member in [
+            Root,
+            SelfLink,
+            ObserverDirectory,
+            ObserverStatus,
+            ObserverPidNamespace,
+            CreatorPidfd,
+        ] {
+            for reason in tolerated {
+                assert!(
+                    !admit_key_only(&error_with_member(reason, member)),
+                    "{member:?}/{reason:?} must abort calibration, not degrade to a key"
+                );
+            }
+        }
+        // Target-side members: the historical key-only fallback stays.
+        for member in [TargetDirectory, TargetStatus, TargetStat, Maps, MapFiles, Pidfd] {
+            for reason in tolerated {
+                assert!(
+                    admit_key_only(&error_with_member(reason, member)),
+                    "{member:?}/{reason:?} must stay key-only evidence"
+                );
+            }
+        }
+        // Member-less errors: historical reason-only routing preserved.
+        for reason in tolerated {
+            assert!(
+                admit_key_only(&bare(reason)),
+                "member-less {reason:?} must stay key-only evidence"
+            );
+        }
+        // Untolerated reasons refuse regardless of origin.
+        for reason in [
+            Reason::WrongContext,
+            Reason::ChangedSource,
+            Reason::Unreadable,
+            Reason::Unavailable,
+            Reason::Malformed,
+            Reason::InvalidInput,
+        ] {
+            assert!(
+                !admit_key_only(&bare(reason)),
+                "member-less {reason:?} must abort calibration"
+            );
+            assert!(
+                !admit_key_only(&error_with_member(reason, MapFiles)),
+                "MapFiles/{reason:?} must abort calibration"
+            );
+        }
+    }
+
+    /// S11-round4: production-path observer-failure control for
+    /// calibration. A forged post-fork epoch (creator = our own parent
+    /// pid, the exact pair a forked child presents) aborts the real
+    /// `calibrate` as a `Failed` operation — never `Ok` key-only
+    /// evidence and never `Inconclusive` — with the CreatorPidfd
+    /// observer origin preserved on the failure, and the mapping
+    /// retired (no active mapping left behind).
+    #[test]
+    #[cfg(feature = "process")]
+    fn post_fork_calibrate_aborts_with_observer_origin() {
+        use crate::file::{HeldFile, ProcFdResolver, SymlinkPolicy};
+        use crate::procfs::ParseLimits;
+        use std::sync::Arc;
+        let control = OperationControl::unlimited();
+        let proc = ProcLimits {
+            parse: ParseLimits {
+                max_bytes: 1 << 20,
+                max_entries: 1 << 16,
+                max_line_bytes: 1 << 16,
+            },
+            max_read_calls: 4096,
+            max_metadata_bytes: 1 << 20,
+        };
+        let epoch = ObserverEpoch::new(proc, &control).expect("epoch on own process");
+        let parent = Pid::new(
+            rustix::process::getppid()
+                .expect("parent pid")
+                .as_raw_nonzero()
+                .get(),
+        )
+        .expect("positive parent pid");
+        let me = Pid::new(std::process::id() as i32).expect("own pid");
+        assert_ne!(parent, me, "test must not be its own parent");
+        let forged = epoch.forge_post_fork_creator(parent);
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "cal-observer-{}-{id}.dat",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"calibration observer probe").expect("write probe file");
+        let resolver = ProcFdResolver::open_self().expect("resolver");
+        let held = Arc::new(
+            HeldFile::open(&path, &resolver, SymlinkPolicy::Follow).expect("hold probe file"),
+        );
+        let page = rustix::param::page_size();
+        let pool = super::super::pool::MappingPool::new(super::super::pool::MappingPoolLimits {
+            max_mappings: 1,
+            max_mapped_bytes: page,
+        })
+        .expect("calibration pool");
+        let guard = super::super::pool::OpGuard::admit(&pool).expect("admit op");
+        match calibrate(&held, guard.domain(), &forged, proc, page, &control) {
+            Err(CalibrationAbort::Failed(failure)) => {
+                assert_eq!(failure.error().reason(), Reason::WrongContext);
+                assert_eq!(
+                    failure
+                        .error()
+                        .process_context()
+                        .and_then(crate::error::ProcessErrorContext::member),
+                    Some(crate::error::ProcMember::CreatorPidfd),
+                    "creator mismatch must keep its observer origin"
+                );
+            }
+            Err(CalibrationAbort::Inconclusive(_)) => {
+                panic!("post-fork calibration must fail, not go inconclusive")
+            }
+            Ok(_) => panic!("post-fork calibration must fail, not publish a key"),
+        }
+        assert_eq!(
+            pool.status().active_mappings(),
+            0,
+            "aborted calibration must retire its mapping"
+        );
+        drop(guard);
+        pool.close(&control).expect("pool closes");
+        std::fs::remove_file(path).unwrap();
     }
 }

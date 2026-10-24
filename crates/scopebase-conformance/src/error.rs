@@ -52,6 +52,11 @@ pub enum OperatorErrorKind {
     CleanupRefused,
     /// R04: a report or usage line could not be written to its stream.
     OutputFailed,
+    /// S42: a failed run left effects that rollback could not remove;
+    /// the detail names the path and the blocking cause. Neither
+    /// retry (the name exists) nor cleanup (no valid manifest) owns
+    /// it — an operator must inspect and remove it by hand.
+    UnresolvedCustody,
 }
 
 /// A typed operator refusal with a human-readable detail.
@@ -108,6 +113,7 @@ pub fn exit_for_kind(kind: OperatorErrorKind) -> i32 {
         }
         OperatorErrorKind::Engine
         | OperatorErrorKind::ReceiptInvalid
-        | OperatorErrorKind::OutputFailed => EXIT_FAILURE,
+        | OperatorErrorKind::OutputFailed
+        | OperatorErrorKind::UnresolvedCustody => EXIT_FAILURE,
     }
 }

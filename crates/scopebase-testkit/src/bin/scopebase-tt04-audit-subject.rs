@@ -463,8 +463,27 @@ fn post_exec_map(target: &str) -> i32 {
 /// Diverges: the exec kills the calling thread, so returning means
 /// setup failure (exit 2). Exit codes: 14 NUL, 15 spawn refused,
 /// 18 exec refused, 19 self-exe resolution.
+///
+/// S06-round3: the leader spins in USERSPACE (no syscalls at all —
+/// not even a clock read) while the worker execs. The counterexample
+/// needs the old leader's tracer phase to be userspace when the
+/// renumber lands: the former `recv_timeout` parked the leader
+/// inside a futex wait, whose in-syscall phase accidentally matched
+/// the exec-exit stop and let phase-preserving code pass. Ordering
+/// is by atomics, not timing: the worker execs only after observing
+/// SPINNING, which the leader stores after its last syscall (the
+/// clone) has exited.
 fn nonleader_exec(target: &str, report: &str) -> ! {
     use std::os::unix::ffi::OsStrExt as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // S06-round3 handshake states (see above).
+    const STARTING: usize = 0;
+    const SPINNING: usize = 1;
+    const FAILED: usize = 2;
+    // Iteration bound for both spins (no clock syscalls): ~10s on a
+    // modern core; the 60s audit timeout backstops pathological
+    // hardware. Every exit below is loud (exit 2).
+    const SPIN_ITERS: u64 = 3_000_000_000;
     let target = target.to_owned();
     let report = report.to_owned();
     let exe = match std::env::current_exe()
@@ -474,10 +493,22 @@ fn nonleader_exec(target: &str, report: &str) -> ! {
         Some(exe) => exe,
         None => std::process::exit(2),
     };
-    let (failed_tx, failed_rx) = std::sync::mpsc::channel::<()>();
+    let state = std::sync::Arc::new(AtomicUsize::new(STARTING));
+    let worker_state = state.clone();
     let spawned = std::thread::Builder::new()
         .name("exec-worker".to_string())
         .spawn(move || {
+            let mut spins: u64 = 0;
+            while worker_state.load(Ordering::Acquire) == STARTING {
+                spins += 1;
+                if spins >= SPIN_ITERS {
+                    std::process::exit(2);
+                }
+                std::hint::spin_loop();
+            }
+            if worker_state.load(Ordering::Acquire) == FAILED {
+                std::process::exit(2);
+            }
             let target = std::ffi::CString::new(target).unwrap_or_else(|_| std::process::exit(2));
             let report = std::ffi::CString::new(report).unwrap_or_else(|_| std::process::exit(2));
             let argv = [
@@ -493,14 +524,30 @@ fn nonleader_exec(target: &str, report: &str) -> ! {
             unsafe {
                 libc::execvp(exe.as_ptr(), argv.as_ptr());
             }
-            let _ = failed_tx.send(());
+            worker_state.store(FAILED, Ordering::Release);
+            // Park: the leader's bounded spin reports the failure.
+            loop {
+                std::thread::park();
+            }
         });
     if spawned.is_err() {
         std::process::exit(2);
     }
-    // The exec kills this thread; waking means the worker reported
-    // failure (or never exec'd at all).
-    let _ = failed_rx.recv_timeout(std::time::Duration::from_secs(10));
+    state.store(SPINNING, Ordering::Release);
+    // The exec kills this thread. Userspace only: a flag check per
+    // 4096 pause iterations, zero syscalls, so the tracer phase at
+    // the renumber is provably userspace on every schedule.
+    let mut spins: u64 = 0;
+    loop {
+        spins += 1;
+        if spins % 4096 == 0 && state.load(Ordering::Acquire) == FAILED {
+            break;
+        }
+        if spins >= SPIN_ITERS {
+            break;
+        }
+        std::hint::spin_loop();
+    }
     cli::err_line("audit subject setup failed at nonleader exec");
     std::process::exit(2);
 }

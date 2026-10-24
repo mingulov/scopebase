@@ -9,14 +9,19 @@ refusals, grant discipline, manifest tamper detection, idempotent
 cleanup and the pure mountinfo/admission predicates. Live privileged
 provisioning is exercised by the operator route, never by this file.
 """
+import errno
+import fcntl
 import importlib.util
 import json
 import os
+import struct
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HELPERS = Path(__file__).resolve().parent / "tt05_helpers.py"
@@ -26,6 +31,75 @@ sys.modules["tt05_helpers"] = h
 hspec.loader.exec_module(h)
 
 provision = h.load("provision_fs", "tools/qualification/provision_fs.py")
+
+
+def _loop_fd_script(get_items, clr_errno=None, open_backings=None):
+    """Hermetic ioctl seam for loop-retire tests. (S17-round3)
+
+    Routes /dev/loop* opens to stand-in fds (recording every
+    open), scripts LOOP_GET_STATUS64 replies, and logs every
+    ioctl by fd. Returns (fake_open, fake_ioctl, log); log
+    holds ('open', path, fd), ('ioctl', fd, req) and
+    ('clr-victim', fd, backing) entries. Non-loop opens and
+    foreign-fd ioctls delegate to the real calls, so the patch
+    is safe process-wide for the test's duration.
+
+    get_items: per-GET replies — ('id', dev, ino), ('enxio',)
+        or ('eacces',) — consumed in call order, unless
+        open_backings is given.
+    clr_errno: None (CLR succeeds) or an errno the CLR raises.
+    open_backings: node-swap model — each routed open pops one
+        backing identity ((dev, ino) or None when free); every
+        fd answers GETs from its own backing, and CLR records
+        its fd's backing as the victim before freeing it.
+    """
+    real_open = os.open
+    real_ioctl = fcntl.ioctl
+    log = []
+    standins = {}
+    gets = list(get_items)
+    router = list(open_backings) if open_backings is not None else None
+    per_fd = {}
+
+    def fake_open(path, flags, *args):
+        if isinstance(path, str) and path.startswith("/dev/loop"):
+            fd = real_open("/dev/null", os.O_RDWR)
+            log.append(("open", path, fd))
+            standins[fd] = path
+            if router is not None:
+                per_fd[fd] = router.pop(0) if router else None
+            return fd
+        return real_open(path, flags, *args)
+
+    def fake_ioctl(fd, req, *args):
+        if fd in standins and req in (provision.LOOP_GET_STATUS64,
+                                      provision.LOOP_CLR_FD):
+            log.append(("ioctl", fd, req))
+            if req == provision.LOOP_CLR_FD:
+                victim = per_fd.get(fd, "scripted")
+                log.append(("clr-victim", fd, victim))
+                if router is not None:
+                    per_fd[fd] = None
+                if clr_errno is not None:
+                    raise OSError(clr_errno,
+                                  os.strerror(clr_errno))
+                return 0
+            if router is not None:
+                backing = per_fd.get(fd)
+                if backing is None:
+                    raise OSError(errno.ENXIO, "no such device")
+                struct.pack_into("<QQ", args[0], 0, *backing)
+                return 0
+            item = gets.pop(0)
+            if item[0] == "enxio":
+                raise OSError(errno.ENXIO, "no such device")
+            if item[0] == "eacces":
+                raise OSError(errno.EACCES, "denied")
+            struct.pack_into("<QQ", args[0], 0, item[1], item[2])
+            return 0
+        return real_ioctl(fd, req, *args)
+
+    return fake_open, fake_ioctl, log
 ROOT = h.ROOT
 
 
@@ -376,7 +450,13 @@ class ReplacementCustodyTests(unittest.TestCase):
                     provision.cleanup_one_mount(entry, run_root))
                 sudo.assert_not_called()
 
-    def test_cleanup_loop_device_refuses_reused_name(self):
+    # S18-round3: string-level loop-identity tests — the kernel
+    # ioctl is unavailable here, so the sysfs fallback governs
+    # (hermetic: no /dev dependence in any uid).
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_cleanup_loop_device_refuses_reused_name(self, _loop_id):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
             run_root = tmp
@@ -854,7 +934,7 @@ class RereviewCustodyTests(unittest.TestCase):
             self.skipTest("/dev/shm not writable here")
         aux = tempfile.mkdtemp(prefix="tt04-", dir="/dev/shm")
         self.addCleanup(shutil.rmtree, aux, ignore_errors=True)
-        os.makedirs(os.path.join(aux, "lower"))
+        os.makedirs(os.path.join(aux, "lower"), mode=0o755)
         Path(aux, "lower", "shared.txt").write_text("shared")
         st = os.stat(aux)
         record = {"path": aux, "dev": st.st_dev, "ino": st.st_ino}
@@ -918,7 +998,13 @@ class RereviewCustodyTests(unittest.TestCase):
         self.assertEqual(rc, 124)
         self.assertIn("timed out", err)
 
-    def test_ext4_mount_timeout_detaches_loop_and_persists(self):
+    # S18-round3: string-level loop-identity tests — the kernel
+    # ioctl is unavailable here, so the sysfs fallback governs
+    # (hermetic: no /dev dependence in any uid).
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_ext4_mount_timeout_detaches_loop_and_persists(self, _loop_id):
         import types
         from unittest import mock
         tmp, run_root, manifest = self.fresh_paths()
@@ -927,14 +1013,14 @@ class RereviewCustodyTests(unittest.TestCase):
 
         def fake_sudo(argv, timeout=120):
             calls.append(list(argv))
-            if argv[0] == "mkfs.ext4":
-                return (0, "", "")
-            if argv[0] == "losetup" and argv[1] == "--find":
-                return (0, "/dev/loop9\n", "")
+            if "make-ext4" in argv:
+                return (0, "made-ext4 x\n", "")
+            if "attach-loop" in argv:
+                return (0, "attached-loop /dev/loop9\n", "")
             if "retire-loop" in argv:
                 return (0, "retired-loop /dev/loop9\n", "")
-            if argv[0] == "mount":
-                return (124, "", "sudo timed out after 120s: mount")
+            if "mount-fs" in argv:
+                return (124, "", "sudo timed out after 120s: mount-fs")
             raise AssertionError(f"unexpected sudo: {argv}")
 
         doc = provision.fresh_manifest(run_root, True)
@@ -1010,6 +1096,72 @@ class RereviewCustodyTests(unittest.TestCase):
                 killer.assert_called_once_with("sleeper-wrapper", 424242)
             finally:
                 stdout.close()
+
+    # S21-round4: a spawn failure refreshes the armed wrapper
+    # record in place (one persist, observed starttime kept)
+    # instead of dropping then re-recording — the durable set
+    # never holds neither mid-transition.
+    def test_spawn_failure_refreshes_armed_record(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            report = str(Path(tmp) / "sleeper.report")
+            reader, writer = os.pipe()
+            try:
+                os.write(writer, b"ready\n")
+                stdout = os.fdopen(reader, "rb")
+            finally:
+                os.close(writer)
+            child = mock.Mock()
+            child.pid = 424242
+            child.stdout = stdout
+            path = os.path.join(tmp, "manifest.json")
+            doc = provision.fresh_manifest(tmp, True)
+            provision.save_manifest(doc, path)
+            provision._PERSIST = path
+            saves = []
+            real_save = provision.save_manifest
+
+            def counting_save(manifest, where):
+                saves.append(where)
+                return real_save(manifest, where)
+
+            try:
+                with mock.patch.object(provision.subprocess,
+                                       "Popen",
+                                       return_value=child), \
+                        mock.patch.object(
+                            provision, "resolve_leaf",
+                            side_effect=provision.AdmissionError(
+                                "no stable leaf")), \
+                        mock.patch.object(
+                            provision, "kill_tree",
+                            return_value=False), \
+                        mock.patch.object(
+                            provision, "stat_state_start",
+                            return_value=("R", 555)), \
+                        mock.patch.object(
+                            provision, "save_manifest",
+                            side_effect=counting_save):
+                    with self.assertRaises(
+                            provision.AdmissionError):
+                        provision.spawn_sleeper(
+                            Path(tmp) / "helper.py",
+                            str(Path(tmp) / "target.bin"),
+                            report, ["wrapper"], doc,
+                            role="w", leaf_role="wl")
+            finally:
+                stdout.close()
+                provision._PERSIST = None
+            # Arm (1) + refresh (1): pre-fix the failure wrote
+            # drop + record (3 total).
+            self.assertEqual(len(saves), 2)
+            kept = doc["pending_procs"]
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0]["pid"], 424242)
+            self.assertEqual(kept[0]["starttime"], 555)
+            self.assertIn("not proven gone", kept[0]["detail"])
+            disk = json.loads(Path(path).read_text())
+            self.assertEqual(len(disk["pending_procs"]), 1)
 
     def test_kill_tree_kills_wrapper_and_descendants(self):
         child = subprocess.Popen(
@@ -1175,9 +1327,11 @@ class RereviewCustodyTests(unittest.TestCase):
     def test_remove_pinned_tree_clears_nested_and_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            base.mkdir()
+            base.mkdir(mode=0o700)
             tree = base / "tree"
-            (tree / "sub" / "deep").mkdir(parents=True)
+            tree.mkdir(mode=0o755)
+            (tree / "sub").mkdir(mode=0o755)
+            (tree / "sub" / "deep").mkdir(mode=0o755)
             (tree / "sub" / "deep" / "f.txt").write_text("f")
             (tree / "top.txt").write_text("top")
             canary = Path(tmp) / "canary.txt"
@@ -1198,7 +1352,7 @@ class RereviewCustodyTests(unittest.TestCase):
     def test_remove_pinned_tree_refuses_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            base.mkdir()
+            base.mkdir(mode=0o700)
             tree = base / "tree"
             tree.mkdir()
             (tree / "owned.txt").write_text("owned")
@@ -1230,9 +1384,10 @@ class RereviewCustodyTests(unittest.TestCase):
         # cannot block on it.
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            base.mkdir()
+            base.mkdir(mode=0o700)
             tree = base / "tree"
-            (tree / "sub").mkdir(parents=True)
+            tree.mkdir(mode=0o755)
+            (tree / "sub").mkdir(mode=0o755)
             (tree / "sub" / "f.txt").write_text("f")
             (tree / "a.txt").write_text("linked")
             os.link(tree / "a.txt", tree / "b.txt")
@@ -1258,12 +1413,241 @@ class RereviewCustodyTests(unittest.TestCase):
                 "refused removal destroyed the inode it claimed "
                 "survived")
 
+    def test_remove_pinned_tree_refuses_shared_nested_dir(self):
+        # S13-round3: a loosened nested directory refuses before
+        # deleting inside it — another UID could rename under a
+        # group/other-writable directory. The nested content and
+        # the tree stand fully intact (pre-gate code cleared and
+        # removed the whole tree here).
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir(mode=0o700)
+            tree = base / "tree"
+            tree.mkdir(mode=0o755)
+            sub = tree / "sub"
+            sub.mkdir(mode=0o755)
+            (sub / "precious.txt").write_text("precious")
+            os.chmod(sub, 0o777)
+            st = os.stat(tree)
+            parent_fd = os.open(
+                base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                failure = provision.remove_pinned_tree(
+                    parent_fd, "tree", (st.st_dev, st.st_ino))
+            finally:
+                os.close(parent_fd)
+            self.assertIn("not exclusive", failure)
+            self.assertEqual((sub / "precious.txt").read_text(),
+                             "precious")
+            self.assertTrue(tree.is_dir())
+
+    def test_remove_pinned_tree_refuses_unexcluded_parent(self):
+        # S13-round3: a group/other-writable non-sticky parent
+        # refuses before clearing anything (fail fast, tree fully
+        # in place). Pre-gate code cleared and removed the whole
+        # tree here.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir(mode=0o700)
+            tree = base / "tree"
+            tree.mkdir(mode=0o755)
+            (tree / "owned.txt").write_text("owned")
+            os.chmod(base, 0o775)
+            st = os.stat(tree)
+            parent_fd = os.open(
+                base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                failure = provision.remove_pinned_tree(
+                    parent_fd, "tree", (st.st_dev, st.st_ino))
+            finally:
+                os.close(parent_fd)
+            self.assertIn("not excluded", failure)
+            self.assertEqual((tree / "owned.txt").read_text(), "owned")
+            self.assertTrue(tree.is_dir())
+
+    def test_remove_pinned_tree_allows_sticky_shared_parent(self):
+        # S13-round3: the designed shared shape — a sticky parent
+        # holding our own entry — still removes: sticky rename
+        # needs entry ownership, which only our euid has, so no
+        # foreign swapper can be inside the window. Pins the
+        # admission against over-refusal regressions.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir(mode=0o700)
+            tree = base / "tree"
+            tree.mkdir(mode=0o755)
+            (tree / "sub").mkdir(mode=0o755)
+            (tree / "sub" / "f.txt").write_text("f")
+            os.chmod(base, 0o1777)
+            st = os.stat(tree)
+            parent_fd = os.open(
+                base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                self.assertIsNone(provision.remove_pinned_tree(
+                    parent_fd, "tree", (st.st_dev, st.st_ino)))
+            finally:
+                os.close(parent_fd)
+            self.assertFalse(os.path.exists(tree))
+
+    def test_removal_refuses_foreign_owned_sticky_parent(self):
+        # S13-round4: a foreign-owned sticky parent with a
+        # privileged remover. The parent owner bypasses the
+        # sticky bit, so the sticky exception needs a trusted
+        # parent owner too — otherwise the remover's final
+        # rmdir deletes the owner's replacement while the
+        # post-unlink proof only detects it afterwards. A
+        # root-owned sticky parent (e.g. /dev/shm) stays
+        # admitted. Pre-fix the verdict was "" (excluded).
+        from unittest import mock
+        alien = 65000 if os.geteuid() != 65000 else 65001
+
+        def stat_of(mode, uid):
+            return os.stat_result(
+                (0o040000 | mode, 1, 2, 2, uid, 100, 0, 0, 0, 0))
+
+        def verdict(parent_uid):
+            fakes = [stat_of(0o1755, parent_uid),
+                     stat_of(0o755, 0)]
+            with mock.patch.object(
+                    provision.os, "fstat",
+                    side_effect=fakes), \
+                    mock.patch.object(
+                        provision.os, "geteuid", return_value=0):
+                return provision._removal_excluded(11, 12)
+
+        # Privileged remover, foreign-owned sticky parent: a
+        # hard refusal (no privilege level closes the window),
+        # never a privileged-retry "denied:".
+        failure = verdict(alien)
+        self.assertIn("not excluded", failure)
+        self.assertNotIn("denied:", failure)
+        # Root-owned sticky parent stays excluded.
+        self.assertEqual(verdict(0), "")
+
+    def test_removal_gates_survive_uid_transition(self):
+        # S75-round4: the exclusion policy is valid across the
+        # caller-to-root cleanup transition. Evaluated as root
+        # with SUDO_UID naming the controller, the
+        # controller's exclusive directories pass both gates
+        # (sticky or exclusive parent); without the controller
+        # identity they deny; a genuinely foreign owner still
+        # denies. Pre-fix the transition verdicts were denials.
+        from unittest import mock
+        me = os.geteuid()
+        if me == 0:
+            self.skipTest("no controller/helper UID transition for root")
+        alien = 65000 if me != 65000 else 65001
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir(mode=0o700)
+            tree = base / "tree"
+            tree.mkdir(mode=0o700)
+            (tree / "f.txt").write_text("f")
+
+            def verdicts(mode):
+                os.chmod(base, mode)
+                parent_fd = os.open(
+                    base,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                root_fd = os.open(
+                    tree,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    with mock.patch.object(
+                            provision.os, "geteuid",
+                            return_value=0), \
+                            mock.patch.dict(
+                                provision.os.environ,
+                                {"SUDO_UID": str(me)}):
+                        transition = provision._removal_excluded(
+                            parent_fd, root_fd)
+                        provision._require_exclusive_dir(
+                            root_fd, "tree")
+                    with mock.patch.object(
+                            provision.os, "geteuid",
+                            return_value=0), \
+                            mock.patch.dict(
+                                provision.os.environ, {},
+                                clear=True):
+                        scrubbed = provision._removal_excluded(
+                            parent_fd, root_fd)
+                        with self.assertRaises(OSError):
+                            provision._require_exclusive_dir(
+                                root_fd, "tree")
+                    with mock.patch.object(
+                            provision.os, "geteuid",
+                            return_value=0), \
+                            mock.patch.dict(
+                                provision.os.environ,
+                                {"SUDO_UID": str(alien)}):
+                        foreign = provision._removal_excluded(
+                            parent_fd, root_fd)
+                    return (transition, scrubbed, foreign)
+                finally:
+                    os.close(parent_fd)
+                    os.close(root_fd)
+
+            for mode in (0o700, 0o1777):
+                with self.subTest(mode=oct(mode)):
+                    transition, scrubbed, foreign = verdicts(mode)
+                    self.assertEqual(transition, "")
+                    self.assertIn("denied:", scrubbed)
+                    self.assertIn("denied:", foreign)
+
+    def test_retire_helper_roundtrip_across_uid_transition(self):
+        # S75-round4: the retire-helper command end to end under
+        # a mocked caller-to-root transition — with SUDO_UID
+        # naming the owner the privileged removal retires the
+        # user-owned tree; without it the helper refuses with
+        # the tree standing.
+        from unittest import mock
+        import types
+        me = os.geteuid()
+        if me == 0:
+            self.skipTest("no controller/helper UID transition for root")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir(mode=0o700)
+            tree = base / "tree"
+            tree.mkdir(mode=0o700)
+            (tree / "sub").mkdir(mode=0o700)
+            (tree / "sub" / "f.txt").write_text("f")
+            st = os.stat(tree)
+            args = types.SimpleNamespace(
+                parent=str(base), name="tree", dev=st.st_dev,
+                ino=st.st_ino)
+            with mock.patch.object(
+                    provision.os, "geteuid", return_value=0), \
+                    mock.patch.dict(
+                        provision.os.environ,
+                        {"SUDO_UID": str(me)}):
+                self.assertEqual(
+                    provision.retire_helper_command(args), 0)
+            self.assertFalse(os.path.exists(tree))
+            # Without the controller identity the helper
+            # refuses and the tree stands.
+            tree.mkdir(mode=0o700)
+            (tree / "canary.txt").write_text("canary")
+            st = os.stat(tree)
+            args = types.SimpleNamespace(
+                parent=str(base), name="tree", dev=st.st_dev,
+                ino=st.st_ino)
+            with mock.patch.object(
+                    provision.os, "geteuid", return_value=0), \
+                    mock.patch.dict(
+                        provision.os.environ, {}, clear=True):
+                self.assertEqual(
+                    provision.retire_helper_command(args), 1)
+            self.assertEqual(
+                (tree / "canary.txt").read_text(), "canary")
+
     def test_retire_helper_roundtrip_and_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "base"
-            base.mkdir()
+            base.mkdir(mode=0o700)
             tree = base / "tree"
-            (tree / "sub").mkdir(parents=True)
+            tree.mkdir(mode=0o755)
+            (tree / "sub").mkdir(mode=0o755)
             (tree / "sub" / "f.txt").write_text("f")
             st = os.stat(tree)
             # Unprivileged end-to-end of the helper sudo would run.
@@ -1275,7 +1659,7 @@ class RereviewCustodyTests(unittest.TestCase):
             self.assertIn("retired tree", proc.stdout)
             self.assertFalse(os.path.exists(tree))
             # Wrong identity refuses with the tree standing.
-            tree.mkdir()
+            tree.mkdir(mode=0o755)
             (tree / "canary.txt").write_text("canary")
             proc = run_tool(
                 "retire-helper", "--parent", str(base),
@@ -1595,7 +1979,13 @@ class SecondReviewTests(unittest.TestCase):
         self.assertFalse(os.path.exists(run_root))
 
     # S18: the recorded backing is the held image, verified live.
-    def test_losetup_backing_swap_detected(self):
+    # S18-round3: string-level loop-identity tests — the kernel
+    # ioctl is unavailable here, so the sysfs fallback governs
+    # (hermetic: no /dev dependence in any uid).
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_losetup_backing_swap_detected(self, _loop_id):
         from unittest import mock
         tmp, run_root, manifest = self.fresh_paths()
         os.makedirs(run_root)
@@ -1603,15 +1993,15 @@ class SecondReviewTests(unittest.TestCase):
 
         def fake_sudo(argv, timeout=120):
             calls.append(list(argv))
-            if argv[0] == "mkfs.ext4":
-                return (0, "", "")
-            if argv[0] == "losetup" and argv[1] == "--find":
+            if "make-ext4" in argv:
+                return (0, "made-ext4 x\n", "")
+            if "attach-loop" in argv:
                 # Replace the image between attach and identity
                 # recording: same spelling, fresh inode.
                 image = os.path.join(run_root, "ext4", "fs01.img")
                 os.unlink(image)
                 Path(image).write_bytes(b"replacement-image")
-                return (0, "/dev/loop9\n", "")
+                return (0, "attached-loop /dev/loop9\n", "")
             raise AssertionError(f"unexpected sudo: {argv}")
 
         doc = provision.fresh_manifest(run_root, True)
@@ -1639,10 +2029,16 @@ class SecondReviewTests(unittest.TestCase):
         pending = [e for e in doc["pending_acquisitions"]
                    if e["kind"] == "loop"]
         self.assertEqual(len(pending), 1)
-        self.assertFalse(any(c[0] == "mount" for c in calls))
+        self.assertFalse(any("mount-fs" in c for c in calls))
 
     # S16: rollback removes only provably-owned occupants.
-    def test_ext4_rollback_preserves_stacked_mount(self):
+    # S18-round3: string-level loop-identity tests — the kernel
+    # ioctl is unavailable here, so the sysfs fallback governs
+    # (hermetic: no /dev dependence in any uid).
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_ext4_rollback_preserves_stacked_mount(self, _loop_id):
         from unittest import mock
         tmp, run_root, manifest = self.fresh_paths()
         os.makedirs(run_root)
@@ -1650,16 +2046,18 @@ class SecondReviewTests(unittest.TestCase):
 
         def fake_sudo(argv, timeout=120):
             calls.append(list(argv))
-            if argv[0] == "mkfs.ext4":
-                return (0, "", "")
-            if argv[0] == "losetup" and argv[1] == "--find":
-                return (0, "/dev/loop9\n", "")
+            if "make-ext4" in argv:
+                return (0, "made-ext4 x\n", "")
+            if "attach-loop" in argv:
+                return (0, "attached-loop /dev/loop9\n", "")
             if "retire-mount" in argv:
                 return (1, "", "FAILED: ambiguous stacked mount")
             if "retire-loop" in argv:
                 return (0, "retired-loop /dev/loop9\n", "")
-            if argv[0] == "mount":
-                return (0, "", "")
+            if "mount-fs" in argv:
+                tgt = argv[argv.index("--target") + 1]
+                return (0, f"mounted {tgt} mnt=1 "
+                           f"source=/dev/loop9 super=rw|\n", "")
             raise AssertionError(f"unexpected sudo: {argv}")
 
         doc = provision.fresh_manifest(run_root, True)
@@ -1706,8 +2104,10 @@ class SecondReviewTests(unittest.TestCase):
 
         def fake_sudo(argv, timeout=120):
             calls.append(list(argv))
-            if argv[0] == "mount":
-                return (0, "", "")
+            if "mount-fs" in argv:
+                tgt = argv[argv.index("--target") + 1]
+                return (0, f"mounted {tgt} mnt=1 "
+                           f"source=overlay super=rw|\n", "")
             if "retire-mount" in argv:
                 return (1, "", "FAILED: ambiguous stacked mount")
             raise AssertionError(f"unexpected sudo: {argv}")
@@ -1744,6 +2144,54 @@ class SecondReviewTests(unittest.TestCase):
                    if e["kind"] == "mount" and e["key"] == merged]
         self.assertEqual(len(pending), 1)
 
+    # S74-round4 end to end: the helper reports FAILED-MOVED and
+    # the overlay arm keeps ID-keyed pending custody (mount ID
+    # plus observed mountpoint) with an uncertain cell — the
+    # moved mount is never dropped from the manifest.
+    def test_overlay_moved_mount_keeps_id_custody(self):
+        from unittest import mock
+        tmp, run_root, manifest = self.fresh_paths()
+        os.makedirs(run_root)
+
+        def fake_sudo(argv, timeout=120):
+            if "mount-fs" in argv:
+                tgt = argv[argv.index("--target") + 1]
+                return (1, f"FAILED-MOVED: mnt=42 observed={tgt}2 "
+                           f"target moved during mount\n", "")
+            raise AssertionError(f"unexpected sudo: {argv}")
+
+        doc = provision.fresh_manifest(run_root, True)
+        doc["cells"]["FS04"] = {"status": "skipped",
+                                "needs_privilege": True, "reason": ""}
+        provision._PERSIST = manifest
+        guard = provision.RootAuthority(run_root)
+        provision._ROOT_GUARD = guard
+        try:
+            with mock.patch.object(provision, "run_sudo",
+                                   side_effect=fake_sudo):
+                merged = os.path.join(run_root, "ov-xino-off",
+                                      "merged")
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[]):
+                    ok = provision.mount_overlay(
+                        doc, run_root, "ov-xino-off",
+                        ",xino=off,metacopy=off", "FS04")
+        finally:
+            provision._PERSIST = None
+            provision._ROOT_GUARD = None
+            guard.close()
+        self.assertFalse(ok)
+        self.assertIn("custody kept pending",
+                      doc["cells"]["FS04"]["reason"])
+        pending = [e for e in doc["pending_acquisitions"]
+                   if e["kind"] == "mount" and e["key"] == merged]
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["mnt_id"], 42)
+        self.assertEqual(pending[0]["observed_target"],
+                         f"{merged}2")
+        self.assertIn("canary", pending[0])
+
     # S23: uncertain timeout outcomes reconcile through kernel
     # identity, never the lost reply.
     def test_reconcile_loop_attach_adopts_clears_or_retains(self):
@@ -1758,7 +2206,7 @@ class SecondReviewTests(unittest.TestCase):
                 "dev": st.st_dev, "ino": st.st_ino}]
             with mock.patch.object(
                     provision, "scan_loop_by_backing",
-                    return_value=["/dev/loop9"]):
+                    return_value=(["/dev/loop9"], False)):
                 self.assertEqual(
                     provision.reconcile_loop_attach(
                         doc, image, st.st_dev, st.st_ino),
@@ -1771,7 +2219,7 @@ class SecondReviewTests(unittest.TestCase):
                 "dev": st.st_dev, "ino": st.st_ino}]
             with mock.patch.object(
                     provision, "scan_loop_by_backing",
-                    return_value=[]):
+                    return_value=([], False)):
                 self.assertIsNone(provision.reconcile_loop_attach(
                     doc, image, st.st_dev, st.st_ino))
             self.assertEqual(doc["pending_acquisitions"], [])
@@ -1780,7 +2228,7 @@ class SecondReviewTests(unittest.TestCase):
                 "dev": st.st_dev, "ino": st.st_ino}]
             with mock.patch.object(
                     provision, "scan_loop_by_backing",
-                    return_value=["/dev/loop9", "/dev/loop10"]):
+                    return_value=(["/dev/loop9", "/dev/loop10"], False)):
                 self.assertIsNone(provision.reconcile_loop_attach(
                     doc, image, st.st_dev, st.st_ino))
             self.assertEqual(len(doc["pending_acquisitions"]), 1)
@@ -1793,15 +2241,15 @@ class SecondReviewTests(unittest.TestCase):
 
         def fake_sudo(argv, timeout=120):
             calls.append(list(argv))
-            if argv[0] == "mkfs.ext4":
-                return (0, "", "")
-            if argv[0] == "losetup" and argv[1] == "--find":
+            if "make-ext4" in argv:
+                return (0, "made-ext4 x\n", "")
+            if "attach-loop" in argv:
                 # Attached, but the device name never came back.
-                return (124, "", "sudo timed out after 120s: losetup")
-            if argv[0] == "mount":
-                return (0, "", "")
-            if argv[0] == "chown":
-                return (0, "", "")
+                return (124, "", "sudo timed out after 120s: attach")
+            if "mount-fs" in argv:
+                tgt = argv[argv.index("--target") + 1]
+                return (0, f"mounted {tgt} mnt=7 "
+                           f"source=/dev/loop9 super=rw|\n", "")
             raise AssertionError(f"unexpected sudo: {argv}")
 
         doc = provision.fresh_manifest(run_root, True)
@@ -1819,7 +2267,7 @@ class SecondReviewTests(unittest.TestCase):
                            "source": "/dev/loop9", "super": "rw|"}
                     with mock.patch.object(
                             provision, "scan_loop_by_backing",
-                            return_value=["/dev/loop9"]):
+                            return_value=(["/dev/loop9"], False)):
                         with mock.patch.object(
                                 provision, "read_mount_table",
                                 return_value=[row]):
@@ -1834,20 +2282,33 @@ class SecondReviewTests(unittest.TestCase):
         self.assertTrue(any(e["role"] == "ext4-fs01"
                             for e in doc["mounts"]))
 
-    def test_mount_timeout_without_effect_detaches_loop(self):
+    # S18-round3: string-level loop-identity tests — the kernel
+    # ioctl is unavailable here, so the sysfs fallback governs
+    # (hermetic: no /dev dependence in any uid).
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_mount_timeout_keeps_pending_custody(self, _loop_id):
+        # S74-round4 contract change: a mount timeout means the
+        # effect may have fired (the helper reported nothing),
+        # so pending custody is kept — never discharged from
+        # target absence — while the loop still detaches and
+        # the reason still names the timeout. (Previously the
+        # empty table dropped the pending record, leaking a
+        # mount that had moved off its target.)
         from unittest import mock
         tmp, run_root, manifest = self.fresh_paths()
         os.makedirs(run_root)
 
         def fake_sudo(argv, timeout=120):
-            if argv[0] == "mkfs.ext4":
-                return (0, "", "")
-            if argv[0] == "losetup" and argv[1] == "--find":
-                return (0, "/dev/loop9\n", "")
+            if "make-ext4" in argv:
+                return (0, "made-ext4 x\n", "")
+            if "attach-loop" in argv:
+                return (0, "attached-loop /dev/loop9\n", "")
             if "retire-loop" in argv:
                 return (0, "retired-loop /dev/loop9\n", "")
-            if argv[0] == "mount":
-                return (124, "", "sudo timed out after 120s: mount")
+            if "mount-fs" in argv:
+                return (124, "", "sudo timed out after 120s: mount-fs")
             raise AssertionError(f"unexpected sudo: {argv}")
 
         doc = provision.fresh_manifest(run_root, True)
@@ -1871,60 +2332,87 @@ class SecondReviewTests(unittest.TestCase):
             provision._PERSIST = None
             provision._ROOT_GUARD = None
             guard.close()
-        # No mount took effect: pending cleared, loop detached,
-        # honest timeout reason.
+        # Timeout: custody kept, loop detached, honest reason.
         self.assertIn("timed out", doc["cells"]["FS01"]["reason"])
-        self.assertEqual(doc["pending_acquisitions"], [])
+        self.assertIn("custody kept pending",
+                      doc["cells"]["FS01"]["reason"])
+        kept = [e for e in doc["pending_acquisitions"]
+                if e.get("kind") == "mount"]
+        self.assertEqual(len(kept), 1)
+        self.assertIn("uncertain", kept[0]["detail"])
 
     # S17: validation/effect-boundary substitutions refuse; every
     # effect is post-verified; no bare umount/detach exists.
     def test_retire_mount_validates_effect_boundary(self):
         from unittest import mock
-        target = "/tmp/provision-s17/mnt"
-        run_root = "/tmp/provision-s17"
-        expected = {"mnt_id": 1, "fstype": "ext4",
-                    "source": "/dev/loop9", "expect_super": []}
-        ok = {"target": target, "mnt_id": 1, "root": "/",
-              "fstype": "ext4", "source": "/dev/loop9",
-              "super": "rw|"}
-        foreign = {"target": target, "mnt_id": 2, "root": "/",
-                   "fstype": "tmpfs", "source": "tmpfs",
-                   "super": "rw|"}
-        with mock.patch.object(
-                provision, "read_mount_table",
-                side_effect=[[ok], [foreign]]):
-            with mock.patch.object(provision, "_umount2") as detach:
-                failure = provision.retire_mount_now(
-                    target, expected, run_root)
-        self.assertIn("between validation and effect", failure)
-        detach.assert_not_called()
+        # S17-round3: the retire path snapshots the target
+        # directory's mount ID at open, so the fixture is a real
+        # directory and mocked rows carry its real mount ID.
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            held = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                ours = provision._mnt_id_of(held)
+            finally:
+                os.close(held)
+            expected = {"mnt_id": ours, "fstype": "ext4",
+                        "source": "/dev/loop9", "expect_super": []}
+            ok = {"target": target, "mnt_id": ours, "root": "/",
+                  "fstype": "ext4", "source": "/dev/loop9",
+                  "super": "rw|"}
+            foreign = {"target": target, "mnt_id": ours + 1000,
+                       "root": "/", "fstype": "tmpfs",
+                       "source": "tmpfs", "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ok], [foreign]]):
+                with mock.patch.object(
+                        provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            self.assertIn("between validation and effect", failure)
+            detach.assert_not_called()
 
     def test_retire_mount_verifies_post_effect(self):
         from unittest import mock
-        target = "/tmp/provision-s17/mnt"
-        run_root = "/tmp/provision-s17"
-        expected = {"mnt_id": 1, "fstype": "ext4",
-                    "source": "/dev/loop9", "expect_super": []}
-        ok = {"target": target, "mnt_id": 1, "root": "/",
-              "fstype": "ext4", "source": "/dev/loop9",
-              "super": "rw|"}
-        with mock.patch.object(
-                provision, "read_mount_table",
-                side_effect=[[ok], [ok], [ok]]):
-            with mock.patch.object(provision, "_umount2",
-                                   return_value=None) as detach:
-                failure = provision.retire_mount_now(
-                    target, expected, run_root)
-        self.assertIn("still live", failure)
-        detach.assert_called_once_with(target)
-        with mock.patch.object(
-                provision, "read_mount_table",
-                side_effect=[[ok], [ok], []]):
-            with mock.patch.object(provision, "_umount2",
-                                   return_value=None):
-                self.assertIsNone(provision.retire_mount_now(
-                    target, expected, run_root))
+        # S17-round3: real directory fixture (see above); the
+        # post-effect assertions are unchanged.
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            held = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                ours = provision._mnt_id_of(held)
+            finally:
+                os.close(held)
+            expected = {"mnt_id": ours, "fstype": "ext4",
+                        "source": "/dev/loop9", "expect_super": []}
+            ok = {"target": target, "mnt_id": ours, "root": "/",
+                  "fstype": "ext4", "source": "/dev/loop9",
+                  "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ok], [ok], [ok]]):
+                with mock.patch.object(
+                        provision, "_umount2",
+                        return_value=None) as detach:
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            self.assertIn("still live", failure)
+            detach.assert_called_once_with(target)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ok], [ok], []]):
+                with mock.patch.object(provision, "_umount2",
+                                       return_value=None):
+                    self.assertIsNone(provision.retire_mount_now(
+                        target, expected, run_root))
 
+    # S17-round3: the ioctl seam is scripted hermetically
+    # (no /dev dependence in any uid) — the final
+    # kernel-identity validate, the CLR, and the post-proof all
+    # address one held device fd.
     def test_retire_loop_validates_effect_boundary(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
@@ -1935,33 +2423,47 @@ class SecondReviewTests(unittest.TestCase):
                        "ino": st.st_ino}
             other = str(Path(tmp) / "other.img")
             Path(other).write_bytes(b"other")
-            with mock.patch.object(
-                    provision, "read_loop_backing",
-                    side_effect=[image, other]):
-                with mock.patch.object(
-                        provision, "_loop_clr_fd") as detach:
-                    failure = provision.retire_loop_now(
-                        "/dev/loop7", backing, tmp)
+            ost = os.stat(other)
+
+            def run(sysfs, script, clr_errno=None):
+                fake_open, fake_ioctl, log = _loop_fd_script(
+                    script, clr_errno=clr_errno)
+                with mock.patch.object(provision,
+                                       "read_loop_backing",
+                                       side_effect=sysfs), \
+                        mock.patch.object(provision.os, "open",
+                                          side_effect=fake_open), \
+                        mock.patch.object(provision.fcntl, "ioctl",
+                                          side_effect=fake_ioctl):
+                    return (provision.retire_loop_now(
+                        "/dev/loop7", backing, tmp), log)
+
+            # Foreign identity at the final kernel gate (after
+            # the last sysfs observation): refuse, CLR never
+            # issued.
+            failure, log = run(
+                [image], [("id", ost.st_dev, ost.st_ino)])
             self.assertIn("between validation and effect", failure)
-            detach.assert_not_called()
-            with mock.patch.object(
-                    provision, "read_loop_backing",
-                    side_effect=[image, image, image]):
-                with mock.patch.object(
-                        provision, "_loop_clr_fd",
-                        return_value=None):
-                    failure = provision.retire_loop_now(
-                        "/dev/loop7", backing, tmp)
+            self.assertFalse(any(
+                e[0] == "ioctl" and
+                e[2] == provision.LOOP_CLR_FD for e in log))
+            # Still attached after the effect: the CLR ran but
+            # the binding persists — custody retained.
+            failure, log = run(
+                [image],
+                [("id", st.st_dev, st.st_ino),
+                 ("id", st.st_dev, st.st_ino)])
             self.assertIn("still attached", failure)
-            with mock.patch.object(
-                    provision, "read_loop_backing",
-                    side_effect=[image, image, None]):
-                with mock.patch.object(
-                        provision, "_loop_clr_fd",
-                        return_value=None) as detach:
-                    self.assertIsNone(provision.retire_loop_now(
-                        "/dev/loop7", backing, tmp))
-                    detach.assert_called_once_with("/dev/loop7")
+            self.assertIn("custody retained", failure)
+            # Happy path: validate, CLR, ENXIO proof.
+            result, log = run(
+                [image],
+                [("id", st.st_dev, st.st_ino), ("enxio",)])
+            self.assertIsNone(result)
+            clrs = [e for e in log
+                    if e[0] == "ioctl" and
+                    e[2] == provision.LOOP_CLR_FD]
+            self.assertEqual(len(clrs), 1)
 
     def test_retire_helpers_absent_is_noop(self):
         from unittest import mock
@@ -1978,7 +2480,7 @@ class SecondReviewTests(unittest.TestCase):
             with mock.patch.object(provision, "read_loop_backing",
                                    return_value=None):
                 with mock.patch.object(
-                        provision, "_loop_clr_fd") as detach:
+                        provision, "_loop_clr_fd_on") as detach:
                     self.assertIsNone(provision.retire_loop_now(
                         "/dev/loop7", backing, tmp))
                     detach.assert_not_called()
@@ -2106,7 +2608,7 @@ class SecondReviewTests(unittest.TestCase):
             stderr=subprocess.DEVNULL)
         try:
             tmp, run_root, manifest = self.fresh_paths()
-            os.makedirs(run_root)
+            os.makedirs(run_root, mode=0o755)
             st = os.stat(run_root)
             doc = provision.fresh_manifest(run_root, False)
             doc["run_root_identity"] = {"dev": st.st_dev,
@@ -2158,27 +2660,28 @@ class SecondReviewTests(unittest.TestCase):
             stderr=subprocess.DEVNULL)
         try:
             _, start = provision.stat_state_start(child.pid)
-            orig_kill = os.kill
+            orig_send = provision._pidfd_send_signal
             checked = []
 
-            def checking_kill(pid, signum):
-                pidfds = 0
-                for fd in os.listdir("/proc/self/fd"):
-                    try:
-                        if os.readlink(f"/proc/self/fd/{fd}") == \
-                                "anon_inode:[pidfd]":
-                            pidfds += 1
-                    except OSError:
-                        pass
-                checked.append(pidfds)
-                assert pidfds >= 1, "signal without a held pidfd"
-                return orig_kill(pid, signum)
+            def checking_send(pin_fd, signum):
+                # S22-round4: the signal addresses a pidfd, never
+                # the numeric pid — exit+reap+reuse past the last
+                # observation fails closed instead of redirecting.
+                self.assertEqual(
+                    os.readlink(f"/proc/self/fd/{pin_fd}"),
+                    "anon_inode:[pidfd]")
+                checked.append(signum)
+                return orig_send(pin_fd, signum)
 
             from unittest import mock
-            with mock.patch("os.kill", side_effect=checking_kill):
+            with mock.patch("os.kill") as killer, \
+                    mock.patch.object(
+                        provision, "_pidfd_send_signal",
+                        side_effect=checking_send):
                 self.assertTrue(
                     provision.kill_owned("test", child.pid, start,
                                          timeout=5))
+                killer.assert_not_called()
             self.assertTrue(checked)
             child.wait(timeout=10)
         finally:
@@ -2205,6 +2708,241 @@ class SecondReviewTests(unittest.TestCase):
                 provision.signal_owned(pid, _signal.SIGTERM, None,
                                        start)
             killer.assert_not_called()
+
+    # S22-round4: signals ride pidfds, never numeric pids — a
+    # live child is signalled with os.kill rigged to explode
+    # (no numeric path exists to redirect), and exit+reap past
+    # the final observation converges to gone: the dead pin
+    # fails ESRCH instead of addressing whoever reused the
+    # number.
+    def test_signal_owned_uses_pidfd_not_numeric(self):
+        import errno as _errno
+        import signal as _signal
+        from unittest import mock
+        child = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            _, start = provision.stat_state_start(child.pid)
+            pin = provision.pin_proc(child.pid)
+            try:
+                def no_numeric(pid, signum):
+                    raise AssertionError(
+                        "numeric kill attempted")
+
+                with mock.patch("os.kill",
+                                side_effect=no_numeric):
+                    self.assertTrue(provision.signal_owned(
+                        child.pid, _signal.SIGTERM, pin, start))
+                child.wait(timeout=10)
+                self.assertEqual(child.returncode,
+                                 -_signal.SIGTERM)
+                # Exit+reap past the final observation: gone,
+                # with no numeric attempt.
+                with mock.patch("os.kill",
+                                side_effect=no_numeric):
+                    self.assertFalse(provision.signal_owned(
+                        child.pid, _signal.SIGKILL, pin, start))
+                # The reuse-proof primitive itself: a dead pin
+                # fails closed.
+                self.assertEqual(
+                    provision._pidfd_send_signal(
+                        pin, _signal.SIGKILL),
+                    _errno.ESRCH)
+            finally:
+                os.close(pin)
+        finally:
+            try:
+                child.kill()
+            except OSError:
+                pass
+            child.wait()
+
+    # S22-round4: the raw-syscall fallback signals when the
+    # libc wrapper is absent — the handle mock exposes only
+    # syscall, so attribute lookup fails exactly as on an old
+    # glibc.
+    def test_pidfd_send_signal_syscall_fallback(self):
+        import ctypes as _ctypes
+        from unittest import mock
+        child = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            pin = provision.pin_proc(child.pid)
+            try:
+                real_libc = _ctypes.CDLL("libc.so.6",
+                                         use_errno=True)
+                handle = mock.Mock(spec=["syscall"])
+                handle.syscall = real_libc.syscall
+                with mock.patch.object(
+                        provision, "_libc_handle",
+                        return_value=handle):
+                    # Signal 0 checks existence, effects none.
+                    self.assertIsNone(
+                        provision._pidfd_send_signal(pin, 0))
+            finally:
+                os.close(pin)
+        finally:
+            try:
+                child.kill()
+            except OSError:
+                pass
+            child.wait()
+
+    # S22-round4: EPERM escalates through a re-pinning helper,
+    # never a numeric sudo kill — the helper argv carries
+    # pid+starttime+signum, the pin stays open across the
+    # call, and helper reports map to sent/gone/identity
+    # change/unknown.
+    def test_signal_owned_eperm_escalates_via_helper(self):
+        import errno as _errno
+        import signal as _signal
+        import sys as _sys
+        from unittest import mock
+        child = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            _, start = provision.stat_state_start(child.pid)
+            pin = provision.pin_proc(child.pid)
+            try:
+                calls = []
+
+                def fake_sudo(argv, timeout=120):
+                    # The pin stays open across the escalation.
+                    os.fstat(pin)
+                    calls.append(list(argv))
+                    return fake_sudo.result
+
+                cases = [
+                    ((0, f"signalled {child.pid}\n", ""),
+                     True, None),
+                    ((0, f"proc-gone {child.pid}\n", ""),
+                     False, None),
+                    ((1, "FAILED: identity changed (live=1 "
+                      "expected=2)\n", ""),
+                     None, provision.AdmissionError),
+                    ((1, "FAILED: boom\n", ""),
+                     None, provision.ProcUnknown),
+                ]
+                for result, want, exc in cases:
+                    fake_sudo.result = result
+                    with mock.patch.object(
+                            provision, "_pidfd_send_signal",
+                            return_value=_errno.EPERM), \
+                            mock.patch.object(
+                                provision, "run_sudo",
+                                side_effect=fake_sudo):
+                        if exc is None:
+                            self.assertEqual(
+                                provision.signal_owned(
+                                    child.pid, _signal.SIGTERM,
+                                    pin, start),
+                                want)
+                        else:
+                            with self.assertRaises(exc):
+                                provision.signal_owned(
+                                    child.pid, _signal.SIGTERM,
+                                    pin, start)
+                self.assertEqual(len(calls), 4)
+                for argv in calls:
+                    self.assertEqual(
+                        argv,
+                        [_sys.executable,
+                         os.path.abspath(provision.__file__),
+                         "signal-proc",
+                         "--pid", str(child.pid),
+                         "--starttime", str(start),
+                         "--signum",
+                         str(int(_signal.SIGTERM))])
+            finally:
+                os.close(pin)
+        finally:
+            try:
+                child.kill()
+            except OSError:
+                pass
+            child.wait()
+
+    # S22-round4: the signal-proc helper pins, verifies, and
+    # signals in one privileged process — live children die by
+    # real effect, the reaped report gone, starttime skew
+    # refuses without signalling, and bad argv refuses.
+    def test_signal_proc_command(self):
+        import contextlib as _contextlib
+        import io as _io
+        import signal as _signal
+        import types as _types
+        child = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            _, start = provision.stat_state_start(child.pid)
+            args = _types.SimpleNamespace(
+                pid=str(child.pid), starttime=str(start),
+                signum=str(int(_signal.SIGTERM)))
+            out = _io.StringIO()
+            with _contextlib.redirect_stdout(out):
+                rc = provision.signal_proc_command(args)
+            self.assertEqual(rc, 0)
+            self.assertIn(f"signalled {child.pid}",
+                          out.getvalue())
+            child.wait(timeout=10)
+            self.assertEqual(child.returncode,
+                             -_signal.SIGTERM)
+        finally:
+            try:
+                child.kill()
+            except OSError:
+                pass
+            child.wait()
+        # Reaped: gone, no signal attempted.
+        out = _io.StringIO()
+        with _contextlib.redirect_stdout(out):
+            rc = provision.signal_proc_command(args)
+        self.assertEqual(rc, 0)
+        self.assertIn("proc-gone", out.getvalue())
+        # Live child, wrong starttime: identity refusal, child
+        # untouched.
+        child2 = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            _, start2 = provision.stat_state_start(child2.pid)
+            bad = _types.SimpleNamespace(
+                pid=str(child2.pid),
+                starttime=str(start2 + 10 ** 9),
+                signum=str(int(_signal.SIGTERM)))
+            out = _io.StringIO()
+            with _contextlib.redirect_stdout(out):
+                rc = provision.signal_proc_command(bad)
+            self.assertEqual(rc, 1)
+            self.assertIn("identity changed", out.getvalue())
+            provision.stat_state_start(child2.pid)
+        finally:
+            try:
+                child2.kill()
+            except OSError:
+                pass
+            child2.wait()
+        # Bad argv refuses.
+        template = dict(pid="123", starttime="456",
+                        signum="15")
+        for key, value in (("pid", "-1"), ("pid", "x"),
+                           ("starttime", "-5"),
+                           ("signum", "0"), ("signum", "999"),
+                           ("signum", "TERM")):
+            with self.subTest(key=key, value=value):
+                argv = dict(template)
+                argv[key] = value
+                out = _io.StringIO()
+                with _contextlib.redirect_stdout(out):
+                    rc = provision.signal_proc_command(
+                        _types.SimpleNamespace(**argv))
+                self.assertEqual(rc, 1)
+                self.assertIn("bad signal-proc argv",
+                              out.getvalue())
 
     # S24: readiness is a bounded poll; custody is armed at spawn.
     def test_readline_bounded_shapes(self):
@@ -2350,7 +3088,8 @@ class SecondReviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp) / "tree"
             sub = tree / "sub"
-            sub.mkdir(parents=True)
+            tree.mkdir(mode=0o755)
+            sub.mkdir(mode=0o755)
             canary = sub / "canary.txt"
             canary.write_bytes(b"canary")
             (tree / "top.txt").write_bytes(b"top")
@@ -2375,7 +3114,7 @@ class SecondReviewTests(unittest.TestCase):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp) / "tree"
-            tree.mkdir()
+            tree.mkdir(mode=0o755)
             covered = tree / "covered.txt"
             covered.write_bytes(b"covered")
             expected = (os.stat(tree).st_dev, os.stat(tree).st_ino)
@@ -2430,7 +3169,7 @@ class SecondReviewTests(unittest.TestCase):
         import types
         from unittest import mock
         tmp, run_root, manifest = self.fresh_paths()
-        os.makedirs(run_root)
+        os.makedirs(run_root, mode=0o755)
         st = os.stat(run_root)
         doc = provision.fresh_manifest(run_root, False)
         doc["run_root_identity"] = {"dev": st.st_dev, "ino": st.st_ino}
@@ -2470,6 +3209,3133 @@ class SecondReviewTests(unittest.TestCase):
                                return_value=[foreign]):
             self.assertEqual(provision.cleanup_command(args), 1)
         self.assertTrue(os.path.isdir(run_root))
+
+
+class ThirdReviewTests(unittest.TestCase):
+    """Round-3 provision findings: S15/S17/S18/S21/S22/S23/S25/S27/S62."""
+
+    @staticmethod
+    def _stat(mode, uid):
+        return os.stat_result(
+            (0o040000 | mode, 1, 2, 2, uid, 100, 0, 0, 0, 0))
+
+    # S25-round3: a sticky parent's foreign owner bypasses the sticky
+    # bit (dir owners may rename anyone's entries), so the shared
+    # allowance requires a trusted owner (us or root) whenever the
+    # parent grants rename rights beyond the owner. Matrix over the
+    # shared helper plus an end-to-end foreign-owner refusal.
+    # S25-round4: the owner check no longer depends on the write
+    # bits — a foreign-owned 0755/01755 parent lets its owner
+    # substitute the temp after the identity proof for any
+    # privileged caller, so every parent needs a trusted owner.
+    def test_manifest_parent_owner_matrix(self):
+        me = os.geteuid()
+        alien = 65000 if me != 65000 else 65001
+        cases = [
+            # (mode, uid, accepted?)
+            (0o700, me, True),
+            (0o755, me, True),
+            (0o775, me, True),    # group trust doctrine (unchanged)
+            (0o1777, me, True),   # /tmp-style, owned by us
+            (0o1777, 0, True),    # /tmp-style, root trusted
+            (0o1777, alien, False),  # THE finding: foreign sticky owner
+            (0o775, alien, False),   # same class, group-writable
+            (0o777, me, False),   # existing unprotected rule
+            (0o777, alien, False),
+            (0o755, alien, False),  # round4: unshared foreign owner
+            (0o1755, alien, False),  # refuses at the gate too
+        ]
+        for mode, uid, accepted in cases:
+            with self.subTest(mode=oct(mode), uid=uid):
+                refusal = provision._manifest_parent_refusal(
+                    self._stat(mode, uid), "/parent")
+                if accepted:
+                    self.assertIsNone(refusal)
+                else:
+                    self.assertIsNotNone(refusal)
+                    if uid == alien:
+                        self.assertIn("foreign owner", refusal)
+
+    def test_save_manifest_refuses_foreign_owned_sticky_parent(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "sticky"
+            parent.mkdir()
+            os.chmod(parent, 0o1777)
+            manifest = str(parent / "manifest.json")
+            real_fstat = os.fstat
+            calls = []
+
+            def fake_fstat(fd):
+                st = real_fstat(fd)
+                calls.append(fd)
+                if len(calls) == 1:
+                    # First fstat is the parent gate: report a
+                    # foreign owner (the sticky-dir bypass).
+                    tup = (st.st_mode, st.st_ino, st.st_dev,
+                           st.st_nlink, 65000, st.st_gid, st.st_size,
+                           int(st.st_atime), int(st.st_mtime),
+                           int(st.st_ctime))
+                    return os.stat_result(tup)
+                return st
+
+            with mock.patch.object(provision.os, "fstat",
+                                   side_effect=fake_fstat):
+                with self.assertRaisesRegex(
+                        provision.AdmissionError, "foreign owner"):
+                    provision.save_manifest({"k": "v"}, manifest)
+            self.assertFalse(os.path.exists(manifest))
+            leftovers = [p.name for p in parent.iterdir()
+                         if p.name.startswith(".tt04-manifest-")]
+            self.assertEqual(leftovers, [])
+
+    def test_save_manifest_privileged_refuses_foreign_755_parent(self):
+        # S25-round4: the foreign-owner privileged publication
+        # case. A privileged caller (mocked euid 0) under a
+        # foreign-owned 0755 parent refuses at the gate: root
+        # (DAC override) could create the temp, and the parent
+        # owner could then substitute it after the identity
+        # proof, before the rename. Pre-fix the gate passed
+        # (owner check scoped to shared parents) and the
+        # publication succeeded outright here.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "priv"
+            parent.mkdir()
+            os.chmod(parent, 0o755)
+            manifest = str(parent / "manifest.json")
+            real_fstat = os.fstat
+            calls = []
+
+            def fake_fstat(fd):
+                st = real_fstat(fd)
+                calls.append(fd)
+                if len(calls) == 1:
+                    # First fstat is the parent gate: report a
+                    # foreign owner on the unshared parent.
+                    tup = (st.st_mode, st.st_ino, st.st_dev,
+                           st.st_nlink, 65000, st.st_gid, st.st_size,
+                           int(st.st_atime), int(st.st_mtime),
+                           int(st.st_ctime))
+                    return os.stat_result(tup)
+                return st
+
+            with mock.patch.object(provision.os, "fstat",
+                                   side_effect=fake_fstat), \
+                    mock.patch.object(provision.os, "geteuid",
+                                       return_value=0):
+                with self.assertRaisesRegex(
+                        provision.AdmissionError, "foreign owner"):
+                    provision.save_manifest({"k": "v"}, manifest)
+            self.assertFalse(os.path.exists(manifest))
+            leftovers = [p.name for p in parent.iterdir()
+                         if p.name.startswith(".tt04-manifest-")]
+            self.assertEqual(leftovers, [])
+
+    # S18-round3: the deleted-B/restored-A counterexample. The loop
+    # holds deleted B (sysfs: "img (deleted)") while A is restored
+    # live at img with the held identity: stripping the suffix and
+    # stating the name returns A and false-admits. Kernel backing
+    # identity (LOOP_GET_STATUS64) governs; the pathname fallback
+    # refuses every " (deleted)" value as unprovable.
+    def test_loop_verify_deleted_restored_counterexample(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            img = str(Path(tmp) / "fs01.img")
+            Path(img).write_bytes(b"image-A")
+            image_st = os.stat(img)
+            other = str(Path(tmp) / "other.img")
+            Path(other).write_bytes(b"image-B")
+            st_b = os.stat(other)
+            deleted = f"{img} (deleted)"
+            unavail = provision.LoopIdUnavailable("test")
+            # Fallback B/A: refuse.
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    side_effect=unavail):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=deleted):
+                    self.assertFalse(provision.verify_loop_backing(
+                        "/dev/loop9", img, image_st))
+            # Kernel-primary mismatch: ioctl reports B while the
+            # pathname states A — identity governs: refuse.
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    return_value=(st_b.st_dev, st_b.st_ino)):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=img):
+                    self.assertFalse(provision.verify_loop_backing(
+                        "/dev/loop9", img, image_st))
+            # Kernel-primary match despite a hostile sysfs string.
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    return_value=(image_st.st_dev,
+                                  image_st.st_ino)):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value="/elsewhere/evil (deleted)"):
+                    self.assertTrue(provision.verify_loop_backing(
+                        "/dev/loop9", img, image_st))
+            # Fallback live-name match: admit (kept behavior).
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    side_effect=unavail):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=img):
+                    self.assertTrue(provision.verify_loop_backing(
+                        "/dev/loop9", img, image_st))
+            # Provably detached (ioctl None): refuse.
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    return_value=None):
+                self.assertFalse(provision.verify_loop_backing(
+                    "/dev/loop9", img, image_st))
+
+    # S18-round3: same counterexample through the retire-path
+    # verifier (which takes the already-read sysfs value).
+    def test_retire_loop_deleted_restored_counterexample(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            img = str(Path(tmp) / "fs01.img")
+            Path(img).write_bytes(b"image-A")
+            image_st = os.stat(img)
+            other = str(Path(tmp) / "other.img")
+            Path(other).write_bytes(b"image-B")
+            st_b = os.stat(other)
+            backing = {"path": img, "dev": image_st.st_dev,
+                       "ino": image_st.st_ino}
+            unavail = provision.LoopIdUnavailable("test")
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    side_effect=unavail):
+                self.assertFalse(provision.loop_backing_verified(
+                    "/dev/loop9", f"{img} (deleted)", backing))
+                self.assertTrue(provision.loop_backing_verified(
+                    "/dev/loop9", img, backing))
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    return_value=(st_b.st_dev, st_b.st_ino)):
+                self.assertFalse(provision.loop_backing_verified(
+                    "/dev/loop9", img, backing))
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    return_value=(image_st.st_dev,
+                                  image_st.st_ino)):
+                self.assertTrue(provision.loop_backing_verified(
+                    "/dev/loop9", "/elsewhere/evil (deleted)",
+                    backing))
+
+    # S18-round3: the cleanup path refuses the B/A state and never
+    # reaches the detach helper; the live-name match still detaches.
+    def test_cleanup_loop_deleted_restored_refuses_detach(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            img = str(Path(tmp) / "fs01.img")
+            Path(img).write_bytes(b"image-A")
+            image_st = os.stat(img)
+            backing = {"path": img, "dev": image_st.st_dev,
+                       "ino": image_st.st_ino}
+            unavail = provision.LoopIdUnavailable("test")
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    side_effect=unavail):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=f"{img} (deleted)"):
+                    with mock.patch.object(
+                            provision, "retire_loop_via_helper"
+                            ) as helper:
+                        result = provision.cleanup_loop_device(
+                            "/dev/loop9", backing, tmp)
+            self.assertIsNotNone(result)
+            helper.assert_not_called()
+            with mock.patch.object(
+                    provision, "read_loop_backing_id",
+                    side_effect=unavail):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=img):
+                    with mock.patch.object(
+                            provision, "retire_loop_via_helper",
+                            return_value=None) as helper:
+                        result = provision.cleanup_loop_device(
+                            "/dev/loop9", backing, tmp)
+            self.assertIsNone(result)
+            helper.assert_called_once()
+
+    # S23-round3: attachment + lost response + unlinked backing.
+    # The loop still holds the image while the pathname is gone
+    # (stat ENOENT): kernel identity adopts it, while an unreadable
+    # kernel status makes the scan explicitly incomplete and pending
+    # custody is retained — never dropped on an empty result.
+    def test_reconcile_lost_response_unlinked_backing(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            deleted = f"{image} (deleted)"
+            os.unlink(image)
+
+            def pending_doc():
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "loop", "key": image, "image": image,
+                    "dev": st.st_dev, "ino": st.st_ino}]
+                return doc
+
+            # Kernel identity adopts the deleted backing.
+            doc = pending_doc()
+            with mock.patch.object(provision.os, "listdir",
+                                   return_value=["sda", "loop9"]):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=deleted):
+                    with mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            return_value=(st.st_dev, st.st_ino)):
+                        loop = provision.reconcile_loop_attach(
+                            doc, image, st.st_dev, st.st_ino)
+            self.assertEqual(loop, "/dev/loop9")
+            self.assertEqual(doc["pending_acquisitions"], [])
+            # Unreadable kernel status: incomplete scan retains.
+            doc = pending_doc()
+            with mock.patch.object(provision.os, "listdir",
+                                   return_value=["sda", "loop9"]):
+                with mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=deleted):
+                    with mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            side_effect=provision.LoopIdUnavailable(
+                                "test")):
+                        loop = provision.reconcile_loop_attach(
+                            doc, image, st.st_dev, st.st_ino)
+                        matches, incomplete = \
+                            provision.scan_loop_by_backing(
+                                st.st_dev, st.st_ino)
+            self.assertIsNone(loop)
+            self.assertEqual(len(doc["pending_acquisitions"]), 1)
+            self.assertEqual(matches, [])
+            self.assertTrue(incomplete)
+
+    # S23-round4: a missing device node is unknown, never
+    # detached — removing /dev/loopN leaves the kernel loop
+    # live, so the kernel-identity read raises instead of
+    # returning the ENXIO-detached None.
+    def test_loop_backing_id_missing_node_is_unknown(self):
+        from unittest import mock
+        real_open = os.open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/dev/loop9":
+                raise FileNotFoundError(
+                    2, "No such file", "/dev/loop9")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch.object(provision.os, "open",
+                               side_effect=fake_open):
+            with self.assertRaisesRegex(
+                    provision.LoopIdUnavailable,
+                    "never detached"):
+                provision.read_loop_backing_id("/dev/loop9")
+
+    # S23-round4: a sysfs-live candidate whose device node is
+    # missing marks the scan incomplete (never a detached
+    # skip), so reconcile retains custody — unless the live
+    # backing stats to the query identity through the pathname
+    # fallback, which still adopts. Pre-fix the candidate
+    # skipped as detached and the empty scan dropped custody.
+    def test_scan_loop_missing_node_marks_incomplete(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            real_open = os.open
+
+            def fake_open(path, *args, **kwargs):
+                if path == "/dev/loop9":
+                    raise FileNotFoundError(
+                        2, "No such file", "/dev/loop9")
+                return real_open(path, *args, **kwargs)
+
+            def pending_doc():
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "loop", "key": image, "image": image,
+                    "dev": st.st_dev, "ino": st.st_ino}]
+                return doc
+
+            # Backing unlinked: sysfs-live plus a missing node
+            # is unassessable — incomplete, retained.
+            deleted = f"{image} (deleted)"
+            os.unlink(image)
+            doc = pending_doc()
+            with mock.patch.object(provision.os, "listdir",
+                                   return_value=["loop9"]), \
+                    mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=deleted), \
+                    mock.patch.object(provision.os, "open",
+                                       side_effect=fake_open):
+                matches, incomplete = \
+                    provision.scan_loop_by_backing(
+                        st.st_dev, st.st_ino)
+                loop = provision.reconcile_loop_attach(
+                    doc, image, st.st_dev, st.st_ino)
+            self.assertEqual(matches, [])
+            self.assertTrue(incomplete)
+            self.assertIsNone(loop)
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+            # Backing linked and matching: the pathname
+            # fallback still adopts the nodeless loop.
+            Path(image).write_bytes(b"image")
+            st2 = os.stat(image)
+            doc = pending_doc()
+            doc["pending_acquisitions"][0]["dev"] = st2.st_dev
+            doc["pending_acquisitions"][0]["ino"] = st2.st_ino
+            with mock.patch.object(provision.os, "listdir",
+                                   return_value=["loop9"]), \
+                    mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=image), \
+                    mock.patch.object(provision.os, "open",
+                                       side_effect=fake_open):
+                matches, incomplete = \
+                    provision.scan_loop_by_backing(
+                        st2.st_dev, st2.st_ino)
+            self.assertEqual(matches, ["/dev/loop9"])
+            self.assertFalse(incomplete)
+
+    # S23-round4: cleanup repeats the retention, not the
+    # discharge — a pending loop whose candidate is
+    # sysfs-live with a missing node reports manual
+    # retirement instead of silently dropping.
+    def test_cleanup_pending_loop_missing_node_keeps_custody(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            deleted = f"{image} (deleted)"
+            os.unlink(image)
+            real_open = os.open
+
+            def fake_open(path, *args, **kwargs):
+                if path == "/dev/loop9":
+                    raise FileNotFoundError(
+                        2, "No such file", "/dev/loop9")
+                return real_open(path, *args, **kwargs)
+
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "loop", "key": image, "image": image,
+                "dev": st.st_dev, "ino": st.st_ino}]
+            with mock.patch.object(provision.os, "listdir",
+                                   return_value=["loop9"]), \
+                    mock.patch.object(
+                        provision, "read_loop_backing",
+                        return_value=deleted), \
+                    mock.patch.object(provision.os, "open",
+                                       side_effect=fake_open):
+                failures = (
+                    provision.cleanup_pending_acquisitions(
+                        doc, tmp))
+            self.assertEqual(len(failures), 1)
+            self.assertIn("incomplete", failures[0])
+            self.assertIn("manual retirement required",
+                          failures[0])
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+
+    # S23-round3: an EACCES backing candidate (real permissions, no
+    # mocks on stat) makes the scan incomplete and retains custody.
+    def test_reconcile_unreadable_backing_candidate_retains(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            sub = Path(tmp) / "denied"
+            sub.mkdir()
+            image = str(sub / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            os.chmod(sub, 0)
+            try:
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "loop", "key": image, "image": image,
+                    "dev": st.st_dev, "ino": st.st_ino}]
+                with mock.patch.object(
+                        provision.os, "listdir",
+                        return_value=["loop9"]):
+                    with mock.patch.object(
+                            provision, "read_loop_backing",
+                            return_value=image):
+                        with mock.patch.object(
+                                provision, "read_loop_backing_id",
+                                side_effect=provision
+                                .LoopIdUnavailable("test")):
+                            loop = provision.reconcile_loop_attach(
+                                doc, image, st.st_dev, st.st_ino)
+                            matches, incomplete = \
+                                provision.scan_loop_by_backing(
+                                    st.st_dev, st.st_ino)
+            finally:
+                os.chmod(sub, 0o700)
+            self.assertIsNone(loop)
+            self.assertEqual(len(doc["pending_acquisitions"]), 1)
+            self.assertEqual(matches, [])
+            self.assertTrue(incomplete)
+
+    # S21-round3: pending-to-admitted handoff is transactional. The
+    # spawn arms pendings for wrapper AND leaf; the caller drops
+    # them only after admitting both. A record_proc failure in the
+    # middle keeps both pendings — no live process loses custody.
+    def test_sleeper_handoff_keeps_pending_on_admit_failure(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            report = str(Path(tmp) / "sleeper.report")
+            reader, writer = os.pipe()
+            try:
+                os.write(writer, b"ready\n")
+                stdout = os.fdopen(reader, "rb")
+            finally:
+                os.close(writer)
+            child = mock.Mock()
+            child.pid = 424242
+            child.stdout = stdout
+            doc = provision.fresh_manifest(tmp, True)
+            try:
+                with mock.patch.object(provision.subprocess, "Popen",
+                                       return_value=child):
+                    with mock.patch.object(
+                            provision, "resolve_leaf",
+                            return_value=424243):
+                        wrap, sleep = provision.spawn_sleeper(
+                            Path(tmp) / "helper.py",
+                            str(Path(tmp) / "target.bin"),
+                            report, ["wrapper"], doc,
+                            role="w-wrapper", leaf_role="w-sleeper")
+            finally:
+                stdout.close()
+            self.assertEqual((wrap, sleep), (424242, 424243))
+            # Caller admits the wrapper, then the leaf admission
+            # fails (identity unreadable) before any drop runs.
+            calls = []
+
+            def fake_record(manifest, role, pid):
+                calls.append(role)
+                if role == "w-sleeper":
+                    raise provision.ProcUnknown("denied")
+                return {"role": role, "pid": pid}
+
+            with mock.patch.object(provision, "record_proc",
+                                   side_effect=fake_record):
+                provision.record_proc(doc, "w-wrapper", wrap)
+                with self.assertRaises(provision.ProcUnknown):
+                    provision.record_proc(doc, "w-sleeper", sleep)
+            self.assertEqual(calls, ["w-wrapper", "w-sleeper"])
+            kept = {(e["role"], e["pid"])
+                    for e in doc["pending_procs"]}
+            self.assertIn(("w-wrapper", 424242), kept)
+            self.assertIn(("w-sleeper", 424243), kept)
+
+    # S21-round3: every unsuccessful retirement persists custody,
+    # including a False (survivor) result — never a silent drop.
+    def test_retire_false_persists_pending(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+            with mock.patch.object(provision, "pin_proc",
+                                   return_value=999):
+                with mock.patch.object(
+                        provision, "stat_state_start",
+                        return_value=("R", 12345)):
+                    with mock.patch.object(
+                            provision, "kill_owned",
+                            return_value=False) as killer:
+                        result = provision.retire_fresh_proc(
+                            "nested-test", 424242, doc)
+            self.assertFalse(result)
+            killer.assert_called_once_with(
+                "nested-test", 424242, 12345, 10)
+            self.assertEqual(len(doc["pending_procs"]), 1)
+            pending = doc["pending_procs"][0]
+            self.assertEqual(
+                (pending["role"], pending["pid"],
+                 pending["starttime"]),
+                ("nested-test", 424242, 12345))
+
+    # S21-round3: the nested caller retires both ends even when one
+    # retirement refuses on identity change (whose occupant is
+    # provably gone-or-foreign), and the evidence still records.
+    def test_nested_retire_continues_past_refusal(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+            auth = mock.Mock()
+            auth.abspath.side_effect = lambda p: f"/tmp/{p}"
+            with mock.patch.object(
+                    provision, "spawn_sleeper",
+                    return_value=(111, 222)):
+                with mock.patch.object(
+                        provision, "proc_identity",
+                        side_effect=provision.ProcUnknown(
+                            "denied")):
+                    with mock.patch.object(
+                            provision, "retire_fresh_proc",
+                            side_effect=[
+                                provision.AdmissionError(
+                                    "starttime changed"),
+                                True]) as retire:
+                        result = provision.try_nested_pidns(
+                            doc, auth, "/tmp/helper.py")
+            self.assertFalse(result)
+            self.assertEqual(retire.call_count, 2)
+            first, second = retire.call_args_list
+            self.assertEqual(first.args[0], "nested-pidns-sleeper")
+            self.assertEqual(
+                second.args[0], "nested-pidns-sleeper-wrapper")
+            self.assertIn("identity unreadable",
+                          doc["evidence"]["nested_pidns"])
+
+    # S21-round4: the nested identity-failure path keeps each
+    # spawn pending armed across its retirement — every
+    # retirement observes its record still present in memory
+    # and on disk (pre-fix both dropped first, so a crash
+    # between the drops and the retirements lost custody).
+    # Proven-gone ends drop; an identity-change refusal drops
+    # the proven-stale record and still retires the other end.
+    def test_nested_identity_path_keeps_pendings_armed(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+            auth = mock.Mock()
+            auth.abspath.side_effect = lambda p: f"/tmp/{p}"
+            seed = [
+                {"role": "nested-pidns-sleeper-wrapper",
+                 "pid": 111, "starttime": 100,
+                 "detail": "sleeper wrapper armed"},
+                {"role": "nested-pidns-sleeper", "pid": 222,
+                 "starttime": 200,
+                 "detail": "sleeper leaf armed"},
+            ]
+            path = os.path.join(tmp, "manifest.json")
+
+            def run(retire_side_effect):
+                doc["pending_procs"] = [dict(e) for e in seed]
+                provision.save_manifest(doc, path)
+                provision._PERSIST = path
+                try:
+                    with mock.patch.object(
+                            provision, "spawn_sleeper",
+                            return_value=(111, 222)), \
+                            mock.patch.object(
+                                provision, "proc_identity",
+                                side_effect=provision.
+                                AdmissionError("unreadable")), \
+                            mock.patch.object(
+                                provision, "retire_fresh_proc",
+                                side_effect=retire_side_effect):
+                        return provision.try_nested_pidns(
+                            doc, auth, "/tmp/helper.py")
+                finally:
+                    provision._PERSIST = None
+
+            seen = []
+            disk_seen = []
+
+            def observing_retire(role, pid, manifest,
+                                 timeout=10):
+                seen.append({(e["role"], e["pid"])
+                             for e in manifest["pending_procs"]})
+                disk = json.loads(Path(path).read_text())
+                disk_seen.append(
+                    {(e["role"], e["pid"])
+                     for e in disk["pending_procs"]})
+                return {"nested-pidns-sleeper": False,
+                        "nested-pidns-sleeper-wrapper": True}[role]
+
+            self.assertFalse(run(observing_retire))
+            both = {("nested-pidns-sleeper-wrapper", 111),
+                    ("nested-pidns-sleeper", 222)}
+            # Both retirements observed both spawn records
+            # armed, in memory and durably.
+            self.assertEqual(seen, [both, both])
+            self.assertEqual(disk_seen, [both, both])
+            # Survivor kept, proven-gone dropped.
+            kept = {(e["role"], e["pid"])
+                    for e in doc["pending_procs"]}
+            self.assertEqual(kept, {("nested-pidns-sleeper",
+                                     222)})
+            self.assertIn("identity unreadable",
+                          doc["evidence"]["nested_pidns"])
+            # Identity-change refusal drops the proven-stale
+            # record and still retires the other end.
+            calls = []
+
+            def raising_retire(role, pid, manifest,
+                               timeout=10):
+                calls.append(role)
+                if role == "nested-pidns-sleeper":
+                    raise provision.AdmissionError(
+                        "starttime changed")
+                return True
+
+            self.assertFalse(run(raising_retire))
+            self.assertEqual(
+                calls,
+                ["nested-pidns-sleeper",
+                 "nested-pidns-sleeper-wrapper"])
+            self.assertEqual(doc["pending_procs"], [])
+
+    # S21-round4: the nested unsupported-depth path keeps both
+    # spawn pendings armed across the tree kill — the kill
+    # observes both records (pre-fix both dropped first);
+    # failure refreshes each in place (one persist per record,
+    # prior starttime preserved when unobserved), success
+    # drops both after the proven-gone result.
+    def test_nested_depth_path_refreshes_around_kill(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = provision.fresh_manifest(tmp, True)
+            auth = mock.Mock()
+            auth.abspath.side_effect = lambda p: f"/tmp/{p}"
+            seed = [
+                {"role": "nested-pidns-sleeper-wrapper",
+                 "pid": 111, "starttime": 100,
+                 "detail": "sleeper wrapper armed"},
+                {"role": "nested-pidns-sleeper", "pid": 222,
+                 "starttime": 200,
+                 "detail": "sleeper leaf armed"},
+            ]
+            path = os.path.join(tmp, "manifest.json")
+
+            def fake_stat(pid):
+                if pid == 111:
+                    return ("R", 999)
+                raise provision.ProcAbsent("gone")
+
+            def run(kill_result):
+                doc["pending_procs"] = [dict(e) for e in seed]
+                provision.save_manifest(doc, path)
+                provision._PERSIST = path
+                seen = []
+                saves = []
+                real_save = provision.save_manifest
+
+                def counting_save(manifest, where):
+                    saves.append(where)
+                    return real_save(manifest, where)
+
+                def observing_kill(role, root, timeout=10):
+                    seen.append(
+                        {(e["role"], e["pid"])
+                         for e in doc["pending_procs"]})
+                    return kill_result
+
+                try:
+                    with mock.patch.object(
+                            provision, "spawn_sleeper",
+                            return_value=(111, 222)), \
+                            mock.patch.object(
+                                provision, "proc_identity",
+                                return_value={"nspid": [
+                                    "1", "2"]}), \
+                            mock.patch.object(
+                                provision, "kill_tree",
+                                side_effect=observing_kill), \
+                            mock.patch.object(
+                                provision, "stat_state_start",
+                                side_effect=fake_stat), \
+                            mock.patch.object(
+                                provision, "save_manifest",
+                                side_effect=counting_save):
+                        result = provision.try_nested_pidns(
+                            doc, auth, "/tmp/helper.py")
+                finally:
+                    provision._PERSIST = None
+                return (result, seen, saves)
+
+            both = {("nested-pidns-sleeper-wrapper", 111),
+                    ("nested-pidns-sleeper", 222)}
+            result, seen, saves = run(False)
+            self.assertFalse(result)
+            self.assertEqual(seen, [both])
+            # One persist per in-place refresh (pre-fix: two
+            # drops plus two records).
+            self.assertEqual(len(saves), 2)
+            by_role = {e["role"]: e
+                       for e in doc["pending_procs"]}
+            self.assertEqual(set(by_role), {
+                "nested-pidns-sleeper-wrapper",
+                "nested-pidns-sleeper"})
+            for entry in by_role.values():
+                self.assertIn("not proven gone",
+                              entry["detail"])
+            self.assertEqual(
+                by_role["nested-pidns-sleeper-wrapper"]
+                ["starttime"], 999)
+            self.assertEqual(
+                by_role["nested-pidns-sleeper"]["starttime"],
+                200)
+            self.assertIn("NSpid depth",
+                          doc["evidence"]["nested_pidns"])
+            result, seen, saves = run(True)
+            self.assertFalse(result)
+            self.assertEqual(seen, [both])
+            self.assertEqual(doc["pending_procs"], [])
+
+    # S21-round4: pending-proc refresh replaces in memory and
+    # persists once — a crash between drop and record can no
+    # longer strand a live process without custody. A None
+    # starttime preserves the prior record's.
+    def test_refresh_pending_proc_persists_once(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "manifest.json")
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_procs"] = [
+                {"role": "a", "pid": 1, "starttime": 100,
+                 "detail": "old-a"},
+                {"role": "b", "pid": 2, "starttime": 200,
+                 "detail": "old-b"},
+            ]
+            provision.save_manifest(doc, path)
+            provision._PERSIST = path
+            saves = []
+            real_save = provision.save_manifest
+
+            def counting_save(manifest, where):
+                saves.append(where)
+                return real_save(manifest, where)
+
+            try:
+                with mock.patch.object(
+                        provision, "save_manifest",
+                        side_effect=counting_save):
+                    provision.refresh_pending_proc(
+                        doc, "a", 1, 777, "new-a")
+            finally:
+                provision._PERSIST = None
+            self.assertEqual(len(saves), 1)
+            by_role = {e["role"]: e
+                       for e in doc["pending_procs"]}
+            self.assertEqual(by_role["a"]["starttime"], 777)
+            self.assertEqual(by_role["a"]["detail"], "new-a")
+            self.assertEqual(by_role["b"]["detail"], "old-b")
+            disk = json.loads(Path(path).read_text())
+            self.assertEqual(len(disk["pending_procs"]), 2)
+            # None preserves the prior starttime; an absent
+            # record appends.
+            provision._PERSIST = None
+            provision.refresh_pending_proc(
+                doc, "a", 1, None, "newer-a")
+            by_role = {e["role"]: e
+                       for e in doc["pending_procs"]}
+            self.assertEqual(by_role["a"]["starttime"], 777)
+            provision.refresh_pending_proc(
+                doc, "c", 3, 300, "fresh-c")
+            self.assertEqual(len(doc["pending_procs"]), 3)
+
+    # S22-round3: the pin discipline the finding questions is the
+    # implemented one — an exit under (or before) the pin converges
+    # to gone without signalling: reaped and zombie children both
+    # prove gone with os.kill never attempted.
+    def test_kill_owned_exited_child_proves_gone_without_signal(self):
+        import subprocess
+        from unittest import mock
+        reaped = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        _, reaped_start = provision.stat_state_start(reaped.pid)
+        reaped.kill()
+        reaped.wait()
+        zombie = subprocess.Popen(
+            ["sleep", "60"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        _, zombie_start = provision.stat_state_start(zombie.pid)
+        zombie.kill()
+        try:
+            with mock.patch("os.kill") as killer:
+                self.assertTrue(provision.kill_owned(
+                    "test", reaped.pid, reaped_start, timeout=1))
+                self.assertTrue(provision.kill_owned(
+                    "test", zombie.pid, zombie_start, timeout=1))
+                killer.assert_not_called()
+        finally:
+            zombie.wait()
+
+    # S27-round3: a same-filesystem bind mounted AFTER the mount
+    # snapshot shares the device and is absent from the set — the
+    # walk must still refuse via the descriptor-bound mount ID.
+    # The foreign mount ID below simulates that post-snapshot
+    # bind (a real one is covered live in test_provision_live).
+    def test_clear_dir_refuses_post_snapshot_same_fs_bind(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "tree"
+            sub = root / "sub"
+            victim = sub / "victim.txt"
+            root.mkdir(mode=0o700)
+            sub.mkdir(mode=0o700)
+            victim.write_bytes(b"shadowed-by-bind\n")
+            root_fd = os.open(
+                root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                # Empty snapshot (bind mounted after it) + a
+                # foreign mount ID on the child: refuse, keep all.
+                def fake_mnt(fd):
+                    if fd == root_fd:
+                        return 100
+                    return 200
+                with mock.patch.object(
+                        provision, "_mnt_id_of",
+                        side_effect=fake_mnt):
+                    with self.assertRaisesRegex(
+                            OSError, "mount boundary"):
+                        provision.fd_clear_dir(
+                            root_fd, "", frozenset())
+                self.assertTrue(victim.exists())
+                self.assertTrue(sub.exists())
+                # Control: the same tree with no mock clears
+                # normally — the refusal above came from the mount
+                # identity, not the tree shape.
+                provision.fd_clear_dir(root_fd, "", frozenset())
+                self.assertFalse(sub.exists())
+            finally:
+                os.close(root_fd)
+
+    # S62-round3: a SOLE foreign mount after a successful create
+    # must not be adopted — record_mount compares the row against
+    # the expected acquisition (source/type/super), not just
+    # absence/stacking.
+    # S62-round4: rollback refresh replaces the pending record
+    # in memory and persists once, preserving the complete
+    # acquisition evidence (fingerprint mnt_id plus the prior
+    # record's canary/loop_backing). Durable boundaries: the
+    # refresh persists exactly once (no drop/record crash
+    # window), and a persistence failure leaves the on-disk
+    # record intact (pre-fix the drop had already persisted,
+    # stranding the live mount without custody).
+    def test_rollback_refresh_persists_once_with_evidence(self):
+        from unittest import mock
+        for evidence_key, evidence_val in (
+                ("canary", "abc123"),
+                ("loop_backing", {"path": "/i", "dev": 7,
+                                  "ino": 8})):
+            with self.subTest(evidence=evidence_key):
+                with tempfile.TemporaryDirectory() as tmp:
+                    mnt = os.path.join(tmp, "mnt")
+                    os.makedirs(mnt)
+                    path = os.path.join(tmp, "manifest.json")
+                    doc = provision.fresh_manifest(tmp, True)
+                    doc["pending_acquisitions"] = [{
+                        "kind": "mount", "key": mnt,
+                        "role": "role", "target": mnt,
+                        "fstype": "overlay", "source": "overlay",
+                        "expect_super": [],
+                        evidence_key: evidence_val,
+                        "detail": "pre-admission",
+                    }]
+                    provision.save_manifest(doc, path)
+                    provision._PERSIST = path
+                    try:
+                        fingerprint = {
+                            "fstype": "overlay",
+                            "source": "overlay", "mnt_id": 99,
+                            "expect_super": [
+                                "rw,lowerdir=/dev/fd/9"]}
+                        row = {"target": mnt, "mnt_id": 99,
+                               "root": "/", "fstype": "overlay",
+                               "source": "overlay", "super": "rw"}
+                        saves = []
+                        real_save = provision.save_manifest
+
+                        def counting_save(manifest, where):
+                            saves.append(where)
+                            return real_save(manifest, where)
+
+                        # Refusal arm: a live row the helper
+                        # refuses to retire.
+                        with mock.patch.object(
+                                provision, "read_mount_table",
+                                return_value=[row]), \
+                                mock.patch.object(
+                                    provision,
+                                    "retire_mount_via_helper",
+                                    return_value=(
+                                        "refused: foreign")), \
+                                mock.patch.object(
+                                    provision, "save_manifest",
+                                    side_effect=counting_save):
+                            note = provision.rollback_owned_mount(
+                                doc, tmp, "role", mnt,
+                                fingerprint)
+                        self.assertIn("custody kept pending",
+                                      note)
+                        self.assertEqual(len(saves), 1)
+                        kept = [e for e in
+                                doc["pending_acquisitions"]
+                                if e.get("key") == mnt]
+                        self.assertEqual(len(kept), 1)
+                        self.assertEqual(kept[0]["mnt_id"], 99)
+                        self.assertEqual(kept[0][evidence_key],
+                                         evidence_val)
+                        self.assertIn("refused",
+                                      kept[0]["detail"])
+                        disk = json.loads(
+                            Path(path).read_text())
+                        pending = [e for e in disk[
+                            "pending_acquisitions"]]
+                        self.assertEqual(len(pending), 1)
+                        self.assertEqual(pending[0]["mnt_id"],
+                                         99)
+                        self.assertEqual(
+                            pending[0][evidence_key],
+                            evidence_val)
+                        # Failure boundary: persistence fails
+                        # mid-refresh — the on-disk record stays
+                        # intact (still the refusal refresh from
+                        # above, never an empty pending set).
+                        with mock.patch.object(
+                                provision, "read_mount_table",
+                                side_effect=provision.
+                                AdmissionError("no table")), \
+                                mock.patch.object(
+                                    provision, "save_manifest",
+                                    side_effect=provision.
+                                    AdmissionError("no disk")):
+                            with self.assertRaises(
+                                    provision.AdmissionError):
+                                provision.rollback_owned_mount(
+                                    doc, tmp, "role", mnt,
+                                    fingerprint)
+                        disk = json.loads(
+                            Path(path).read_text())
+                        pending = [e for e in disk[
+                            "pending_acquisitions"]]
+                        self.assertEqual(len(pending), 1)
+                        self.assertIn("refused",
+                                      pending[0]["detail"])
+                    finally:
+                        provision._PERSIST = None
+
+    # S74-round4: mount-failure taxonomy — moved reports parse
+    # to (ID, observed location); timeouts, crashes, and
+    # inconclusive helper post-reads are uncertain (keep);
+    # only pre-effect refusals (plain FAILED, sudo exec
+    # failure, rc==0 verified-but-unparseable) reconcile-drop.
+    def test_classify_mount_failure_taxonomy(self):
+        cls = provision._classify_mount_failure
+        moved = ("mount /t moved during create (mnt=42 "
+                 "observed=/o2): target moved")
+        self.assertEqual(cls(moved), ("moved", 42, "/o2"))
+        # Escaped observed locations decode.
+        esc = provision._escape_report_field("/o 2/x")
+        moved_esc = ("mount /t moved during create (mnt=7 "
+                     f"observed={esc}): moved")
+        self.assertEqual(cls(moved_esc), ("moved", 7, "/o 2/x"))
+        # Truncated structure degrades to uncertain, keeping
+        # the ID when it survived.
+        self.assertEqual(
+            cls("mount /t moved during create (mnt=9 "
+                "observed-unknown): truncated"),
+            ("uncertain", 9, None))
+        self.assertEqual(
+            cls("mount /t moved during create (garbage"),
+            ("uncertain", None, None))
+        # Uncertain markers.
+        self.assertEqual(
+            cls("mount /t effect uncertain after create: "
+                "sudo timed out after 120s"),
+            ("uncertain", None, None))
+        # Refused class: pre-effect, exec failure, rc==0
+        # verified-but-unparseable.
+        self.assertEqual(
+            cls("mount /t refused: rc=1 FAILED: no canary"),
+            ("refused", None, None))
+        self.assertEqual(
+            cls("mount /t refused: rc=127 sudo exec failed"),
+            ("refused", None, None))
+        self.assertEqual(
+            cls("mount /t report unparseable: mounted ???"),
+            ("refused", None, None))
+        self.assertEqual(cls(""), ("refused", None, None))
+        self.assertEqual(cls(None), ("refused", None, None))
+
+    # S74-round4: mount-fs failure normalization — helper
+    # MOVED/UNCERTAIN lines, timeouts, and crashes become
+    # keep-custody reports; pre-effect FAILED and sudo exec
+    # failures stay refused-class.
+    def test_mount_failure_normalization(self):
+        from unittest import mock
+        import types
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = types.SimpleNamespace(dev=1, ino=2)
+            target = os.path.join(tmp, "mnt")
+
+            def attempt(rc, out, err):
+                with mock.patch.object(
+                        provision, "run_sudo",
+                        return_value=(rc, out, err)):
+                    return provision.mount_fs_via_helper(
+                        tmp, guard, target, 3, 4, "overlay",
+                        layers=[], canary="c")
+
+            reported, failure = attempt(
+                1, "FAILED-MOVED: mnt=42 observed=/o2 moved\n",
+                "")
+            self.assertIsNone(reported)
+            self.assertIn("moved during create", failure)
+            kind, mid, obs = provision._classify_mount_failure(
+                failure)
+            self.assertEqual((kind, mid, obs),
+                             ("moved", 42, "/o2"))
+
+            reported, failure = attempt(
+                1, "FAILED-UNCERTAIN: missing after create\n",
+                "")
+            self.assertIsNone(reported)
+            self.assertIn("effect uncertain after create",
+                          failure)
+
+            reported, failure = attempt(
+                124, "", "sudo timed out after 120s: mount-fs")
+            self.assertIsNone(reported)
+            self.assertIn("effect uncertain after create",
+                          failure)
+            self.assertIn("timed out", failure)
+
+            reported, failure = attempt(
+                1, "", "Traceback (most recent call last): boom")
+            self.assertIsNone(reported)
+            self.assertIn("effect uncertain after create",
+                          failure)
+
+            reported, failure = attempt(
+                1, "FAILED: overlay needs 3 layers\n", "")
+            self.assertIsNone(reported)
+            self.assertIn("refused: rc=1", failure)
+
+            reported, failure = attempt(
+                127, "", "sudo exec failed: nope")
+            self.assertIsNone(reported)
+            self.assertIn("refused: rc=127", failure)
+
+    # S74-round4: reconcile honors the failure taxonomy — moved
+    # and uncertain outcomes refresh (never drop) pending
+    # custody with the reported recovery identity; refused
+    # outcomes keep the legacy adopt-or-drop behavior.
+    def test_reconcile_mount_failure_taxonomy(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            fingerprint = {"fstype": "overlay",
+                           "source": "overlay",
+                           "expect_super": []}
+
+            def doc_with_pending():
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "mount", "key": mnt, "role": "role",
+                    "target": mnt, "fstype": "overlay",
+                    "source": "overlay", "expect_super": [],
+                    "canary": "abc123",
+                    "detail": "pre-admission",
+                }]
+                return doc
+
+            moved = ("mount /t moved during create (mnt=42 "
+                     f"observed={mnt}2): moved")
+            doc = doc_with_pending()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        canary=(provision.MOUNT_CANARY_NAME,
+                                "abc123"),
+                        failure=moved))
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0]["mnt_id"], 42)
+            self.assertEqual(kept[0]["observed_target"],
+                             f"{mnt}2")
+            self.assertEqual(kept[0]["canary"], "abc123")
+            self.assertIn("moved", kept[0]["detail"])
+            # Uncertain: kept with a fresh detail, no ID.
+            doc = doc_with_pending()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        failure="mount /t effect uncertain "
+                                "after create: timeout"))
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertNotIn("mnt_id", kept[0])
+            self.assertIn("uncertain", kept[0]["detail"])
+            # Refused with nothing live: legacy drop.
+            doc = doc_with_pending()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        failure="mount /t refused: rc=1 "
+                                "FAILED: no canary"))
+            self.assertEqual(doc["pending_acquisitions"], [])
+
+    def test_record_mount_refuses_sole_foreign_replacement(self):
+        from unittest import mock
+        expected = {"fstype": "ext4", "source": "/dev/loop9",
+                    "expect_super": ["rw|"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            base = {"target": mnt, "mnt_id": 42, "root": "/",
+                    "fstype": "ext4", "source": "/dev/loop9",
+                    "super": "rw|"}
+            variants = [
+                ("foreign source",
+                 dict(base, source="/dev/loop7"), True),
+                ("foreign fstype",
+                 dict(base, fstype="xfs"), True),
+                ("foreign super",
+                 dict(base, super="ro|"), True),
+                ("expected occupant", dict(base), False),
+            ]
+            for name, row, refused in variants:
+                with self.subTest(name):
+                    doc = provision.fresh_manifest(tmp, True)
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            return_value=[row]):
+                        if refused:
+                            with self.assertRaisesRegex(
+                                    provision.AdmissionError,
+                                    "does not match expected"):
+                                provision.record_mount(
+                                    doc, tmp, "role", mnt,
+                                    expected=expected)
+                            self.assertEqual(doc["mounts"], [])
+                        else:
+                            provision.record_mount(
+                                doc, tmp, "role", mnt,
+                                expected=expected)
+                            self.assertEqual(len(doc["mounts"]), 1)
+                            self.assertEqual(
+                                doc["mounts"][0]["source"],
+                                "/dev/loop9")
+
+    # S62-round3 end to end: successful mount command + a single
+    # foreign mount at the target — admission refuses, pending
+    # custody is retained (admission commits before the drop),
+    # and no chown or file writes touch the foreign target.
+    @mock.patch.object(
+        provision, "read_loop_backing_id",
+        side_effect=provision.LoopIdUnavailable("test"))
+    def test_ext4_success_path_ignores_foreign_mount(self, _loop_id):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            manifest = os.path.join(tmp, "manifest.json")
+            os.makedirs(run_root)
+            calls = []
+
+            def fake_sudo(argv, timeout=120):
+                calls.append(list(argv))
+                if "make-ext4" in argv:
+                    return (0, "made-ext4 x\n", "")
+                if "attach-loop" in argv:
+                    return (0, "attached-loop /dev/loop9\n", "")
+                if "retire-mount" in argv:
+                    return (1, "", "FAILED: foreign occupant refused")
+                if "retire-loop" in argv:
+                    return (0, "retired-loop /dev/loop9\n", "")
+                if "mount-fs" in argv:
+                    # The helper mounted ours (mnt 42, fd-spelling
+                    # source); the admission read below sees the
+                    # foreign replacement (mnt 77) instead.
+                    tgt = argv[argv.index("--target") + 1]
+                    return (
+                        0, f"mounted {tgt} mnt=42 "
+                           f"source=/dev/fd/9 super=rw|\n", "")
+                raise AssertionError(f"unexpected sudo: {argv}")
+
+            doc = provision.fresh_manifest(run_root, True)
+            provision._PERSIST = manifest
+            guard = provision.RootAuthority(run_root)
+            provision._ROOT_GUARD = guard
+            try:
+                with mock.patch.object(provision, "run_sudo",
+                                       side_effect=fake_sudo):
+                    with mock.patch.object(
+                            provision.shutil, "which",
+                            return_value="/sbin/x"):
+                        image = os.path.join(
+                            run_root, "ext4", "fs01.img")
+                        mnt = os.path.join(run_root, "ext4", "mnt")
+                        # Sole occupant is foreign: our mount was
+                        # replaced before the admission read.
+                        foreign = {"target": mnt, "mnt_id": 77,
+                                   "root": "/", "fstype": "ext4",
+                                   "source": "/dev/loop7",
+                                   "super": "rw|"}
+                        with mock.patch.object(
+                                provision, "read_loop_backing",
+                                return_value=image):
+                            with mock.patch.object(
+                                    provision, "read_mount_table",
+                                    return_value=[foreign]):
+                                provision.provision_ext4(
+                                    doc, run_root)
+            finally:
+                provision._PERSIST = None
+                provision._ROOT_GUARD = None
+                guard.close()
+            self.assertIn("not admitted",
+                          doc["cells"]["FS01"]["reason"])
+            self.assertEqual(doc["mounts"], [])
+            # No privileged or content effects on the foreign
+            # target: no chown, no file writes.
+            self.assertFalse(any(c[:1] == ["chown"] for c in calls))
+            self.assertFalse(os.path.exists(
+                os.path.join(mnt, "a.bin")))
+            self.assertFalse(os.path.exists(
+                os.path.join(mnt, "alias.bin")))
+            self.assertFalse(os.path.exists(
+                os.path.join(mnt, "b.bin")))
+            # Pending custody retained (exactly one record: the
+            # rollback replaces, not duplicates).
+            pending = [e for e in doc["pending_acquisitions"]
+                       if e["kind"] == "mount" and e["key"] == mnt]
+            self.assertEqual(len(pending), 1)
+
+    # S17-round3: the loop validate, CLR, and post-proof share
+    # ONE held device fd — a single open, GET/CLR/GET all on
+    # that fd, no pathname re-resolution between validation and
+    # effect. The old shape (validate-GET on one fd, CLR on a
+    # freshly opened fd) opens three times and fails this.
+    def test_retire_loop_effect_shares_validating_fd(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            backing = {"path": image, "dev": st.st_dev,
+                       "ino": st.st_ino}
+            fake_open, fake_ioctl, log = _loop_fd_script(
+                [("id", st.st_dev, st.st_ino), ("enxio",)])
+            with mock.patch.object(provision, "read_loop_backing",
+                                   return_value=image), \
+                    mock.patch.object(provision.os, "open",
+                                      side_effect=fake_open), \
+                    mock.patch.object(provision.fcntl, "ioctl",
+                                      side_effect=fake_ioctl):
+                self.assertIsNone(provision.retire_loop_now(
+                    "/dev/loop7", backing, tmp))
+            opens = [e for e in log if e[0] == "open"]
+            self.assertEqual(len(opens), 1)
+            held = opens[0][2]
+            seq = [(e[1], e[2]) for e in log if e[0] == "ioctl"]
+            self.assertEqual(
+                seq, [(held, provision.LOOP_GET_STATUS64),
+                      (held, provision.LOOP_CLR_FD),
+                      (held, provision.LOOP_GET_STATUS64)])
+
+    # S17-round3: device-node swap between validation and effect
+    # (a root attacker re-resolving /dev/loopN at the final
+    # boundary). Both sysfs validations see ours, but the
+    # effect-time device open resolves to the foreign device.
+    # S17-round4 fix: the old shape's effect-time open is its
+    # ONLY open (inside _loop_clr_fd), so the swap must
+    # redirect the FIRST routed open — the previous
+    # [ours, ours, foreign] model never delivered foreign to
+    # the old code and passed vacuously. The new shape
+    # validates on its single held fd, sees the foreign
+    # association, and refuses with no CLR; the old shape
+    # cleared the foreign victim and reported discharged.
+    def test_retire_loop_nodeswap_clears_validated_backing(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            backing = {"path": image, "dev": st.st_dev,
+                       "ino": st.st_ino}
+            other = str(Path(tmp) / "other.img")
+            Path(other).write_bytes(b"other")
+            ost = os.stat(other)
+            foreign = (ost.st_dev, ost.st_ino)
+            fake_open, fake_ioctl, log = _loop_fd_script(
+                [], open_backings=[foreign])
+            with mock.patch.object(
+                    provision, "read_loop_backing",
+                    side_effect=[image, image, None]), \
+                    mock.patch.object(provision.os, "open",
+                                      side_effect=fake_open), \
+                    mock.patch.object(provision.fcntl, "ioctl",
+                                      side_effect=fake_ioctl):
+                failure = provision.retire_loop_now(
+                    "/dev/loop7", backing, tmp)
+            self.assertIn("refusing detach", failure)
+            victims = [e[2] for e in log if e[0] == "clr-victim"]
+            self.assertEqual(victims, [])
+
+    # S17-round4: a recorded mount whose path vanished (renamed
+    # away) but whose ID is still live anywhere — including
+    # outside the run root — is a moved mount, not a
+    # discharge. The helper's absence arm scans the whole
+    # table before returning None.
+    def test_retire_mount_vanished_path_id_live_reports_moved(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            target = os.path.join(run_root, "mnt")  # absent
+            expected = {"mnt_id": 4242, "fstype": "ext4",
+                        "source": "x", "expect_super": []}
+            row = {"target": "/elsewhere", "mnt_id": 4242,
+                   "root": "/", "fstype": "ext4", "source": "x",
+                   "super": "rw"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                failure = provision.retire_mount_now(
+                    target, expected, run_root)
+            self.assertIn("moved (mnt=4242", failure)
+            self.assertIn("/elsewhere", failure)
+            self.assertIn("manual retirement required", failure)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(provision.retire_mount_now(
+                    target, expected, run_root))
+
+    # S17-round4: the caller-side absence arm
+    # (cleanup_one_mount) applies the same whole-table ID
+    # scan — the public cleanup route cannot discharge a
+    # moved mount through the helper/result gap.
+    def test_cleanup_one_mount_absent_id_live_reports_moved(
+            self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            entry = {"target": os.path.join(run_root, "mnt"),
+                     "mnt_id": 111, "fstype": "ext4",
+                     "source": "/dev/loop9", "actual_super": "rw|",
+                     "expect_super": []}
+            moved = [{"target": "/outside-run-root",
+                      "mnt_id": 111, "root": "/",
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "super": "rw|"}]
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=moved):
+                with mock.patch.object(
+                        provision, "run_sudo") as sudo:
+                    failure = provision.cleanup_one_mount(
+                        entry, run_root)
+            sudo.assert_not_called()
+            self.assertIn("moved (mnt=111", failure)
+            self.assertIn("manual retirement required", failure)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(provision.cleanup_one_mount(
+                    entry, run_root))
+
+    # S17-round4: the public cleanup command reports a
+    # recorded mount whose ID survives outside the run root
+    # as moved/manual — end to end through cleanup_command,
+    # not just the helper or the caller in isolation.
+    def test_cleanup_reports_recorded_move_outside_run_root(
+            self):
+        from unittest import mock
+        import contextlib
+        import io
+        import types
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root, mode=0o755)
+            orig = os.path.join(run_root, "mnt")
+            os.makedirs(orig)
+            st = os.stat(run_root)
+            manifest = os.path.join(tmp, "manifest.json")
+            doc = provision.fresh_manifest(run_root, False)
+            doc["run_root_identity"] = {"dev": st.st_dev,
+                                        "ino": st.st_ino}
+            doc["mounts"] = [{
+                "target": orig, "mnt_id": 4242,
+                "fstype": "ext4", "source": "/dev/loop9",
+                "actual_super": "rw|", "expect_super": []}]
+            Path(manifest).write_text(json.dumps(doc))
+            args = types.SimpleNamespace(run_root=run_root,
+                                         manifest=manifest)
+            row = {"target": "/outside-run-root",
+                   "mnt_id": 4242, "root": "/",
+                   "fstype": "ext4", "source": "/dev/loop9",
+                   "super": "rw|"}
+            out = io.StringIO()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]), \
+                    contextlib.redirect_stdout(out):
+                rc = provision.cleanup_command(args)
+            self.assertEqual(rc, 1)
+            self.assertIn("moved (mnt=4242", out.getvalue())
+            self.assertIn("manual retirement required",
+                          out.getvalue())
+
+    # S17-round4: the mount-mutation lock serializes helpers —
+    # a second acquirer blocks until the first releases (flock
+    # on separate descriptions, including threads).
+    def test_mount_exclock_serializes_helpers(self):
+        import threading
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            fd_a = provision._mount_exclock_acquire(tmp)
+            acquired = []
+
+            def take():
+                fd = provision._mount_exclock_acquire(tmp)
+                acquired.append(True)
+                provision._mount_exclock_release(fd)
+
+            worker = threading.Thread(target=take)
+            worker.start()
+            try:
+                time.sleep(0.2)
+                self.assertEqual(acquired, [])
+            finally:
+                provision._mount_exclock_release(fd_a)
+            worker.join(timeout=5)
+            self.assertEqual(acquired, [True])
+
+    # S17-round4: both mount-mutating CLIs take the lock —
+    # retire-mount (detach path) and mount-fs (create path)
+    # leave the lockfile behind, released.
+    def test_mount_commands_take_exclock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            lock = os.path.join(
+                run_root, provision.MOUNT_EXCLOCK_NAME)
+            res = run_tool(
+                "retire-mount", "--run-root", run_root,
+                "--target", os.path.join(run_root, "mnt"),
+                "--mnt-id", "4242", "--fstype", "ext4",
+                "--source", "none")
+            self.assertEqual(res.returncode, 0)
+            self.assertTrue(os.path.exists(lock))
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+            target = os.path.join(run_root, "tgt")
+            os.makedirs(target)
+            rst = os.stat(run_root)
+            tst = os.stat(target)
+            res = run_tool(
+                "mount-fs", "--run-root", run_root,
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", target,
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino),
+                "--fstype", "bogus")
+            self.assertEqual(res.returncode, 1)
+            self.assertIn("unsupported fstype",
+                          (res.stdout + res.stderr).lower()
+                          .replace("-", " "))
+            self.assertTrue(os.path.exists(lock))
+
+    # S17-round4: interposition alarm — our row is gone after
+    # the detach but a foreign row sits at our target that was
+    # not there before the effect. Either a racer stacked
+    # after we detached ours, or ours was unmounted
+    # concurrently and our umount took the foreign top: retain
+    # custody, never report discharged.
+    def test_retire_mount_foreign_appeared_alarms(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "mnt_id": held,
+                      "fstype": "ext4", "source": "/dev/loop9",
+                      "expect_super": []}
+            ours = {"target": target, "mnt_id": held,
+                    "root": "/", "fstype": "ext4",
+                    "source": "/dev/loop9", "super": "rw|"}
+            foreign = {"target": target, "mnt_id": held + 1000,
+                       "root": "/", "fstype": "tmpfs",
+                       "source": "tmpfs", "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours], [foreign]]):
+                with mock.patch.object(
+                        provision, "_umount2",
+                        return_value=None) as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_called_once_with(target)
+            self.assertIn("occupant changed", failure)
+            self.assertIn("custody retained", failure)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours], []]):
+                with mock.patch.object(
+                        provision, "_umount2",
+                        return_value=None):
+                    self.assertIsNone(
+                        provision.retire_mount_now(
+                            target, record, run_root))
+
+    # S17-round3: replica replacement after the open — the row
+    # matches everything a rollback-style record (no mnt_id)
+    # checks, but its mount ID differs from the snapshot taken
+    # at open. The old shape admits and unmounts the replica;
+    # the correspondence check refuses with no effect.
+    def test_retire_mount_replica_after_open_refuses(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            record = {"target": target, "fstype": "ext4",
+                      "source": "/dev/loop9", "expect_super": []}
+            replica = {"target": target, "mnt_id": held + 1000,
+                       "root": "/", "fstype": "ext4",
+                       "source": "/dev/loop9", "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[replica], [replica]]):
+                with mock.patch.object(
+                        provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, record, run_root)
+            detach.assert_not_called()
+            self.assertIn("refusing", failure)
+
+    # S17-round3 positive control: the open-time snapshot and
+    # both table observations agree — the detach proceeds (both
+    # manifest-style records with mnt_id and rollback-style
+    # records without).
+    def test_retire_mount_held_fd_agreement_detaches(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            ours = {"target": target, "mnt_id": held, "root": "/",
+                    "fstype": "ext4", "source": "/dev/loop9",
+                    "super": "rw|"}
+            records = [
+                {"target": target, "mnt_id": held,
+                 "fstype": "ext4", "source": "/dev/loop9",
+                 "expect_super": []},
+                {"target": target, "fstype": "ext4",
+                 "source": "/dev/loop9", "expect_super": []},
+            ]
+            for record in records:
+                with self.subTest(mnt_id=("manifest"
+                                          if "mnt_id" in record
+                                          else "rollback")):
+                    with mock.patch.object(
+                            provision, "read_mount_table",
+                            side_effect=[[ours], [ours], []]):
+                        with mock.patch.object(
+                                provision, "_umount2",
+                                return_value=None) as detach:
+                            self.assertIsNone(
+                                provision.retire_mount_now(
+                                    target, record, run_root))
+                    detach.assert_called_once_with(target)
+
+    # S17-round3: our mount moved away after the final
+    # observation — the target reads clear but our mount ID is
+    # still live elsewhere. Target-scoped post-proof reports
+    # discharged and leaks custody; the whole-table proof
+    # retains it.
+    def test_retire_mount_moved_away_retains_custody(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            elsewhere = os.path.join(run_root, "elsewhere")
+            os.makedirs(elsewhere)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            expected = {"target": target, "mnt_id": held,
+                        "fstype": "ext4", "source": "/dev/loop9",
+                        "expect_super": []}
+            ours = {"target": target, "mnt_id": held, "root": "/",
+                    "fstype": "ext4", "source": "/dev/loop9",
+                    "super": "rw|"}
+            moved = dict(ours, target=elsewhere)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours], [moved]]):
+                with mock.patch.object(
+                        provision, "_umount2",
+                        return_value=errno.ENOENT):
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            self.assertIsNotNone(failure)
+            self.assertIn("still live", failure)
+            self.assertIn("custody retained", failure)
+            self.assertIn("elsewhere", failure)
+
+    # S17-round3: foreign stack landing after the final
+    # observation — the kernel detaches the top (foreign)
+    # mount; ours is still live, so custody is retained. A
+    # failed umount likewise defers to the post-proof: ours
+    # live means retained, never a bare refusal.
+    def test_retire_mount_stack_after_final_retains(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            probe = os.open(target, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                held = provision._mnt_id_of(probe)
+            finally:
+                os.close(probe)
+            expected = {"target": target, "mnt_id": held,
+                        "fstype": "ext4", "source": "/dev/loop9",
+                        "expect_super": []}
+            ours = {"target": target, "mnt_id": held, "root": "/",
+                    "fstype": "ext4", "source": "/dev/loop9",
+                    "super": "rw|"}
+            foreign = {"target": target, "mnt_id": held + 1000,
+                       "root": "/", "fstype": "tmpfs",
+                       "source": "tmpfs", "super": "rw|"}
+            post = [ours]
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours], post]):
+                def detach(target):
+                    # Substitution at the actual final effect
+                    # boundary: the foreign top lands after the
+                    # last observation; the kernel removes it.
+                    post.append(foreign)
+                    return None
+                with mock.patch.object(provision, "_umount2",
+                                       side_effect=detach):
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            self.assertIn("still live", failure)
+            self.assertIn("custody retained", failure)
+            # Failed umount + ours live: post-proof decides.
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    side_effect=[[ours], [ours], [ours]]):
+                with mock.patch.object(
+                        provision, "_umount2",
+                        return_value=errno.EBUSY):
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            self.assertIn("still live", failure)
+            self.assertIn("custody retained", failure)
+
+    # S17-round3: our mount already moved away at the FIRST
+    # observation — the target reads clear but the recorded
+    # mount ID is live elsewhere. A manifest-style record
+    # (with mnt_id) retains custody; a genuinely absent mount
+    # (ID nowhere) still discharges.
+    def test_retire_mount_early_moveaway_retains_custody(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as run_root:
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            elsewhere = os.path.join(run_root, "elsewhere")
+            os.makedirs(elsewhere)
+            expected = {"target": target, "mnt_id": 424242,
+                        "fstype": "ext4", "source": "/dev/loop9",
+                        "expect_super": []}
+            moved = {"target": elsewhere, "mnt_id": 424242,
+                     "root": "/", "fstype": "ext4",
+                     "source": "/dev/loop9", "super": "rw|"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[moved]):
+                with mock.patch.object(
+                        provision, "_umount2") as detach:
+                    failure = provision.retire_mount_now(
+                        target, expected, run_root)
+            detach.assert_not_called()
+            self.assertIsNotNone(failure)
+            self.assertIn("still live", failure)
+            self.assertIn("custody retained", failure)
+            self.assertIn("elsewhere", failure)
+            # Genuinely absent: the ID is nowhere — discharge.
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                with mock.patch.object(
+                        provision, "_umount2") as detach:
+                    self.assertIsNone(provision.retire_mount_now(
+                        target, expected, run_root))
+            detach.assert_not_called()
+
+    # S15-round3: binding a run-root under a parent anyone
+    # untrusted can rename in is refused — the (dev,ino)
+    # authority still detects a swapped root, but roots are
+    # only bound under contained parents (same doctrine as
+    # manifest parents: sticky+trusted shared is contained).
+    # S25-round4: unshared foreign-owned parents refuse too —
+    # the owner check no longer depends on the write bits.
+    def test_root_authority_parent_matrix(self):
+        me = os.geteuid()
+        alien = 65000 if me != 65000 else 65001
+        cases = [
+            # (mode, uid, accepted?)
+            (0o700, me, True),
+            (0o755, me, True),
+            (0o775, me, True),    # group trust doctrine
+            (0o1777, me, True),
+            (0o1777, 0, True),    # /tmp-style, root trusted
+            (0o1777, alien, False),
+            (0o775, alien, False),
+            (0o777, me, False),
+            (0o777, alien, False),
+            (0o755, alien, False),  # round4: unshared foreign owner
+            (0o1755, alien, False),  # refuses at the gate too
+        ]
+        for mode, uid, accepted in cases:
+            with self.subTest(mode=oct(mode), uid=uid):
+                refusal = provision._run_root_parent_refusal(
+                    self._stat(mode, uid), "/parent")
+                if accepted:
+                    self.assertIsNone(refusal)
+                else:
+                    self.assertIsNotNone(refusal)
+
+    # S76-round4: the same directory stays admissible across the
+    # controller-to-helper UID transition. My 0775 parent is
+    # admitted by me (controller); re-evaluated as root with
+    # SUDO_UID=me (helper) it stays admitted; without the
+    # controller identity the helper still refuses a foreign
+    # owner; malformed SUDO_UID never widens trust.
+    def test_parent_policy_survives_uid_transition(self):
+        from unittest import mock
+        me = os.geteuid()
+        if me == 0:
+            self.skipTest("no controller/helper UID transition for root")
+        alien = 65000 if me != 65000 else 65001
+        check = provision._run_root_parent_refusal
+        mine = self._stat(0o775, me)
+        foreign = self._stat(0o775, alien)
+        # Controller side: my 0775 parent admitted.
+        self.assertIsNone(check(mine, "/parent"))
+        # Helper side: euid 0 + SUDO_UID=me admits the same dir.
+        with mock.patch.object(
+                provision.os, "geteuid", return_value=0), \
+                mock.patch.dict(
+                    provision.os.environ,
+                    {"SUDO_UID": str(me)}):
+            self.assertIsNone(check(mine, "/parent"))
+            # Genuinely foreign owners still refuse.
+            self.assertIsNotNone(check(foreign, "/parent"))
+        # Helper side without the controller identity: refuse.
+        with mock.patch.object(
+                provision.os, "geteuid", return_value=0), \
+                mock.patch.dict(
+                    provision.os.environ, {}, clear=True):
+            self.assertIsNotNone(check(mine, "/parent"))
+        # Malformed SUDO_UID never widens trust.
+        for bogus in ("", "root", "-1", "1;2", " 12"):
+            with self.subTest(sudo_uid=bogus):
+                with mock.patch.object(
+                        provision.os, "geteuid",
+                        return_value=0), \
+                        mock.patch.dict(
+                            provision.os.environ,
+                            {"SUDO_UID": bogus}):
+                    self.assertIsNotNone(check(mine, "/parent"))
+
+    def test_root_authority_refuses_untrusted_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Real unprotected parent: the bind refuses.
+            shared = Path(tmp) / "shared"
+            shared.mkdir(mode=0o777)
+            os.chmod(shared, 0o777)
+            root = shared / "run"
+            root.mkdir()
+            with self.assertRaisesRegex(
+                    provision.RootAuthorityError, "parent"):
+                provision.RootAuthority(str(root))
+            # Real private parent: the bind succeeds.
+            private = Path(tmp) / "private"
+            private.mkdir(mode=0o700)
+            root = private / "run"
+            root.mkdir()
+            guard = provision.RootAuthority(str(root))
+            try:
+                guard.verify()
+            finally:
+                guard.close()
+
+    # S15-round3: privileged creation is descriptor-bound inside
+    # a narrowly scoped helper. make-ext4 opens the image
+    # itself, verifies the caller's (dev,ino), and runs mkfs on
+    # /dev/fd/N — a swapped operand refuses with no effect.
+    def test_make_ext4_refuses_foreign_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            image = run / "fs01.img"
+            image.write_bytes(b"sentinel" + bytes(1 << 20))
+            st = os.stat(image)
+            rst = os.stat(run)
+            # Wrong operand identity: refuse, image untouched.
+            proc = run_tool(
+                "make-ext4", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(image),
+                "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino + 1))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertEqual(image.read_bytes()[:8], b"sentinel")
+            # Wrong ROOT identity: refuse without touching.
+            proc = run_tool(
+                "make-ext4", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino + 1),
+                "--image", str(image),
+                "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertEqual(image.read_bytes()[:8], b"sentinel")
+
+    def test_make_ext4_outside_root_and_symlink_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            rst = os.stat(run)
+            outside = Path(tmp) / "outside.img"
+            outside.write_bytes(b"sentinel" + bytes(1 << 20))
+            ost = os.stat(outside)
+            proc = run_tool(
+                "make-ext4", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(outside),
+                "--dev", str(ost.st_dev),
+                "--ino", str(ost.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertEqual(outside.read_bytes()[:8], b"sentinel")
+            # Symlink operand: never followed.
+            target = Path(tmp) / "target.img"
+            target.write_bytes(b"sentinel" + bytes(1 << 20))
+            link = run / "link.img"
+            link.symlink_to(target)
+            lst = os.stat(target)
+            proc = run_tool(
+                "make-ext4", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(link),
+                "--dev", str(lst.st_dev),
+                "--ino", str(lst.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertEqual(target.read_bytes()[:8], b"sentinel")
+
+    @unittest.skipUnless(shutil.which("mkfs.ext4"),
+                         "mkfs.ext4 required")
+    def test_make_ext4_formats_verified_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            image = run / "fs01.img"
+            with open(image, "wb") as handle:
+                handle.truncate(64 << 20)
+            st = os.stat(image)
+            rst = os.stat(run)
+            proc = run_tool(
+                "make-ext4", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(image),
+                "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino))
+            self.assertEqual(
+                proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertIn("made-ext4", proc.stdout)
+            # Genuine ext4 superblock magic at 0x438, same file.
+            with open(image, "rb") as handle:
+                handle.seek(0x438)
+                self.assertEqual(handle.read(2), b"\x53\xef")
+            now = os.stat(image)
+            self.assertEqual((now.st_dev, now.st_ino),
+                             (st.st_dev, st.st_ino))
+
+    # S15-round3: attach-loop binds a free loop device to the
+    # verified image natively (LOOP_CONFIGURE on a
+    # self-opened fd) — a swapped operand refuses before any
+    # loop device is touched. (Happy path is privileged: live.)
+    def test_attach_loop_refuses_foreign_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            image = run / "fs01.img"
+            image.write_bytes(b"sentinel" + bytes(1 << 20))
+            st = os.stat(image)
+            rst = os.stat(run)
+            proc = run_tool(
+                "attach-loop", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(image),
+                "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino + 1))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("identity mismatch", proc.stdout)
+            proc = run_tool(
+                "attach-loop", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino + 1),
+                "--image", str(image),
+                "--dev", str(st.st_dev),
+                "--ino", str(st.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+
+    # S73-round4: attach post-verify never clears — a mismatch
+    # (rebound foreign) or an unreadable/detached status
+    # refuses and leaves the device in place for reconcile.
+    # Rollback may retire only an association whose ownership
+    # remains established, so no CLR fires on any refusal
+    # path; the configured fd is retained through validation
+    # (each device opened exactly once) and always closed.
+    def test_configure_loop_post_verify_never_clears(self):
+        from unittest import mock
+        real_open = os.open
+        opened = []
+        closed = []
+        next_fd = [100]
+
+        def fake_open(path, flags, *args, **kwargs):
+            if path in ("/dev/loop-control", "/dev/loop9"):
+                fd = next_fd[0]
+                next_fd[0] += 1
+                opened.append((path, fd))
+                return fd
+            return real_open(path, *args, **kwargs)
+
+        def fake_close(fd):
+            closed.append(fd)
+
+        def fake_ioctl(fd, op, *args):
+            if op == provision.LOOP_CTL_GET_FREE:
+                return 9
+            return 0
+
+        def attempt(status):
+            opened.clear()
+            closed.clear()
+            next_fd[0] = 100
+            # None means ENXIO-detached (drive by value, not
+            # the exception arm).
+            get_kwargs = ({"side_effect": status}
+                          if isinstance(status, Exception)
+                          else {"return_value": status})
+            with mock.patch.object(provision.os, "open",
+                                   side_effect=fake_open), \
+                    mock.patch.object(provision.os, "close",
+                                       side_effect=fake_close), \
+                    mock.patch.object(provision.fcntl, "ioctl",
+                                       side_effect=fake_ioctl), \
+                    mock.patch.object(
+                        provision, "_loop_get_status_on",
+                        **get_kwargs) as get, \
+                    mock.patch.object(
+                        provision, "_loop_clr_fd_on") as clr:
+                try:
+                    loop = provision._configure_free_loop(
+                        50, 11, 22)
+                except provision._HelperFail as exc:
+                    return (None, str(exc), get, clr)
+                return (loop, "", get, clr)
+
+        def check_single_open(get):
+            by_path = dict(opened)
+            self.assertEqual(
+                sorted(by_path), ["/dev/loop-control",
+                                  "/dev/loop9"])
+            loop_fd = by_path["/dev/loop9"]
+            # Validated on the retained fd, never a reopen.
+            get.assert_called_once_with(loop_fd)
+            self.assertEqual(set(closed),
+                             set(by_path.values()))
+
+        # Mismatch (rebound foreign): refuse, never clear.
+        loop, reason, get, clr = attempt((33, 44))
+        self.assertIsNone(loop)
+        self.assertIn("mismatch", reason)
+        self.assertIn("never cleared", reason)
+        clr.assert_not_called()
+        check_single_open(get)
+        # Unreadable status: refuse, never clear.
+        loop, reason, get, clr = attempt(
+            provision.LoopIdUnavailable("EACCES"))
+        self.assertIsNone(loop)
+        self.assertIn("unverifiable", reason)
+        clr.assert_not_called()
+        check_single_open(get)
+        # Detached after configure: refuse, nothing to clear.
+        loop, reason, get, clr = attempt(None)
+        self.assertIsNone(loop)
+        self.assertIn("detached after configure", reason)
+        clr.assert_not_called()
+        check_single_open(get)
+        # Match: the bound device reports.
+        loop, reason, get, clr = attempt((11, 22))
+        self.assertEqual(loop, "/dev/loop9")
+        clr.assert_not_called()
+        check_single_open(get)
+
+    # S15-round3: the helper-reported mount ID joins the
+    # adoption fingerprint — a same-source/type row with a
+    # different mount ID (a replacement after the helper's
+    # post-verify) refuses.
+    def test_fingerprint_honors_reported_mount_id(self):
+        row = {"target": "/t", "mnt_id": 42, "root": "/",
+               "fstype": "ext4", "source": "/dev/loop9",
+               "super": "rw,relatime"}
+        self.assertTrue(provision.mount_fingerprint_matches(
+            row, {"fstype": "ext4", "source": "/dev/loop9",
+                  "mnt_id": 42, "expect_super": ["rw,relatime"]}))
+        self.assertFalse(provision.mount_fingerprint_matches(
+            row, {"fstype": "ext4", "source": "/dev/loop9",
+                  "mnt_id": 77, "expect_super": ["rw,relatime"]}))
+        # Uncertain paths omit the ID: matching without it.
+        self.assertTrue(provision.mount_fingerprint_matches(
+            row, {"fstype": "ext4", "source": "/dev/loop9",
+                  "expect_super": []}))
+
+    # S71-round4: mount-to-loop correspondence — the live
+    # filesystem's device ID must equal the recorded loop
+    # node's own device ID. Mismatch (foreign loop at our
+    # target), unreadable target, missing loop, non-block
+    # loop, or symlinked loop all refuse.
+    def test_mount_matches_loop_identity(self):
+        from unittest import mock
+
+        def node(mode, dev=0, rdev=0):
+            entry = mock.Mock()
+            entry.st_mode = mode
+            entry.st_dev = dev
+            entry.st_rdev = rdev
+            return entry
+
+        def attempt(target, loop):
+            def fake_stat(path, **kwargs):
+                if path == "/mnt":
+                    if isinstance(target, Exception):
+                        raise target
+                    return target
+                if path == "/dev/loop9":
+                    if isinstance(loop, Exception):
+                        raise loop
+                    self.assertFalse(
+                        kwargs.get("follow_symlinks", True),
+                        "loop node must not resolve symlinks")
+                    return loop
+                raise AssertionError(path)
+            with mock.patch.object(
+                    provision.os, "stat",
+                    side_effect=fake_stat):
+                return provision._mount_matches_loop(
+                    "/mnt", "/dev/loop9")
+
+        loop = stat.S_IFBLK | 0o660
+        self.assertTrue(attempt(
+            node(0o40755, dev=0x0709),
+            node(loop, rdev=0x0709)))
+        # Foreign loop B mounted while ours (A) stays bound.
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x070B),
+            node(loop, rdev=0x0709)))
+        # Unreadable target / missing loop / non-block loop /
+        # symlinked loop: retain uncertainty.
+        self.assertFalse(attempt(
+            PermissionError(13, "denied"),
+            node(loop, rdev=0x0709)))
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x0709),
+            FileNotFoundError(2, "gone")))
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x0709),
+            node(stat.S_IFREG | 0o644, rdev=0x0709)))
+        self.assertFalse(attempt(
+            node(0o40755, dev=0x0709),
+            node(stat.S_IFLNK | 0o777, rdev=0x0709)))
+
+    # S15-round3: a /dev/fd/N row source matches a recorded
+    # loop-device source by shape — but shape alone never
+    # adopts; the loop must still bind the recorded image.
+    def test_fd_spelling_loop_shape(self):
+        shape = provision._fd_spelling_loop_shape
+        fp = {"fstype": "ext4", "source": "/dev/loop9"}
+        self.assertTrue(shape(
+            {"fstype": "ext4", "source": "/dev/fd/9"}, fp))
+        self.assertFalse(shape(
+            {"fstype": "ext4", "source": "/dev/loop9"}, fp))
+        self.assertFalse(shape(
+            {"fstype": "xfs", "source": "/dev/fd/9"}, fp))
+        self.assertFalse(shape(
+            {"fstype": "ext4", "source": "/dev/fd/9"},
+            {"fstype": "ext4", "source": "overlay"}))
+
+    def test_reconcile_fd_spelling_requires_live_binding(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            backing = {"path": image, "dev": st.st_dev,
+                       "ino": st.st_ino}
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 9, "root": "/",
+                   "fstype": "ext4", "source": "/dev/fd/9",
+                   "super": "rw,relatime"}
+            fingerprint = {"fstype": "ext4",
+                           "source": "/dev/loop9",
+                           "expect_super": []}
+
+            def attempt(ident, correspond=True):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [{
+                    "kind": "mount", "key": mnt,
+                    "target": mnt}]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "read_loop_backing",
+                            return_value=image), \
+                        mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            return_value=ident), \
+                        mock.patch.object(
+                            provision, "_mount_matches_loop",
+                            return_value=correspond):
+                    got = provision.reconcile_mount_effect(
+                        doc, tmp, "ext4-fs01", mnt, fingerprint,
+                        loop="/dev/loop9", loop_backing=backing)
+                return (got, doc)
+
+            # Loop still binds our image and the mounted
+            # filesystem sits on it: adopt under the observed fd
+            # spelling.
+            got, doc = attempt((st.st_dev, st.st_ino))
+            self.assertEqual(got, row)
+            self.assertEqual(doc["pending_acquisitions"], [])
+            self.assertEqual(doc["mounts"][0]["source"],
+                             "/dev/fd/9")
+            # S71-round4: loop bound but a foreign filesystem at
+            # our target (no mount-to-loop correspondence):
+            # retain, never populate the stranger.
+            got, doc = attempt((st.st_dev, st.st_ino),
+                               correspond=False)
+            self.assertIsNone(got)
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+            # Loop rebound to a foreign image: retain.
+            got, doc = attempt((st.st_dev, st.st_ino + 1))
+            self.assertIsNone(got)
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+            # Shape without loop proof: retain.
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": mnt, "target": mnt}]
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "ext4-fs01", mnt, fingerprint))
+            self.assertEqual(len(doc["pending_acquisitions"]),
+                             1)
+
+    # S81-round4: post-mount loop binding — a plausible
+    # foreign row (matching fstype, fd-shaped source) refuses
+    # unless the mounted filesystem sits on our recorded loop.
+    # Driven in-process with a mocked mount table (no
+    # privileges); the live suite plants a real replacement.
+    def test_post_verify_mount_requires_loop_binding(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 42, "root": "/",
+                   "fstype": "ext4", "source": "/dev/fd/9",
+                   "super": "rw"}
+
+            def attempt(dev_match):
+                def fake_stat(path, **kwargs):
+                    entry = mock.Mock()
+                    if path == mnt:
+                        entry.st_dev = (0x0709 if dev_match
+                                        else 0x070B)
+                        return entry
+                    if path == "/dev/loop9":
+                        entry.st_mode = stat.S_IFBLK | 0o660
+                        entry.st_rdev = 0x0709
+                        return entry
+                    raise AssertionError(path)
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision.os, "stat",
+                            side_effect=fake_stat):
+                    return provision._post_verify_mount(
+                        mnt, "ext4", "/dev/loop9",
+                        loop="/dev/loop9")
+
+            self.assertEqual(attempt(True), row)
+            with self.assertRaises(
+                    provision._HelperFail) as ctx:
+                attempt(False)
+            self.assertIn("not on /dev/loop9",
+                          str(ctx.exception))
+
+    # S81-round4: post-mount canary binding — a plausible
+    # foreign row (matching fstype/source) refuses unless our
+    # exact upper canary shows through the occupant. Wrong
+    # content and absent canary both refuse before any chown.
+    def test_post_verify_mount_requires_canary_binding(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 9, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw,lowerdir=/dev/fd/9"}
+
+            def attempt():
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]):
+                    return provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123")
+
+            Path(mnt,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"abc123")
+            self.assertEqual(attempt(), row)
+            Path(mnt,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"foreign")
+            with self.assertRaises(
+                    provision._HelperFail) as ctx:
+                attempt()
+            self.assertIn("canary mismatch",
+                          str(ctx.exception))
+            os.unlink(os.path.join(
+                mnt, provision.MOUNT_CANARY_NAME))
+            with self.assertRaises(provision._HelperFail):
+                attempt()
+
+    # S81-round4: overlay mount-fs without --canary refuses at
+    # the CLI boundary, before any effect (binding is
+    # mandatory, never silently skipped).
+    def test_mount_fs_overlay_requires_canary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            role = run / "ov"
+            for sub in ("lower", "upper", "work", "merged"):
+                (role / sub).mkdir(parents=True)
+            rst = os.stat(run)
+            tst = os.stat(role / "merged")
+            layers = []
+            for name in ("lower", "upper", "work"):
+                st = os.stat(role / name)
+                layers += ["--layer",
+                           f"{name}={role / name}:"
+                           f"{st.st_dev}:{st.st_ino}"]
+            proc = run_tool(
+                "mount-fs", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", str(role / "merged"),
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino),
+                "--fstype", "overlay", *layers)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("requires a canary", proc.stdout)
+
+    # S74-round4: table-diff post-verify — a target renamed
+    # around mount(2) is found at its observed mountpoint by
+    # table difference, gates-checked there, and reported as
+    # moved (mount ID + observed target) instead of a false
+    # "missing" failure. Unprivileged: real canary files under
+    # plain directories stand in for the occupant (no mount);
+    # the live suite renames a real mount.
+    def test_post_verify_mount_reports_moved_target(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = os.path.join(tmp, "merged")
+            moved = os.path.join(tmp, "merged2")
+            os.makedirs(orig)
+            os.makedirs(moved)
+            Path(moved,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"abc123")
+            row = {"target": moved, "mnt_id": 42, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw"}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                with self.assertRaises(
+                        provision._HelperMoved) as ctx:
+                    provision._post_verify_mount(
+                        orig, "overlay", "overlay",
+                        canary="abc123", pre=frozenset())
+            self.assertEqual(ctx.exception.mnt_id, 42)
+            self.assertEqual(ctx.exception.observed, moved)
+            # A pre-existing occupant under the moved mount:
+            # stacked at the observed name, uncertain.
+            covered = dict(row, mnt_id=7, source="tmpfs",
+                           fstype="tmpfs")
+            pre_covered = frozenset([(
+                7, moved, "tmpfs", "tmpfs", "rw", "/")])
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[covered, row]):
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "ambiguous stacked mount"):
+                    provision._post_verify_mount(
+                        orig, "overlay", "overlay",
+                        canary="abc123", pre=pre_covered)
+            # At the verified name the same row succeeds.
+            row_at_orig = dict(row, target=orig)
+            Path(orig,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"abc123")
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row_at_orig]):
+                self.assertEqual(
+                    provision._post_verify_mount(
+                        orig, "overlay", "overlay",
+                        canary="abc123", pre=frozenset()),
+                    row_at_orig)
+
+    # S74-round4: ambiguous diff effects stay uncertain (never
+    # adopted), and an empty diff falls through to the
+    # pathname proof — a same-name replacement still fails
+    # with the established binding reasons.
+    def test_post_verify_mount_diff_fallbacks(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            other = os.path.join(tmp, "other")
+            os.makedirs(mnt)
+            os.makedirs(other)
+            for place in (mnt, other):
+                Path(place,
+                     provision.MOUNT_CANARY_NAME).write_bytes(
+                         b"abc123")
+
+            def mkrow(target, mid):
+                return {"target": target, "mnt_id": mid,
+                        "root": "/", "fstype": "overlay",
+                        "source": "overlay", "super": "rw"}
+
+            # Two added rows both passing the gates: ambiguous.
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[mkrow(mnt, 1),
+                                  mkrow(other, 2)]):
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "ambiguous mount effects"):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123", pre=frozenset())
+            # No added row but a foreign same-name occupant:
+            # the pathname proof fails with the S81 reason.
+            Path(mnt,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"foreign")
+            row = mkrow(mnt, 9)
+            pre = frozenset([(
+                9, mnt, "overlay", "overlay", "rw", "/")])
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "canary mismatch"):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123", pre=pre)
+            # No added row and nothing at the name: uncertain
+            # (the effect fired — never a plain refusal).
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                with self.assertRaisesRegex(
+                        provision._HelperUncertain,
+                        "missing after create"):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123", pre=frozenset())
+                # Plain _HelperFail still catches (subclass).
+                with self.assertRaises(provision._HelperFail):
+                    provision._post_verify_mount(
+                        mnt, "overlay", "overlay",
+                        canary="abc123", pre=frozenset())
+
+    def test_pending_mount_fd_spelling_retires_when_bound(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            image = str(Path(tmp) / "fs01.img")
+            Path(image).write_bytes(b"image")
+            st = os.stat(image)
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            row = {"target": mnt, "mnt_id": 9, "root": "/",
+                   "fstype": "ext4", "source": "/dev/fd/9",
+                   "super": "rw,relatime"}
+            entry = {"kind": "mount", "key": mnt, "target": mnt,
+                     "fstype": "ext4", "source": "/dev/loop9",
+                     "expect_super": [],
+                     "loop_backing": {
+                         "path": image, "dev": st.st_dev,
+                         "ino": st.st_ino}}
+
+            def attempt(ident, correspond=True):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [dict(entry)]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "read_loop_backing",
+                            return_value=image), \
+                        mock.patch.object(
+                            provision, "read_loop_backing_id",
+                            return_value=ident), \
+                        mock.patch.object(
+                            provision, "_mount_matches_loop",
+                            return_value=correspond), \
+                        mock.patch.object(
+                            provision, "cleanup_one_mount",
+                            return_value=None) as retire:
+                    failures = (
+                        provision.cleanup_pending_acquisitions(
+                            doc, tmp))
+                return (failures, retire)
+
+            failures, retire = attempt((st.st_dev, st.st_ino))
+            self.assertEqual(failures, [])
+            retire.assert_called_once()
+            self.assertEqual(
+                retire.call_args[0][0]["source"], "/dev/fd/9")
+            # S71-round4: loop bound but a foreign filesystem at
+            # our target (no mount-to-loop correspondence): the
+            # stranger is left in place, never unmounted.
+            failures, retire = attempt(
+                (st.st_dev, st.st_ino), correspond=False)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+            failures, retire = attempt(
+                (st.st_dev, st.st_ino + 1))
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+
+    # S72-round4: pending overlay cleanup carries the
+    # acquisition canary — a foreign same-type overlay/overlay row
+    # at our target (wrong canary content) is left in place, never
+    # unmounted; exact content retires.
+    def test_pending_overlay_cleanup_requires_canary(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            merged = os.path.join(tmp, "merged")
+            os.makedirs(merged)
+            row = {"target": merged, "mnt_id": 9, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw,lowerdir=/dev/fd/9"}
+            entry = {"kind": "mount", "key": merged,
+                     "target": merged, "fstype": "overlay",
+                     "source": "overlay", "expect_super": [],
+                     "canary": "abc123"}
+
+            def attempt():
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [dict(entry)]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=[row]), \
+                        mock.patch.object(
+                            provision, "cleanup_one_mount",
+                            return_value=None) as retire:
+                    failures = (
+                        provision.cleanup_pending_acquisitions(
+                            doc, tmp))
+                return (failures, retire, doc)
+
+            # Foreign same-type occupant (wrong canary): refuse.
+            Path(merged, ".tt04-mount-canary").write_bytes(
+                b"foreign")
+            failures, retire, doc = attempt()
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+            self.assertEqual(len(doc["pending_acquisitions"]), 1)
+            # Our occupant (exact canary): retire.
+            Path(merged, ".tt04-mount-canary").write_bytes(
+                b"abc123")
+            failures, retire, doc = attempt()
+            self.assertEqual(failures, [])
+            retire.assert_called_once()
+            self.assertEqual(
+                retire.call_args[0][0]["mnt_id"], 9)
+
+    # S74-round4: ID-keyed pending recovery — a moved mount is
+    # found by its carried mount ID wherever it sits. A
+    # binding-proven occupant reports manual retirement with
+    # the live location (never auto-unmounted off-nominal); a
+    # binding-refused occupant is left in place; a vanished ID
+    # at an empty original heals silently.
+    def test_pending_mount_moved_recovers_by_id(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            orig = os.path.join(tmp, "merged")
+            moved = os.path.join(tmp, "merged2")
+            os.makedirs(orig)
+            os.makedirs(moved)
+            row = {"target": moved, "mnt_id": 42, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw"}
+            entry = {"kind": "mount", "key": orig,
+                     "target": orig, "fstype": "overlay",
+                     "source": "overlay", "expect_super": [],
+                     "canary": "abc123", "mnt_id": 42,
+                     "observed_target": moved,
+                     "detail": "target moved during mount"}
+
+            def attempt(table):
+                doc = provision.fresh_manifest(tmp, True)
+                doc["pending_acquisitions"] = [dict(entry)]
+                with mock.patch.object(
+                        provision, "read_mount_table",
+                        return_value=table), \
+                        mock.patch.object(
+                            provision, "cleanup_one_mount",
+                            return_value=None) as retire:
+                    failures = (
+                        provision.cleanup_pending_acquisitions(
+                            doc, tmp))
+                return (failures, retire)
+
+            # Moved, binding proven at the live location:
+            # manual retirement with the location named.
+            Path(moved, provision.MOUNT_CANARY_NAME).write_bytes(
+                b"abc123")
+            failures, retire = attempt([row])
+            self.assertEqual(len(failures), 1)
+            self.assertIn("moved (mnt=42", failures[0])
+            self.assertIn(moved, failures[0])
+            self.assertIn("manual retirement required",
+                          failures[0])
+            retire.assert_not_called()
+            # Moved, occupant replaced (wrong canary): left in
+            # place, never unmounted.
+            Path(moved, provision.MOUNT_CANARY_NAME).write_bytes(
+                b"foreign")
+            failures, retire = attempt([row])
+            self.assertEqual(len(failures), 1)
+            self.assertIn("not provably ours", failures[0])
+            retire.assert_not_called()
+            # ID vanished and nothing at the original: silent
+            # (the effect is gone; nothing to recover).
+            failures, retire = attempt([])
+            self.assertEqual(failures, [])
+            retire.assert_not_called()
+
+    # S74-round4: the unrecorded-mount sweep knows moved-but-
+    # custodied mounts by their observed location — cleanup
+    # reports the manual retirement once, never an additional
+    # "unrecorded mount" stray for the same occupant.
+    def test_cleanup_suppresses_observed_moved_mount(self):
+        from unittest import mock
+        import contextlib
+        import io
+        import types
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root, mode=0o755)
+            orig = os.path.join(run_root, "merged")
+            moved = os.path.join(run_root, "merged2")
+            os.makedirs(orig)
+            os.makedirs(moved)
+            Path(moved,
+                 provision.MOUNT_CANARY_NAME).write_bytes(
+                     b"abc123")
+            st = os.stat(run_root)
+            manifest = os.path.join(tmp, "manifest.json")
+            doc = provision.fresh_manifest(run_root, False)
+            doc["run_root_identity"] = {"dev": st.st_dev,
+                                        "ino": st.st_ino}
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": orig, "target": orig,
+                "fstype": "overlay", "source": "overlay",
+                "expect_super": [], "canary": "abc123",
+                "mnt_id": 42, "observed_target": moved,
+                "detail": "target moved during mount"}]
+            Path(manifest).write_text(json.dumps(doc))
+            args = types.SimpleNamespace(run_root=run_root,
+                                         manifest=manifest)
+            row = {"target": moved, "mnt_id": 42, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw"}
+            out = io.StringIO()
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]), \
+                    contextlib.redirect_stdout(out):
+                rc = provision.cleanup_command(args)
+            self.assertEqual(rc, 1)
+            self.assertIn("manual retirement required",
+                          out.getvalue())
+            self.assertNotIn("unrecorded mount",
+                             out.getvalue())
+
+    # S15-round3: the mounted-line parser binds the report to
+    # the request — malformed lines and wrong targets refuse.
+    def test_parse_mounted_line(self):
+        parse = provision._parse_mounted_line
+        self.assertEqual(
+            parse("mounted /t mnt=42 source=/dev/fd/9 "
+                  "super=rw,relatime\n", "/t"),
+            (42, "/dev/fd/9", "rw,relatime"))
+        self.assertEqual(
+            parse("mounted /a b/mnt mnt=7 source=overlay "
+                  "super=rw|x\n", "/a b/mnt"),
+            (7, "overlay", "rw|x"))
+        self.assertEqual(
+            parse("mounted /x mnt=1 mnt=7 source=overlay "
+                  "super=rw\n", "/x mnt=1"),
+            (7, "overlay", "rw"))
+        for bad, target in [
+                ("", "/t"),
+                ("FAILED: nope\n", "/t"),
+                ("mounted /t mnt=42 super=rw\n", "/t"),
+                ("mounted /t mnt=42 source=\n", "/t"),
+                ("mounted /t mnt=x source=s super=rw\n", "/t"),
+                ("mounted /t mnt=42 source=s super=\n", "/t"),
+                ("mounted /t mnt=42 source=a b super=rw\n",
+                 "/t"),
+                ("mounted /t mnt=42 source=s super=a b\n", "/t"),
+                ("mounted /other mnt=42 source=s super=rw\n",
+                 "/t"),
+        ]:
+            with self.subTest(line=bad):
+                self.assertIsNone(parse(bad, target))
+
+    # S77-round4: the helper success report survives admitted
+    # line separators — format/parse round-trips a LF target
+    # (plus space, tab, CR, and backslash) exactly, instead of
+    # splitting the report before its fingerprint fields. Raw
+    # line separators and unknown escapes refuse.
+    def test_mounted_line_escapes_line_separators(self):
+        parse = provision._parse_mounted_line
+        format_line = provision._format_mounted_line
+        targets = [
+            "/tmp/a\nb/mnt",
+            "/tmp/a\rb/mnt",
+            "/tmp/a\tb mnt",
+            "/tmp/a\\b/mnt",
+            "/x mnt=1\nsource=x super=y",
+        ]
+        for target in targets:
+            with self.subTest(target=target):
+                line = format_line(
+                    target, 42, "/dev/fd/9", "rw,relatime")
+                self.assertNotIn("\n", line)
+                self.assertNotIn("\r", line)
+                self.assertEqual(
+                    parse(line + "\n", target),
+                    (42, "/dev/fd/9", "rw,relatime"))
+        # Escaped separators inside source/super decode too.
+        line = format_line(
+            "/t", 7, "/dev/with space\n", "a\tb")
+        self.assertEqual(
+            parse(line + "\n", "/t"),
+            (7, "/dev/with space\n", "a\tb"))
+        # Raw separators and unknown escapes refuse.
+        for bad, target in [
+                ("mounted /a\nb mnt=1 source=s super=rw\n",
+                 "/a\nb"),
+                ("mounted /a\rb mnt=1 source=s super=rw\n",
+                 "/a\rb"),
+                ("mounted /t mnt=1 source=s\\q super=rw\n",
+                 "/t"),
+                ("mounted /t mnt=1 source=s super=rw\\1\n",
+                 "/t"),
+                ("mounted /t\\ mnt=1 source=s super=rw\n",
+                 "/t\\"),
+        ]:
+            with self.subTest(line=bad):
+                self.assertIsNone(parse(bad, target))
+
+    # S15-round3: uncertain-path overlay adoption requires the
+    # pre-mount canary to show through merged with exact
+    # content — absent, wrong, symlinked, or oversized content
+    # retains pending custody.
+    def test_reconcile_overlay_requires_canary(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            merged = os.path.join(tmp, "merged")
+            os.makedirs(merged)
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": merged, "role": "ov",
+                "target": merged, "fstype": "overlay",
+                "source": "overlay"}]
+            row = {"target": merged, "mnt_id": 9, "root": "/",
+                   "fstype": "overlay", "source": "overlay",
+                   "super": "rw,lowerdir=/dev/fd/9"}
+            fingerprint = {"fstype": "overlay",
+                           "source": "overlay",
+                           "expect_super": []}
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                # No canary file: retain.
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "ov", merged, fingerprint,
+                        canary=(".c", "abc123")))
+                self.assertEqual(len(doc["pending_acquisitions"]),
+                                 1)
+                # Wrong content: retain.
+                Path(merged, ".c").write_bytes(b"nope")
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "ov", merged, fingerprint,
+                        canary=(".c", "abc123")))
+                self.assertEqual(len(doc["pending_acquisitions"]),
+                                 1)
+                # Exact content: adopt.
+                Path(merged, ".c").write_bytes(b"abc123")
+                self.assertEqual(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "ov", merged, fingerprint,
+                        canary=(".c", "abc123")),
+                    row)
+                self.assertEqual(doc["pending_acquisitions"], [])
+                self.assertTrue(any(
+                    e["target"] == merged for e in doc["mounts"]))
+            # Symlinked canary: refuse even with right content
+            # behind the link.
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": merged, "role": "ov",
+                "target": merged, "fstype": "overlay",
+                "source": "overlay"}]
+            doc["mounts"] = []
+            os.unlink(os.path.join(merged, ".c"))
+            real = os.path.join(tmp, "real")
+            Path(real).write_bytes(b"abc123")
+            os.symlink(real, os.path.join(merged, ".c"))
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[row]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "ov", merged, fingerprint,
+                        canary=(".c", "abc123")))
+                self.assertEqual(len(doc["pending_acquisitions"]),
+                                 1)
+
+    def test_attach_loop_outside_root_and_symlink_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            rst = os.stat(run)
+            outside = Path(tmp) / "outside.img"
+            outside.write_bytes(b"sentinel" + bytes(1 << 20))
+            ost = os.stat(outside)
+            proc = run_tool(
+                "attach-loop", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(outside),
+                "--dev", str(ost.st_dev),
+                "--ino", str(ost.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("outside run-root", proc.stdout)
+            target = Path(tmp) / "target.img"
+            target.write_bytes(b"sentinel" + bytes(1 << 20))
+            link = run / "link.img"
+            link.symlink_to(target)
+            lst = os.stat(target)
+            proc = run_tool(
+                "attach-loop", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--image", str(link),
+                "--dev", str(lst.st_dev),
+                "--ino", str(lst.st_ino))
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+
+    # S15-round3: mount-fs mounts via mount(2) on helper-opened
+    # fds (/dev/fd/N source, target, and overlay layers) after
+    # verifying every operand's (dev,ino) — anything swapped
+    # refuses before the mount call. (Happy paths privileged:
+    # live.)
+    def _layer_spec(self, name, path):
+        st = os.stat(path)
+        return f"{name}={path}:{st.st_dev}:{st.st_ino}"
+
+    def test_mount_fs_refuses_foreign_target_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            target = run / "mnt"
+            target.mkdir(parents=True)
+            tst = os.stat(target)
+            rst = os.stat(run)
+            proc = run_tool(
+                "mount-fs", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", str(target),
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino + 1),
+                "--fstype", "ext4",
+                "--loop", "/dev/loop9999",
+                "--backing-dev", "1", "--backing-ino", "2")
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("identity mismatch", proc.stdout)
+
+    # S15-round4: the ext4 mount opens the loop device exactly
+    # once — the backing validation and the mount source
+    # address the same held descriptor, so a device-node
+    # substitution between two opens cannot redirect the
+    # source. Pre-fix this saw two opens (validate, then
+    # mount) with the mount sourcing the unvalidated second.
+    def test_mount_ext4_validates_and_mounts_one_loop_fd(self):
+        from unittest import mock
+        import types
+        opened = []
+        validated = []
+        mounted = []
+        next_fd = [100]
+
+        def fake_open(path, flags, *args, **kwargs):
+            opened.append(path)
+            fd = next_fd[0]
+            next_fd[0] += 1
+            return fd
+
+        def fake_status(fd):
+            validated.append(fd)
+            return (11, 22)
+
+        def fake_mount(source, target, fstype, flags, data):
+            mounted.append((source, target))
+            return None
+
+        args = types.SimpleNamespace(
+            loop="/dev/loop9", backing_dev=11, backing_ino=22,
+            target="/t")
+        row = {"target": "/t", "mnt_id": 1, "root": "/",
+               "fstype": "ext4", "source": "/dev/loop9",
+               "super": "rw"}
+        with mock.patch.object(provision.os, "open",
+                               side_effect=fake_open), \
+                mock.patch.object(provision, "_loop_get_status_on",
+                                   side_effect=fake_status), \
+                mock.patch.object(provision, "_mount2",
+                                   side_effect=fake_mount), \
+                mock.patch.object(provision, "_snapshot_mount_rows",
+                                   return_value=frozenset()), \
+                mock.patch.object(provision, "_post_verify_mount",
+                                   return_value=row) as post:
+            got = provision._mount_ext4_now(args, "/run", 55)
+        self.assertEqual(got, row)
+        loop_opens = [p for p in opened if p == "/dev/loop9"]
+        self.assertEqual(len(loop_opens), 1)
+        self.assertEqual(validated, [100])
+        self.assertEqual(mounted,
+                         [(f"/dev/fd/100", "/dev/fd/55")])
+        post.assert_called_once()
+
+    def test_mount_fs_refuses_bad_fstype(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            target = run / "mnt"
+            target.mkdir(parents=True)
+            tst = os.stat(target)
+            rst = os.stat(run)
+            proc = run_tool(
+                "mount-fs", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", str(target),
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino),
+                "--fstype", "xfs")
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("unsupported fstype", proc.stdout)
+
+    def test_mount_fs_overlay_refuses_foreign_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            role = run / "ov"
+            target = role / "merged"
+            for sub in ("lower", "upper", "work", "merged"):
+                (role / sub).mkdir(parents=True)
+            tst = os.stat(target)
+            rst = os.stat(run)
+            good = [self._layer_spec(n, role / n)
+                    for n in ("lower", "upper", "work")]
+            bad_lower = list(good)
+            lst = os.stat(role / "lower")
+            bad_lower[0] = (f"lower={role / 'lower'}:"
+                            f"{lst.st_dev}:{lst.st_ino + 1}")
+            argv = ["mount-fs", "--run-root", str(run),
+                   "--root-dev", str(rst.st_dev),
+                   "--root-ino", str(rst.st_ino),
+                   "--target", str(target),
+                   "--target-dev", str(tst.st_dev),
+                   "--target-ino", str(tst.st_ino),
+                   "--fstype", "overlay",
+                   # S81-round4: binding canary present so the
+                   # invocation reaches layer verification.
+                   "--canary", "abc123"]
+            for spec in bad_lower:
+                argv += ["--layer", spec]
+            proc = run_tool(*argv)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("identity mismatch", proc.stdout)
+
+    def test_mount_fs_layer_outside_roots_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            role = run / "ov"
+            target = role / "merged"
+            for sub in ("upper", "work", "merged"):
+                (role / sub).mkdir(parents=True)
+            aux = Path(tmp) / "aux"
+            lower = aux / "lower"
+            lower.mkdir(parents=True)
+            tst = os.stat(target)
+            rst = os.stat(run)
+            specs = [self._layer_spec("lower", lower),
+                     self._layer_spec("upper", role / "upper"),
+                     self._layer_spec("work", role / "work")]
+            argv = ["mount-fs", "--run-root", str(run),
+                   "--root-dev", str(rst.st_dev),
+                   "--root-ino", str(rst.st_ino),
+                   "--target", str(target),
+                   "--target-dev", str(tst.st_dev),
+                   "--target-ino", str(tst.st_ino),
+                   "--fstype", "overlay",
+                   # S81-round4: binding canary present (and
+                   # planted, for the as-root success branch).
+                   "--canary", "abc123"]
+            (role / "upper" / provision.MOUNT_CANARY_NAME).write_bytes(
+                b"abc123")
+            for spec in specs:
+                argv += ["--layer", spec]
+            # No aux root declared: the outside lower refuses.
+            proc = run_tool(*argv)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("outside", proc.stdout)
+            # Declared aux root: verification passes and the
+            # helper reaches mount(2) — unprivileged that is
+            # EPERM; as root the mount genuinely succeeds.
+            ast = os.stat(aux)
+            argv += ["--aux-root", str(aux),
+                    "--aux-dev", str(ast.st_dev),
+                    "--aux-ino", str(ast.st_ino)]
+            proc = run_tool(*argv)
+            if os.geteuid() == 0:
+                self.assertEqual(
+                    proc.returncode, 0,
+                    proc.stdout + proc.stderr)
+                self.assertIn("mounted", proc.stdout)
+                bye = subprocess.run(
+                    ["umount", str(target)], capture_output=True,
+                    text=True, timeout=60)
+                self.assertEqual(bye.returncode, 0, bye.stderr)
+            else:
+                self.assertEqual(proc.returncode, 1, proc.stdout)
+                self.assertIn("Operation not permitted",
+                              proc.stdout)
+
+    def test_mount_fs_ext4_refuses_foreign_loop_backing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            target = run / "mnt"
+            target.mkdir(parents=True)
+            tst = os.stat(target)
+            rst = os.stat(run)
+            proc = run_tool(
+                "mount-fs", "--run-root", str(run),
+                "--root-dev", str(rst.st_dev),
+                "--root-ino", str(rst.st_ino),
+                "--target", str(target),
+                "--target-dev", str(tst.st_dev),
+                "--target-ino", str(tst.st_ino),
+                "--fstype", "ext4",
+                "--loop", "/dev/loop9999",
+                "--backing-dev", "1", "--backing-ino", "2")
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("FAILED", proc.stdout)
+            self.assertNotIn("Operation not permitted",
+                             proc.stdout)
 
 
 if __name__ == "__main__":

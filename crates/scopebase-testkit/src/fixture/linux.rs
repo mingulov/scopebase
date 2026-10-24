@@ -14,33 +14,52 @@
 //! Snapshot full-schema conformance, F rows, the strict materializer and
 //! final-index joint compatibility are documented follow-ups, not claimed
 //! here.
+// S78-round4: under the seccomp-only feature the linux surface is
+// just `seccomp` (libc-only, no scopebase-linux edge); everything
+// else stays behind `linux-fixtures`.
+#[cfg(feature = "linux-fixtures")]
 pub mod audit;
+#[cfg(feature = "linux-fixtures")]
 mod creator;
+#[cfg(feature = "linux-fixtures")]
 mod driver;
+#[cfg(feature = "linux-fixtures")]
 pub(crate) mod fork;
+#[cfg(feature = "linux-fixtures")]
 mod manifest;
+#[cfg(feature = "linux-fixtures")]
 mod oracle;
+#[cfg(feature = "linux-fixtures")]
 mod phase;
 pub mod seccomp;
+#[cfg(feature = "linux-fixtures")]
 mod session;
+#[cfg(feature = "linux-fixtures")]
 pub mod target;
+#[cfg(feature = "linux-fixtures")]
 pub mod wire;
 
+#[cfg(feature = "linux-fixtures")]
 pub use driver::{
     launch_pair, CleanupProof, DeadlineHoldReport, DrainedRecord, DriverError, DriverErrorKind,
     InventoryRecord, LaunchConfig, LivePair, ReapedExit, Scenario, ScenarioStep, ShutdownReport,
 };
+#[cfg(feature = "linux-fixtures")]
 pub use manifest::{control_pairing_applies, Control};
+#[cfg(feature = "linux-fixtures")]
 pub use oracle::{
     clean_shutdown_gate, exited_unreaped_owned, generation_of, gone_from_result,
     parse_stat_comm_state_starttime, stat_is_zombie, verify_retirement_exactly_once,
     verify_unknown_sticky, CustodyClaim, GenerationState, OracleError, TRICKY_COMM,
     TRICKY_COMM_HEX,
 };
+#[cfg(feature = "linux-fixtures")]
 pub use phase::{LinuxPhaseError, LinuxProcessFixture};
+#[cfg(feature = "linux-fixtures")]
 pub use session::{
     LinuxFixtureAdmissionCleanupReport, LinuxFixtureAdmissionCustody, LinuxFixtureAdmissionFailure,
     LinuxFixtureFiles, LinuxFixtureSession, LinuxOuterCleanupAdmissionError,
     LinuxOuterCleanupAdmissionErrorKind, LinuxOuterCleanupBudget, LinuxOuterCleanupReport,
 };
+#[cfg(feature = "linux-fixtures")]
 pub use wire::{Action, Actor};

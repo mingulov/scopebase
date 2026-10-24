@@ -21,10 +21,24 @@ pub const MANIFEST_FILE: &str = "fixture-manifest.json";
 pub const MAX_MANIFEST_BYTES: u64 = 1 << 20;
 /// Upper bound for a single verified closure file.
 pub const MAX_CLOSURE_FILE_BYTES: u64 = 1 << 26;
-/// S39: upper bound for a receipt envelope read. Envelopes are small
-/// report documents; the bound keeps a hostile path from inflating
-/// the verifier before JSON admission.
-pub const MAX_RECEIPT_BYTES: u64 = 1 << 20;
+/// S57: upper bound for a receipt envelope, shared by the writer
+/// (`delivery` refuses to emit above it) and the reader (both
+/// verification routes refuse above it) — compatible by
+/// construction. Derived: the largest engine-admitted report body
+/// (delivery pins default limits, so 8 MiB `receipt_bytes`) plus
+/// 2 MiB envelope overhead (worst-case subject near ~1.1 MB at max
+/// artifact cardinality, bindings, seal, JSON framing) with margin.
+/// A receipt that cannot verify is refused at emission, never
+/// stranded as an unverifiable artifact.
+pub const MAX_RECEIPT_BYTES: u64 = 10 << 20;
+
+/// S57: writer-side envelope bound check — the single predicate
+/// both the emitter (`delivery` refuses to write above it) and the
+/// reader share, so writer and reader bounds stay compatible by
+/// construction.
+pub fn receipt_envelope_fits(len: u64) -> bool {
+    len <= MAX_RECEIPT_BYTES
+}
 /// S39: upper bound for a catalog read. Catalogs scale with case
 /// count, so the bound is generous; parser admission re-validates
 /// below it.
@@ -72,7 +86,41 @@ impl VerifiedClosure {
                 format!("closure file is not pinned: {path}"),
             )
         })?;
-        let bytes = read_bounded(&self.root.join(path), MAX_CLOSURE_FILE_BYTES).map_err(|e| {
+        // S38: no-follow member read (see verify_closure).
+        let bytes = read_member(&self.root, path, MAX_CLOSURE_FILE_BYTES).map_err(|e| {
+            OperatorError::new(
+                OperatorErrorKind::ClosureIncomplete,
+                format!("closure file unreadable: {path}: {e}"),
+            )
+        })?;
+        check_pin(path, &bytes, pinned)?;
+        Ok(bytes)
+    }
+
+    /// S58-round4: read a pinned member against a caller-computed
+    /// allowance. The manifest-pinned length admits BEFORE the
+    /// filesystem is touched (a pinned member larger than the
+    /// remaining aggregate refuses with no allocation and no read);
+    /// the live read below stays capped too (fstat pre-check plus a
+    /// capped take), and a lying pin still fails the hash afterward.
+    pub fn read_capped(&self, path: &str, max: u64) -> Result<Vec<u8>, OperatorError> {
+        let pinned = self.files.iter().find(|f| f.path == path).ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("closure file is not pinned: {path}"),
+            )
+        })?;
+        if pinned.length > max {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!(
+                    "closure file {path} pinned {} exceeds {max} byte allowance",
+                    pinned.length,
+                ),
+            ));
+        }
+        // S38: no-follow member read (see verify_closure).
+        let bytes = read_member(&self.root, path, max).map_err(|e| {
             OperatorError::new(
                 OperatorErrorKind::ClosureIncomplete,
                 format!("closure file unreadable: {path}: {e}"),
@@ -99,8 +147,83 @@ impl VerifiedClosure {
 ///
 /// Missing files are [`OperatorErrorKind::ClosureIncomplete`]; hash, length or
 /// notice violations are [`OperatorErrorKind::BrokenPackage`].
+/// S70-round4: anchor a CLI spelling against the process cwd and
+/// normalize it lexically (`.` dropped, `..` popped, never past
+/// `/`). Pure string work — no filesystem access, no symlink
+/// resolution — so equivalent spellings (`--fixture-root .` with a
+/// bare manifest name, a relative root with an absolute manifest
+/// inside it) compare equal. Only the PREFIX comparison uses this;
+/// the bytes still come from the no-follow descriptor walk below,
+/// which governs what is actually read.
+fn anchor_lexical(path: &Path) -> Result<PathBuf, OperatorError> {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| {
+                OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!("cannot anchor {}: {e}", path.display()),
+                )
+            })?
+            .join(path)
+    };
+    let mut out = PathBuf::from("/");
+    for comp in abs.components() {
+        use std::path::Component;
+        match comp {
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return Err(OperatorError::new(
+                        OperatorErrorKind::MissingInput,
+                        format!("closure path escapes its anchor: {}", path.display()),
+                    ));
+                }
+            }
+            Component::Normal(name) => out.push(name),
+            Component::Prefix(_) => {
+                return Err(OperatorError::new(
+                    OperatorErrorKind::MissingInput,
+                    format!("closure path has no anchor: {}", path.display()),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosure, OperatorError> {
-    let bytes = read_bounded(manifest_path, MAX_MANIFEST_BYTES).map_err(|e| {
+    // S38: the manifest itself reads through the retained-root
+    // no-follow reader — a symlinked manifest must refuse, never
+    // open outside the root.
+    // S70-round4: anchor and normalize both spellings before the
+    // prefix comparison, so `--fixture-root . --fixture-manifest
+    // fixture-manifest.json` admits the same manifest the default
+    // spelling does, as does a relative root with an absolute
+    // manifest inside it.
+    let anchored_root = anchor_lexical(root)?;
+    let anchored_manifest = anchor_lexical(manifest_path)?;
+    let rel = anchored_manifest.strip_prefix(&anchored_root).map_err(|_| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!(
+                "closure manifest {} is not under the fixture root {}",
+                manifest_path.display(),
+                root.display()
+            ),
+        )
+    })?;
+    let rel = rel.to_str().ok_or_else(|| {
+        OperatorError::new(
+            OperatorErrorKind::MissingInput,
+            format!(
+                "closure manifest {} is not valid Unicode",
+                manifest_path.display()
+            ),
+        )
+    })?;
+    let bytes = read_member(root, rel, MAX_MANIFEST_BYTES).map_err(|e| {
         OperatorError::new(
             OperatorErrorKind::MissingInput,
             format!(
@@ -209,8 +332,10 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
     // notice breaks the installed route; any other missing file is
     // incomplete input.
     for file in closure.files.clone() {
-        let bytes =
-            read_bounded(&closure.root.join(&file.path), MAX_CLOSURE_FILE_BYTES).map_err(|e| {
+        // S38: no-follow member reads — a symlinked member (leaf or
+        // intermediate) refuses before any outside byte is opened,
+        // even when its pin would match the outside content.
+        let bytes = read_member(&closure.root, &file.path, MAX_CLOSURE_FILE_BYTES).map_err(|e| {
                 let kind = if notice_paths.iter().any(|n| n == &file.path) {
                     OperatorErrorKind::BrokenPackage
                 } else {
@@ -623,6 +748,67 @@ mod tests {
         assert!(reject_escape(Path::new("some/rel/root"), "../../evil.json").is_err());
     }
 
+    // S70-round4: a relative root with an absolute manifest inside
+    // it admits the same closure the all-absolute spelling does —
+    // the old raw `strip_prefix` rejected it. The relative root is
+    // derived lexically from the real cwd (no chdir: `..` legs are
+    // pure strings). An absolute manifest OUTSIDE the root still
+    // refuses, and the admitted bytes still come from the no-follow
+    // walk (a symlinked member still refuses below).
+    #[test]
+    fn verify_closure_admits_relative_root_with_absolute_manifest() {
+        fn relative_lexical(base: &Path, target: &Path) -> PathBuf {
+            let b: Vec<_> = base.components().collect();
+            let t: Vec<_> = target.components().collect();
+            let mut shared = 0;
+            while shared < b.len() && shared < t.len() && b[shared] == t[shared] {
+                shared += 1;
+            }
+            let mut out = PathBuf::new();
+            for _ in shared..b.len() {
+                out.push("..");
+            }
+            for comp in &t[shared..] {
+                out.push(comp.as_os_str());
+            }
+            out
+        }
+        let dir = scratch("s70-relroot");
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&dir, &[("notice.txt", None, None)]);
+        let cwd = std::env::current_dir().unwrap();
+        let root_rel = relative_lexical(&cwd, &dir);
+        assert!(root_rel.is_relative(), "test needs a relative spelling");
+        let closure = verify_closure(&root_rel, &dir.join(MANIFEST_FILE))
+            .expect("relative root + absolute manifest admits");
+        assert_eq!(closure.read("notice.txt").unwrap(), b"notice");
+        // Escape still refuses through the same anchored comparison.
+        let outside = scratch("s70-outside");
+        std::fs::write(outside.join(MANIFEST_FILE), b"{}").unwrap();
+        let err = verify_closure(&root_rel, &outside.join(MANIFEST_FILE)).unwrap_err();
+        assert!(
+            err.detail().contains("not under the fixture root"),
+            "outside manifest must refuse: {}",
+            err.detail()
+        );
+        // A symlinked manifest still refuses at the no-follow walk,
+        // not at admission: admission passes (same anchored path),
+        // the read refuses.
+        let link_dir = scratch("s70-linkroot");
+        std::fs::write(link_dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(&link_dir, &[("notice.txt", None, None)]);
+        let real_manifest = link_dir.join(MANIFEST_FILE);
+        let staged = link_dir.join("staged-manifest.json");
+        std::fs::rename(&real_manifest, &staged).unwrap();
+        std::os::unix::fs::symlink(&staged, &real_manifest).unwrap();
+        let err = verify_closure(&link_dir, &real_manifest).unwrap_err();
+        assert!(
+            err.detail().contains("symlink"),
+            "symlinked manifest must refuse at the walk: {}",
+            err.detail()
+        );
+    }
+
     // S38: a symlinked leaf pointing outside refuses instead of
     // escaping, and the outside canary is never read. (Lexical
     // confinement alone passes this path; the old join+read followed
@@ -678,6 +864,87 @@ mod tests {
             read_member(&dir, "./sub/real.json", 1 << 20).unwrap(),
             b"real",
             "dot-prefixed member reads"
+        );
+    }
+
+    // S38-round3: verify_closure refuses a symlinked leaf through
+    // the PUBLIC route even when the pin matches the outside bytes.
+    // The old join+read opened through the link, matched the pin,
+    // and verified OK — reading outside the root during planning.
+    #[test]
+    fn verify_closure_refuses_symlinked_leaf_with_matching_pin() {
+        let dir = scratch("verify-leaf-link");
+        let outside = scratch("verify-leaf-outside");
+        std::fs::write(outside.join("canary.txt"), b"canary-bytes").unwrap();
+        std::os::unix::fs::symlink(outside.join("canary.txt"), dir.join("evil-link")).unwrap();
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(
+            &dir,
+            &[
+                ("notice.txt", None, None),
+                ("evil-link", None, Some(b"canary-bytes")),
+            ],
+        );
+        let err = verify_closure(&dir, &dir.join(MANIFEST_FILE))
+            .expect_err("symlinked member refuses even with a matching pin");
+        assert!(
+            err.detail().contains("symlink"),
+            "unexpected error: {}",
+            err.detail()
+        );
+    }
+
+    // S38-round3: verify_closure refuses a symlinked intermediate
+    // directory through the PUBLIC route even when the pin matches
+    // the outside bytes.
+    #[test]
+    fn verify_closure_refuses_symlinked_dir_with_matching_pin() {
+        let dir = scratch("verify-dir-link");
+        let outside = scratch("verify-dir-outside");
+        std::fs::write(outside.join("inner.bin"), b"inner-bytes").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("sub-link")).unwrap();
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(
+            &dir,
+            &[
+                ("notice.txt", None, None),
+                ("sub-link/inner.bin", None, Some(b"inner-bytes")),
+            ],
+        );
+        let err = verify_closure(&dir, &dir.join(MANIFEST_FILE))
+            .expect_err("symlinked dir refuses even with a matching pin");
+        assert!(
+            err.detail().contains("symlink"),
+            "unexpected error: {}",
+            err.detail()
+        );
+    }
+
+    // S38-round3: VerifiedClosure::read refuses a link planted after
+    // verification even when the outside bytes match the pin. The
+    // old join+read returned the outside bytes as verified.
+    #[test]
+    fn closure_read_refuses_planted_link_with_matching_pin() {
+        let dir = scratch("read-plant-link");
+        let outside = scratch("read-plant-outside");
+        std::fs::write(dir.join("member.bin"), b"shared-bytes").unwrap();
+        std::fs::write(outside.join("same.bin"), b"shared-bytes").unwrap();
+        std::fs::write(dir.join("notice.txt"), b"notice").unwrap();
+        write_manifest(
+            &dir,
+            &[("notice.txt", None, None), ("member.bin", None, None)],
+        );
+        let closure = verify_closure(&dir, &dir.join(MANIFEST_FILE)).unwrap();
+        assert_eq!(closure.read("member.bin").unwrap(), b"shared-bytes");
+        std::fs::remove_file(dir.join("member.bin")).unwrap();
+        std::os::unix::fs::symlink(outside.join("same.bin"), dir.join("member.bin")).unwrap();
+        let err = closure
+            .read("member.bin")
+            .expect_err("planted link refuses despite matching pin");
+        assert!(
+            err.detail().contains("symlink"),
+            "unexpected error: {}",
+            err.detail()
         );
     }
 

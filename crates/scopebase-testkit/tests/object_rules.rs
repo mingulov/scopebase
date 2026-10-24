@@ -471,6 +471,47 @@ fn jump(endian: Endian, off: i16) -> [u8; 8] {
     insn(endian, 0x05, endian.regs(0, 0), off, 0)
 }
 
+/// JMP32 long jump by `imm` slots (off is zero, imm32 displaces).
+fn long_jump(endian: Endian, imm: i32) -> [u8; 8] {
+    insn(endian, 0x06, endian.regs(0, 0), 0, imm)
+}
+
+/// `atomic_fetch_add64 [rdst+off], rsrc` (DW, 0xDB): overwrites
+/// SRC with the old value (clobber).
+fn atomic_fetch_add(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, 0xDB, endian.regs(dst, src), off, 0x01)
+}
+
+/// `atomic_fetch_add32 [rdst+off], rsrc` (W, 0xC3): overwrites
+/// SRC with the old 32-bit value (clobber, S03-round4).
+fn atomic_fetch_add32(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, 0xC3, endian.regs(dst, src), off, 0x01)
+}
+
+/// `atomic_add64 [rdst+off], rsrc` (plain DW XADD): memory only,
+/// no register write (precision control for the fetch clobber).
+fn atomic_xadd(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, 0xDB, endian.regs(dst, src), off, 0x00)
+}
+
+/// Atomic acquire load (imm BPF_LOAD_ACQ=0x100): overwrites DST
+/// with the loaded value (S63-round4). `op` selects W/DW width.
+fn atomic_load_acq(endian: Endian, op: u8, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, op, endian.regs(dst, src), off, 0x100)
+}
+
+/// Atomic release store (imm BPF_STORE_REL=0x110): memory only,
+/// no register write (S63-round4 precision).
+fn atomic_store_rel(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, 0xDB, endian.regs(dst, src), off, 0x110)
+}
+
+/// Atomic exchange (imm BPF_XCHG=0xe1): overwrites SRC with the
+/// old value (S64-round4: the kernel selector is 0xe1, not 0xe0).
+fn atomic_xchg(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
+    insn(endian, 0xDB, endian.regs(dst, src), off, 0xe1)
+}
+
 /// `ld_imm64` wide load: two slots, second slot zero.
 fn ldimm64(endian: Endian, dst: u8, imm: i32) -> [u8; 16] {
     let mut wide = [0u8; 16];
@@ -2213,7 +2254,7 @@ fn init_guard_charges_quadratic_traversal_work() {
     // never timing): new code needs more than 6000 steps, pre-S09
     // code passes at 6000.
     let mut tight = limits();
-    tight.work_steps = 6000;
+    tight.work_steps = 6300;
     let error = check_verifier_rules(
         &bytes,
         &contract(),
@@ -2222,6 +2263,96 @@ fn init_guard_charges_quadratic_traversal_work() {
         &tight,
     )
     .expect_err("charged walk must exhaust a tight ceiling");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+}
+
+#[test]
+fn init_guard_charges_single_function_many_calls() {
+    // S09-round3: one function with many relocated call sites must
+    // charge the coverage work per site. The old per-call linear
+    // reloc scan was uncharged; the indexed build charges per
+    // entry, so a calibrated tight ceiling trips only on new code.
+    let endian = Endian::Little;
+    let calls = 1500u64;
+    let mut text = Vec::new();
+    for _ in 0..calls {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section("text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let helper = obj.func("helper", true, text_idx, calls * 8, 8);
+    let emit = obj.func("emit", true, text_idx, 0, calls * 8 + 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let edges: Vec<(u64, u32, u32)> = (0..calls)
+        .map(|i| (i * 8, helper as u32, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    let bytes = obj.build();
+    let guard = single_rule_manifest("stack", 3);
+    let violations = check_rules(&bytes, std::slice::from_ref(&guard), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+    // Calibrated boundary (deterministic: work is input-determined,
+    // never timing): new code charges the per-function index build
+    // and trips at 18000; pre-fix code passes at 17000 and 18000.
+    let mut tight = limits();
+    tight.work_steps = 18000;
+    let error = check_verifier_rules(
+        &bytes,
+        &contract(),
+        std::slice::from_ref(&guard),
+        None,
+        &tight,
+    )
+    .expect_err("charged coverage must exhaust a tight ceiling");
+    assert_eq!(error.kind(), ErrorKind::LimitExceeded);
+}
+
+#[test]
+fn repair_charges_many_call_sites_coverage() {
+    // S09-round4: the repair entry indexes relocated call sites
+    // (charged per entry) instead of scanning all relocs per
+    // call. Generous control prunes clean; the calibrated tight
+    // ceiling trips only on indexed code.
+    let endian = Endian::Little;
+    let calls = 1500u64;
+    let mut text = Vec::new();
+    for _ in 0..calls {
+        text.extend_from_slice(&call_sub(endian, -1));
+    }
+    text.extend_from_slice(&exit(endian));
+    let mut obj = ObjBuilder::little();
+    let text_idx = obj.section(".text", SHT_PROGBITS, SHF_EXECINSTR, text);
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&call_sub(endian, -1));
+    entry.extend_from_slice(&exit(endian));
+    let uprobe_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, entry);
+    let helper = obj.func("helper", true, text_idx, calls * 8, 8);
+    let emit = obj.func("emit", true, text_idx, 0, calls * 8);
+    obj.func("entry", true, uprobe_idx, 0, 16);
+    obj.reloc_section(".reluprobe", uprobe_idx, &[(0, emit, R_BPF_64_32)]);
+    let edges: Vec<(u64, u32, u32)> = (0..calls)
+        .map(|i| (i * 8, helper as u32, R_BPF_64_32))
+        .collect();
+    obj.reloc_section(".rel.text", text_idx, &edges);
+    let bytes = obj.build();
+    let allow = load_allowlist();
+    let (_out, _report) =
+        prune_dead_code_with_report(&bytes, &contract(), &allow, &limits()).expect("prune");
+    // Calibrated boundary (deterministic: work is input-determined,
+    // never timing): indexed repair trips at 6000 and passes at
+    // 6100; with the index-build charge neutered the same fixture
+    // passes at 6000 (neuter check: the ceiling trips only on the
+    // new charged index build, not on old slot-walk charges).
+    let mut tight = limits();
+    tight.work_steps = 6000;
+    let error = prune_dead_code_with_report(&bytes, &contract(), &allow, &tight)
+        .expect_err("charged coverage must exhaust a tight ceiling");
     assert_eq!(error.kind(), ErrorKind::LimitExceeded);
 }
 
@@ -2739,6 +2870,169 @@ fn tail_call_with_jump_into_prologue_reports_unknown_slot() {
     let endian = Endian::Little;
     let mut body = Vec::new();
     body.extend_from_slice(&jump(endian, 1)); // 0: lands on slot 2
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 1: skipped r3 load
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 2-3: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov64(endian, 0, 0)); // 4: neutral filler
+    body.extend_from_slice(&call_helper(endian, 12)); // 5: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[16]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S03-round3: `atomic_fetch_add [r10-8], r3` overwrites the SRC
+/// register with the old value, so the earlier `mov32 r3, -1` must
+/// not be certified — while plain XADD (memory only) preserves it.
+#[test]
+fn tail_call_after_atomic_fetch_clobber_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_fetch_add(endian, 10, 3, -8)); // 3: r3 = old
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S03-round3 precision: plain atomic XADD writes memory only, so
+/// attribution across it is sound and stays certified.
+#[test]
+fn tail_call_after_atomic_xadd_stays_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_xadd(endian, 10, 3, -8)); // 3: mem only
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+}
+
+/// S03-round4: W-width atomic fetch (0xC3) overwrites SRC exactly
+/// like the DW form — the stale opt-out must not be certified.
+#[test]
+fn tail_call_after_atomic_fetch32_clobber_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_fetch_add32(endian, 10, 3, -8)); // 3: r3 = old32
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S63-round4: atomic acquire load (imm 0x100) overwrites DST —
+/// truncating the selector to u8 misreads it as plain ADD.
+#[test]
+fn tail_call_after_atomic_load_acq_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_load_acq(endian, 0xDB, 3, 10, -8)); // 3: r3 = mem
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S63-round4: W-width acquire load overwrites DST as well.
+#[test]
+fn tail_call_after_atomic_load_acq32_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_load_acq(endian, 0xC3, 3, 10, -8)); // 3: r3 = mem32
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S63-round4 precision: atomic release store (imm 0x110) writes
+/// memory only, so attribution across it stays certified.
+#[test]
+fn tail_call_after_atomic_store_rel_stays_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_store_rel(endian, 10, 3, -8)); // 3: mem only
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+}
+
+/// S64-round4 precision: XCHG (imm 0xe1) overwrites only SRC —
+/// an exchange through r4 preserves the r2/r3 attribution.
+#[test]
+fn tail_call_after_atomic_xchg_unrelated_stays_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_xchg(endian, 10, 4, -8)); // 3: r4 = old
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert!(violations.is_empty(), "unexpected: {violations:?}");
+}
+
+/// S64-round4: XCHG through the attributed register clobbers it.
+#[test]
+fn tail_call_after_atomic_xchg_clobber_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&ldimm64(endian, 2, 0)); // 0-1: r2 = TAIL_CALLS
+    body.extend_from_slice(&mov32_r3(endian, -1)); // 2: r3 = opt-out
+    body.extend_from_slice(&atomic_xchg(endian, 10, 3, -8)); // 3: r3 = old
+    body.extend_from_slice(&call_helper(endian, 12)); // 4: tail_call
+    body.extend_from_slice(&stxw_frame(endian, 1, -4));
+    body.extend_from_slice(&exit(endian));
+    let bytes = stack_carrier_custom(body, &[0]);
+    let manifest = load_manifest("private-stack");
+    let violations = check_rules(&bytes, std::slice::from_ref(&manifest), None);
+    assert_eq!(rule_ids(&violations), ["private-stack.unknown-slot"]);
+}
+
+/// S50: a JMP32 long jump displaces by imm32, not off16. Decoding
+/// it by off lands the check on the skipped index definition and
+/// wrongly certifies it; the real target bypasses the load.
+#[test]
+fn tail_call_behind_long_jump_is_not_attributed() {
+    let endian = Endian::Little;
+    let mut body = Vec::new();
+    body.extend_from_slice(&long_jump(endian, 1)); // 0: really lands on 2
     body.extend_from_slice(&mov32_r3(endian, -1)); // 1: skipped r3 load
     body.extend_from_slice(&ldimm64(endian, 2, 0)); // 2-3: r2 = TAIL_CALLS
     body.extend_from_slice(&mov64(endian, 0, 0)); // 4: neutral filler

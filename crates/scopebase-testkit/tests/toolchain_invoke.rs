@@ -664,12 +664,11 @@ fn exited_tool_settles_descendant_held_stdout() {
 }
 
 /// S33: second-reader spawn failure completes (no hang) and reports
-/// the spawn error. The denied stderr builder forces the production
-/// cleanup branch with a forking tool: when the tool wins the
-/// startup race its grandchild is retired like above (asserted when
-/// the pidfile exists); when the instant group-kill lands first the
-/// tool dies pre-fork, which is equally correct — completion and
-/// the spawn report hold on both schedules.
+/// the spawn error. The stderr gate waits for the fixture's sleeper
+/// RUNNING (sleep-prefixed cmdline) BEFORE the denied builder runs,
+/// so the production cleanup branch always faces a proven-live
+/// descendant holding stdout — lived-proven then dead-required, a
+/// closed chain with no opportunistic branch.
 #[cfg(target_os = "linux")]
 #[test]
 fn second_reader_failure_completes_with_forking_tool() {
@@ -690,6 +689,9 @@ fn second_reader_failure_completes_with_forking_tool() {
         // R06: absurd stack size fails spawn deterministically.
         let denied = std::thread::Builder::new().stack_size(usize::MAX);
         let normal = std::thread::Builder::new().name("s33-stdout".to_string());
+        let gate_pidfile = pidfile.clone();
+        let lived = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate_lived = lived.clone();
         let out = run_pinned_with_builders(
             &closure(),
             "llvm-23.1.2-source",
@@ -699,26 +701,141 @@ fn second_reader_failure_completes_with_forking_tool() {
             &generous(),
             normal,
             denied,
+            Some(Box::new(move || {
+                // Bounded wait only: a missing proof fails the
+                // required assertions below, after cleanup retires
+                // whatever the tool started (no panic-unwind leak).
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while Instant::now() < deadline {
+                    let running = std::fs::read_to_string(&gate_pidfile)
+                        .ok()
+                        .and_then(|text| text.trim().parse::<i32>().ok())
+                        .and_then(|pid| {
+                            std::fs::read(format!("/proc/{pid}/cmdline")).ok()
+                        })
+                        .map(|bytes| bytes.starts_with(b"sleep"))
+                        .unwrap_or(false);
+                    if running {
+                        gate_lived.store(true, std::sync::atomic::Ordering::SeqCst);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            })),
+            None,
         );
-        let _ = tx.send(out.map(|_| ()).map_err(refusal_owned));
+        let lived = lived.load(std::sync::atomic::Ordering::SeqCst);
+        let _ = tx.send((out.map(|_| ()).map_err(refusal_owned), lived));
     });
-    let outcome = rx
+    let (outcome, lived) = rx
         .recv_timeout(Duration::from_secs(30))
         .expect("cleanup hung on descendant-held stdout");
     assert_eq!(
         outcome.expect_err("spawn failure reports"),
         (ErrorKind::Backend, Stage::Execute)
     );
-    // Opportunistic: only when the tool forked before the kill.
-    if dir.join("grandchild.pid").exists() {
-        assert_grandchild_dead(&dir.join("grandchild.pid"));
-    }
+    // Required chain: the gate proved the sleeper RUNNING before
+    // the failure, so cleanup must have retired it.
+    assert!(lived, "gate must prove the sleeper running");
+    assert_grandchild_dead(&dir.join("grandchild.pid"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(target_os = "linux")]
 fn refusal_owned(error: OperationError) -> (ErrorKind, Stage) {
     refusal(&error)
+}
+
+/// S67-round4: with the WNOWAIT observation denied (seccomp EPERM
+/// on `waitid`, reap and signaling allowed), the run still fails
+/// `Backend/Execute`, retires the tool tree, and settles the
+/// readers — never drops a live child and two reader handles. The
+/// driver gates on the fixture's recorded sleeper RUNNING before
+/// the first (denied) observation, so the denial branch always
+/// faces a proven-live descendant (closed chain, like the S33
+/// gate): the grandchild must be dead afterward with zero children
+/// left behind and no unsettled/retirement fallout in the report.
+/// Pre-fix the child was dropped live (a `sleep 300` survivor plus
+/// an unreaped zombie).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn waitid_denial_still_retires_tool_and_readers() {
+    let dir = std::env::temp_dir().join(format!(
+        "tc02-s67-deny-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pidfile = dir.join("grandchild.pid");
+    let closure_path = dir.join("closure.json");
+    std::fs::write(&closure_path, valid_closure()).unwrap();
+    let tool = fake_tool("fork-silent-grandchild");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tc02-invoke-denial"));
+    let mut child = std::process::Command::new(&driver)
+        .arg("--tool")
+        .arg(&tool)
+        .arg("--closure")
+        .arg(&closure_path)
+        .arg("--timeout")
+        .arg("10000")
+        .arg("--gate-pidfile")
+        .arg(&pidfile)
+        .arg("--")
+        .arg(&pidfile)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("denial driver spawns");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match child.try_wait().expect("try_wait runs") {
+            Some(_) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("denial driver hung (S67 regression)");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+    let output = child.wait_with_output().expect("output collected");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if output.status.code() == Some(3) {
+        assert!(
+            stdout.starts_with("setup="),
+            "exit 3 must carry its setup reason, got: {stdout}"
+        );
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "driver failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.starts_with("verdict=err")
+            && stdout.contains("kind=Backend")
+            && stdout.contains("stage=Execute")
+            && stdout.contains("errno=Some(1)"),
+        "waitid denial must fail Backend/Execute with EPERM, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("children_after=0"),
+        "no child may survive retirement, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("unsettled") && !stdout.contains("retirement failed"),
+        "clean retirement carries no fallout, got: {stdout}"
+    );
+    // Required chain: the gate proved the sleeper RUNNING before
+    // the denied observation, so retirement must have reaped it.
+    assert_grandchild_dead(&pidfile);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// S33: the recorded grandchild must be dead: SIGKILL is async, so

@@ -9,6 +9,11 @@ use scopebase_conformance::{
     EXIT_BROKEN_PACKAGE, EXIT_FAILURE, EXIT_INCOMPLETE, EXIT_USAGE,
 };
 use scopebase_testkit::{CaseOracle, ConformanceAdapter, Digest256, Qualification};
+use scopebase_testkit::{
+    CaseErrorCategory, CaseId, CaseInvocation, CaseInvocationValues, CaseKey, CaseKeyValues,
+    EffectBatch, FixtureAccess, FixtureInput, InvocationKey, InvocationKeyValues, Label,
+    OperationScript, RunId, RunLimits, SchemaBinding, SchemaBindingValues,
+};
 use std::path::{Path, PathBuf};
 
 fn delivery_root() -> PathBuf {
@@ -42,6 +47,23 @@ fn copy_closure(name: &str) -> PathBuf {
     let root = dst.join("fixture-root");
     copy_dir(&delivery_root(), &root);
     root
+}
+
+/// S13: create one directory level with an explicit exclusive mode,
+/// umask-proof. Cleanup refuses shared directories, so every test
+/// tree it clears must be exclusive by construction (run dirs 0700
+/// like delivery creates; nested levels 0755).
+fn mkexclusive(path: &std::path::Path, mode: u32) {
+    std::fs::create_dir(path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+    }
 }
 
 fn copy_dir(src: &Path, dst: &Path) {
@@ -397,6 +419,162 @@ fn receipt_rejects_sparse_and_malformed_bindings() {
     }
 }
 
+// S41: the shallow subject gate admits the TYPED binding, not any
+// object. A resealed envelope whose subject is `{}` — or a sparse
+// object missing binding fields — fails at the subject gate, never
+// by seal mismatch (the reseal keeps the seal valid).
+#[test]
+fn receipt_rejects_untyped_subject() {
+    let root = delivery_root();
+    let out = scratch("receipt-subject");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let envelope = read_json(&out.join("run").join("receipt.json"));
+    let reseal = |mut sparse: serde_json::Value| {
+        sparse.as_object_mut().unwrap().remove("envelope_sha256");
+        let digest =
+            scopebase_testkit::Digest256::of_bytes(&serde_json::to_vec(&sparse).unwrap()).as_str();
+        sparse["envelope_sha256"] = digest.into();
+        sparse
+    };
+    // Control: the resealed genuine envelope still verifies — the
+    // producer's subject passes typed admission.
+    let control_path = out.join("resealed-subject-control.json");
+    std::fs::write(
+        &control_path,
+        serde_json::to_vec(&reseal(envelope.clone())).unwrap(),
+    )
+    .unwrap();
+    let report = receipt::verify_receipt(&control_path).unwrap();
+    assert_eq!(report.qualification, Qualification::Qualified);
+    // `{}` and sparse subjects fail at the subject gate.
+    let mut probe = envelope["subject"].clone();
+    probe.as_object_mut().unwrap().remove("consumer");
+    let mut mistyped = envelope["subject"].clone();
+    mistyped["package_name"] = serde_json::json!(7);
+    mistyped["consumer"] = serde_json::json!("consumer");
+    for (tag, bad) in [
+        ("empty", serde_json::json!({})),
+        ("sparse", probe),
+        ("mistyped", mistyped),
+        ("scalar", serde_json::json!("subject")),
+    ] {
+        let mut tampered = envelope.clone();
+        tampered["subject"] = bad;
+        let path = out.join(format!("untyped-subject-{tag}.json"));
+        std::fs::write(&path, serde_json::to_vec(&reseal(tampered)).unwrap()).unwrap();
+        let err = receipt::verify_receipt(&path).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            OperatorErrorKind::ReceiptInvalid,
+            "untyped subject ({tag}) must fail"
+        );
+        assert!(
+            err.to_string().contains("subject"),
+            "untyped subject ({tag}) must fail at the subject gate, got: {err}"
+        );
+    }
+}
+
+// S57: a valid large receipt round-trips. A 512 KiB binding input
+// (echoed by DeliveryAdapter, hex-expanded in the report past the
+// old 1 MiB cap) still verifies on both routes — writer and reader
+// bounds are compatible, including envelope expansion.
+#[test]
+fn large_valid_receipt_round_trips() {
+    let root = copy_closure("s57-large");
+    let big = vec![b'a'; 524288];
+    std::fs::write(root.join("vectors/binding-input.txt"), &big).unwrap();
+    let expected = format!(
+        "{{\"schema_version\": 1, \"kind\": \"tt07-binding-v1-expected\", \"steps\": [{{\"step_id\": \"binding\", \"value\": \"{}\"}}]}}",
+        "a".repeat(524288)
+    );
+    std::fs::write(root.join("vectors/binding-expected.json"), &expected).unwrap();
+    // Re-pin the full chain: the contract template pins each vector
+    // (length + sha256), and the fixture manifest pins the template.
+    let template_path = root.join("contract-template.json");
+    let mut template = read_json(&template_path);
+    for artifact in template["artifacts"].as_array_mut().unwrap() {
+        let id = artifact["id"].as_str().unwrap();
+        let rel = match id {
+            "binding-input" => "vectors/binding-input.txt",
+            "binding-expected" => "vectors/binding-expected.json",
+            _ => continue,
+        };
+        let bytes = std::fs::read(root.join(rel)).unwrap();
+        artifact["length"] = serde_json::Value::String(bytes.len().to_string());
+        artifact["sha256"] =
+            serde_json::Value::String(scopebase_testkit::Digest256::of_bytes(&bytes).as_str());
+    }
+    std::fs::write(&template_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest = read_json(&manifest_path);
+    for file in manifest["files"].as_array_mut().unwrap() {
+        let path = file["path"].as_str().unwrap();
+        if path == "vectors/binding-input.txt"
+            || path == "vectors/binding-expected.json"
+            || path == "contract-template.json"
+        {
+            let bytes = std::fs::read(root.join(path)).unwrap();
+            file["length"] = serde_json::Value::String(bytes.len().to_string());
+            file["sha256"] =
+                serde_json::Value::String(scopebase_testkit::Digest256::of_bytes(&bytes).as_str());
+        }
+    }
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let out = scratch("s57-large-out");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    let receipt_path = out.join("run").join("receipt.json");
+    let receipt_len = std::fs::metadata(&receipt_path).unwrap().len();
+    assert!(
+        receipt_len > (1 << 20),
+        "round trip must exceed the old 1 MiB cap: {receipt_len}"
+    );
+    let report = receipt::verify_receipt(&receipt_path).unwrap();
+    assert_eq!(report.qualification, Qualification::Qualified);
+    let catalog_bytes = std::fs::read(root.join("catalog.json")).unwrap();
+    let full = receipt::verify_receipt_with_catalog(&receipt_path, &catalog_bytes).unwrap();
+    assert_eq!(full.qualification, Qualification::Qualified);
+}
+
+// S57: the envelope bound covers the largest engine-admitted
+// report body plus overhead — guards the derivation against
+// future limit changes on either side.
+#[test]
+fn receipt_cap_covers_engine_report_ceiling() {
+    let body = RunLimits::default().receipt_bytes();
+    assert!(
+        closure::MAX_RECEIPT_BYTES >= body + (2 << 20),
+        "envelope cap {} must cover report ceiling {body} + 2 MiB overhead",
+        closure::MAX_RECEIPT_BYTES
+    );
+    assert!(closure::receipt_envelope_fits(closure::MAX_RECEIPT_BYTES));
+    assert!(!closure::receipt_envelope_fits(closure::MAX_RECEIPT_BYTES + 1));
+}
+
 // S39: receipt envelopes admit bounded. An oversized envelope
 // refuses before JSON admission, and a writer-less FIFO refuses
 // promptly instead of blocking the verifier. The FIFO call runs on
@@ -406,7 +584,8 @@ fn receipt_rejects_sparse_and_malformed_bindings() {
 fn receipt_envelope_admits_bounded_inputs() {
     let out = scratch("receipt-bounds");
     let huge = out.join("huge-receipt.json");
-    std::fs::write(&huge, vec![b'x'; (1 << 20) + 1]).unwrap();
+    let over = usize::try_from(closure::MAX_RECEIPT_BYTES).unwrap() + 1;
+    std::fs::write(&huge, vec![b'x'; over]).unwrap();
     let err = receipt::verify_receipt(&huge).unwrap_err();
     assert_eq!(err.kind(), OperatorErrorKind::ReceiptInvalid);
     assert!(
@@ -1041,6 +1220,63 @@ fn describe_and_plan_have_no_effects() {
     assert!(!doc.missing.is_empty());
 }
 
+// S38-round3: plan confines every member read to the fixture root —
+// a symlinked member refuses through the PUBLIC planning route even
+// when its pin matches the outside bytes. The old verification
+// pass opened through the link, matched the pin, and reported the
+// closure complete (admitting outside bytes into planning).
+#[cfg(unix)]
+#[test]
+fn plan_mismatches_symlinked_member_with_matching_pin() {
+    let root = copy_closure("plan-symlink");
+    let outside = scratch("plan-symlink-outside");
+    std::fs::write(outside.join("canary.txt"), b"canary-bytes").unwrap();
+    let member = root.join("vectors").join("binding-input.txt");
+    std::fs::remove_file(&member).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("canary.txt"), &member).unwrap();
+    // Repin the member to the outside bytes (the bypass shape).
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let mut repinned = false;
+    for entry in manifest
+        .get_mut("files")
+        .and_then(|f| f.as_array_mut())
+        .unwrap()
+    {
+        if entry.get("path").and_then(|p| p.as_str()) == Some("vectors/binding-input.txt") {
+            entry["length"] = serde_json::Value::from("12");
+            entry["sha256"] =
+                serde_json::Value::from(Digest256::of_bytes(b"canary-bytes").as_str());
+            repinned = true;
+        }
+    }
+    assert!(repinned, "fixture pins vectors/binding-input.txt");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let catalog = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    let doc = plan::plan(
+        &catalog,
+        "operator-delivery-v1",
+        &root,
+        "no-new-target-mappings",
+    )
+    .unwrap();
+    assert!(
+        !doc.closure_complete,
+        "symlinked member must not verify complete"
+    );
+    assert!(
+        doc.mismatched.iter().any(|m| m == "vectors/binding-input.txt"),
+        "symlinked member must land in mismatched: {:?}",
+        doc.mismatched
+    );
+}
+
 // R38: planning never reads outside the root, unbounded, or
 // blocking. Escape entries, pseudo-devices, oversized manifests and
 // FIFOs are accounted without ever being opened the old way.
@@ -1553,7 +1789,8 @@ fn cleanup_never_follows_planted_symlinks() {
     std::fs::write(&outside, b"precious").unwrap();
     let run = out.join("run");
     let nested = run.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
+    mkexclusive(&run, 0o700);
+    mkexclusive(&nested, 0o755);
     std::fs::write(
         run.join("run-manifest.json"),
         r#"{"schema":"operator-run-manifest-v1","run_id":"ffffffffffffffffffffffffffffffff","profile":"p"}"#,
@@ -1577,6 +1814,14 @@ fn cleanup_never_follows_planted_symlinks() {
 // can only ever remove an empty attacker-planted dir (and is then
 // reported as a refusal); the non-empty victim here proves the
 // fd-bound validation rules out the destructive case.
+//
+// S13-round3: the residual window above is same-UID self-race
+// (caller territory — no mode excludes our own threads, and Linux
+// has no atomic verify-and-unlink). Cross-UID swappers are excluded
+// by the deletion-time exclusivity re-check: a loosened parent
+// refuses before unlinking (see `unlink_window_loosening_refuses_
+// before_unlink`), so a foreign swapper can never be inside the
+// window.
 #[test]
 fn cleanup_survives_validation_to_deletion_swaps() {
     const RUN_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1585,7 +1830,7 @@ fn cleanup_survives_validation_to_deletion_swaps() {
     std::fs::create_dir_all(&victim_src).unwrap();
     std::fs::write(victim_src.join("precious.txt"), b"precious").unwrap();
     let run_src = out.join("run-src");
-    std::fs::create_dir_all(&run_src).unwrap();
+    mkexclusive(&run_src, 0o700);
     std::fs::write(
         run_src.join("run-manifest.json"),
         format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
@@ -1618,6 +1863,12 @@ fn cleanup_survives_validation_to_deletion_swaps() {
         let staging = dst.with_extension("plant");
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).unwrap();
+        // S13: planted runs are exclusive like delivery creates.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         std::fs::write(
             staging.join("run-manifest.json"),
             format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
@@ -1660,7 +1911,7 @@ fn cleanup_survives_validation_to_deletion_swaps() {
     assert_eq!(precious, 1, "victim bytes must survive exactly once");
     // And cleanup still works once the swapping stops.
     let calm = out.join("calm");
-    std::fs::create_dir_all(&calm).unwrap();
+    mkexclusive(&calm, 0o700);
     std::fs::write(
         calm.join("run-manifest.json"),
         format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#),
@@ -1738,6 +1989,44 @@ fn cleanup_refuses_shared_parent() {
     );
 }
 
+// S13-round3: a loosened nested directory refuses before deleting
+// inside it. Another UID could rename under a group/other-writable
+// directory, so clearing refuses with the nested content fully
+// intact and the run standing. Pre-gate code cleared and removed
+// the whole tree here.
+#[test]
+fn cleanup_refuses_shared_nested_dir() {
+    let out = scratch("cleanup-shared-nested");
+    let run = out.join("run");
+    mkexclusive(&run, 0o700);
+    std::fs::write(
+        run.join("run-manifest.json"),
+        r#"{"schema":"operator-run-manifest-v1","run_id":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","profile":"p"}"#,
+    )
+    .unwrap();
+    let nested = run.join("nested");
+    mkexclusive(&nested, 0o755);
+    std::fs::write(nested.join("precious.txt"), b"precious").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    let err = cleanup::cleanup_run(&run, None).unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(
+        err.detail().contains("not exclusive"),
+        "unexpected detail: {}",
+        err.detail()
+    );
+    assert_eq!(
+        std::fs::read(nested.join("precious.txt")).unwrap(),
+        b"precious",
+        "refused cleanup deleted nested content"
+    );
+    assert!(run.is_dir(), "refused cleanup unlinked the run");
+}
+
 // S13: the nested unlink proof fires on multi-linked entries. A
 // hardlink planted inside a run dir would survive any single
 // unlink, so cleanup refuses loudly instead of reporting
@@ -1746,7 +2035,7 @@ fn cleanup_refuses_shared_parent() {
 fn cleanup_refuses_hardlinked_entry() {
     let out = scratch("cleanup-hardlink");
     let run = out.join("run");
-    std::fs::create_dir(&run).unwrap();
+    mkexclusive(&run, 0o700);
     std::fs::write(
         run.join("run-manifest.json"),
         r#"{"schema":"operator-run-manifest-v1","run_id":"dddddddddddddddddddddddddddddddd","profile":"p"}"#,
@@ -1874,6 +2163,536 @@ fn ledger_file_id_traversal_is_refused() {
     assert!(
         !out.join("escaped.json").exists(),
         "traversal must not write anywhere unexpected"
+    );
+}
+
+// S58 helpers: whitespace-pad a ledger template to an exact raw
+// length (valid JSON, still exactly one run-id slot) and pin it in
+// the manifest; add N ledger aliases (artifact + template entry).
+fn s58_pad_tmpl(base: &[u8], raw_len: usize) -> Vec<u8> {
+    assert_eq!(
+        std::str::from_utf8(base)
+            .unwrap()
+            .matches("@RUN_ID@")
+            .count(),
+        1,
+        "base template must hold exactly one run-id slot"
+    );
+    assert!(base.starts_with(b"{"));
+    let mut out = Vec::with_capacity(raw_len);
+    out.push(b'{');
+    out.extend(std::iter::repeat(b' ').take(raw_len - base.len()));
+    out.extend_from_slice(&base[1..]);
+    assert_eq!(out.len(), raw_len);
+    out
+}
+
+fn s58_pin_file(manifest: &mut serde_json::Value, root: &Path, rel: &str) {
+    let bytes = std::fs::read(root.join(rel)).unwrap();
+    manifest["files"].as_array_mut().unwrap().push(serde_json::json!({
+        "path": rel,
+        "length": bytes.len().to_string(),
+        "sha256": scopebase_testkit::Digest256::of_bytes(&bytes).as_str(),
+    }));
+}
+
+fn s58_add_aliases(template: &mut serde_json::Value, n: usize, tmpl_rel: &str) {
+    for k in 0..n {
+        let id = format!("alias-{k:04}");
+        template["ledger_templates"][id.clone()] =
+            serde_json::Value::String(tmpl_rel.to_string());
+        template["artifacts"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": id,
+            "revision": 1,
+            "role": "fixture_ledger",
+            "length": "7",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        }));
+    }
+    template["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+}
+
+// S58: every ledger template must reference a fixture-ledger
+// artifact. An unreferenced alias renders unbounded staged waste;
+// a mistyped id (naming an expected vector) would overwrite that
+// artifact's pins with rendered bytes. Both refuse pre-effect.
+#[test]
+fn ledger_alias_must_reference_fixture_ledger_artifact() {
+    let root = delivery_root();
+    for (tag, key) in [
+        ("unreferenced", "evil-alias"),
+        ("mistyped", "binding-expected"),
+    ] {
+        let out = scratch(&format!("s58-ref-{tag}"));
+        let mut template = read_json(&root.join("contract-template.json"));
+        template["ledger_templates"][key] =
+            serde_json::Value::String("vectors/ledger-binding.json.tmpl".into());
+        let override_path = out.join("override.json");
+        std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+        let err = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: Some(override_path),
+            output_dir: out.join("run"),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage, "{tag}: kind");
+        assert!(
+            err.detail().contains(key),
+            "{tag}: refusal must name the alias: {}",
+            err.detail()
+        );
+        assert!(
+            !out.join("run").exists(),
+            "{tag}: preflight refusal leaves no run dir"
+        );
+    }
+}
+
+// S58: per-file rendered budget is exact. A ledger rendering to
+// exactly the vector ceiling passes preflight (the run acquires
+// its directory — the whitespace padding is ledger-inert); one
+// byte over refuses before allocation. The exact case may still
+// fail downstream (the engine's encoded-payload caps are tighter
+// than the vector ceiling); what the boundary proves is
+// preflight admission, and a later failure stays cleanable via
+// its creating manifest.
+#[test]
+fn ledger_render_exact_vector_budget() {
+    let ceiling = 8 << 20;
+    for (tag, raw_len, pass) in [
+        ("exact", ceiling - 24, true),
+        ("over", ceiling - 24 + 1, false),
+    ] {
+        let root = copy_closure(&format!("s58-exact-{tag}"));
+        let base = std::fs::read(root.join("vectors/ledger-binding.json.tmpl")).unwrap();
+        std::fs::write(
+            root.join("vectors/pad-exact.json.tmpl"),
+            s58_pad_tmpl(&base, raw_len),
+        )
+        .unwrap();
+        let manifest_path = root.join("fixture-manifest.json");
+        let mut manifest = read_json(&manifest_path);
+        s58_pin_file(&mut manifest, &root, "vectors/pad-exact.json.tmpl");
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let out = scratch(&format!("s58-exact-out-{tag}"));
+        let mut template = read_json(&root.join("contract-template.json"));
+        template["ledger_templates"]["binding-ledger"] =
+            serde_json::Value::String("vectors/pad-exact.json.tmpl".into());
+        let override_path = out.join("override.json");
+        std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+        let outcome = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: Some(override_path),
+            output_dir: out.join("run"),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        });
+        if pass {
+            // Preflight admitted: the run acquired its directory.
+            // A downstream engine refusal is not a budget refusal.
+            if let Err(err) = &outcome {
+                assert!(
+                    !err.detail().contains("budget"),
+                    "{tag}: exact budget must not refuse: {}",
+                    err.detail()
+                );
+            }
+            let run = out.join("run");
+            assert!(run.exists(), "{tag}: exact budget acquires a run dir");
+            let report = cleanup::cleanup_run(&run, None).expect("later failure stays cleanable");
+            assert_eq!(report.profile, "operator-delivery-v1");
+            assert!(!run.exists(), "{tag}: cleanup removes the run");
+        } else {
+            let err = outcome.unwrap_err();
+            assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage, "{tag}: kind");
+            assert!(
+                err.detail().contains("vector budget"),
+                "{tag}: must cite the vector budget: {}",
+                err.detail()
+            );
+            assert!(
+                !out.join("run").exists(),
+                "{tag}: budget refusal leaves no run dir"
+            );
+        }
+    }
+}
+
+// S58: ledger cardinality admits before rendering. Over four
+// thousand aliases refuse on the artifact budget without reading
+// a single template.
+#[test]
+fn ledger_cardinality_admits_before_rendering() {
+    let root = delivery_root();
+    let out = scratch("s58-cardinality");
+    let mut template = read_json(&root.join("contract-template.json"));
+    s58_add_aliases(&mut template, 4200, "vectors/ledger-binding.json.tmpl");
+    let override_path = out.join("override.json");
+    std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let override_len = std::fs::metadata(&override_path).unwrap().len();
+    assert!(
+        override_len < (1 << 20),
+        "override itself stays admittable: {override_len}"
+    );
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(override_path),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    assert!(
+        err.detail().contains("artifact budget"),
+        "must cite the artifact budget: {}",
+        err.detail()
+    );
+    assert!(
+        !out.join("run").exists(),
+        "budget refusal leaves no run dir"
+    );
+}
+
+// S58: alias amplification refuses before allocation. Thirty maxed
+// (8 MiB) aliases nominally retain ~500 MB from a ~5 KB override;
+// the preflight refuses once the retained peak crosses the budget
+// instead of rendering and staging all of it.
+#[test]
+fn ledger_alias_amplification_refuses_before_allocation() {
+    let root = copy_closure("s58-amplify");
+    let base = std::fs::read(root.join("vectors/ledger-binding.json.tmpl")).unwrap();
+    std::fs::write(
+        root.join("vectors/pad-8m.json.tmpl"),
+        s58_pad_tmpl(&base, (8 << 20) - 24),
+    )
+    .unwrap();
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest = read_json(&manifest_path);
+    s58_pin_file(&mut manifest, &root, "vectors/pad-8m.json.tmpl");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let out = scratch("s58-amplify-out");
+    let mut template = read_json(&root.join("contract-template.json"));
+    s58_add_aliases(&mut template, 30, "vectors/pad-8m.json.tmpl");
+    let override_path = out.join("override.json");
+    std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let override_len = std::fs::metadata(&override_path).unwrap().len();
+    assert!(
+        override_len < (1 << 20),
+        "override itself stays small: {override_len}"
+    );
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(override_path),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    // S58-round4: the eighth maxed alias still refuses at the
+    // retained peak: aliases sort before the base ledgers, so its
+    // remaining allowance is exactly 8 MiB and the pinned member
+    // fits it — the peak (not the read) is over budget. The
+    // pre-read allowance refusal is covered by the rawcap test,
+    // whose member exceeds its remainder.
+    assert!(
+        err.detail().contains("retained budget"),
+        "must cite the retained budget: {}",
+        err.detail()
+    );
+    assert!(
+        !out.join("run").exists(),
+        "budget refusal leaves no run dir"
+    );
+}
+
+// S58: add N fully wired alias cases (catalog case + profile
+// requirement + rule + layout row + ledger artifact + template
+// entry), each ledger rendering the shared padded template. The
+// aliases echo the binding vectors, so every case is independently
+// runnable; the ledgers multiply retained bytes.
+fn s58_add_alias_cases(
+    catalog: &mut serde_json::Value,
+    template: &mut serde_json::Value,
+    n: usize,
+    tmpl_rel: &str,
+) {
+    let binding_case = catalog["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "TT07.binding")
+        .unwrap()
+        .clone();
+    let binding_rule = template["case_rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["case_key"]["case_id"] == "TT07.binding")
+        .unwrap()
+        .clone();
+    for k in 0..n {
+        let case_id = format!("TT07.alias-{k:02}");
+        let ledger_id = format!("alias-ledger-{k:02}");
+        let mut case = binding_case.clone();
+        case["id"] = serde_json::Value::String(case_id.clone());
+        catalog["cases"].as_array_mut().unwrap().push(case);
+        catalog["profiles"][0]["required_cases"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "case_id": case_id,
+                "case_version": 1,
+                "when_extensions": [],
+            }));
+        let mut rule = binding_rule.clone();
+        rule["case_key"]["case_id"] = serde_json::Value::String(case_id.clone());
+        // Contract admission requires distinct operation ids per
+        // rule (closure/binding already take 1–2).
+        rule["operation_ids"] = serde_json::Value::Array(vec![serde_json::Value::String(
+            format!("{}", 3 + k),
+        )]);
+        template["case_rules"].as_array_mut().unwrap().push(rule);
+        template["vector_layout"][case_id] = serde_json::json!({
+            "inputs": {"binding-input": "binding-input"},
+            "expected": "binding-expected",
+            "ledger": ledger_id,
+        });
+        template["artifacts"].as_array_mut().unwrap().push(serde_json::json!({
+            "id": ledger_id,
+            "revision": 1,
+            "role": "fixture_ledger",
+            "length": "7",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        }));
+        template["ledger_templates"][ledger_id] =
+            serde_json::Value::String(tmpl_rel.to_string());
+    }
+    template["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+}
+
+// S58: aggregate budget margins, ±1 maxed file around the
+// retained boundary. Seven ~8 MB wired alias ledgers (~59 MB
+// retained) pass preflight — the run acquires its directory;
+// eight refuse. The under case may still fail downstream of
+// preflight (engine encoded caps); what the margin proves is
+// admission, and a later failure stays cleanable.
+#[test]
+fn ledger_aggregate_budget_margins() {
+    // Rendered 8 MiB − 1 KiB per alias: seven peak ~8 KB under the
+    // retained budget, eight exceed it by megabytes — both margins
+    // robust, neither borderline.
+    const RAW: usize = (8 << 20) - 24 - 1024;
+    for (tag, n, pass) in [("under", 7, true), ("over", 8, false)] {
+        let root = copy_closure(&format!("s58-margin-{tag}"));
+        let base = std::fs::read(root.join("vectors/ledger-binding.json.tmpl")).unwrap();
+        std::fs::write(
+            root.join("vectors/pad-margin.json.tmpl"),
+            s58_pad_tmpl(&base, RAW),
+        )
+        .unwrap();
+        let catalog_path = root.join("catalog.json");
+        let mut catalog = read_json(&catalog_path);
+        let mut template = read_json(&root.join("contract-template.json"));
+        s58_add_alias_cases(
+            &mut catalog,
+            &mut template,
+            n,
+            "vectors/pad-margin.json.tmpl",
+        );
+        std::fs::write(&catalog_path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        let manifest_path = root.join("fixture-manifest.json");
+        let mut manifest = read_json(&manifest_path);
+        s58_pin_file(&mut manifest, &root, "vectors/pad-margin.json.tmpl");
+        for file in manifest["files"].as_array_mut().unwrap() {
+            if file["path"].as_str() == Some("catalog.json") {
+                let bytes = std::fs::read(&catalog_path).unwrap();
+                file["length"] = serde_json::Value::String(bytes.len().to_string());
+                file["sha256"] = serde_json::Value::String(
+                    scopebase_testkit::Digest256::of_bytes(&bytes).as_str(),
+                );
+            }
+        }
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let out = scratch(&format!("s58-margin-out-{tag}"));
+        let override_path = out.join("override.json");
+        std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+        let outcome = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: catalog_path.clone(),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: Some(override_path),
+            output_dir: out.join("run"),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        });
+        if pass {
+            if let Err(err) = &outcome {
+                assert!(
+                    !err.detail().contains("budget"),
+                    "{tag}: under-budget aggregate must not refuse: {}",
+                    err.detail()
+                );
+            }
+            let run = out.join("run");
+            assert!(
+                run.exists(),
+                "{tag}: under-budget aggregate acquires a run dir; outcome: {outcome:?}"
+            );
+            let report = cleanup::cleanup_run(&run, None).expect("later failure stays cleanable");
+            assert_eq!(report.profile, "operator-delivery-v1");
+            assert!(!run.exists(), "{tag}: cleanup removes the run");
+        } else {
+            let err = outcome.unwrap_err();
+            assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage, "{tag}: kind");
+            assert!(
+                err.detail().contains("retained budget"),
+                "{tag}: must cite the retained budget: {}",
+                err.detail()
+            );
+            assert!(
+                !out.join("run").exists(),
+                "{tag}: budget refusal leaves no run dir"
+            );
+        }
+    }
+}
+
+// S58-round4: build a template with exactly `slots` run-id slots at
+// exactly `raw_len` bytes (4x rendering amplification: each 8-byte
+// slot grows by 24 when the 32-char run id lands).
+fn s58_multi_tmpl(slots: usize, raw_len: usize) -> Vec<u8> {
+    let body = format!("\"s\":\"{}\"", "@RUN_ID@".repeat(slots));
+    assert!(
+        1 + body.len() + 1 <= raw_len,
+        "slots do not fit the raw length"
+    );
+    let mut out = Vec::with_capacity(raw_len);
+    out.push(b'{');
+    out.extend(std::iter::repeat(b' ').take(raw_len - 1 - body.len() - 1));
+    out.extend_from_slice(body.as_bytes());
+    out.push(b'}');
+    assert_eq!(out.len(), raw_len);
+    out
+}
+
+fn s58_add_ledger_alias(template: &mut serde_json::Value, id: &str, tmpl_rel: &str) {
+    template["ledger_templates"][id] = serde_json::Value::String(tmpl_rel.to_string());
+    template["artifacts"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": id,
+        "revision": 1,
+        "role": "fixture_ledger",
+        "length": "7",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    }));
+}
+
+// S58-round4: the raw member read admits against the per-file vector
+// budget and the REMAINING aggregate allowance before allocating.
+// Seven 8 MiB-rendered predecessors plus one 4 MiB predecessor
+// retain ~60 MiB; a final 5 MiB member — under the 8 MiB vector
+// budget but over the ~4 MiB remainder — refuses at read admission
+// with no allocation and no run dir. Pre-fix it materialized in
+// full beside the retained 60 MiB and refused only at the peak
+// check ("would exceed retained budget"); the allowance citation is
+// the boundary signal. (Templates render sorted by alias id, so the
+// final alias sorts last; base closure/binding ledgers render first
+// and their kilobytes sit inside every margin below.)
+#[test]
+fn ledger_raw_member_admits_before_allocation() {
+    const VECTOR: usize = 8 << 20;
+    // Predecessors render exactly 8 MiB from ~3.4 MiB raw (200k
+    // slots × 24 growth); the eighth renders exactly 4 MiB.
+    const PRED_SLOTS: usize = 200_000;
+    const PRED_RAW: usize = VECTOR - 24 * PRED_SLOTS;
+    const PRED8_SLOTS: usize = 100_000;
+    const PRED8_RAW: usize = (4 << 20) - 24 * PRED8_SLOTS;
+    const FINAL_RAW: usize = 5 << 20;
+    assert_eq!(PRED_RAW + 24 * PRED_SLOTS, VECTOR);
+    assert_eq!(PRED8_RAW + 24 * PRED8_SLOTS, 4 << 20);
+    let root = copy_closure("s58-rawcap");
+    let manifest_path = root.join("fixture-manifest.json");
+    let mut manifest = read_json(&manifest_path);
+    for k in 0..7 {
+        let rel = format!("vectors/pred-{k:02}.json.tmpl");
+        std::fs::write(root.join(&rel), s58_multi_tmpl(PRED_SLOTS, PRED_RAW)).unwrap();
+        s58_pin_file(&mut manifest, &root, &rel);
+    }
+    std::fs::write(
+        root.join("vectors/pred-07.json.tmpl"),
+        s58_multi_tmpl(PRED8_SLOTS, PRED8_RAW),
+    )
+    .unwrap();
+    s58_pin_file(&mut manifest, &root, "vectors/pred-07.json.tmpl");
+    std::fs::write(
+        root.join("vectors/zzz-final.json.tmpl"),
+        s58_multi_tmpl(1, FINAL_RAW),
+    )
+    .unwrap();
+    s58_pin_file(&mut manifest, &root, "vectors/zzz-final.json.tmpl");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let out = scratch("s58-rawcap-out");
+    let mut template = read_json(&root.join("contract-template.json"));
+    for k in 0..8 {
+        let id = format!("pred-{k:02}");
+        s58_add_ledger_alias(&mut template, &id, &format!("vectors/{id}.json.tmpl"));
+    }
+    s58_add_ledger_alias(&mut template, "zzz-final", "vectors/zzz-final.json.tmpl");
+    template["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    let override_path = out.join("override.json");
+    std::fs::write(&override_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    let err = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: Some(override_path),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    assert!(
+        err.detail().contains("byte allowance")
+            && err.detail().contains("zzz-final.json.tmpl"),
+        "must cite the read allowance for the final member: {}",
+        err.detail()
+    );
+    assert!(
+        !out.join("run").exists(),
+        "read-admission refusal leaves no run dir"
     );
 }
 
@@ -2291,6 +3110,49 @@ fn non_utf8_argv_refuses_with_usage() {
     assert!(stderr.contains("usage:"), "{stderr:?}");
 }
 
+/// S70-round4: `--fixture-root . --fixture-manifest
+/// fixture-manifest.json` admits the same manifest the default
+/// spelling does. Runs the real binary with its cwd inside a
+/// fixture copy (no in-process chdir): pre-fix the raw
+/// `strip_prefix` rejected the equivalent spelling.
+#[test]
+fn cli_dot_root_with_bare_manifest_matches_default() {
+    let root = copy_closure("s70-cli");
+    let out = scratch("s70-cli-out");
+    let run = out.join("run");
+    let child = std::process::Command::new(operator_bin())
+        .current_dir(&root)
+        .arg("run")
+        .arg("--catalog")
+        .arg(root.join("catalog.json"))
+        .arg("--profile")
+        .arg("operator-delivery-v1")
+        .arg("--fixture-root")
+        .arg(".")
+        .arg("--fixture-manifest")
+        .arg("fixture-manifest.json")
+        .arg("--output")
+        .arg(&run)
+        .output()
+        .expect("spawn operator");
+    let stderr = String::from_utf8_lossy(&child.stderr).into_owned();
+    assert_eq!(
+        child.status.code(),
+        Some(0),
+        "dot-root run must qualify: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&child.stdout).into_owned();
+    assert!(
+        stdout.contains("\"qualification\":\"qualified\"")
+            || stdout.contains("\"qualification\": \"qualified\""),
+        "dot-root run must report qualified: {stdout}"
+    );
+    assert!(run.exists(), "dot-root run must acquire its run dir");
+    let report = cleanup::cleanup_run(&run, None).expect("run stays cleanable");
+    assert_eq!(report.profile, "operator-delivery-v1");
+    assert!(!run.exists(), "cleanup removes the run");
+}
+
 /// R04: `--help` with a dead stdout exits 1 with an `OutputFailed`
 /// report on stderr, never panics (old `println!` exited 101).
 #[test]
@@ -2378,7 +3240,10 @@ fn creating_run_is_cleanable() {
     let out = scratch("s42-creating");
     let run = out.join("run");
     let staging = run.join("staging");
-    std::fs::create_dir_all(&staging).unwrap();
+    // S13: cleanup requires every traversed dir exclusive — pin both
+    // levels umask-proof (delivery creates them 0700).
+    mkexclusive(&run, 0o700);
+    mkexclusive(&staging, 0o700);
     let creating = serde_json::json!({
         "schema": "operator-run-manifest-v1",
         "run_id": "0123456789abcdef0123456789abcdef",
@@ -2398,6 +3263,441 @@ fn creating_run_is_cleanable() {
     assert!(!run.exists(), "creating run must be removable");
     assert_eq!(report.run_id, "0123456789abcdef0123456789abcdef");
     assert_eq!(report.profile, "operator-delivery-v1");
+}
+
+// S42-round3: each pre-manifest failure window rolls back to
+// "nothing happened" — the original error returns, no residue
+// remains, and a retry at the same path succeeds. Every injection
+// is root-proof (symlink/EEXIST/rename-onto-dir), never raced.
+#[test]
+fn pre_manifest_failures_leave_no_residue_and_retry() {
+    use delivery::DeliveryHookPhase;
+    let root = delivery_root();
+    for tag in ["acquire-open", "staging-mkdir", "staging-open", "manifest-write"] {
+        let out = scratch(&format!("s42-{tag}"));
+        let run = out.join("run");
+        let decoy = out.join("decoy-target");
+        std::fs::write(&decoy, b"decoy").unwrap();
+        let hook = |phase: DeliveryHookPhase| {
+            let fire = |want: DeliveryHookPhase| phase == want;
+            match tag {
+                // Fresh dir swapped for a symlink: acquire openat
+                // (NOFOLLOW) fails ELOOP as any uid.
+                "acquire-open" if fire(DeliveryHookPhase::AfterOutputMkdir) => {
+                    std::fs::remove_dir(&run).unwrap();
+                    std::os::unix::fs::symlink(&decoy, &run).unwrap();
+                }
+                // Staging pre-created as a file: staging mkdirat
+                // fails EEXIST as any uid.
+                "staging-mkdir" if fire(DeliveryHookPhase::AfterAcquire) => {
+                    std::fs::write(run.join("staging"), b"blocker").unwrap();
+                }
+                // Fresh staging swapped for a symlink: staging
+                // openat (NOFOLLOW) fails ELOOP as any uid.
+                "staging-open" if fire(DeliveryHookPhase::AfterStagingMkdir) => {
+                    std::fs::remove_dir(run.join("staging")).unwrap();
+                    std::os::unix::fs::symlink(&decoy, run.join("staging")).unwrap();
+                }
+                // Manifest name planted as a directory: the sealed
+                // rename-onto-dir fails as any uid.
+                "manifest-write" if fire(DeliveryHookPhase::BeforeManifest) => {
+                    std::fs::create_dir(run.join("run-manifest.json")).unwrap();
+                }
+                _ => {}
+            }
+        };
+        let err = delivery::run_delivery_with_hook(
+            delivery::RunRequest {
+                catalog_path: root.join("catalog.json"),
+                profile: "operator-delivery-v1".into(),
+                fixture_root: root.clone(),
+                manifest_path: None,
+                template_path: None,
+                output_dir: run.clone(),
+                mapping_policy: "no-new-target-mappings".into(),
+                adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+                oracle: &delivery::DeliveryOracle::new().unwrap(),
+            },
+            Some(&hook),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::Engine, "{tag}: kind");
+        let stage = match tag {
+            "acquire-open" => "cannot open fresh output dir",
+            "staging-mkdir" => "cannot create run staging",
+            "staging-open" => "cannot open run staging",
+            _ => "cannot write creating manifest",
+        };
+        assert!(
+            err.detail().contains(stage),
+            "{tag}: wrong window failed: {}",
+            err.detail()
+        );
+        // Rollback reclaimed OUR names only: the decoy target is
+        // untouched, the run name is gone.
+        assert!(decoy.exists(), "{tag}: rollback followed a link");
+        assert!(!run.exists(), "{tag}: pre-manifest failure stranded residue");
+        // Retry at the same path succeeds — the name is free and no
+        // half-state lingers.
+        let outcome = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+        .unwrap();
+        assert_eq!(outcome.qualification, Qualification::Qualified, "{tag}: retry");
+    }
+}
+
+// S42-round3: a rollback that cannot remove reports unresolved
+// custody naming the run path — never a silent strand, never a
+// foreign deletion. Case A blocks removal with permissions
+// (non-root only: root bypasses the mode bits); case B plants a
+// foreign entry (any uid) and proves nothing is removed.
+#[test]
+fn failed_rollback_reports_unresolved_custody() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    // Case A: staging mkdir fails (acquired dir read-only) AND the
+    // rollback unlink fails (parent read-only).
+    if !rustix::process::geteuid().is_root() {
+        let out = scratch("s42-custody-perms");
+        let run = out.join("run");
+        let hook = |phase: DeliveryHookPhase| {
+            if phase != DeliveryHookPhase::AfterAcquire {
+                return;
+            }
+            std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o500)).unwrap();
+            std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o500)).unwrap();
+        };
+        let err = delivery::run_delivery_with_hook(
+            delivery::RunRequest {
+                catalog_path: root.join("catalog.json"),
+                profile: "operator-delivery-v1".into(),
+                fixture_root: root.clone(),
+                manifest_path: None,
+                template_path: None,
+                output_dir: run.clone(),
+                mapping_policy: "no-new-target-mappings".into(),
+                adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+                oracle: &delivery::DeliveryOracle::new().unwrap(),
+            },
+            Some(&hook),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::UnresolvedCustody);
+        assert!(
+            err.detail().contains("without cleanup custody"),
+            "custody must say so: {}",
+            err.detail()
+        );
+        assert!(
+            err.detail().contains(&run.display().to_string()),
+            "custody must name the path: {}",
+            err.detail()
+        );
+        // Neither retry (name exists) nor cleanup (no manifest) owns
+        // it — the documented premise of the custody report.
+        let retry = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+        .unwrap_err();
+        assert_eq!(retry.kind(), OperatorErrorKind::Usage);
+        let scrub = cleanup::cleanup_run(&run, None).unwrap_err();
+        assert_eq!(scrub.kind(), OperatorErrorKind::CleanupRefused);
+        // Restore and hand-remove the stranded run.
+        std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::remove_dir_all(&run).unwrap();
+    } else {
+        eprintln!("skip s42-custody-perms: needs a non-root uid");
+    }
+    // Case B: a foreign entry refuses rollback before ANY removal.
+    let out = scratch("s42-custody-foreign");
+    let run = out.join("run");
+    let hook = |phase: DeliveryHookPhase| {
+        if phase != DeliveryHookPhase::BeforeManifest {
+            return;
+        }
+        std::fs::create_dir(run.join("run-manifest.json")).unwrap();
+        std::fs::write(run.join("evil"), b"foreign").unwrap();
+    };
+    let err = delivery::run_delivery_with_hook(
+        delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        },
+        Some(&hook),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::UnresolvedCustody);
+    assert!(
+        err.detail().contains("foreign entry"),
+        "custody must name the cause: {}",
+        err.detail()
+    );
+    // Inventory-first: nothing was removed, known entries included.
+    assert!(run.join("evil").exists(), "foreign entry must survive");
+    assert!(
+        run.join("staging").exists(),
+        "rollback must not partially remove"
+    );
+    assert!(run.join("run-manifest.json").exists());
+    std::fs::remove_dir_all(&run).unwrap();
+}
+
+// S56: producer and cleanup agree on the parent policy. A run
+// directly under a shared parent (sticky 1777 like /tmp, or plain
+// group-writable) refuses BEFORE creating anything; an
+// auto-created parent is secured 0700 so the run proceeds; and a
+// run under a private parent round-trips through cleanup.
+#[test]
+fn run_and_cleanup_agree_on_parent_policy() {
+    let root = delivery_root();
+    let out = scratch("s56-parent");
+    for (tag, mode) in [("sticky", 0o1777), ("group-writable", 0o775)] {
+        let shared = out.join(tag);
+        mkexclusive(&shared, mode);
+        let run = shared.join("run");
+        let err = delivery::run_delivery(delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::Usage, "{tag}: kind");
+        assert!(
+            err.detail().contains("not exclusive"),
+            "{tag}: must cite exclusivity: {}",
+            err.detail()
+        );
+        assert!(!run.exists(), "{tag}: refused run must create nothing");
+    }
+    // Auto-created parents are secured, not refused.
+    let nested = out.join("deep").join("nest").join("run");
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.clone(),
+        manifest_path: None,
+        template_path: None,
+        output_dir: nested.clone(),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    })
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(nested.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "created parent must be exclusive");
+    }
+    // Round trip: the delivered cleanup route removes a successful run.
+    let report = cleanup::cleanup_run(&nested, None).unwrap();
+    assert!(!nested.exists(), "cleanup must remove the run");
+    assert!(!report.run_id.is_empty());
+    assert_eq!(report.profile, "operator-delivery-v1");
+}
+
+// S69-round4: a symlink planted in the check-to-create window (fired
+// via BeforeParentMkdir) must NOT receive the new-parent chmod: the
+// planted name reports EEXIST (not newly owned), refuses at the
+// NOFOLLOW parent open, and the link target's mode and marker
+// survive untouched. Pre-fix the path chmod followed the plant and
+// flipped the victim to 0700.
+#[test]
+fn planted_parent_symlink_gets_no_chmod() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    let out = scratch("s69-plant");
+    let victim = out.join("victim");
+    mkexclusive(&victim, 0o755);
+    let marker = victim.join("marker.txt");
+    std::fs::write(&marker, b"victim intact").unwrap();
+    let parent = out.join("parent");
+    let run = parent.join("run");
+    let hook = |phase: DeliveryHookPhase| {
+        if phase != DeliveryHookPhase::BeforeParentMkdir {
+            return;
+        }
+        std::os::unix::fs::symlink(&victim, &parent).unwrap();
+    };
+    let err = delivery::run_delivery_with_hook(
+        delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        },
+        Some(&hook),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), OperatorErrorKind::MissingInput);
+    assert!(
+        err.detail().contains("cannot open output parent"),
+        "planted symlink parent must refuse at open: {}",
+        err.detail()
+    );
+    assert!(!run.exists(), "refused run must create nothing");
+    let mode = std::fs::metadata(&victim)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o755, "victim mode must survive the plant window");
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        b"victim intact",
+        "victim content must survive the plant window"
+    );
+}
+
+// S61: DeliveryAdapter preflights the ENTIRE script before its
+// first input access (TT02 dialect amendment, like the S34 capture
+// adapters). The script below has a valid first step and an
+// unsupported second step under the binding dialect, whose first
+// input is non-UTF8: the old per-step loop read step 1 first —
+// Unavailable with a missing slot, InvalidOutput with a populated
+// one — while the preflight rejects pre-read UnsupportedSchema
+// with no step and no progress in both cases.
+#[test]
+fn delivery_adapter_preflights_whole_script_before_reads() {
+    fn script(second_op: &str) -> Vec<u8> {
+        format!(
+            "{{\"schema_version\":1,\"kind\":\"steps-v1\",\"schema_id\":\"tt07-binding-v1\",\
+             \"steps\":[{{\"step_id\":\"first\",\"operation\":\"subject-coords\",\
+             \"inputs\":[\"slot-a\"],\"parameters\":[]}},\
+             {{\"step_id\":\"second\",\"operation\":\"{second_op}\",\
+             \"inputs\":[\"slot-a\"],\"parameters\":[]}}]}}"
+        )
+        .into_bytes()
+    }
+    fn invocation(limits: &RunLimits, script_json: &[u8]) -> CaseInvocation {
+        let script = OperationScript::load(script_json, limits).expect("test script loads");
+        let key = InvocationKey::new(
+            InvocationKeyValues {
+                run_id: RunId::parse("0123456789abcdef0123456789abcdef").expect("run id"),
+                case_key: CaseKey::new(
+                    CaseKeyValues {
+                        case_id: CaseId::parse("TT07.delivery-contract").expect("case id"),
+                        case_version: 1,
+                        cell_id: "contract".to_string(),
+                    },
+                    limits,
+                )
+                .expect("case key"),
+                attempt: 1,
+                operation_id: 1,
+            },
+            limits,
+        )
+        .expect("invocation key");
+        CaseInvocation::new(
+            CaseInvocationValues {
+                key,
+                observation_schema: SchemaBinding::new(
+                    SchemaBindingValues {
+                        id: Label::parse("tt07-binding-v1-observation").expect("schema"),
+                        revision: 1,
+                    },
+                    limits,
+                )
+                .expect("observation schema"),
+                fixture_schema: SchemaBinding::new(
+                    SchemaBindingValues {
+                        id: Label::parse("tt07-fixture-v1").expect("schema"),
+                        revision: 1,
+                    },
+                    limits,
+                )
+                .expect("fixture schema"),
+                script,
+                limits: limits.clone(),
+            },
+            limits,
+        )
+        .expect("invocation")
+    }
+    let limits = RunLimits::default();
+    let inv = invocation(&limits, &script("no-such-op"));
+    // Non-UTF8 first input: the old loop consumed it (InvalidOutput)
+    // before reaching the unsupported second step.
+    let slot_a = Label::parse("slot-a").expect("slot");
+    let present = FixtureInput::new(slot_a, b"\xff\xfe");
+    let fix_present =
+        FixtureAccess::new(std::slice::from_ref(&present), &[], EffectBatch::empty(&limits), &limits)
+            .expect("populated fixture");
+    let fix_missing =
+        FixtureAccess::new(&[], &[], EffectBatch::empty(&limits), &limits).expect("empty fixture");
+    for (tag, fix) in [("missing-slot", &fix_missing), ("populated-slot", &fix_present)] {
+        let err = delivery::DeliveryAdapter::new()
+            .unwrap()
+            .execute(&inv, fix)
+            .expect_err(&format!("{tag}: second-step dialect rejects pre-read"));
+        assert_eq!(
+            *err.category(),
+            CaseErrorCategory::UnsupportedSchema,
+            "{tag}: category"
+        );
+        assert_eq!(err.stage().as_str(), "adapter-schema", "{tag}: stage");
+        assert!(err.step_id().is_none(), "{tag}: dialect names no step");
+        assert!(err.completed_steps().is_empty(), "{tag}: no progress");
+    }
+    // Control: two valid steps still execute.
+    let inv_ok = invocation(&limits, &script("subject-coords"));
+    let slot_b = Label::parse("slot-a").expect("slot");
+    let ok_input = FixtureInput::new(slot_b, b"coords-ok");
+    let fix_ok = FixtureAccess::new(
+        std::slice::from_ref(&ok_input),
+        &[],
+        EffectBatch::empty(&limits),
+        &limits,
+    )
+    .expect("control fixture");
+    delivery::DeliveryAdapter::new()
+        .unwrap()
+        .execute(&inv_ok, &fix_ok)
+        .expect("valid two-step script executes");
 }
 
 // S42: success overwrites the creating manifest with the sealed

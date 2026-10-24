@@ -28,6 +28,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
+          # S53-round4: the check-i686-testkit fast gate type-checks the
+          # non-x86_64 audit stub (cfg(not(x86_64)) must stay
+          # signature-compatible with the x86_64 tracer entry).
+          targets: i686-unknown-linux-gnu
       - uses: actions/cache@v4
         with:
           path: ~/.cargo/registry

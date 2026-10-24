@@ -5,7 +5,7 @@
 
 use crate::closure::{self, BoundedReadError, VerifiedClosure};
 use crate::error::{OperatorError, OperatorErrorKind};
-use scopebase_testkit::{Qualification, RunContract, RunLimits, RunReport};
+use scopebase_testkit::{Qualification, RunContract, RunLimits, RunReport, SubjectBinding};
 use std::path::Path;
 
 /// Receipt envelope schema marker.
@@ -184,10 +184,24 @@ fn verify_envelope(bytes: &[u8]) -> Result<(ReceiptReport, serde_json::Value), O
             .is_none_or(|p| p.is_empty()),
         "receipt lacks its mapping policy",
     )?;
-    invalid_if(
-        !envelope.get("subject").is_some_and(|s| s.is_object()),
-        "receipt lacks its subject",
-    )?;
+    // S41: the shallow subject gate admits the TYPED binding through
+    // the engine's exact `Decode` + bounds admission — never a bare
+    // `is_object` shape check, which a resealed `{}` subject passes.
+    // Default limits are the structural gate: the producer's genuine
+    // subject decodes under them (see the resealed-control test), so
+    // anything rejected here is malformed, not over budget.
+    let subject_value = envelope.get("subject").cloned().ok_or_else(|| {
+        OperatorError::new(
+            OperatorErrorKind::ReceiptInvalid,
+            "receipt lacks its subject",
+        )
+    })?;
+    SubjectBinding::from_json(subject_value, &RunLimits::default()).map_err(|e| {
+        OperatorError::new(
+            OperatorErrorKind::ReceiptInvalid,
+            format!("receipt subject binding rejected: {e}"),
+        )
+    })?;
     let sealed = envelope
         .get("envelope_sha256")
         .and_then(|s| s.as_str())

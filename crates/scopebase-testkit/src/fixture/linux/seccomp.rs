@@ -22,20 +22,25 @@
 use std::fmt;
 use std::os::fd::RawFd;
 
-/// Which strict errno the denied syscall reports.
+/// What the denied syscall does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DenyAction {
     /// `SECCOMP_RET_ERRNO | EPERM`.
     Eperm,
     /// `SECCOMP_RET_ERRNO | ENOSYS`.
     Enosys,
+    /// `SECCOMP_RET_KILL_PROCESS`: attempting the syscall kills the
+    /// caller with SIGSYS. Used only to prove a cleanup path never
+    /// issues the syscall (S68-round4): survival is the assertion.
+    Kill,
 }
 
 impl DenyAction {
-    fn errno(self) -> u32 {
+    fn ret(self) -> u32 {
         match self {
-            DenyAction::Eperm => libc::EPERM as u32,
-            DenyAction::Enosys => libc::ENOSYS as u32,
+            DenyAction::Eperm => SECCOMP_RET_ERRNO | libc::EPERM as u32,
+            DenyAction::Enosys => SECCOMP_RET_ERRNO | libc::ENOSYS as u32,
+            DenyAction::Kill => SECCOMP_RET_KILL_PROCESS,
         }
     }
 }
@@ -76,6 +81,7 @@ const BPF_JEQ_K: u16 = 0x15;
 const BPF_RET_K: u16 = 0x06;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 // `struct seccomp_data` field offsets: nr (int) at 0, arch (__u32) at 4,
 // args[0] (u64) at 16 (the ptrace request rides in its low word).
 const SECCOMP_DATA_NR_OFF: u32 = 0;
@@ -106,7 +112,7 @@ fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
 /// `unsupported_arch` without touching process state.
 #[cfg(target_arch = "x86_64")]
 pub fn install_deny_one(nr: libc::c_long, action: DenyAction) -> Result<(), SeccompError> {
-    let deny = SECCOMP_RET_ERRNO | (action.errno() & 0xffff);
+    let deny = action.ret();
     let program = [
         stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
         jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
@@ -128,7 +134,7 @@ pub fn install_deny_ptrace_request(
     request: libc::c_uint,
     action: DenyAction,
 ) -> Result<(), SeccompError> {
-    let deny = SECCOMP_RET_ERRNO | (action.errno() & 0xffff);
+    let deny = action.ret();
     let program = [
         stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
         jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),

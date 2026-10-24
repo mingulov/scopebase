@@ -1816,6 +1816,20 @@ impl Decode for BindingProvenance {
     }
 }
 record!(SubjectBinding,SubjectBindingValues{package_name:String,package_version:String,source_sha256:Digest256,build_inputs_sha256:Digest256,features:Vec<String>,backend:Option<BackendBinding>,host:String,target:String,consumer:ConsumerBinding,objects:Vec<ArtifactBinding>,provenance:BindingProvenance},|v:&SubjectBindingValues,l:&RunLimits|{for s in [&v.package_name,&v.package_version,&v.host,&v.target]{name(s,l)?}for s in &v.features{name(s,l)?}bound(v.features.len(),l.features(),"features")?;sorted(&v.features)?;bound(v.objects.len(),l.artifacts(),"objects")?;sorted(&v.objects.iter().map(|a|a.id()).collect::<Vec<_>>())?;if let BindingProvenance::SelfReported{reason}=&v.provenance{name(reason,l)?}Ok(())});
+impl SubjectBinding {
+    /// Admit a subject binding from an already-parsed JSON envelope
+    /// value under caller limits.
+    ///
+    /// S41: the receipt verifier's shallow subject gate reuses this
+    /// exact typed admission — the same `Decode` plus bounds check
+    /// the engine uses — so a resealed envelope with a sparse or
+    /// malformed `subject` object fails here instead of passing an
+    /// `is_object` shape check.
+    pub fn from_json(v: Value, l: &RunLimits) -> Result<Self, HarnessError> {
+        Self::decode(v, l)
+    }
+}
+
 record!(
     OracleBinding,
     OracleBindingValues {

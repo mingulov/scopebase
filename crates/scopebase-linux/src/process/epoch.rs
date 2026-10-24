@@ -141,6 +141,35 @@ impl ObserverEpoch {
         &self.marker
     }
 }
+
+#[cfg(test)]
+impl ObserverEpoch {
+    /// Forge a post-fork epoch: identical authority handles, foreign
+    /// creator. Reproduces exactly the guard state a forked child
+    /// observes (`creator != getpid`) without forking: forked children
+    /// of the multithreaded test binary may only run syscalls, never
+    /// lib code, so a real fork cannot drive `observe_mapping`. The
+    /// guard decides on the pid comparison alone and fails before
+    /// touching the cloned handles.
+    pub(crate) fn forge_post_fork_creator(&self, creator: Pid) -> Self {
+        Self {
+            authority: Arc::new(Authority {
+                creator,
+                pidfd: self
+                    .authority
+                    .pidfd
+                    .try_clone()
+                    .expect("clone authority pidfd"),
+                ns: self.authority.ns.try_clone().expect("clone authority ns"),
+                key: self.authority.key,
+            }),
+            marker: Arc::clone(&self.marker),
+            interval: self.interval,
+            charges: self.charges.clone(),
+            effects: self.effects.clone(),
+        }
+    }
+}
 impl Clone for ObserverEpoch {
     fn clone(&self) -> Self {
         Self {
@@ -246,7 +275,19 @@ fn guard_creator_live(
 ) -> Result<(), LinuxError> {
     let current = current_pid(ops, control)?;
     if current != epoch.creator() {
-        return Err(ops.fail(Stage::ConfigureProcess, Reason::WrongContext, None));
+        // S11: the post-fork creator mismatch is observer-side (our
+        // authentication broke; no target work ran). current_pid
+        // clears ops.member, so tag the creator origin explicitly —
+        // a memberless WrongContext would route as a target
+        // ViewChanged mismatch instead of an observer failure.
+        let context =
+            ProcessErrorContext::new(ops.operation, Some(ProcMember::CreatorPidfd));
+        return Err(ops.fail_with(
+            Stage::ConfigureProcess,
+            Reason::WrongContext,
+            None,
+            context,
+        ));
     }
     let sample = poll_pidfd(
         ops,

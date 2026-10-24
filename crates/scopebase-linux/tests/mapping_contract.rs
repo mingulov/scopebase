@@ -1183,3 +1183,78 @@ fn drain_report_counts_idle_domain() {
     assert!(report.errors().is_empty());
     pool.close(&control()).unwrap();
 }
+
+/// S10: calibration is pre-admitted against the REMAINING budget on
+/// the production path. With max_open_fds=31 the documented prefix
+/// (birth 5 + maps 15 + denied map_files 10 = 30) fits, but
+/// calibration's worst case (47 more) does not — so the refusal must
+/// report the ceiling with prefix-only charges. Any calibration
+/// acquisition (mapping, self observation, reads) would add its
+/// charges to the ledger and fail the sum; the old post-effect
+/// absorb recorded them before reporting the same ceiling.
+/// Oracle-gated: calibration only runs where exact association is
+/// denied, so granted environments skip (loudly).
+#[test]
+fn calibration_preadmits_remaining_budget_before_any_effect() {
+    let epoch = epoch();
+    let process = ProcessObservation::acquire(me(), &epoch, proc_limits(), &control()).unwrap();
+    let temp = TempFile::create(8192);
+    let held = temp.hold();
+    let file = std::fs::File::open(&temp.path).unwrap();
+    let mapping = TestMapping::map(&file, page_size());
+    let addr = mapping.addr();
+    let maps = process.read_maps(proc_limits(), &control()).unwrap();
+    let line = maps
+        .snapshot()
+        .containing(addr)
+        .expect("test mapping is rendered");
+    let range = MapRange::new(line.start(), line.end()).unwrap();
+    if oracle_map_files_identity(std::process::id(), line.start(), line.end()).is_ok() {
+        eprintln!("SKIP s10: environment grants map_files; calibration unreachable");
+        return;
+    }
+    let policy = MappingPolicy::AllowPrivateCalibration {
+        max_mapped_bytes: page_size(),
+    };
+    let pool = pool_for(&policy);
+    let failure = scopebase_linux::mapping::observe_mapping(
+        MappingRequest {
+            pool: &pool,
+            held,
+            process: &process,
+            range,
+            policy,
+            retained: None,
+            limits: MappingLimits {
+                proc: proc_limits(),
+                max_mount_refreshes: 1,
+                max_open_fds: 31,
+                max_live_mappings: 1,
+            },
+        },
+        &control(),
+    )
+    .expect_err("31-FD ceiling cannot admit calibration's 47 after a 30 prefix");
+    assert_eq!(
+        failure.error().reason(),
+        Reason::LimitExceeded(LimitKind::OpenFds)
+    );
+    let staged: u64 = failure
+        .stage_charges()
+        .iter()
+        .map(|charges| charges.fd_acquisitions())
+        .sum();
+    assert_eq!(
+        staged, 30,
+        "prefix only (birth 5 + maps 15 + denied map_files 10); \
+         calibration must acquire nothing, got {staged}"
+    );
+    assert!(
+        failure.unresolved().is_none(),
+        "refused calibration must attach no custody"
+    );
+    let status = pool.status();
+    assert_eq!(status.active_mappings(), 0);
+    assert_eq!(status.unresolved_mappings(), 0);
+    pool.close(&control()).unwrap();
+}

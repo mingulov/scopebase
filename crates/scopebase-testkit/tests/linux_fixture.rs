@@ -865,19 +865,26 @@ fn accepted_components_consumed() {
     )
     .unwrap();
     assert_eq!(mounts.entries().len(), 1);
+    // RATIFY-2026-10-23-LX05-NSFS (LX06 repair): real kernels
+    // render namespace pseudo-names as nsfs mount roots; the
+    // accepted parser admits exactly that documented shape
+    // (unknown non-`/` roots still refuse, pinned by the
+    // parser's own unit tests).
     let nsfs = b"1572 34 0:5 net:[4026532307] /run/docker/netns/5014e9543e94 rw shared:1132 - nsfs nsfs rw\n";
-    assert!(
-        parse_mountinfo(
-            nsfs,
-            ParseLimits {
-                max_bytes: nsfs.len(),
-                max_entries: 4,
-                max_line_bytes: 8192,
-            },
-        )
-        .is_err(),
-        "accepted parser pins current nsfs-source refusal (LX05 follow-up)"
-    );
+    let table = parse_mountinfo(
+        nsfs,
+        ParseLimits {
+            max_bytes: nsfs.len(),
+            max_entries: 4,
+            max_line_bytes: 8192,
+        },
+    )
+    .expect("accepted parser admits ratified nsfs pseudo-root");
+    assert_eq!(table.entries().len(), 1);
+    let entry = table.entries().next().unwrap();
+    assert_eq!(entry.root().decoded(), b"net:[4026532307]");
+    assert_eq!(entry.filesystem_type().decoded(), b"nsfs");
+    assert_eq!(entry.source().decoded(), b"nsfs");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

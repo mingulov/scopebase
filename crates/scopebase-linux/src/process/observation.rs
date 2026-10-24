@@ -506,6 +506,15 @@ impl ProcessObservation {
         &self.effects
     }
 }
+
+#[cfg(test)]
+impl ProcessObservation {
+    /// Swap the retained epoch (post-fork forgery; see
+    /// `ObserverEpoch::forge_post_fork_creator`).
+    pub(crate) fn forge_post_fork_epoch(&mut self, epoch: ObserverEpoch) {
+        self.epoch = epoch;
+    }
+}
 impl fmt::Debug for ProcessObservation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ProcessObservation")
