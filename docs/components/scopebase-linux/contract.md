@@ -1,10 +1,13 @@
 # scopebase-linux LX01 boundary contract
 
-Version 0.1.0 is a Linux-only package boundary with no runtime exports or
-production/development dependencies. Default features are empty; `process`,
-`mapping = ["process"]`, `supervision = ["process"]` and `walk` are additive
-boundary declarations only. No placeholder modules or HeldFile are exported.
-Public authority appears with real implementation/tests at LX02 and later.
+Version 0.1.0 is a Linux-only package. As of the accepted LX02–LX10-era
+increments it exports nine public modules (`conformance`, `control`,
+`error`, `file`, `identity`, `mapping`, `process`, `procfs`, `walk`; see
+`src/lib.rs`, some behind their named features) and depends on
+`rustix =1.1.5` (`std`, `fs`, `pipe`). The `supervision` feature remains a
+boundary declaration; its runtime mechanism is later work.
+(LX01-era "no runtime exports / zero dependencies" text superseded
+2026-10-25; see the [gap-audit review](../../reviews/2026-10-25-scopebase-gap-audit.md).)
 
 Explicit package values follow accepted workspace policy: Rust edition 2021,
 prospective MSRV 1.88.0, Apache-2.0, `publish = false`, `build = false`.
@@ -23,7 +26,7 @@ bounded-walk profiles are all unimplemented and unqualified. No operator conform
 route or independently useful behavioral consumer exists in this boundary increment.
 
 `package-policy.json` at repository root declares the genuine product member,
-zero allowed dependencies and build approvals, both exact compilers, source-input
+its allowed dependencies and build approvals, both exact compilers, source-input
 inventory, two independently wired import-only clients, three configurations and
 an exact eight-file archive allowlist. Minimal/default builds import with empty
 feature sets. The union combines mapping/process/supervision/walk; separate

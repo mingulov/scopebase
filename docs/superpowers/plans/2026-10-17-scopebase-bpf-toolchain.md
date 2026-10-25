@@ -101,7 +101,7 @@ The [ratified descriptive host contract](../specs/2026-10-22-scopebase-bp03-host
 
 **Files:** Create `crates/scopebase-bpf/src/capability.rs`, `crates/scopebase-bpf/tests/capability.rs`, `fixtures/bpf/capability/populations.json`, `crates/scopebase-testkit/src/bpf/adapter.rs`.
 
-**Interfaces:** Produce spec `CapabilityState`, `EvidenceStage`, `HazardState`, `CapabilityObservation::{state,stage,applies_to}`, `ProbeContext`, `ProbePopulation`, `assess_filter_probe(&ProbePopulation)->Result<CapabilityState,OperationError>`. Consume shared `ConformanceAdapter`/`SubjectBinding`/`CaseInvocation`/`FixtureAccess`/`Observation`/`CaseError`; adapter provides observations, never expected truth.
+**Interfaces:** Produce spec `CapabilityState`, `EvidenceStage`, `HazardState`, `CapabilityObservation::{state,stage,applies_to}`, `ProbeContext`, `ProbePopulation`, `assess_filter_probe(&ProbePopulation)->Result<CapabilityState,OperationError>`. Consume **prepared-only** `ResponsePreparedAdapter` per TT02-RSP01 (`BpfHostAdapter` must not implement `ConformanceAdapter`; a legacy `run_profile` caller must compile-fail, PRP12), plus shared `SubjectBinding`/`CaseInvocation`/`FixtureAccess`/`Observation`/`CaseError`; adapter provides observations, never expected truth.
 
 **Preservation/decision gate:** Add H33 same-errno/different-cause and GPL-helper admission cases. Preserve BPF_PROG_LOAD operation, raw errno and bounded verifier evidence; verifier/license refusal is not automatically Denied. Unknown cause stays Unknown. Bridge BP/testkit ProfileIds by checked unchanged bytes; slash/long/uppercase domain-only inputs refuse in the receiving grammar.
 

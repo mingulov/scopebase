@@ -1,10 +1,61 @@
 # ScopeBase current handoff
 
+Date: 2026-10-25. **The two trees are merged.** At the user's explicit instruction, `feat/m0-foundations` (integration, 139 commits, tip `db47ca34bd97e077c166a65971603867aa875556`) was fast-forward merged into `main`, and the counts/docs were reconciled in the commit containing this file. **`main` in `/home/user/src/m/bpfscope` is now the single canonical tree and ledger.** Fifty-one of 86 tasks are accepted, thirty-five planned (TODO header, TODO checkboxes and traceability ACCEPTED were recounted and agree). The integration worktree `.worktrees/m0-integration` (branch `feat/m0-foundations`, incl. its 45G `target/` and `.superpowers/sdd/` ledger) is **preserved as read-only custody** — do not develop in it, do not delete it without a deliberate retirement decision. The `bp03-prepared` worktree was NOT merged. Basis: the [2026-10-25 deep gap analysis + engineering audit](docs/reviews/2026-10-25-scopebase-gap-audit.md) (11 lanes; read its §0 top finding and §6 order). Round-9 state at merge: external findings S126–S141 fixed/verified; external round 3 produced **S143–S159 (9 Critical / 6 Important / 2 Minor), still unadjudicated — that loop is the first resume work**, so do not repeat any aggregate "full stack green" claim until it closes. Session goal `goal-01a16ea1-c385-7890-995b-da6c0a620f2d` was left ACTIVE but paused by the 2026-10-24 record; resume it, do not create a replacement.
+
+## Resume here
+
+Read this section first; everything below the next `---` is prior record.
+
+1. **Verify the tree before anything else** (all read-only):
+   - `git -C /home/user/src/m/bpfscope log --oneline -3` — top is the 2026-10-25 reconciliation commit, then `db47ca3`.
+   - `git -C /home/user/src/m/bpfscope status --short` — clean except deliberately untracked/private paths; explain every line before dispatch.
+   - `git -C /home/user/src/m/bpfscope rev-list --count feat/m0-foundations..main` — `1` (this reconciliation) unless work continued since.
+   - Recreate the build-lease root if `/run` was wiped: `mkdir -p /run/user/1000/scopebase-locks && chmod 0700 /run/user/1000/scopebase-locks`.
+2. **Read, in order:** this file; [TODO](TODO.md) (canonical ledger, 51/86); the [gap audit](docs/reviews/2026-10-25-scopebase-gap-audit.md) §0/§3/§5/§6; the SDD ledger `/tmp/sdd-round7/ledger.md` (backup `/home/user/.local/share/muse/sdd-round7-20261024/`) and `.worktrees/m0-integration/.superpowers/sdd/2026-10-17-scopebase/progress.md`; then [DEVELOPMENT](DEVELOPMENT.md), the [decision register](docs/superpowers/specs/2026-10-18-scopebase-decisions.md) and [executor contract](docs/superpowers/specs/2026-10-18-scopebase-executor-contract.md) before executing any packet.
+3. **First work — S143–S159 adjudication/fix loop** (external round 3, report `/tmp/sdd-round7/codex-r9-final.md` + backup, range `c65d9dd..db47ca3`; no relaunch needed): map each S-id to its owning task; adjudicate → fix (TDD: failing test naming the intended assertion first; ≤3 parallel writers, disjoint files; cargo via the lease wrapper) → verify → post-patch validation → re-review → next external round, until external review approves with zero open findings (alpha-mode rule in [AGENTS](AGENTS.md)). **S149 reopens the agreed S129-half2 refutation with a concrete second-wait path — re-examine it first.** Report per-S-id PASS/REFUTED/DEFERRED; never aggregate-green over an unadjudicated Critical.
+4. **Second — integration evidence audit** ([TODO corrections row](TODO.md)): AGENTS.md alpha mode (owner-directed 2026-10-23) is real, but `orchestration/policy.json` and traceability `ACCEPTED` carry no tier field. Bind each of the 51 acceptances to its review artifact (reviewer lane, package hash, verdict) or mark it alpha-tier explicitly; BP10/CP12 and post-review fixup deltas get fresh independent review. Never relabel root re-verification as review.
+5. **Then, in TODO order:** count-consistency checker (header==checkbox==traceability), `PACKET-GUARD01`, `TRACE-AMEND01`/`REQ-STATUS01`; then the product frontier — 35 planned tasks (BP11, TC07, TC08, CP13, LX07–LX09, LX12, LX13, SDK05–SDK09, NX01–NX10, TT03, TT05, TT10, RL02–RL04, MG01–MG05), with the joint LX08×TT03-final-index compatibility record before LX08 dispatch.
+6. **Donor rules (unchanged + audit additions):** frozen copies under `.scopebase/donor-snapshots/2026-10-18/` are the only porting inputs; never fetch or port from live donors. p11scope items D1–D7 (audit §2a) need the bounded recapture at `6780e71e`/`cd1eb1f0` before any related port — never from frozen bytes (at merge time `crates/` contained no ELF segment-range code, so D1 was not imported; re-verify before BP08 work). KryProbe production pins are still current; the proof-core analyzer is retired — **do not port** (see `docs/provenance/h22-k-harness-20261025.md`). MojoBPF (J) has no frozen capture; capture or explicitly defer before any J packet.
+7. **Verification gates** (run fresh; quote real output; NOT_RUN stays NOT_RUN):
+   - `python3 tools/check_planning_docs.py`
+   - `python3 tools/planning/check_traceability.py docs/superpowers/plans/2026-10-17-scopebase-traceability.json`
+   - `python3 -m unittest discover -s tests/orchestration -v`
+   - `python3 -m unittest discover -s tools/planning/tests -v`
+   - `python3 -m unittest discover -s tests/package-policy -p 'test_*.py' -v` (no outer build wrapper — the suite self-locks per cargo call)
+   - Cargo via the frozen wrapper with the explicit lock root (see [DEVELOPMENT](DEVELOPMENT.md)): `cargo test --workspace --locked --offline`. MSRV 1.88, `--all-features`, the twenty-cell matrix, fuzz and live N1–N9 cells are NOT_RUN at merged bytes unless a later record says otherwise.
+   - **Known red at merge (pre-existing, reproduced on pristine `db47ca3`):** `LockDiagnosticControls` in the package-policy suite — layer 1 (scopebase-conformance unregistered) fixed in the merge commit; layer 2 open: staged source inventory predates BP09's `btf-rs` git dependency (TODO row 'SB02 source-inventory successor'). Every other gate above was re-run at merge; quote their fresh output, not this note.
+8. **Custody:** preserve every worktree, target, cache, log and ownership claim; `.worktrees/bp02-maps-20261018/bp02-review-fix-report.md` is not ours — leave it. Pre-merge `main` working tree is recoverable at git ref `refs/tbh/recovery/before-discard/20261025T152709Z-2194146` and as patches under `/tmp/scopebase-merge-20261025/`; audit lane reports are under `/tmp/scopebase-audit-20261025/` (scratch — the durable record is `docs/reviews/2026-10-25-scopebase-gap-audit.md`). Restore safe parallelism per DEVELOPMENT/policy (disjoint ownership, explicit model/effort, one heavy-build slot). If disk is tight, audit `/tmp` ownership before touching anything (2026-10-24 housekeeping notes are in the prior record below).
+
+---
+
+## Prior record (2026-10-24 VM-restart pause, superseded above)
+
+Date: 2026-10-24. **Development is paused for a VM restart at the user's explicit request.** Instruction: finish current work without starting new workers or cancelling anything, pause the goal, write this handoff. No new fixers/reviewers were dispatched. External round 3 finished before the restart (see step 4); its S143–S159 fixes are the resume work. NOTE: `.worktrees/bp02-maps-20261018` holds one untracked file (`bp02-review-fix-report.md`, not ours) — left untouched. Resume requires the user's instruction.
+
+**Integration is clean at `db47ca34bd97e077c166a65971603867aa875556`** (`feat/m0-foundations` in `/home/user/src/m/bpfscope/.worktrees/m0-integration`). Round-9 is COMPLETE: external findings S126–S141 fixed, fresh-verified, post-patch validated, and re-reviewed (S129-half2 refuted with agreed reasoning; S142 + minors deferred to ledger). Full stack green at HEAD: testkit `--all-features` 29/29 targets, provision_fs 261 OK, provision_live 66 OK / 21 skipped, plus targeted live runs (E2E 69s OK post-gate, S136/S137/respawn live OK), zero stray mounts/processes from this session's runs.
+
+Session goal `goal-01a16ea1-c385-7890-995b-da6c0a620f2d` (38%): "using superpowers and all relevant skills, develop BPF scopebase fully by the plan, using 'codex gpt-6.1-sol max' (json mode, resume sessions) for additional reviews (use your review initially, so use external after initial rounds of muse's reviews)". Left ACTIVE but paused; resume it, do not create a replacement.
+
+### Post-restart steps as recorded 2026-10-24
+
+1. Recreate the build-lease root (reboot wipes /run): `mkdir -p /run/user/1000/scopebase-locks && chmod 0700 /run/user/1000/scopebase-locks`.
+2. Verify the tree: `git -C /home/user/src/m/bpfscope/.worktrees/m0-integration log --format='%h %s' -2` must show `db47ca3` on top with a clean `git status`.
+3. Read the ledger `/tmp/sdd-round7/ledger.md` (backup: `/home/user/.local/share/muse/sdd-round7-20261024/`; both hold all briefs/reports/diffs/PPV harnesses).
+4. External Codex round 3 COMPLETED pre-restart (no relaunch needed): FINDINGS 9 Critical / 6 Important / 2 Minor (S143–S159) over `c65d9dd..db47ca3`, report at `/tmp/sdd-round7/codex-r9-final.md` (+ backup). Adjudicate → fix loop (TDD, ≤3 parallel writers, disjoint files, lease wrapper for cargo) → verify → PPV → re-review → next external round, until external review approves; then continue the master plan past 51/86 accepted tasks. NOTE: S149 reopens the agreed S129-half2 refutation with a concrete second-wait path — re-examine on resume.
+5. Housekeeping done 2026-10-24 (disk 48G→104G free): removed 5 untagged `rust:<none>` docker images + builder cache (~10GB), 25 stale sb02-policy test outputs in /tmp (kept 3 from today), and `target/` in 24 merged+clean wave-lane worktrees (w24–w29, all ancestors of m0, zero live builders). Deliberately kept: m0-integration/target (45G, active), bp03-prepared worktree (NOT merged), `.scopebase` (custody), all rustup toolchains (shared; BPF-nightly pins referenced by sibling projects), /tmp/claude-1000 (haskoki, active today), target-ppv/target-tt08 (owner unattributed).
+6. Disk was 48G free at pause (p11scope lanes active); if tight, audit `/tmp` (93G+ pre-restart, other sessions' scratch — verify ownership before touching).
+
+Pre-restart notes: pid 6274 (another session's keeper) and the shared per-UID keeper were left running — reboot clears them. Main checkout untouched at `262e8b2` (+3 pre-existing untracked files, not ours).
+
+---
+
+## Prior record (2026-10-22 pause and earlier, superseded above)
+
 Date: 2026-10-22. **Development is paused at the user's explicit request.** The instruction was: “prepare to do a pause and restart. Wait all tasks will be finished, do not start new tasks - and write handoff.md to allow proper restart.” Existing workers finished their current bounded checkpoint, audit, review or preparation; no follow-on repair, source import, job, product campaign or C7 probe was started. Resume requires a later user instruction.
 
 **Nineteen of 86 tasks remain accepted; sixty-seven remain planned.** TT02-RSP01 and JOB-CUSTODY01 are maintenance, not additional product tasks. CP06 is accepted at `e6fe76c`; BP03 is accepted at `bfb9452` after custody closure, prepared integration, fix round and 24-cell bounded qualification; TT03 and LX08 remain planned despite their bounded design increments. No complete twenty-cell matrix, installed operator, full mapped-image capability or runtime/conformance profile is qualified.
 
-## Resume here
+## Prior resume route (2026-10-22, superseded 2026-10-25)
 
 Read this current section before any historical instructions below. Canonical integration is `/home/user/src/m/bpfscope/.worktrees/m0-integration`, branch `feat/m0-foundations`. Main and integration were clean at **`f78eb738031f344673c35db54382d77754055a89`** before this documentation-only pause checkpoint. The containing documentation commit and the private final receipt identify the restart tip; no product bytes are integrated by this checkpoint.
 

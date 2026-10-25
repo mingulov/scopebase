@@ -1,8 +1,9 @@
 # TT03 owned Linux fixture and independent raw truth contract
 
-2026-10-22. **PROPOSED NARROW C7/DELIVERY AMENDMENT.** The new
-materializer/source-selection support is not ratified by the predecessor record
-below. It requires scoped review/root adoption and actual separate execution
+2026-10-22. **PROPOSED NARROW C7/DELIVERY AMENDMENT.** The materializer
+design itself was adopted at `f78eb73` ("adopt TT03 materialization"); the
+new source-selection/C7 support in this amendment is not ratified by that
+adoption or by the predecessor record below. It requires scoped review/root adoption and actual separate execution
 bindings. The unchanged r4 process/protocol/creator contract retains its
 predecessor ratification; no implementation or execution is admitted here.
 
