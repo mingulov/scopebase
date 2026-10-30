@@ -2019,7 +2019,9 @@ mod tests {
     /// exec'd children (their fd-count asserts would see it).
     /// NEVER NEST: same-process POSIX locks merge, so an inner
     /// drop would release the outer's lock — hold at most one
-    /// (placement loops never nest).
+    /// (placement loops never nest). R13-009: locked_* helpers
+    /// take this guard internally — never call them under a held
+    /// guard (explicit drop/scope after placement first).
     #[cfg(target_arch = "x86_64")]
     struct NsLastPidFlock {
         fd: libc::c_int,
@@ -2083,12 +2085,16 @@ mod tests {
         }
     }
 
-    /// R12-005: steer the pid allocator so the next fork takes
-    /// `want` (twin of the toolchain file's steer, sudo
-    /// fallback included — mode bits lie: the write needs a
-    /// capability the direct path may lack).
+    /// R13-009: unlocked allocator steer (rename of
+    /// audit_steer_next_pid; twin of the toolchain file's
+    /// unlocked steer). Call ONLY under a held placement guard
+    /// (placement loops hold it across steer-then-spawn) or via
+    /// [`audit_locked_steer_next_pid`]. Every other allocator
+    /// write must take the lock: an unlocked write landing
+    /// between another process's steer and fork invalidates its
+    /// placement.
     #[cfg(target_arch = "x86_64")]
-    fn audit_steer_next_pid(want: i32) -> bool {
+    fn audit_steer_next_pid_unlocked(want: i32) -> bool {
         use std::process::Stdio;
         let path = "/proc/sys/kernel/ns_last_pid";
         let text = format!("{}", want - 1);
@@ -2104,6 +2110,29 @@ mod tests {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+    }
+
+    /// R13-009: allocator steer under the cross-process placement
+    /// lock (twin of the toolchain file's locked steer — probes
+    /// and restores, every write outside placement loops). NEVER
+    /// call under a held guard: same-process POSIX locks merge,
+    /// so this guard's drop would release the outer's lock (see
+    /// NEVER NEST on the guard).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_locked_steer_next_pid(want: i32) -> bool {
+        let _lock = ns_last_pid_flock();
+        audit_steer_next_pid_unlocked(want)
+    }
+
+    /// R13-009: bare hint restore under the cross-process
+    /// placement lock (twin of the toolchain file's locked
+    /// restore; same NEVER-NEST rule). Keeps the
+    /// direct-write-only shape (no sudo fallback — a best-effort
+    /// hint write, never load-bearing).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_locked_restore_hint(last_before: &str) {
+        let _lock = ns_last_pid_flock();
+        let _ = std::fs::write("/proc/sys/kernel/ns_last_pid", last_before);
     }
 
     /// R12-005: python3 staged-probe marker — fork-only
@@ -5300,7 +5329,7 @@ mod tests {
                 return;
             }
         };
-        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
             eprintln!("skip: ns_last_pid unwritable (no reuse control)");
             return;
         }
@@ -5359,7 +5388,7 @@ mod tests {
         {
             let _flock = ns_last_pid_flock();
             for _ in 0..100 {
-                if !audit_steer_next_pid(id) {
+                if !audit_steer_next_pid_unlocked(id) {
                     break;
                 }
                 let mut cand = std::process::Command::new("/bin/sleep")
@@ -5413,7 +5442,7 @@ mod tests {
             libc::kill(id, libc::SIGKILL);
         }
         let owned = replacement.wait();
-        let _ = std::fs::write(last_path, &last_before);
+        audit_locked_restore_hint(&last_before);
         // Expiry must have fired (else survival below is
         // vacuous — nothing addressed anyone).
         assert!(got.is_none(), "collection must expire, not hang for EOF");
@@ -5470,7 +5499,7 @@ mod tests {
                 return;
             }
         };
-        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
             eprintln!("skip: ns_last_pid unwritable (no reuse control)");
             return;
         }
@@ -5553,7 +5582,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             let _flock = ns_last_pid_flock();
             for _ in 0..100 {
-                if !audit_steer_next_pid(id) {
+                if !audit_steer_next_pid_unlocked(id) {
                     break;
                 }
                 let mut cmd = std::process::Command::new("/bin/sleep");
@@ -5620,7 +5649,7 @@ mod tests {
             libc::kill(holder, libc::SIGKILL);
         }
         let holder_gone = await_proc_gone_reaping(holder, holder_tick, Duration::from_secs(5));
-        let _ = std::fs::write(last_path, &last_before);
+        audit_locked_restore_hint(&last_before);
         assert!(got.is_none(), "collection must expire (EOF held)");
         assert!(
             foreign_placed + Duration::from_millis(100) < deadline,
@@ -5671,7 +5700,7 @@ mod tests {
                 return;
             }
         };
-        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
             eprintln!("skip: ns_last_pid unwritable (no reuse control)");
             return;
         }
@@ -5705,7 +5734,7 @@ mod tests {
         {
             let _flock = ns_last_pid_flock();
             for _ in 0..100 {
-                if !audit_steer_next_pid(id) {
+                if !audit_steer_next_pid_unlocked(id) {
                     break;
                 }
                 let mut cmd = std::process::Command::new("/bin/sleep");
@@ -5766,7 +5795,7 @@ mod tests {
             libc::kill(id, libc::SIGKILL);
         }
         let owned = foreigner.wait();
-        let _ = std::fs::write(last_path, &last_before);
+        audit_locked_restore_hint(&last_before);
         assert!(first.is_none(), "null stdio must route to expiry");
         assert!(second.is_none(), "repeated expiry must route again");
         assert_eq!(

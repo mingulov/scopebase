@@ -1556,7 +1556,7 @@ fn stale_child_wait_after_sweep_steals_nothing() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -1580,7 +1580,7 @@ fn stale_child_wait_after_sweep_steals_nothing() {
     // concurrently in another process).
     let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
-        if !steer_next_pid(stray_pid) {
+        if !steer_next_pid_unlocked(stray_pid) {
             break;
         }
         let mut cand = std::process::Command::new("/bin/sleep")
@@ -1604,6 +1604,10 @@ fn stale_child_wait_after_sweep_steals_nothing() {
         replacement = Some(cand);
         break;
     }
+    // R13-009: placement done — release the cross-process lock
+    // BEFORE any locked_* call below (same-process POSIX locks
+    // merge: a nested locked_* drop would release this guard).
+    drop(_nsflock);
     let mut replacement = replacement.expect("replacement placed on stray's number");
     // Kill the replacement: it becomes a zombie holding the
     // number (nothing reaps it before the stale wait — the
@@ -1628,7 +1632,7 @@ fn stale_child_wait_after_sweep_steals_nothing() {
         .wait()
         .expect("replacement owner reaps its own zombie");
     assert!(!status.success(), "killed replacement reports signal death");
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
 }
 
 /// R12-003 (block direction): a stale numeric wait after a
@@ -1652,7 +1656,7 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -1675,7 +1679,7 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
     // concurrently in another process).
     let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
-        if !steer_next_pid(stray_pid) {
+        if !steer_next_pid_unlocked(stray_pid) {
             break;
         }
         let mut cand = std::process::Command::new("/bin/sleep")
@@ -1699,6 +1703,10 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
         replacement = Some(cand);
         break;
     }
+    // R13-009: placement done — release the cross-process lock
+    // BEFORE any locked_* call below (same-process POSIX locks
+    // merge: a nested locked_* drop would release this guard).
+    drop(_nsflock);
     let mut replacement = replacement.expect("replacement placed on stray's number");
     // R12-003: the gated wait skips at once (the live holder is
     // a replacement, not the stray) instead of blocking on its
@@ -1720,7 +1728,7 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
         libc::kill(stray_pid, libc::SIGKILL);
     }
     let _ = replacement.wait();
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
 }
 
 /// S112/S115-round8: pin any live same-UID task (child or not).
@@ -2479,7 +2487,7 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -2549,7 +2557,7 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     // contended exit below runs with staged fixtures).
     if forced.as_deref() != Some("placement-failure") {
         for _ in 0..100 {
-            if !steer_next_pid(victim) {
+            if !steer_next_pid_unlocked(victim) {
                 break;
             }
             let kid = fork_pauser();
@@ -2561,7 +2569,7 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
         }
     }
     drop(_nsflock);
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
     if squatter != victim {
         // R13-008: the driver requires the R13008 line (fixture
         // identities for its independent absence checks) before
@@ -2905,8 +2913,10 @@ static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// children (their fd-count asserts would see it). NEVER NEST:
 /// same-process POSIX locks merge, so an inner drop would
 /// release the outer's lock — hold at most one (placement
-/// loops never nest). Lock order everywhere: STEER_SERIAL
-/// first (test top), this guard second (loop top).
+/// loops never nest). R13-009: locked_* helpers take this guard
+/// internally — never call them under a held guard (explicit
+/// drop/scope after placement first). Lock order everywhere:
+/// STEER_SERIAL first (test top), this guard second (loop top).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct NsLastPidFlock {
     fd: libc::c_int,
@@ -3108,8 +3118,14 @@ fn settle_probe_after_hook(p: &mut std::process::Child, hook_acted: bool) {
     let _ = p.kill();
     let _ = p.wait();
 }
+/// R13-009: unlocked allocator steer (rename of
+/// steer_next_pid). Call ONLY under a held placement guard
+/// (placement loops hold it across steer-then-spawn) or via
+/// [`locked_steer_next_pid`]. Every other allocator write must
+/// take the lock: an unlocked write landing between another
+/// process's steer and fork invalidates its placement.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn steer_next_pid(want: i32) -> bool {
+fn steer_next_pid_unlocked(want: i32) -> bool {
     use std::process::Stdio;
     let path = "/proc/sys/kernel/ns_last_pid";
     let text = format!("{}", want - 1);
@@ -3125,6 +3141,27 @@ fn steer_next_pid(want: i32) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+/// R13-009: allocator steer under the cross-process placement
+/// lock (probes and restores — every write outside placement
+/// loops). NEVER call under a held guard: same-process POSIX
+/// locks merge, so this guard's drop would release the outer's
+/// lock (see NEVER NEST on the guard).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn locked_steer_next_pid(want: i32) -> bool {
+    let _lock = ns_last_pid_flock();
+    steer_next_pid_unlocked(want)
+}
+
+/// R13-009: bare hint restore under the cross-process placement
+/// lock (same NEVER-NEST rule as [`locked_steer_next_pid`]).
+/// Keeps the direct-write-only shape (no sudo fallback — a
+/// best-effort hint write, never load-bearing).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn locked_restore_hint(last_before: &str) {
+    let _lock = ns_last_pid_flock();
+    let _ = std::fs::write("/proc/sys/kernel/ns_last_pid", last_before);
 }
 
 /// R11-004: replacing an intermediate parent DURING the
@@ -3158,7 +3195,7 @@ fn descendant_walk_survives_intermediate_replacement() {
     };
     // No-op write-back proves writability without changing
     // allocator state (skips before any fixture exists).
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -3209,7 +3246,7 @@ fn descendant_walk_survives_intermediate_replacement() {
         // R12-005: cross-process placement lock.
         let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
-            if !steer_next_pid(p_pid) {
+            if !steer_next_pid_unlocked(p_pid) {
                 break;
             }
             let kid = fork_pauser();
@@ -3255,7 +3292,7 @@ fn descendant_walk_survives_intermediate_replacement() {
     if let Ok(num) = last_before.parse::<i32>() {
         let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !restored && std::time::Instant::now() < end {
-            let _ = steer_next_pid(num + 1);
+            let _ = locked_steer_next_pid(num + 1);
             restored = std::fs::read_to_string(last_path)
                 .map(|text| text.trim() == last_before)
                 .unwrap_or(false);
@@ -3455,7 +3492,7 @@ fn descendant_walk_survives_check_sample_replacement() {
     };
     // No-op write-back proves writability without changing
     // allocator state (skips before any fixture exists).
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -3512,7 +3549,7 @@ fn descendant_walk_survives_check_sample_replacement() {
         // R12-005: cross-process placement lock.
         let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
-            if !steer_next_pid(p_pid) {
+            if !steer_next_pid_unlocked(p_pid) {
                 break;
             }
             let kid = fork_pauser();
@@ -3550,7 +3587,7 @@ fn descendant_walk_survives_check_sample_replacement() {
     if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) == p_pid {
         kill_wait_child(p_pid);
     }
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
     // R12-002: placement failed — a squatter holding P skips
     // (contended environment, honestly reported), a free P
     // means steering itself broke (loud).
@@ -3610,7 +3647,7 @@ fn ancestry_cleanup_spares_sibling_zombie() {
     };
     // No-op write-back proves writability without changing
     // allocator state (skips before any fixture exists).
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -3654,7 +3691,7 @@ fn ancestry_cleanup_spares_sibling_zombie() {
     let _nsflock = ns_last_pid_flock();
     let mut owner = None;
     for _ in 0..100 {
-        if !steer_next_pid(p_pid) {
+        if !steer_next_pid_unlocked(p_pid) {
             break;
         }
         let cand = std::process::Command::new("sh")
@@ -3673,6 +3710,10 @@ fn ancestry_cleanup_spares_sibling_zombie() {
         Some(owner) => owner,
         None => panic!("steering broken: P={p_pid} free but unretaken"),
     };
+    // R13-009: placement done — release the cross-process lock
+    // BEFORE any locked_* call below (same-process POSIX locks
+    // merge: a nested locked_* drop would release this guard).
+    drop(_nsflock);
     // Different birth (else the zombie could be a P remnant —
     // vacuous), then zombie-state proof with the owner UNTOUCHED
     // (a reap here would be ours, not the settler's).
@@ -3718,13 +3759,138 @@ fn ancestry_cleanup_spares_sibling_zombie() {
     if let Ok(num) = last_before.parse::<i32>() {
         let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while !restored && std::time::Instant::now() < end {
-            let _ = steer_next_pid(num + 1);
+            let _ = locked_steer_next_pid(num + 1);
             restored = std::fs::read_to_string(last_path)
                 .map(|text| text.trim() == last_before)
                 .unwrap_or(false);
         }
     }
     assert!(restored, "allocator hint must restore after steering");
+}
+
+/// R13-009: allocator-lock probe child (see
+/// [`allocator_writes_excluded_during_placement`]). Under a
+/// normal suite run (no rendezvous) this passes silently; the
+/// driver spawns a FRESH test-binary process at this exact path
+/// with the rendezvous set. The probe reads the current hint,
+/// signals READY (it stands AT its first locked call), then
+/// performs each out-of-loop allocator write path (locked steer
+/// no-op write-back + locked bare restore — both no-ops, so the
+/// hint is undisturbed) and reports DONE. While the driver holds
+/// the lock, the probe must BLOCK at the first locked call
+/// (post-fix) or sail through (pre-fix RED). Writability is
+/// irrelevant here (only exclusion is measured), so steering
+/// failures never fail this probe.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn allocator_lock_probe() {
+    let ready_path = match std::env::var("SCOPEBASE_R13009_READY") {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+    let current =
+        std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").expect("probe reads current hint");
+    let current = current.trim().to_string();
+    std::fs::write(&ready_path, "ready").expect("probe signals ready");
+    // Each out-of-loop allocator write path, as a no-op (the
+    // hint value is preserved — the probe disturbs nothing).
+    let _ = locked_steer_next_pid(current.parse::<i32>().unwrap_or(0) + 1);
+    locked_restore_hint(&current);
+    eprintln!("R13009 DONE");
+}
+
+/// R13-009: out-of-loop allocator writes must take the
+/// cross-process placement lock. The driver holds the lock and
+/// spawns the probe child: the child must BLOCK at its first
+/// locked call (still running 2s after READY) and complete only
+/// after the release (exit 0 + DONE). Pre-fix the unlocked paths
+/// sail through (RED: child exits while held). The lock is
+/// blocking-absolute, so the verdict has no timing flakes — the
+/// windows only bound how long we observe. Holds STEER_SERIAL
+/// across the child run (in-process steering siblings block
+/// while this exclusion is measured).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn allocator_writes_excluded_during_placement() {
+    use std::time::{Duration, Instant};
+    // R12-002: serialize steerers (whole-child hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Hold the cross-process lock BEFORE spawning: the child's
+    // locked calls must block on THIS hold.
+    let placement_lock = ns_last_pid_flock();
+    let ready =
+        std::env::temp_dir().join(format!("scopebase-r13009-ready-{}.pid", std::process::id()));
+    let _ = std::fs::remove_file(&ready);
+    let exe = std::env::current_exe().expect("probe test binary path");
+    let mut child = std::process::Command::new(exe)
+        .arg("allocator_lock_probe")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R13009_READY", &ready)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn lock probe");
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged = task_starttime_checked(child.id() as i32)
+        .expect("probe stat readable")
+        .expect("probe visible");
+    // READY rendezvous (10s): the child stands AT its first
+    // locked call (a child that never arrives is broken, loud —
+    // never a vacuous pass).
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if ready.exists() {
+            break;
+        }
+        // A child that exits BEFORE ready took no lock path at
+        // all (broken probe — loud, never vacuous).
+        if let Some(status) = child.try_wait().expect("probe wait") {
+            panic!("lock probe exited {status} before READY (probe broken?)");
+        }
+        assert!(
+            Instant::now() < end,
+            "lock probe never reached its lock attempt"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Exclusion window: 2s during which the locked child MUST
+    // still run (post-fix: blocked in F_SETLKW; pre-fix RED: it
+    // already exited — the writes sailed through unlocked).
+    std::thread::sleep(Duration::from_secs(2));
+    if let Some(status) = child.try_wait().expect("probe wait") {
+        panic!(
+            "probe completed while the placement lock was held (status {status}) — \
+             out-of-loop allocator writes bypass the lock (RED)"
+        );
+    }
+    // Release: the blocked child must now complete promptly.
+    drop(placement_lock);
+    let end = Instant::now() + Duration::from_secs(10);
+    let (status, stderr) = loop {
+        if let Some(status) = child.try_wait().expect("probe wait") {
+            let (_, err) = drain_exited_child_output(&child);
+            break (status, err);
+        }
+        if Instant::now() >= end {
+            retire_probe_tree(&mut child, staged);
+            panic!("lock probe hung past release (deadlock?)");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let _ = std::fs::remove_file(&ready);
+    assert!(
+        status.success(),
+        "lock probe must exit success after release, got {status}"
+    );
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr_text.contains("R13009 DONE"),
+        "lock probe must run its write paths after release: {stderr_text}"
+    );
 }
 
 /// S128-round9: the pin must be acquired BEFORE custody evidence is
@@ -4509,7 +4675,7 @@ fn repeated_holder_cleanup_spares_recycled_number() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -4544,7 +4710,7 @@ fn repeated_holder_cleanup_spares_recycled_number() {
     // concurrently in another process).
     let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
-        if !steer_next_pid(holder) {
+        if !steer_next_pid_unlocked(holder) {
             break;
         }
         let mut cand = std::process::Command::new("sleep")
@@ -4571,6 +4737,10 @@ fn repeated_holder_cleanup_spares_recycled_number() {
         replacement = Some(cand);
         break;
     }
+    // R13-009: placement done — release the cross-process lock
+    // BEFORE any locked_* call below (same-process POSIX locks
+    // merge: a nested locked_* drop would release this guard).
+    drop(_nsflock);
     let mut replacement = replacement.expect("replacement placed on holder's number");
     // R12-004: the repeated cleanup, tick-gated (the
     // holder's number now names a live replacement).
@@ -4592,7 +4762,7 @@ fn repeated_holder_cleanup_spares_recycled_number() {
         .wait()
         .expect("replacement owner keeps its status");
     assert!(!status.success(), "killed replacement reports signal death");
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
 }
 
 /// R12-005: settle whether `pid` survived a strike (twin of
@@ -4656,7 +4826,7 @@ fn repeated_probe_retirement_spares_recycled_number() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -4704,7 +4874,7 @@ fn repeated_probe_retirement_spares_recycled_number() {
         // R12-005: cross-process placement lock.
         let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
-            if !steer_next_pid(id) {
+            if !steer_next_pid_unlocked(id) {
                 break;
             }
             let mut cand = std::process::Command::new("/bin/sleep")
@@ -4750,7 +4920,7 @@ fn repeated_probe_retirement_spares_recycled_number() {
         libc::kill(id, libc::SIGKILL);
     }
     let owned = replacement.wait();
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
     assert_eq!(
         revived_now,
         Ok(Some(revived_tick)),
@@ -4794,7 +4964,7 @@ fn repeated_group_retirement_spares_grouped_stranger() {
             return;
         }
     };
-    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
@@ -4843,7 +5013,7 @@ fn repeated_group_retirement_spares_grouped_stranger() {
         // R12-005: cross-process placement lock.
         let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
-            if !steer_next_pid(id) {
+            if !steer_next_pid_unlocked(id) {
                 break;
             }
             let mut cand = std::process::Command::new("/bin/sleep");
@@ -4896,7 +5066,7 @@ fn repeated_group_retirement_spares_grouped_stranger() {
         libc::kill(id, libc::SIGKILL);
     }
     let owned = replacement.wait();
-    let _ = std::fs::write(last_path, &last_before);
+    locked_restore_hint(&last_before);
     assert_eq!(
         revived_now,
         Ok(Some(revived_tick)),
