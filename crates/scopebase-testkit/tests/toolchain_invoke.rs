@@ -5656,31 +5656,6 @@ fn probe_tree_retirement_kills_stranded_group() {
 /// beats a silent stranger-kill). Residuals: a regroup in
 /// the µs read→signal window (no atomic check-and-killpg
 /// exists); a same-tick recycle reads as ours (S100-class).
-/// R13-003: group-signal decision for `retire_probe_tree`,
-/// extracted for direct unit coverage (a mid-call recycle is
-/// unplantable without steering, but every decision state is
-/// plantable as a current state). True while the number names
-/// our probe, names nothing (freed or unreadable — our
-/// strays alone in the group), or names a live foreigner
-/// OUTSIDE the group (getpgid proves the signal cannot reach
-/// it). False only for a live foreign SELF-GROUPED holder.
-#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn probe_group_kill_allowed(id: i32, expected: u64) -> bool {
-    // None covers freed AND unreadable (unproven, never
-    // foreign — the group signal still retires our strays).
-    let holder_tick = task_starttime_checked(id).ok().flatten();
-    if holder_tick == Some(expected) {
-        return true;
-    }
-    if holder_tick.is_none() {
-        return true;
-    }
-    // SAFETY: getpgid queries only. ESRCH (died between the
-    // reads) is freed-equivalent: a dead task cannot be hit
-    // and the group signal only reaches live members.
-    (unsafe { libc::getpgid(id) }) != id
-}
-
 fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
     // SAFETY: signal-only to the probe's own group, then the
     // probe itself; errors ignored (house discipline).
@@ -5706,6 +5681,35 @@ fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
         }
         wait_child_unless_reaped(child, id, expected);
     }
+}
+
+/// R13-003: group-signal decision for `retire_probe_tree`,
+/// extracted for direct unit coverage (a mid-call recycle is
+/// unplantable without steering, but every decision state is
+/// plantable as a current state). True while the number names
+/// our probe, names nothing (freed or unreadable — our
+/// strays alone in the group), or names a live foreigner
+/// OUTSIDE the group (getpgid proves the signal cannot reach
+/// it). False only for a live foreign SELF-GROUPED holder.
+/// R14-004: each helper keeps its own gate (sharing one
+/// attribute left `retire_probe_tree` compiling ungated;
+/// verify: cargo test -p scopebase-testkit --features toolchain
+/// --test toolchain_invoke --no-run).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn probe_group_kill_allowed(id: i32, expected: u64) -> bool {
+    // None covers freed AND unreadable (unproven, never
+    // foreign — the group signal still retires our strays).
+    let holder_tick = task_starttime_checked(id).ok().flatten();
+    if holder_tick == Some(expected) {
+        return true;
+    }
+    if holder_tick.is_none() {
+        return true;
+    }
+    // SAFETY: getpgid queries only. ESRCH (died between the
+    // reads) is freed-equivalent: a dead task cannot be hit
+    // and the group signal only reaches live members.
+    (unsafe { libc::getpgid(id) }) != id
 }
 
 /// R10-013: run the framing bad control confined in a fresh
