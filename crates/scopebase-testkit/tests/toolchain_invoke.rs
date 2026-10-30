@@ -2491,11 +2491,19 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     // Zombie-ours: a fork-only child that exits at once and is
     // never reaped until cleanup — keeps its tick in state Z.
     // SAFETY: fork; the child only _exits (no runtime, no locks).
+    // R13-007: the intended exit is a DISTINCT code (17): a
+    // post-fork panic in this single-threaded child also exits 0
+    // (last-thread termination), so ==0 could not prove the child
+    // reached the _exit site.
     let zombie = unsafe { libc::fork() };
-    assert!(zombie > 0, "zombie fork");
+    // R13-007: the child branch comes FIRST — nothing panic-capable
+    // may precede it (an assert here runs in the child too, with
+    // zero, invoking panic machinery after a raw fork). The child
+    // path is compare-then-_exit only.
     if zombie == 0 {
-        unsafe { libc::_exit(0) };
+        unsafe { libc::_exit(17) };
     }
+    assert!(zombie > 0, "zombie fork");
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         let row = std::fs::read_to_string(format!("/proc/{zombie}/stat")).expect("zombie stat");
@@ -2573,6 +2581,19 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let mut status = 0;
     let got = unsafe { libc::waitpid(zombie, &mut status, 0) };
     assert_eq!(got, zombie, "zombie reaped in cleanup");
+    // R13-007: the zombie must have reached the intended
+    // immediate _exit site — only that path yields 17 (a
+    // post-fork panic exits 0 here and risks inherited-lock
+    // deadlock on the way there).
+    assert!(
+        libc::WIFEXITED(status),
+        "zombie must exit, not die by signal"
+    );
+    assert_eq!(
+        libc::WEXITSTATUS(status),
+        17,
+        "zombie must reach the intended immediate exit"
+    );
 }
 
 /// S115/S123-round8: reap a confined probe child under a hang
