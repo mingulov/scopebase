@@ -281,7 +281,17 @@ def adopt_recorded_replacement(pidfile, stale, lives):
     the verified replacement instead of leaking it.
     Malformed, dead, or unreadable replacements adopt
     nothing — the record alone is retained for manual
-    recovery. In particular an unreadable-or-gone record
+    recovery. R11-007: neither does a holder outside the
+    RECORDED mount namespace — adoption samples whoever
+    holds the number now, so without the namespace binding
+    a recycled replacement would grant quiescence authority
+    over a stranger (its sampled starttime verifies BY
+    CONSTRUCTION, and the kill lands). The gate is one
+    unprivileged readlink; the canary is deliberately NOT
+    rechecked (mount-secret proof needs nsenter privilege —
+    entering our private mountns already requires it, so a
+    namespace match with a live holder is the binding that
+    matters here). In particular an unreadable-or-gone record
     after a record existed at entry (R11-008) flags retained
     (True): silent False would let teardown erase the
     recovery state of a replacement the finalizer never saw.
@@ -302,12 +312,27 @@ def adopt_recorded_replacement(pidfile, stale, lives):
     state = provision._parse_keeper_state(current)
     if state is None:
         return True
+    pid, nsid, _canary = state
     try:
-        bound = provision._keeper_starttime(state[0])
+        bound = provision._keeper_starttime(pid)
     except Exception:
         return True
-    if bound is not None:
-        lives.append((state[0], bound))
+    if bound is None:
+        return True
+    # R11-007: the sampled life must still run the RECORDED
+    # mount namespace — else this number was recycled to a
+    # stranger since the record was published, and adopting
+    # (pid, sampled-start) would aim quiescence at it (the
+    # sample verifies by construction). Unreadable ns link
+    # refuses the same way. Either way the record stays
+    # retained (True) for manual recovery.
+    try:
+        link = os.readlink(f"/proc/{pid}/ns/mnt")
+    except OSError:
+        return True
+    if link != f"mnt:[{nsid}]":
+        return True
+    lives.append((pid, bound))
     return True
 
 
@@ -538,8 +563,9 @@ def fixture_root_gone(run):
     read as removed and disable preservation. Only ENOENT
     counts as gone; any other stat failure reports surviving
     (False) — unobservable is not removed. Follows symlinks,
-    exactly like the prior exists() (R11-007 residual: no
-    in-system producer symlinks a fixture root). Never raises.
+    exactly like the prior exists() (residual, first noted
+    under a misnumbered R11-007 entry: no in-system producer
+    symlinks a fixture root). Never raises.
     """
     try:
         os.stat(run)
@@ -3448,7 +3474,17 @@ class AdoptReplacementTests(unittest.TestCase):
     # private record — the finalizer must adopt the
     # replacement into lives (never leak an unrecorded root
     # keeper) and flag the fixture retained. Never raises.
-    def test_adopt_appends_live_replacement(self):
+    def test_adopt_refuses_namespace_mismatch(self):
+        # R11-007: a changed record pointing at an unrelated
+        # controlled process (ordinary sleeper, fictitious
+        # namespace/canary) must NOT be adopted — sampling
+        # the current holder's starttime grants quiescence
+        # authority over whoever holds the number, which a
+        # recycled replacement turns into a stranger kill.
+        # Refusal retains (True: unresolved custody) while
+        # the sleeper survives quiescence. (Supersedes the
+        # old test_adopt_appends_live_replacement, which
+        # asserted adoption of this exact stranger shape.)
         sleeper = subprocess.Popen(
             ["sleep", "120"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -3459,6 +3495,61 @@ class AdoptReplacementTests(unittest.TestCase):
             with open(pidfile, "wb") as handle:
                 handle.write(
                     f"{sleeper.pid} 77 {'cd' * 16}\n".encode())
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, b"stale-bytes", lives))
+            # Quiesce BEFORE asserting: pre-fix the adopted
+            # stranger is killed here (the finding's
+            # consequence — only the kill is asserted first
+            # so the RED output shows it); post-fix there is
+            # nothing to quiesce and the sleeper survives.
+            # timeout=0 fails the failure mode fast (a sent
+            # signal over a test-owned child would otherwise
+            # stall 15s on its unreaped zombie, correctly
+            # reported unproven — quiesce signals, the
+            # spawner reaps). The settle lets a wrongly sent
+            # SIGKILL land before the survival assert, so the
+            # RED output shows the stranger-kill, not a
+            # death-window pass.
+            unproven = quiesce_private_lives(lives, timeout=0)
+            time.sleep(0.5)
+            self.assertIsNone(
+                sleeper.poll(), "refused stranger must survive")
+            self.assertEqual(lives, [])
+            self.assertEqual(unproven, [])
+
+    @unittest.skipUnless(shutil.which("unshare"),
+                         "needs unshare for a real mountns")
+    def test_adopt_appends_namespace_matching_replacement(self):
+        # R11-007 twin (anti-overcorrection): a holder that
+        # genuinely runs the RECORDED namespace is adopted —
+        # the R10-009 rescue (an erroneously spawned real
+        # keeper) keeps working. Real namespaces via
+        # unprivileged `unshare -rm`; the canary stays
+        # fictitious (adoption binds the namespace, not the
+        # mount secret — see the adopter docstring).
+        sleeper = subprocess.Popen(
+            ["unshare", "-rm", "sleep", "120"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        own_ns = os.readlink("/proc/self/ns/mnt")
+        deadline = time.time() + 5
+        while True:
+            kid_ns = os.readlink(f"/proc/{sleeper.pid}/ns/mnt")
+            if kid_ns != own_ns:
+                break
+            self.assertLess(
+                time.time(), deadline,
+                "unshare never left our namespace")
+            time.sleep(0.02)
+        nsid = int(kid_ns[5:-1])
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(
+                    f"{sleeper.pid} {nsid} {'cd' * 16}\n".encode())
             lives = [(4242, 1234)]
             self.assertTrue(
                 adopt_recorded_replacement(
@@ -3766,10 +3857,11 @@ class E2ERetirementTests(unittest.TestCase):
             os.chmod(tmp, 0o700)
 
     def test_root_dangling_symlink_reads_gone(self):
-        # R11-007 residual, pinned deliberately: the
-        # observation follows symlinks (same as the prior
-        # exists()), so a dangling link reads as gone. No
-        # in-system producer symlinks a fixture root.
+        # fixture_root_gone residual, pinned deliberately
+        # (first noted under a misnumbered R11-007 entry):
+        # the observation follows symlinks (same as the
+        # prior exists()), so a dangling link reads as gone.
+        # No in-system producer symlinks a fixture root.
         tmp = tempfile.mkdtemp(prefix="e2e-pin-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         run = os.path.join(tmp, "run")
