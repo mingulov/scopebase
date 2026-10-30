@@ -6795,11 +6795,11 @@ mod tests {
     /// R14-012: custody AT birth for lib-test fixtures — the
     /// audit twin of the toolchain's `SilentChildGuard`
     /// (separate harnesses, same contract): auto-pins the birth
-    /// tick (our unreaped child cannot have recycled), blind
-    /// drop when the birth read failed (OUR unreaped child —
-    /// reaps-or-ECHILDs, never murders), tick-gated drop
-    /// otherwise (R14-001: a recycled number is spared),
-    /// disarm after explicit retires.
+    /// tick (our unreaped child cannot have recycled),
+    /// probe-first drop when the birth read failed (IR-002: a
+    /// gone number or a foreign recycle takes no signal),
+    /// tick-gated drop otherwise (R14-001: a recycled number
+    /// is spared), disarm after explicit retires.
     #[cfg(target_arch = "x86_64")]
     struct FixtureGuard {
         pid: libc::pid_t,
@@ -6848,10 +6848,24 @@ mod tests {
     /// (staging cleanup and guard drops). Never panics — a
     /// stuck child reports through the caller's loud verify,
     /// never from inside unwind.
+    /// IR-002: waitpid-probes FIRST — ECHILD (not our child: a
+    /// gone number, or one recycled by a foreign task) returns
+    /// WITHOUT signaling; a reaped status was our zombie
+    /// (done, no kill needed); only a live owned child takes
+    /// the signal plus the bounded reap.
     #[cfg(target_arch = "x86_64")]
     fn retire_audit_child_silent(pid: libc::pid_t) {
         use std::time::{Duration, Instant};
-        // SAFETY: signal-only to an owned child; errors ignored.
+        let mut status = 0;
+        // SAFETY: WNOHANG probe of a possibly-owned child; never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got != 0 {
+            // Our zombie discharged (got == pid), or not our
+            // child at all (got < 0: gone, or a foreign
+            // recycle) — either way no signal is owed.
+            return;
+        }
+        // SAFETY: signal-only to a live owned child; errors ignored.
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
@@ -7054,9 +7068,10 @@ mod tests {
     }
 
     /// R14-012 pin: a guard over an already-gone number (birth
-    /// read fails → unpinned) drops silently — kill ESRCHs,
-    /// waitpid ECHILDs, nothing panics, nothing murders. Pins
-    /// the None arm (the drivers above pin the tick-gated arm).
+    /// read fails → unpinned) drops silently — IR-002: the
+    /// waitpid probe ECHILDs first and no kill ever fires.
+    /// Pins the None arm (the drivers above pin the tick-gated
+    /// arm).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn unpinned_fixture_guard_over_gone_number_is_silent_noop() {
@@ -7076,6 +7091,107 @@ mod tests {
             let _guard = FixtureGuard::new(pid);
         }
         assert_audit_pid_free(pid, "gone-number");
+    }
+
+    /// IR-002: the silent retire must observe before it
+    /// signals (R14-006 discipline for the unpinned path
+    /// too). A live NON-child — a grandchild parented to
+    /// `sh`, never ours, so our waitpid ECHILDs — retired
+    /// through `retire_audit_child_silent` must survive. The
+    /// staged trigger is a gone number recycled by a foreign
+    /// task under an unpinned guard. Pre-fix the kill fires
+    /// before the waitpid that would have ECHILDed (RED: the
+    /// stranger is murdered); post-fix the waitpid probe
+    /// comes first and ECHILD returns without signaling
+    /// (GREEN). The verdict reads /proc STATE settled, never
+    /// the tick — a zombie keeps its tick, and SIGKILL
+    /// delivery is async. Residual: birth-read failure +
+    /// recycle by OUR OWN fork is indistinguishable without a
+    /// pin (waitpid 0 → kill). Duration 59 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_silent_probe_first_spares_live_non_child() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // R12-002: serialize against steerers (whole-test hold).
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 59 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pid readable");
+        let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let stick = proc_starttime(stranger)
+            .expect("stranger stat readable")
+            .expect("stranger present");
+        // Sanity: live, and not our child (the probe the fix
+        // relies on).
+        assert!(
+            matches!(proc_state(stranger), Some(state) if state != 'Z'),
+            "staged stranger must be live"
+        );
+        {
+            let mut status = 0;
+            // SAFETY: WNOHANG probe only.
+            let got = unsafe { libc::waitpid(stranger, &mut status, libc::WNOHANG) };
+            assert!(got < 0, "staged stranger must not be our child");
+        }
+        retire_audit_child_silent(stranger);
+        // Verdict by /proc STATE, settled: a tick check cannot
+        // tell live from zombie, and SIGKILL delivery is async
+        // — poll until the stranger zombifies/vanishes
+        // (murdered) or stays live past the settle window
+        // (spared).
+        let end = Instant::now() + Duration::from_secs(2);
+        let mut survived = true;
+        loop {
+            match proc_state(stranger) {
+                Some(state) if state != 'Z' => {
+                    if Instant::now() >= end {
+                        break;
+                    }
+                }
+                _ => {
+                    survived = false;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Cleanup (runs on RED too): kill our staged task by
+        // number + tick, poll it gone, then reap the sh parent
+        // (its `wait` ends with the grandchild).
+        // SAFETY: staged task, tick-known; errors ignored.
+        unsafe {
+            libc::kill(stranger, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(stranger) != Ok(Some(stick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "staged stranger must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if parent.try_wait().expect("parent wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "sh parent must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(survived, "silent retire must not murder a live non-child");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
