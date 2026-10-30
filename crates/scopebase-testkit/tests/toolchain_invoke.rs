@@ -1540,7 +1540,53 @@ fn cloexec_pipe() -> [libc::c_int; 2] {
 /// patterns.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn spawn_orphan_sleeper(duration: &str) -> (i32, u64) {
-    spawn_orphan_sleeper_with_hook(duration, None)
+    spawn_orphan_sleeper_with_hook(duration, None, true)
+}
+
+/// R10-013: best-effort orphan retirement for the report-read
+/// expiry path. Returns a note for the timeout panic. The middle
+/// child may have reported its pid before the stall: when the
+/// buffer holds a COMPLETE line (a partial line parses to a
+/// wrong number) AND that number's argv still proves the expected
+/// `sleep <duration>` (a recycled number must never be signaled),
+/// pin it and retire it. Anything unproven is NAMED, never
+/// touched.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_reported_orphan(buffer: &[u8], duration: &str) -> String {
+    if !buffer.contains(&b'\n') {
+        return "orphan pid never reported".to_string();
+    }
+    let pid: i32 = match std::str::from_utf8(buffer)
+        .ok()
+        .map(str::trim)
+        .and_then(|text| text.parse().ok())
+    {
+        Some(pid) if pid > 0 => pid,
+        _ => return "orphan pid unparsable".to_string(),
+    };
+    let mut expected = b"sleep\0".to_vec();
+    expected.extend_from_slice(duration.as_bytes());
+    expected.push(0);
+    // Await exec-or-gone: a pre-exec task still carries the test
+    // binary's argv and proves nothing yet.
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::read(format!("/proc/{pid}/cmdline")) {
+            Err(_) => return format!("orphan {pid} exited on its own"),
+            Ok(cmdline) if cmdline == expected => break,
+            Ok(_) => {}
+        }
+        if Instant::now() >= end {
+            return format!("orphan {pid} unproven after 5s, left for manual retirement");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pinned = match task_starttime_checked(pid) {
+        Ok(Some(pinned)) => pinned,
+        _ => return format!("orphan {pid} stat unreadable, left for manual retirement"),
+    };
+    retire_orphan(pid, pinned);
+    format!("orphan {pid} retired")
 }
 
 /// S138-round9: seam for the concurrent-inheritor regression:
@@ -1548,8 +1594,17 @@ fn spawn_orphan_sleeper(duration: &str) -> (i32, u64) {
 /// and before the middle fork, so the test can fork a deliberate
 /// inheritor holding the write end. Production callers use
 /// [`spawn_orphan_sleeper`].
+/// R10-013: `framed` selects the newline-framed report read
+/// (true: return on the `pid\n` line — the S138 fix) or the
+/// legacy EOF-waiting read (false: the framing bad control —
+/// a held write end stalls to the 10s bound, and the expiry
+/// path must retire everything owned before failing loud).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn spawn_orphan_sleeper_with_hook(duration: &str, hook: Option<&dyn Fn(i32, i32)>) -> (i32, u64) {
+fn spawn_orphan_sleeper_with_hook(
+    duration: &str,
+    hook: Option<&dyn Fn(i32, i32)>,
+    framed: bool,
+) -> (i32, u64) {
     let pipe = cloexec_pipe();
     if let Some(hook) = hook {
         hook(pipe[0], pipe[1]);
@@ -1623,6 +1678,9 @@ fn spawn_orphan_sleeper_with_hook(duration: &str, hook: Option<&dyn Fn(i32, i32)
     // forked inheritor holding the write end must not stall the
     // fixture: CLOEXEC covers exec'd inheritors, framing covers
     // fork-only ones). 10s bound; expiry fails loud.
+    // R10-013: `framed` false restores the legacy EOF-waiting
+    // shape (the bad control): the break below is skipped and a
+    // held write end stalls to the bound.
     let mut text = [0u8; 32];
     let mut len = 0;
     let end = Instant::now() + Duration::from_secs(10);
@@ -1630,17 +1688,34 @@ fn spawn_orphan_sleeper_with_hook(duration: &str, hook: Option<&dyn Fn(i32, i32)
         if len >= text.len() {
             break;
         }
-        if text[..len].contains(&b'\n') {
+        if framed && text[..len].contains(&b'\n') {
             break;
         }
         let remaining = end
             .saturating_duration_since(Instant::now())
             .as_millis()
             .min(i32::MAX as u128) as i32;
-        assert!(
-            remaining > 0,
-            "orphan report read timed out (an inheritor holds the write end?)"
-        );
+        if remaining <= 0 {
+            // R10-013: the report read expired (the bad control:
+            // an inheritor holds the write end past the bound) —
+            // retire EVERYTHING owned before failing loud, so the
+            // expiry never leaks a descriptor, a zombie middle
+            // child, or a live orphan.
+            // SAFETY: pipe read end owned by this scope.
+            unsafe { libc::close(pipe[0]) };
+            // SAFETY: the middle child is ours (fork succeeded,
+            // never reaped on this path): SIGKILL (a no-op when
+            // already a zombie) then blocking reap.
+            unsafe {
+                libc::kill(middle, libc::SIGKILL);
+                let mut status = 0;
+                libc::waitpid(middle, &mut status, 0);
+            }
+            let orphan_note = retire_reported_orphan(&text[..len], duration);
+            panic!(
+                "orphan report read timed out (an inheritor holds the write end?) [{orphan_note}]"
+            );
+        }
         let mut waiting = libc::pollfd {
             fd: pipe[0],
             events: libc::POLLIN,
@@ -2037,6 +2112,7 @@ fn orphan_fixture_survives_concurrent_inheritor() {
             }
             holder_pid.store(holder, Ordering::SeqCst);
         }),
+        true,
     );
     let elapsed = start.elapsed();
     // Reap the holder first: it is our child, still sleeping.
@@ -2048,21 +2124,285 @@ fn orphan_fixture_survives_concurrent_inheritor() {
         let mut status = 0;
         libc::waitpid(holder, &mut status, 0);
     }
+    // R10-013: observe BEFORE retiring, assert AFTER — no
+    // assertion (including the elapsed bound on a slow return)
+    // may precede orphan retirement, or its panic leaks the
+    // 94s sleeper.
+    let pinned_now = task_starttime_checked(pid);
+    let retired_now = task_retired_checked(pid);
+    retire_orphan(pid, pinned);
     assert!(
         elapsed < Duration::from_secs(20),
         "framed read must not wait for the inheritor, took: {elapsed:?}"
     );
+    assert_eq!(pinned_now, Ok(Some(pinned)), "orphan pinned");
     assert_eq!(
-        task_starttime_checked(pid),
-        Ok(Some(pinned)),
-        "orphan pinned"
-    );
-    assert_eq!(
-        task_retired_checked(pid),
+        retired_now,
         Ok(false),
         "orphan alive after a held write end"
     );
-    retire_orphan(pid, pinned);
+}
+
+/// R10-013: rendezvous — the unframed-expiry probe runs only
+/// when set.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+const UNFRAMED_PROBE_ENV: &str = "SCOPEBASE_TT04_UNFRAMED_EXPIRY_PROBE";
+
+/// R10-013: our own open pipe targets (`pipe:[ino]`) beyond
+/// stdio, for exact report-descriptor accounting in the confined
+/// probe. Fds 0/1/2 are the probe's own stdio pipes (owned by the
+/// harness, not the helper) and excluded; a leaked report end
+/// would allocate at fd 3+.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn own_pipe_targets() -> Vec<String> {
+    let mut pipes = Vec::new();
+    let entries = std::fs::read_dir("/proc/self/fd").expect("own fd table readable");
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "0" || name == "1" || name == "2" {
+            continue;
+        }
+        if let Ok(target) = std::fs::read_link(entry.path()) {
+            let text = target.to_string_lossy().into_owned();
+            if text.starts_with("pipe:[") {
+                pipes.push(text);
+            }
+        }
+    }
+    pipes.sort();
+    pipes
+}
+
+/// R10-013: our own open fd count.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn own_fd_count() -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .expect("own fd table readable")
+        .flatten()
+        .count()
+}
+
+/// R10-013: true when no live task runs `sleep <duration>`.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn no_sleep_duration(duration: &str) -> bool {
+    let want = format!("sleep\0{duration}\0").into_bytes();
+    let procs = match std::fs::read_dir("/proc") {
+        Ok(dirs) => dirs,
+        Err(_) => return false,
+    };
+    for entry in procs.flatten() {
+        let text = entry.file_name().to_string_lossy().into_owned();
+        if !text.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(cmdline) = std::fs::read(format!("/proc/{text}/cmdline")) {
+            if cmdline == want {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// R10-013: the framing bad control, confined in a fresh probe
+/// process (single-threaded — exact fd accounting is sound
+/// here, unlike in the parallel suite binary). WITHOUT the
+/// newline-frame break the held write end stalls the orphan
+/// report to the 10s bound; the expiry must fail bounded with
+/// NO leaks: no holder, no sleeper, no zombie middleman, no
+/// report descriptor. Pre-fix the 10s panic unwinds past the
+/// pipe close, the middle reap, and the orphan retirement
+/// (RED: the 95s sleeper survives); post-fix the expiry path
+/// retires everything it owns before failing loud. Duration 95
+/// is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn tt04_orphan_unframed_expiry_probe() {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    if std::env::var(UNFRAMED_PROBE_ENV).is_err() {
+        return;
+    }
+    // SAFETY: setpgid on self, no userspace state.
+    unsafe {
+        libc::setpgid(0, 0);
+    }
+    let fds_before = own_fd_count();
+    let holder_pid = AtomicI32::new(-1);
+    let start = Instant::now();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spawn_orphan_sleeper_with_hook(
+            "95",
+            Some(&|read_fd, _write_fd| {
+                // SAFETY: the holder keeps ONLY the write end
+                // open 25s, then exits; async-signal-safe only.
+                let holder = unsafe { libc::fork() };
+                assert!(holder >= 0, "holder fork failed");
+                if holder == 0 {
+                    unsafe {
+                        libc::close(read_fd);
+                        let mut remaining = 25u32;
+                        while remaining > 0 {
+                            remaining = libc::sleep(remaining);
+                        }
+                        libc::_exit(0);
+                    }
+                }
+                holder_pid.store(holder, Ordering::SeqCst);
+            }),
+            false,
+        )
+    }));
+    let elapsed = start.elapsed();
+    assert!(outcome.is_err(), "unframed held read must expire");
+    // The holder is OURS (the helper never learns it): kill +
+    // reap before any further assertion.
+    let holder = holder_pid.load(Ordering::SeqCst);
+    assert!(holder > 0, "hook must report its holder");
+    // SAFETY: retiring our own holder.
+    unsafe {
+        libc::kill(holder, libc::SIGKILL);
+        let mut status = 0;
+        libc::waitpid(holder, &mut status, 0);
+    }
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "expiry must stay bounded, took {elapsed:?}"
+    );
+    // No sleeper: nothing on the box may run our argv.
+    assert!(no_sleep_duration("95"), "orphan sleeper 95 leaked");
+    // No zombie middleman (or anything else of ours): reap
+    // stragglers so RED runs stay clean, then require zero.
+    let mut stragglers = 0;
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid(-1) reaps any owned child.
+        let got = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if got > 0 {
+            stragglers += 1;
+            continue;
+        }
+        if got < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+        }
+        break;
+    }
+    assert_eq!(stragglers, 0, "expiry must leave no zombie middle child");
+    // No report descriptor: no pipe ends survive, and the fd
+    // count is back at baseline.
+    assert!(
+        own_pipe_targets().is_empty(),
+        "report pipe ends leaked: {:?}",
+        own_pipe_targets()
+    );
+    assert_eq!(
+        own_fd_count(),
+        fds_before,
+        "fd count must return to baseline"
+    );
+}
+
+/// R10-013: drain an exited probe child's piped output WITHOUT
+/// waiting for EOF. A RED-run live grandchild (the leaked
+/// sleeper) holds the stdio pipes across fork, and
+/// `wait_with_output` would stall to the parent timeout instead
+/// of reporting the probe's fast failure. All probe bytes
+/// precede its exit, so a nonblocking drain after the reap is
+/// complete.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) {
+    use std::os::unix::io::AsRawFd;
+    fn drain(fd: i32) -> Vec<u8> {
+        // SAFETY: flag-set + bounded reads on an owned pipe end.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            // SAFETY: bounded read into a stack buffer.
+            let got =
+                unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            if got > 0 {
+                bytes.extend_from_slice(&chunk[..got as usize]);
+                continue;
+            }
+            break;
+        }
+        bytes
+    }
+    let out = child
+        .stdout
+        .as_ref()
+        .map(AsRawFd::as_raw_fd)
+        .map(drain)
+        .unwrap_or_default();
+    let err = child
+        .stderr
+        .as_ref()
+        .map(AsRawFd::as_raw_fd)
+        .map(drain)
+        .unwrap_or_default();
+    (out, err)
+}
+
+/// R10-013: run the framing bad control confined in a fresh
+/// probe process and require bounded failure with no remaining
+/// holder, sleeper, zombie middleman, or report descriptor (all
+/// proven inside the probe). On timeout the parent retires the
+/// probe's whole process group before failing loud. The probe
+/// output must name one passed test — a renamed probe path
+/// fails here instead of passing vacuously on zero tests.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn unframed_report_expiry_retires_everything() {
+    let exe = std::env::current_exe().expect("probe test binary path");
+    let mut child = std::process::Command::new(exe)
+        .arg("tt04_orphan_unframed_expiry_probe")
+        .arg("--exact")
+        .env(UNFRAMED_PROBE_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn unframed-expiry probe");
+    let end = Instant::now() + Duration::from_secs(90);
+    loop {
+        match child.try_wait().expect("probe wait") {
+            Some(status) => {
+                // Drained, never EOF-waited: a RED-run sleeper
+                // holds the pipes (see drain_exited_child_output).
+                let (stdout, stderr) = drain_exited_child_output(&child);
+                assert!(
+                    status.success(),
+                    "unframed-expiry probe must exit success, got {status}: {}",
+                    String::from_utf8_lossy(&stdout)
+                );
+                assert!(
+                    String::from_utf8_lossy(&stdout).contains("1 passed"),
+                    "probe must run its one test (path exact): {}",
+                    String::from_utf8_lossy(&stderr)
+                );
+                return;
+            }
+            None => {}
+        }
+        if Instant::now() >= end {
+            // SAFETY: signal-only to the probe's own group,
+            // then the probe itself; errors ignored.
+            let id = child.id() as libc::pid_t;
+            unsafe {
+                libc::killpg(id, libc::SIGKILL);
+                libc::kill(id, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            panic!("unframed-expiry probe hung past 90s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// S129-round9: retirement polling must never issue a numeric
