@@ -492,17 +492,22 @@ def native_loop_probe_verdict(returncode, stdout):
     return "LOOP_VIABLE" in (stdout or "")
 
 
-def e2e_retirement_verdict(cleanup_ok, leftovers, host_clean):
+def e2e_retirement_verdict(cleanup_ok, leftovers, host_clean,
+                           root_gone):
     """'retired' only when cleanup worked with no residue. (S118)
 
     `leftovers` is the list of live rows still under the
     fixture root (None when unobservable); `host_clean` tells
-    whether the host table shows no fixture residue. Any
-    failed cleanup, any leftover row, any host residue, or any
-    unobservable residue returns 'preserve' — unknown is not
-    retired.
+    whether the host table shows no fixture residue;
+    `root_gone` tells whether the fixture root itself was
+    removed (R10-010: a standing root is residue — the
+    false-cleanup-success path must preserve, never retire).
+    Any failed cleanup, any leftover row, any host residue, a
+    surviving root, or any unobservable residue returns
+    'preserve' — unknown is not retired.
     """
-    if cleanup_ok and leftovers == [] and host_clean:
+    if (cleanup_ok and leftovers == [] and host_clean
+            and root_gone):
         return "retired"
     return "preserve"
 
@@ -2534,8 +2539,12 @@ class LiveBindTests(unittest.TestCase):
                 host_clean = False
                 observe_note = (
                     f"residue unobservable: {exc!r}")
+            # R10-010: the fixture root itself is verdict
+            # residue — observed once so the verdict and the
+            # assertion below agree by construction.
+            root_gone = not os.path.exists(run)
             verdict = e2e_retirement_verdict(
-                cleanup_ok, leftovers, host_clean)
+                cleanup_ok, leftovers, host_clean, root_gone)
             # S130: removal of the ORIGINAL fixture is
             # conditional on proven retirement — copies
             # alone (new inodes, original paths in the
@@ -2550,11 +2559,15 @@ class LiveBindTests(unittest.TestCase):
                     run, manifest,
                     f"{cleanup_note} "
                     f"leftovers={leftovers!r} "
-                    f"host_clean={host_clean} {observe_note}")
+                    f"host_clean={host_clean} "
+                    f"root_gone={root_gone} {observe_note}")
             self.assertTrue(
                 cleanup_ok,
                 f"{cleanup_note} (evidence: {preserved})")
-            self.assertFalse(os.path.exists(run))
+            self.assertTrue(
+                root_gone,
+                f"fixture root {run} survives cleanup "
+                f"(evidence: {preserved})")
             self.assertEqual(leftovers, [], observe_note)
             self.assertTrue(
                 host_clean,
@@ -3239,20 +3252,30 @@ class E2ERetirementTests(unittest.TestCase):
     # no mounts); the live E2E wires these decisions into its
     # armed try/finally.
     def test_verdict_matrix(self):
+        # R10-010: a surviving fixture root is residue — the
+        # false-cleanup-success path (rc 0, clean mounts, root
+        # standing) must preserve, never retire.
         self.assertEqual(
-            e2e_retirement_verdict(True, [], True), "retired")
+            e2e_retirement_verdict(True, [], True, False),
+            "preserve")
         self.assertEqual(
-            e2e_retirement_verdict(False, [], True), "preserve")
+            e2e_retirement_verdict(True, [], True, True),
+            "retired")
+        self.assertEqual(
+            e2e_retirement_verdict(False, [], True, True),
+            "preserve")
         self.assertEqual(
             e2e_retirement_verdict(
-                True, [{"mnt_id": 41}], True), "preserve")
+                True, [{"mnt_id": 41}], True, True), "preserve")
         self.assertEqual(
-            e2e_retirement_verdict(True, [], False), "preserve")
+            e2e_retirement_verdict(True, [], False, True),
+            "preserve")
         # Unobservable residue is uncertain, never retired.
         self.assertEqual(
-            e2e_retirement_verdict(True, None, True), "preserve")
+            e2e_retirement_verdict(True, None, True, True),
+            "preserve")
         self.assertEqual(
-            e2e_retirement_verdict(False, None, False),
+            e2e_retirement_verdict(False, None, False, False),
             "preserve")
 
     def test_preserve_copies_manifest_and_run(self):
@@ -3393,7 +3416,8 @@ class E2ERetirementTests(unittest.TestCase):
         with open(os.path.join(run, "ext4", "a.bin"),
                   "w") as handle:
             handle.write("payload")
-        verdict = e2e_retirement_verdict(False, None, False)
+        verdict = e2e_retirement_verdict(
+            False, None, False, False)
         retain = e2e_retirement_retains_tmp(verdict)
         self.assertTrue(retain)
         captured = io.StringIO()
@@ -3409,6 +3433,46 @@ class E2ERetirementTests(unittest.TestCase):
         with open(os.path.join(
                 dest, "run", "ext4", "a.bin")) as handle:
             self.assertEqual(handle.read(), "payload")
+        with open(manifest) as handle:
+            doc = _json.load(handle)
+        self.assertTrue(os.path.isdir(doc["run_root"]))
+        with open(os.path.join(
+                doc["run_root"], "ext4", "a.bin")) as handle:
+            self.assertEqual(handle.read(), "payload")
+
+    def test_false_cleanup_success_preserves_original(self):
+        # R10-010: cleanup rc 0 with clean mount tables but a
+        # STANDING root is false success — the verdict
+        # preserves (never retires), the ORIGINAL tmpdir is
+        # retained in place with manifest identities intact,
+        # and the copies land outside the fixture root.
+        import io
+        import json as _json
+        from unittest import mock
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(os.path.join(run, "ext4"))
+        manifest = os.path.join(tmp, "manifest.json")
+        with open(manifest, "w") as handle:
+            handle.write(_json.dumps({"run_root": run}))
+        with open(os.path.join(run, "ext4", "a.bin"),
+                  "w") as handle:
+            handle.write("payload")
+        verdict = e2e_retirement_verdict(True, [], True, False)
+        self.assertEqual(verdict, "preserve")
+        retain = e2e_retirement_retains_tmp(verdict)
+        self.assertTrue(retain)
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            dest = preserve_e2e_evidence(
+                run, manifest,
+                "cleanup rc=0 leftovers=[] host_clean=True "
+                "root_gone=False for pins")
+            removed = remove_tmp_unless_retained(tmp, retain)
+        self.addCleanup(shutil.rmtree, dest, ignore_errors=True)
+        self.assertFalse(removed)
+        self.assertFalse(dest.startswith(tmp + os.sep))
         with open(manifest) as handle:
             doc = _json.load(handle)
         self.assertTrue(os.path.isdir(doc["run_root"]))
