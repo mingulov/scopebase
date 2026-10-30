@@ -1998,6 +1998,238 @@ mod tests {
         stat.rsplit_once(") ")?.1.split_whitespace().next()?.chars().next()
     }
 
+    /// R12-005: in-process steerer serialization for audit
+    /// lib tests (twin of the toolchain file's STEER_SERIAL —
+    /// lib tests and integration tests are SEPARATE processes,
+    /// so neither mutex covers the other; the file lock below
+    /// is the cross-process half).
+    #[cfg(target_arch = "x86_64")]
+    static AUDIT_STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// R12-005: cross-process ns_last_pid placement lock (twin
+    /// of the toolchain file's guard — SAME lockfile path, kept
+    /// in sync by hand): lib tests and integration tests run as
+    /// separate (possibly concurrent) processes, and a foreign
+    /// steer between our steer and our spawn corrupts
+    /// exact-number placement. POSIX fcntl locks (NOT flock):
+    /// flock locks leak into fork-only children (the lock
+    /// survives our close on their inherited fd — the next
+    /// holder blocks until they exit), while POSIX locks are
+    /// dropped across fork. O_CLOEXEC keeps the fd out of
+    /// exec'd children (their fd-count asserts would see it).
+    /// NEVER NEST: same-process POSIX locks merge, so an inner
+    /// drop would release the outer's lock — hold at most one
+    /// (placement loops never nest).
+    #[cfg(target_arch = "x86_64")]
+    struct NsLastPidFlock {
+        fd: libc::c_int,
+    }
+
+    /// R12-005: take the cross-process placement lock
+    /// (blocking; held for milliseconds across one
+    /// steer-then-spawn placement loop).
+    #[cfg(target_arch = "x86_64")]
+    fn ns_last_pid_flock() -> NsLastPidFlock {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = std::env::temp_dir().join("scopebase-ns-last-pid.lock");
+        let bytes = path.as_os_str().as_bytes();
+        let cpath = std::ffi::CString::new(bytes).expect("lock path c-str");
+        // SAFETY: valid path pointer; O_CLOEXEC documented above.
+        let fd = unsafe {
+            libc::open(
+                cpath.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        assert!(fd >= 0, "placement lock opens");
+        // SAFETY: F_SETLKW on an owned fd, whole-file write lock.
+        let locked = unsafe {
+            libc::fcntl(
+                fd,
+                libc::F_SETLKW,
+                &libc::flock {
+                    l_type: libc::F_WRLCK as libc::c_short,
+                    l_whence: libc::SEEK_SET as libc::c_short,
+                    l_start: 0,
+                    l_len: 0,
+                    l_pid: 0,
+                },
+            )
+        };
+        assert_eq!(locked, 0, "placement lock acquires");
+        NsLastPidFlock { fd }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for NsLastPidFlock {
+        fn drop(&mut self) {
+            // SAFETY: unlock-then-close an owned fd (never nest:
+            // releasing here releases the process's lock).
+            unsafe {
+                libc::fcntl(
+                    self.fd,
+                    libc::F_SETLK,
+                    &libc::flock {
+                        l_type: libc::F_UNLCK as libc::c_short,
+                        l_whence: libc::SEEK_SET as libc::c_short,
+                        l_start: 0,
+                        l_len: 0,
+                        l_pid: 0,
+                    },
+                );
+                libc::close(self.fd);
+            }
+        }
+    }
+
+    /// R12-005: steer the pid allocator so the next fork takes
+    /// `want` (twin of the toolchain file's steer, sudo
+    /// fallback included — mode bits lie: the write needs a
+    /// capability the direct path may lack).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_steer_next_pid(want: i32) -> bool {
+        use std::process::Stdio;
+        let path = "/proc/sys/kernel/ns_last_pid";
+        let text = format!("{}", want - 1);
+        if std::fs::write(path, &text).is_ok() {
+            return true;
+        }
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo {text} | sudo -n tee {path} >/dev/null 2>&1"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    /// R12-005: python3 staged-probe marker — fork-only
+    /// holders are staged probe-side (a probe-side fork
+    /// inherits the piped stdio; an exec'd holder would lose
+    /// the cloexec ends, and raw-fd stdio leaves
+    /// child.stdout/stderr None so the drain never runs).
+    /// Each script carries a unique marker comment so holders
+    /// are nameable by (pgid, cmdline, birth) even after
+    /// reparenting (the pgid survives it).
+    #[cfg(target_arch = "x86_64")]
+    const STAGED_PROBE_MARK: &str = "R12-005-STAGED-PROBE";
+
+    /// R12-005: live (pid, starttime, pgid) tasks whose
+    /// cmdline contains `mark` and born at/after `since`,
+    /// excluding `exclude` — so a test can name probe-side
+    /// fork-only holders by their script marker even after
+    /// reparenting (cmdline + pgid survive it; ppid does not).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_marked_tasks(
+        mark: &str,
+        since: u64,
+        exclude: libc::pid_t,
+    ) -> Vec<(libc::pid_t, u64, libc::pid_t)> {
+        let mut found = Vec::new();
+        let entries = std::fs::read_dir("/proc").into_iter().flatten().flatten();
+        for entry in entries {
+            let pid: libc::pid_t = match entry.file_name().to_string_lossy().parse() {
+                Ok(pid) => pid,
+                Err(_) => continue,
+            };
+            if pid == exclude {
+                continue;
+            }
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            if !cmdline.windows(mark.len()).any(|w| w == mark.as_bytes()) {
+                continue;
+            }
+            let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(row) => row,
+                Err(_) => continue,
+            };
+            let fields = (|| {
+                let after = row.rsplit_once(") ")?.1;
+                let mut words = after.split_whitespace();
+                let group = words.nth(2)?.parse::<libc::pid_t>().ok()?;
+                let tick = words.nth(16)?.parse::<u64>().ok()?;
+                Some((group, tick))
+            })();
+            if let Some((group, tick)) = fields {
+                if tick >= since {
+                    found.push((pid, tick, group));
+                }
+            }
+        }
+        found
+    }
+
+    /// R12-005: process group of `pid` (field 5 of
+    /// /proc/PID/stat; None when unreadable/gone).
+    #[cfg(target_arch = "x86_64")]
+    fn proc_pgrp(pid: libc::pid_t) -> Option<libc::pid_t> {
+        let row = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        row.rsplit_once(") ")?
+            .1
+            .split_whitespace()
+            .nth(2)?
+            .parse::<libc::pid_t>()
+            .ok()
+    }
+
+    /// R12-005: settle whether `pid` survived a strike.
+    /// Death is async (a SIGKILLed task shows R with the
+    /// signal pending for µs-ms before reaching Z), so an
+    /// instant aliveness read after a strike misreads murder
+    /// as survival — and the first post-strike sample can even
+    /// show empty-pending-live (strike/settle race at µs
+    /// scale), so NEVER trust one sample: poll the FULL 500ms
+    /// window and report spared only if EVERY sample shows a
+    /// live task with an empty pending mask (our sleepers
+    /// receive no other signals). Gone/Z/parse-failure, or any
+    /// pending fatal at any sample, means struck (false —
+    /// conservative: the strike landed).
+    #[cfg(target_arch = "x86_64")]
+    fn settle_spared(pid: libc::pid_t) -> bool {
+        use std::time::{Duration, Instant};
+        let end = Instant::now() + Duration::from_millis(500);
+        loop {
+            let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(row) => row,
+                Err(_) => return false,
+            };
+            let observed = (|| {
+                let after = row.rsplit_once(") ")?.1;
+                let mut words = after.split_whitespace();
+                let state = words.next()?.chars().next()?;
+                let pending = words.nth(27)?.parse::<u64>().ok()?;
+                Some((state, pending))
+            })();
+            match observed {
+                Some(('Z', _)) | None => return false,
+                Some((_, 0)) => {}
+                Some((_, _)) => return false,
+            }
+            if Instant::now() >= end {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R12-005: python3 presence for staged probes (fork-only
+    /// holders are staged probe-side — see
+    /// [`STAGED_PROBE_MARK`]).
+    #[cfg(target_arch = "x86_64")]
+    fn staged_probe_python3() -> bool {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
     /// Best-effort SIGKILL + reap on drop, so a failed retirement
     /// test never leaks a stopped child into the test process.
     /// S97-round6: the guard retains pidfd authority from birth and
@@ -4074,20 +4306,126 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     const PROBE_OUTPUT_CAP: usize = 1 << 20;
 
+    /// R12-005: best-effort retirement of one KNOWN stray
+    /// (a task the caller knows holds the probe's pipes from
+    /// OUTSIDE the probe group, where the group signal cannot
+    /// reach): pin first, verify the pinned starttime still
+    /// names it, signal through the pin (ESRCH-tolerant — it
+    /// may have exited), then await disappearance (reaping an
+    /// adopted zombie along the way). Never panics — expiry
+    /// is fail-closed house discipline, not an assertion.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_known_stray_best_effort(pid: libc::pid_t, started: u64) {
+        use std::time::Duration;
+        let pin = match super::super::seccomp::pidfd_open_raw(pid) {
+            Ok(pin) => pin,
+            Err(_) => return,
+        };
+        if proc_starttime(pid) != Ok(Some(started)) {
+            // SAFETY: pin owned by this scope.
+            unsafe { libc::close(pin) };
+            return;
+        }
+        // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pin as libc::c_long,
+                libc::SIGKILL as libc::c_long,
+                0 as libc::c_long,
+                0 as libc::c_long,
+            );
+        }
+        // SAFETY: pin owned by this scope.
+        unsafe { libc::close(pin) };
+        await_proc_gone_reaping(pid, started, Duration::from_secs(5));
+    }
+
     /// R11-014: fail-closed retirement for an expired (or
     /// unobservable) probe collection: signal the probe's own
     /// group, then the probe itself, then reap. The probe's
     /// pgid is its pid — every probe groups itself on entry —
     /// so the holders stranded in its group die with it.
+    /// R12-005: every arm is identity-gated — callers reap the
+    /// probe BEFORE collecting, so the bare numbers may name
+    /// recycled strangers. Three gates: (a) killpg fires only
+    /// while the group never died (`group_died` from the drain's
+    /// continuity sampler — a group that died and reformed is
+    /// foreign); (b) kill + the wait run only while the number
+    /// still names `expected` (a zombie keeps its starttime, so
+    /// ours still reaps; anything else skips without waiting);
+    /// (c) each known stray (a pipe-holder OUTSIDE the probe
+    /// group, where killpg cannot reach) is retired by (pin,
+    /// starttime) identity.
+    /// Residuals: a group death+regroup fully inside the
+    /// caller's reap→entry gap or one 100ms sample gap still
+    /// fires (exotic — needs our strays all dead plus a
+    /// foreign regroup in the gap); a same-tick number
+    /// recycle still kills+reaps as ours (S100-class).
     #[cfg(target_arch = "x86_64")]
-    fn expire_probe_collection(child: &mut std::process::Child, id: libc::pid_t) {
-        // SAFETY: signal-only to the probe's own group, then
-        // the probe itself; errors ignored (house discipline).
-        unsafe {
-            libc::killpg(id, libc::SIGKILL);
-            libc::kill(id, libc::SIGKILL);
+    fn expire_probe_collection(
+        id: libc::pid_t,
+        expected: u64,
+        strays: &[(libc::pid_t, u64)],
+        group_died: bool,
+    ) {
+        use std::time::Duration;
+        if !group_died {
+            // SAFETY: signal-only to our continuously-live
+            // group; errors ignored (house discipline).
+            unsafe {
+                libc::killpg(id, libc::SIGKILL);
+            }
         }
-        let _ = child.wait();
+        // The probe itself: only while the number still names
+        // it (reaped-and-freed is the normal caller shape —
+        // skip, never signal-or-wait a recycled holder). The
+        // await reuses the R11-005 stat gate (mismatch/freed
+        // return at once without waiting).
+        if proc_starttime(id) == Ok(Some(expected)) {
+            // SAFETY: the number still names our probe.
+            unsafe {
+                libc::kill(id, libc::SIGKILL);
+            }
+        }
+        match proc_starttime(id) {
+            Err(error) => {
+                eprintln!("expiry skips unresolvable probe {id} wait: {error}");
+            }
+            _ => {
+                await_proc_gone_reaping(id, expected, Duration::from_secs(5));
+            }
+        }
+        // Drain adopted group zombies (R11-013 pattern): under
+        // a subreaper/PID-1 runner the dead strays became OUR
+        // zombies and still hold the group observable — a
+        // plain killpg leaves them. waitpid(-pgid) reaps only
+        // OUR children in THIS group (never another test's).
+        loop {
+            let mut status = 0;
+            // SAFETY: -pgid filters to our children in our
+            // own group; WNOHANG never blocks.
+            let got = unsafe { libc::waitpid(-id, &mut status, libc::WNOHANG) };
+            if got > 0 {
+                continue;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+            }
+            break;
+        }
+        for (pid, started) in strays {
+            retire_known_stray_best_effort(*pid, *started);
+        }
+        // No Child-handle wait here by design (not even a
+        // parameter for it): the caller reaped via the handle
+        // already (all callers do — the contract), and a
+        // numeric wait past an external reap would steal a
+        // recycled holder's status. The raw await above reaps
+        // adopted zombies without touching any handle cache.
     }
 
     /// R11-014: bounded probe-output collection shared by the
@@ -4106,10 +4444,23 @@ mod tests {
     /// still evidence). Callers pass the SAME `end` as their
     /// try_wait loop — one deadline covers exit AND collection
     /// by construction.
+    /// R12-005: `expected` is the probe's birth tick pinned at
+    /// spawn (callers reap BEFORE collecting, so the number
+    /// alone may name a recycled stranger — the expiry gates
+    /// every signal and wait on it); `strays` names known pipe
+    /// writers OUTSIDE the probe group for individual
+    /// retirement. While draining, a continuity sampler
+    /// probes the group's existence every ≤100ms (sticky
+    /// `group_died` flag): a group that died and reformed is
+    /// foreign, and the expiry must not signal it. Contract:
+    /// the caller reaped via the Child handle already, and
+    /// every caller pins `expected` before any wait.
     #[cfg(target_arch = "x86_64")]
     fn collect_probe_output_bounded(
         child: &mut std::process::Child,
         end: std::time::Instant,
+        expected: u64,
+        strays: &[(libc::pid_t, u64)],
     ) -> Option<(Vec<u8>, Vec<u8>)> {
         use std::os::unix::io::AsRawFd as _;
         // IR1 (internal review round 1): the try_wait loop
@@ -4176,9 +4527,27 @@ mod tests {
         let id = child.id() as libc::pid_t;
         let mut stdout = child.stdout.take();
         let mut stderr = child.stderr.take();
+        // R12-005: group-continuity sampler state. Sampled once
+        // at entry (a group already dead can only come back
+        // foreign, so every path below carries at least that)
+        // and every drain iteration; any failure (ESRCH: gone;
+        // EPERM: foreign-owned — ours are same-uid) latches
+        // `group_died` and forbids the expiry killpg. Residual:
+        // a death+regroup fully inside the caller's reap→entry
+        // gap (µs — callers collect immediately after reaping)
+        // or inside one 100ms sample gap still fires (exotic);
+        // the tick gates on kill/wait have no window at all.
+        // SAFETY: killpg(id, 0) probes existence only.
+        let mut group_died = unsafe { libc::killpg(id, 0) } < 0;
+        let sample_group = |group_died: &mut bool| {
+            // SAFETY: killpg(id, 0) probes existence only.
+            if unsafe { libc::killpg(id, 0) } < 0 {
+                *group_died = true;
+            }
+        };
         // A blocking read could outlive `end` — fail closed.
         if !nonblocking(&stdout) || !nonblocking(&stderr) {
-            expire_probe_collection(child, id);
+            expire_probe_collection(id, expected, strays, group_died);
             return None;
         }
         let mut out = Vec::new();
@@ -4187,12 +4556,27 @@ mod tests {
         let mut err_done = false;
         let mut buf = [0u8; 8192];
         loop {
+            sample_group(&mut group_died);
             if out_done && err_done {
-                let _ = child.wait();
+                // R12-005: the probe is reaped already on the
+                // normal path — reap here only while the
+                // number still names it (reuse the R11-005
+                // gate: mismatch/freed return at once without
+                // waiting; unresolvable skips loud instead of
+                // stalling to `end` on a dead stat read).
+                match proc_starttime(id) {
+                    Err(error) => {
+                        eprintln!("collection skips unresolvable probe {id} wait: {error}");
+                    }
+                    _ => {
+                        let window = end.saturating_duration_since(std::time::Instant::now());
+                        await_proc_gone_reaping(id, expected, window);
+                    }
+                }
                 return Some((out, err));
             }
             if std::time::Instant::now() >= end {
-                expire_probe_collection(child, id);
+                expire_probe_collection(id, expected, strays, group_died);
                 return None;
             }
             // Negative fds are skipped by poll: done pipes
@@ -4215,9 +4599,15 @@ mod tests {
                     revents: 0,
                 },
             ];
+            // R12-005: cap the poll sleep at 100ms so the
+            // continuity sampler above runs ≥10/s — an
+            // uncapped sleep could hide a whole
+            // group-death-plus-foreign-regroup inside one
+            // blind window on long collections.
             let remaining = end
                 .saturating_duration_since(std::time::Instant::now())
                 .as_millis()
+                .min(100)
                 .min(i32::MAX as u128) as i32;
             // SAFETY: valid pollfds for owned descriptors.
             let ready = unsafe {
@@ -4232,7 +4622,7 @@ mod tests {
                 if error.kind() == std::io::ErrorKind::Interrupted {
                     continue;
                 }
-                expire_probe_collection(child, id);
+                expire_probe_collection(id, expected, strays, group_died);
                 return None;
             }
             if ready == 0 {
@@ -4286,13 +4676,19 @@ mod tests {
             });
         }
         let mut child = child.spawn().expect("spawn pipe-holding stage");
+        // R12-005: pin the probe's birth tick before any wait
+        // (the expiry gates every signal and wait on it).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("stage stat readable")
+            .expect("stage visible");
         // The shell exits at once; its sleeper inherits the
         // group AND the pipe write ends.
         let status = child.wait().expect("stage exit");
         assert!(status.success());
         let group = child.id() as libc::pid_t;
         let started = Instant::now();
-        let got = collect_probe_output_bounded(&mut child, started + Duration::from_secs(2));
+        let got =
+            collect_probe_output_bounded(&mut child, started + Duration::from_secs(2), staged, &[]);
         assert!(got.is_none(), "collection must expire, not hang for EOF");
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -4322,6 +4718,384 @@ mod tests {
         }
     }
 
+    /// R12-005: reap a probe whose pipe writer lives in an
+    /// INDEPENDENT group, then stage identity reuse on the
+    /// probe's freed number. The tick-gated expiry spares the
+    /// replacement (starttime mismatch — no signal, no wait)
+    /// and the known-strays retirement takes the actual
+    /// writer. Pre-fix the expiry murders the replacement and
+    /// never retires the writer (RED). The writer is staged
+    /// probe-side (a python probe-side fork inherits the
+    /// piped stdio and self-groups; an exec'd writer would
+    /// lose the cloexec ends). A RED run strands at most the
+    /// 6s writer.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_expiry_spares_recycled_number_and_retires_known_writer() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        // Serialize steerers in-process (whole-test hold); the
+        // placement loop below adds the cross-process lock.
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // The probe: self-grouped python forking an
+        // independently grouped writer (own group, 6s), then
+        // exiting at once. The writer inherits the piped stdio
+        // across the fork (no exec — cloexec would drop it).
+        let mark = format!("{STAGED_PROBE_MARK}-T1");
+        let script = format!(
+            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    os.setpgid(0, 0)\n    time.sleep(6)\n    os._exit(0)\nprint('OUT')\nprint('ERR', file=sys.stderr)\n"
+        );
+        let mut probe = std::process::Command::new("python3");
+        probe
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("staged probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let probe_tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Name the writer by (marker, birth): it is the only
+        // marked task besides the probe itself.
+        let (writer, writer_tick, writer_group) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut marked = audit_marked_tasks(&mark, probe_tick, id);
+                if marked.len() == 1 {
+                    break marked.pop().unwrap();
+                }
+                assert!(
+                    Instant::now() < end,
+                    "writer never appeared, got {marked:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        assert_ne!(writer_group, id, "writer must leave the probe group");
+        // Reap the probe (the caller-side wait the finding
+        // names): its number is free (not zombie) from here.
+        let status = probe.wait().expect("probe exit");
+        assert!(status.success());
+        // Controlled reuse: a LIVE replacement on the probe's
+        // number at a DIFFERENT birth tick (same-tick is the
+        // exotic accepted residual, not this finding).
+        let mut replacement = None;
+        {
+            let _flock = ns_last_pid_flock();
+            for _ in 0..100 {
+                if !audit_steer_next_pid(id) {
+                    break;
+                }
+                let mut cand = std::process::Command::new("/bin/sleep")
+                    .arg("60")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("replacement spawns");
+                if cand.id() as libc::pid_t != id {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                let placed_different = match proc_starttime(id) {
+                    Ok(Some(tick)) => tick != probe_tick,
+                    _ => false,
+                };
+                if !placed_different {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                replacement = Some(cand);
+                break;
+            }
+        }
+        let mut replacement = replacement.expect("replacement placed on probe's number");
+        let revived_tick = proc_starttime(id)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        // R12-005: tick-gated expiry (the probe's number now
+        // names a live replacement) with the writer named as a
+        // known stray (outside the probe group, where the
+        // group signal cannot reach).
+        let got = collect_probe_output_bounded(
+            &mut probe,
+            Instant::now() + Duration::from_secs(2),
+            probe_tick,
+            &[(writer, writer_tick)],
+        );
+        // Observe before cleanup (R12-014): identity now, then
+        // SETTLED aliveness (death is async — an instant read
+        // misreads a mid-death task as live), then retire.
+        let revived_now = proc_starttime(id);
+        let revived_spared = settle_spared(id);
+        // SAFETY: retiring our own replacement (live when
+        // spared; already a zombie when struck — the kill is
+        // then a no-op and the owner reaps below).
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let owned = replacement.wait();
+        let _ = std::fs::write(last_path, &last_before);
+        // Expiry must have fired (else survival below is
+        // vacuous — nothing addressed anyone).
+        assert!(got.is_none(), "collection must expire, not hang for EOF");
+        assert_eq!(
+            revived_now,
+            Ok(Some(revived_tick)),
+            "recycled probe number keeps its holder"
+        );
+        assert!(
+            revived_spared,
+            "recycled probe number must hold a LIVE task (settled)"
+        );
+        let status = owned.expect("replacement owner keeps its status");
+        assert!(!status.success(), "killed replacement reports signal death");
+        // The actual owned writer is retired by the expiry
+        // (2s bound — far below the writer's 6s natural life,
+        // so a pass cannot be its natural exit).
+        assert!(
+            await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2)),
+            "known writer must be retired by the expiry"
+        );
+    }
+
+    /// R12-005 (group continuity): the probe's group dies
+    /// MID-COLLECTION (its stray is retired) and a foreign task
+    /// recycles the GROUP NUMBER (a replacement on the probe's
+    /// freed pid that self-groups). The continuity sampler saw
+    /// the group die and the expiry skips the killpg; the
+    /// tick gate skips the direct kill/wait. Pre-fix the blind
+    /// killpg murders the foreign group (RED). The 300ms death
+    /// gap spans several 100ms
+    /// samples by construction; the expiry proves it fired
+    /// (EOF is held throughout by an unattributed test-group
+    /// holder the expiry cannot know). The 10s holder covers
+    /// the 5s deadline with margin (retired in cleanup on
+    /// every path past staging).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_expiry_skips_recycled_group() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // SAFETY: getpgrp reads our own group only.
+        let test_group = unsafe { libc::getpgrp() };
+        // The probe: self-grouped python forking S (its group,
+        // 30s — retired mid-collection) and H (OUR group via a
+        // setpgid-join, 6s — the unattributed EOF holder no
+        // list names), then exiting at once. Both inherit the
+        // piped stdio across the fork (no exec — cloexec would
+        // drop it).
+        let mark = format!("{STAGED_PROBE_MARK}-T2");
+        let script = format!(
+            "# {mark}\nimport os, sys, time\ns = os.fork()\nif s == 0:\n    time.sleep(30)\n    os._exit(0)\nh = os.fork()\nif h == 0:\n    os.setpgid(0, {test_group})\n    time.sleep(10)\n    os._exit(0)\n"
+        );
+        let mut probe = std::process::Command::new("python3");
+        probe
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("staged probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let probe_tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Name S (pgid == probe group) and H (pgid == our
+        // group) by (marker, birth, pgid): pgid + cmdline
+        // survive the probe's exit where ppid would flap.
+        let ((stray, stray_tick, _), (holder, holder_tick, _)) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let marked = audit_marked_tasks(&mark, probe_tick, id);
+                let mut stray = None;
+                let mut holder = None;
+                for (pid, tick, group) in marked {
+                    if group == id {
+                        stray = Some((pid, tick, group));
+                    } else if group == test_group {
+                        holder = Some((pid, tick, group));
+                    }
+                }
+                if let (Some(stray), Some(holder)) = (stray, holder) {
+                    break (stray, holder);
+                }
+                assert!(Instant::now() < end, "stray/holder never appeared");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        // Reap the probe: its number is free from here; S lives
+        // on in the group (reparented), H in ours.
+        let status = probe.wait().expect("probe exit");
+        assert!(status.success());
+        // Mid-collection recycler: retire S, hold the group
+        // dead across several samples, then recycle the GROUP
+        // NUMBER with a self-grouped foreigner on the probe's
+        // freed pid. Returns the foreigner's handle for the
+        // owner to retire.
+        let stager = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            // SAFETY: retiring our own grandchild S (kill
+            // only — reparented, never waited by us).
+            unsafe {
+                libc::kill(stray, libc::SIGKILL);
+            }
+            assert!(
+                await_proc_gone_reaping(stray, stray_tick, Duration::from_secs(5)),
+                "stray retires mid-collection"
+            );
+            // The death gap: the sampler must observe ESRCH
+            // here (several 100ms samples land inside it).
+            std::thread::sleep(Duration::from_millis(300));
+            let _flock = ns_last_pid_flock();
+            for _ in 0..100 {
+                if !audit_steer_next_pid(id) {
+                    break;
+                }
+                let mut cmd = std::process::Command::new("/bin/sleep");
+                cmd.arg("60")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec — this IS
+                // the group-number recycle (pgid becomes id).
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                let mut cand = cmd.spawn().expect("foreigner spawns");
+                if cand.id() as libc::pid_t != id {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                let tick = match proc_starttime(id) {
+                    Ok(Some(tick)) => tick,
+                    _ => {
+                        let _ = cand.kill();
+                        let _ = cand.wait();
+                        continue;
+                    }
+                };
+                assert_ne!(
+                    tick, probe_tick,
+                    "recycled group holder must differ in tick"
+                );
+                return (cand, tick, Instant::now());
+            }
+            panic!("foreigner placement failed");
+        });
+        // R12-005: tick-gated expiry (the probe's number now
+        // names a live foreigner) with continuity sampling
+        // (the group dies mid-collection and reforms foreign).
+        // The 5s deadline gives the stager room (S-retirement
+        // + 300ms gap + sudo-paced placement ≈ 1s typical);
+        // the 10s H holder covers it with margin.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let got = collect_probe_output_bounded(&mut probe, deadline, probe_tick, &[]);
+        let (mut foreign, foreign_tick, foreign_placed) = stager.join().expect("stager placed F");
+        // Observe before cleanup (R12-014), then retire both
+        // owned tasks on every path. SETTLED aliveness: death
+        // is async (an instant read misreads a mid-death task
+        // as live) and a zombie keeps its starttime, so
+        // identity alone would pass a murder.
+        let foreign_now = proc_starttime(id);
+        let foreign_group = proc_pgrp(id);
+        let foreign_spared = settle_spared(id);
+        // SAFETY: retiring our own live foreigner.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let owned = foreign.wait();
+        // Retire H (reparented to init on the probe's exit —
+        // kill only, never waited by us; init reaps it).
+        // SAFETY: retiring our own staged holder.
+        unsafe {
+            libc::kill(holder, libc::SIGKILL);
+        }
+        let holder_gone = await_proc_gone_reaping(holder, holder_tick, Duration::from_secs(5));
+        let _ = std::fs::write(last_path, &last_before);
+        assert!(got.is_none(), "collection must expire (EOF held)");
+        assert!(
+            foreign_placed + Duration::from_millis(100) < deadline,
+            "foreigner must predate the strike with margin (else survival is vacuous)"
+        );
+        assert_eq!(
+            foreign_group,
+            Some(id),
+            "foreigner must sit in the recycled group (else the strike cannot address it)"
+        );
+        assert_eq!(
+            foreign_now,
+            Ok(Some(foreign_tick)),
+            "foreign group holder survives the expiry"
+        );
+        assert!(
+            foreign_spared,
+            "foreign group holder must be LIVE (settled)"
+        );
+        let status = owned.expect("foreigner owner keeps its status");
+        assert!(!status.success(), "killed foreigner reports signal death");
+        assert!(holder_gone, "staged holder retires in cleanup");
+    }
+
     /// R11-014: the bounded helper must not break the normal
     /// path — an exited child with small output collects
     /// exactly, fast.
@@ -4337,6 +5111,10 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn echo stage");
+        // R12-005: pin before any wait (expiry identity gate).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("stage stat readable")
+            .expect("stage visible");
         let status = loop {
             match child.try_wait().expect("stage wait") {
                 Some(status) => break status,
@@ -4345,7 +5123,12 @@ mod tests {
         };
         assert!(status.success());
         let started = Instant::now();
-        let got = collect_probe_output_bounded(&mut child, started + Duration::from_secs(10));
+        let got = collect_probe_output_bounded(
+            &mut child,
+            started + Duration::from_secs(10),
+            staged,
+            &[],
+        );
         let (stdout, stderr) = got.expect("small output must collect");
         assert_eq!(stdout, b"OUT\n");
         assert_eq!(stderr, b"ERR\n");
@@ -4376,6 +5159,10 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn echo stage");
+        // R12-005: pin before any wait (expiry identity gate).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("stage stat readable")
+            .expect("stage visible");
         let status = loop {
             match child.try_wait().expect("stage wait") {
                 Some(status) => break status,
@@ -4387,6 +5174,8 @@ mod tests {
         let got = collect_probe_output_bounded(
             &mut child,
             started.checked_sub(Duration::from_secs(1)).unwrap(),
+            staged,
+            &[],
         );
         let (stdout, stderr) = got.expect("expired end must still recover");
         assert_eq!(stdout, b"OUT\n");
@@ -4424,6 +5213,10 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn subreaper probe");
+        // R12-005: pin before any wait (expiry identity gate).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("probe stat readable")
+            .expect("probe visible");
         let end = Instant::now() + Duration::from_secs(150);
         loop {
             match child.try_wait().expect("probe wait") {
@@ -4432,7 +5225,7 @@ mod tests {
                     // deadline — wait_with_output would wait for
                     // EOF past it whenever a descendant outlives
                     // the probe holding the pipes.
-                    match collect_probe_output_bounded(&mut child, end) {
+                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
                         Some((stdout, stderr)) => {
                             assert!(
                                 status.success(),
@@ -5008,9 +5801,10 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("spawn adopting-guard probe");
-        // The probe's worst case is ~17s (2s guard + 5s
-        // retirement + 10s group probe); 60s is the same
-        // proportionate bound as the R10-012 parent's 150s.
+        // R12-005: pin before any wait (expiry identity gate).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("probe stat readable")
+            .expect("probe visible");
         let end = Instant::now() + Duration::from_secs(60);
         loop {
             match child.try_wait().expect("probe wait") {
@@ -5019,7 +5813,7 @@ mod tests {
                     // deadline — wait_with_output would wait for
                     // EOF past it whenever a descendant outlives
                     // the probe holding the pipes.
-                    match collect_probe_output_bounded(&mut child, end) {
+                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
                         Some((stdout, stderr)) => {
                             assert!(
                                 status.success(),

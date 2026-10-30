@@ -1576,6 +1576,9 @@ fn stale_child_wait_after_sweep_steals_nothing() {
     // number at a DIFFERENT birth tick (same-tick is the
     // exotic accepted residual, not this finding).
     let mut replacement = None;
+    // R12-005: cross-process placement lock (lib tests steer
+    // concurrently in another process).
+    let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
         if !steer_next_pid(stray_pid) {
             break;
@@ -1668,6 +1671,9 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
     // Controlled reuse: a LIVE replacement on the stray's
     // number at a DIFFERENT birth tick.
     let mut replacement = None;
+    // R12-005: cross-process placement lock (lib tests steer
+    // concurrently in another process).
+    let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
         if !steer_next_pid(stray_pid) {
             break;
@@ -2394,6 +2400,33 @@ fn spawn_orphan_sleeper_with_hook(
 /// names the reported starttime, signal through the pin, poll for
 /// disappearance. Never a numeric signal on a non-child.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+/// R12-005-stress: disappearance predicate for `retire_orphan`'s
+/// poll — presence-aware PLUS a foreign-tick escape. Gone or
+/// zombie retires as before (zombie counts: reaping is the live
+/// parent's duty — B'-family orphans sit unreaped under live
+/// parents until test-end). A LIVE holder with a different birth
+/// tick also retires: our pidfd-signaled orphan is then
+/// definitionally retired (S98 principle) — the stranger is a
+/// steered recycle, not resistance. Only a live same-tick holder
+/// keeps polling. Unreadable rows stay UNRESOLVED (loud), never
+/// retired. Residual: a live same-tick recycle reads as ours and
+/// polls to the bound (S100-class). Extracted (not inlined) so
+/// the recycle semantics carry a direct unit regression: a
+/// mid-poll recycle is unplantable end-to-end (the pin stage
+/// already rejects pre-recycled numbers fail-closed, and a
+/// planter thread cannot beat the poll's first read).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn orphan_retired_checked(pid: i32, pinned: u64) -> Result<bool, String> {
+    if task_retired_checked(pid)? {
+        return Ok(true);
+    }
+    match task_starttime_checked(pid) {
+        Ok(None) => Ok(true),
+        Ok(Some(now)) => Ok(now != pinned),
+        Err(error) => Err(error),
+    }
+}
+
 fn retire_orphan(pid: i32, pinned: u64) {
     let fd = pidfd_open_task(pid).expect("orphan pinnable while live");
     assert_eq!(
@@ -2410,7 +2443,7 @@ fn retire_orphan(pid: i32, pinned: u64) {
     unsafe { libc::close(fd) };
     let end = Instant::now() + Duration::from_secs(5);
     loop {
-        match task_retired_checked(pid) {
+        match orphan_retired_checked(pid, pinned) {
             Ok(true) => return,
             Ok(false) => {}
             Err(error) => panic!("orphan {pid} retirement unresolved: {error}"),
@@ -2418,6 +2451,125 @@ fn retire_orphan(pid: i32, pinned: u64) {
         assert!(Instant::now() < end, "orphan {pid} resisted retirement");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// R12-005-stress: the retirement predicate needs a foreign-tick
+/// escape. R12-002's hook leaves ns_last_pid just below our orphan,
+/// so a sibling fork retakes the freed number inside
+/// `retire_orphan`'s 5s poll — a pure presence-poll misreads the
+/// live stranger as "resisted" (3/10 full-suite flakes). Each state
+/// is fabricated directly: recycled-under-foreign-tick is retired;
+/// live-ours (same tick) is not; zombie-ours retires as before
+/// (dead is retired — reaping is the live parent's duty).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_retirement_predicate_ignores_recycled_number() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    // Live-ours: an owned pauser under its own tick.
+    let live = fork_pauser();
+    let live_tick = task_starttime_checked(live)
+        .expect("pauser stat readable")
+        .expect("pauser live");
+    // Zombie-ours: a fork-only child that exits at once and is
+    // never reaped until cleanup — keeps its tick in state Z.
+    // SAFETY: fork; the child only _exits (no runtime, no locks).
+    let zombie = unsafe { libc::fork() };
+    assert!(zombie > 0, "zombie fork");
+    if zombie == 0 {
+        unsafe { libc::_exit(0) };
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = std::fs::read_to_string(format!("/proc/{zombie}/stat")).expect("zombie stat");
+        let state = row
+            .rsplit_once(") ")
+            .and_then(|(_, after)| after.split_whitespace().next());
+        if state == Some("Z") {
+            break;
+        }
+        assert!(Instant::now() < end, "child never zombied");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let zombie_tick = task_starttime_checked(zombie)
+        .expect("zombie stat readable")
+        .expect("zombie present");
+    // Recycled: kill an owned pauser, force a tick advance, retake
+    // its number with a steered squatter (R12-005: cross-process
+    // placement lock; a racing sibling spawn may steal it —
+    // retried, then honestly skipped).
+    let victim = fork_pauser();
+    let victim_tick = task_starttime_checked(victim)
+        .expect("victim stat readable")
+        .expect("victim live");
+    kill_wait_child(victim);
+    std::thread::sleep(Duration::from_millis(50));
+    let _nsflock = ns_last_pid_flock();
+    let mut squatter = -1;
+    for _ in 0..100 {
+        if !steer_next_pid(victim) {
+            break;
+        }
+        let kid = fork_pauser();
+        if kid == victim {
+            squatter = kid;
+            break;
+        }
+        kill_wait_child(kid);
+    }
+    drop(_nsflock);
+    let _ = std::fs::write(last_path, &last_before);
+    if squatter != victim {
+        eprintln!("skip: victim number not retaken (contended)");
+        return;
+    }
+    let now = task_starttime_checked(victim)
+        .expect("squatter stat readable")
+        .expect("squatter live");
+    if now == victim_tick {
+        kill_wait_child(squatter);
+        eprintln!("skip: same-tick recycle (S100, vacuous)");
+        return;
+    }
+    // The incident: a proven-foreign task under the number means
+    // OUR orphan is definitionally retired (S98 principle).
+    assert_eq!(
+        orphan_retired_checked(victim, victim_tick),
+        Ok(true),
+        "recycled number is retired"
+    );
+    // Zombie-ours retires as before (dead is retired; the live
+    // parent reaps at test-end) — only live same-tick polls on.
+    assert_eq!(
+        orphan_retired_checked(zombie, zombie_tick),
+        Ok(true),
+        "zombie-ours is retired"
+    );
+    assert_eq!(
+        orphan_retired_checked(live, live_tick),
+        Ok(false),
+        "live-ours is not retired"
+    );
+    kill_wait_child(squatter);
+    kill_wait_child(live);
+    // SAFETY: our own zombie child.
+    let mut status = 0;
+    let got = unsafe { libc::waitpid(zombie, &mut status, 0) };
+    assert_eq!(got, zombie, "zombie reaped in cleanup");
 }
 
 /// S115/S123-round8: reap a confined probe child under a hang
@@ -2533,6 +2685,84 @@ fn sole_child_pid(pid: i32) -> i32 {
 /// already failed; each test still reports its own fate).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// R12-005: cross-process ns_last_pid placement lock (twin of
+/// the audit lib-tests' guard — SAME lockfile path, kept in
+/// sync by hand): lib tests and integration tests run as
+/// separate (possibly concurrent) processes, so the
+/// in-process mutexes cannot serialize them; without this a
+/// foreign steer between our steer and our spawn corrupts
+/// exact-number placement. POSIX fcntl locks (NOT flock):
+/// flock locks leak into fork-only children (the lock survives
+/// our close on their inherited fd), while POSIX locks are
+/// dropped across fork. O_CLOEXEC keeps the fd out of exec'd
+/// children (their fd-count asserts would see it). NEVER NEST:
+/// same-process POSIX locks merge, so an inner drop would
+/// release the outer's lock — hold at most one (placement
+/// loops never nest). Lock order everywhere: STEER_SERIAL
+/// first (test top), this guard second (loop top).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct NsLastPidFlock {
+    fd: libc::c_int,
+}
+
+/// R12-005: take the cross-process placement lock (blocking;
+/// held for milliseconds across one steer-then-spawn
+/// placement loop).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn ns_last_pid_flock() -> NsLastPidFlock {
+    use std::os::unix::ffi::OsStrExt as _;
+    let path = std::env::temp_dir().join("scopebase-ns-last-pid.lock");
+    let bytes = path.as_os_str().as_bytes();
+    let cpath = std::ffi::CString::new(bytes).expect("lock path c-str");
+    // SAFETY: valid path pointer; O_CLOEXEC documented above.
+    let fd = unsafe {
+        libc::open(
+            cpath.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    assert!(fd >= 0, "placement lock opens");
+    // SAFETY: F_SETLKW on an owned fd, whole-file write lock.
+    let locked = unsafe {
+        libc::fcntl(
+            fd,
+            libc::F_SETLKW,
+            &libc::flock {
+                l_type: libc::F_WRLCK as libc::c_short,
+                l_whence: libc::SEEK_SET as libc::c_short,
+                l_start: 0,
+                l_len: 0,
+                l_pid: 0,
+            },
+        )
+    };
+    assert_eq!(locked, 0, "placement lock acquires");
+    NsLastPidFlock { fd }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for NsLastPidFlock {
+    fn drop(&mut self) {
+        // SAFETY: unlock-then-close an owned fd (never nest:
+        // releasing here releases the process's lock).
+        unsafe {
+            libc::fcntl(
+                self.fd,
+                libc::F_SETLK,
+                &libc::flock {
+                    l_type: libc::F_UNLCK as libc::c_short,
+                    l_whence: libc::SEEK_SET as libc::c_short,
+                    l_start: 0,
+                    l_len: 0,
+                    l_pid: 0,
+                },
+            );
+            libc::close(self.fd);
+        }
+    }
+}
 
 /// R12-002: fork a pausing child WITHOUT exec (microsecond
 /// placement for pid-stealing loops — Command::spawn's
@@ -2680,6 +2910,8 @@ fn descendant_walk_survives_intermediate_replacement() {
         // holding P defeats every retry deterministically,
         // so the test infers skip-vs-broken below instead of
         // asserting here).
+        // R12-005: cross-process placement lock.
+        let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
             if !steer_next_pid(p_pid) {
                 break;
@@ -2818,6 +3050,8 @@ fn descendant_walk_survives_check_sample_replacement() {
         // holding P defeats every retry deterministically, so
         // the test infers skip-vs-broken below instead of
         // asserting here.
+        // R12-005: cross-process placement lock.
+        let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
             if !steer_next_pid(p_pid) {
                 break;
@@ -3709,6 +3943,9 @@ fn repeated_holder_cleanup_spares_recycled_number() {
     // Controlled reuse: a LIVE replacement on the holder's
     // number at a DIFFERENT birth tick.
     let mut replacement = None;
+    // R12-005: cross-process placement lock (lib tests steer
+    // concurrently in another process).
+    let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
         if !steer_next_pid(holder) {
             break;
@@ -3759,6 +3996,175 @@ fn repeated_holder_cleanup_spares_recycled_number() {
         .expect("replacement owner keeps its status");
     assert!(!status.success(), "killed replacement reports signal death");
     let _ = std::fs::write(last_path, &last_before);
+}
+
+/// R12-005: settle whether `pid` survived a strike (twin of
+/// the audit lib-tests' helper — death is async, so an
+/// instant aliveness read after a strike misreads murder as
+/// survival, and even the first post-strike sample can show
+/// empty-pending-live). Poll the FULL 500ms window: spared
+/// only if EVERY sample shows a live task with an empty
+/// pending mask (our sleepers receive no other signals).
+/// Gone/Z/parse-failure, or any pending at any sample, means
+/// struck (false — conservative).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn settle_spared(pid: i32) -> bool {
+    let end = Instant::now() + Duration::from_millis(500);
+    loop {
+        let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(row) => row,
+            Err(_) => return false,
+        };
+        let observed = (|| {
+            let after = row.rsplit_once(") ")?.1;
+            let mut words = after.split_whitespace();
+            let state = words.next()?.chars().next()?;
+            let pending = words.nth(27)?.parse::<u64>().ok()?;
+            Some((state, pending))
+        })();
+        match observed {
+            Some(('Z', _)) | None => return false,
+            Some((_, 0)) => {}
+            Some((_, _)) => return false,
+        }
+        if Instant::now() >= end {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R12-005: reap a self-grouped probe, stage identity
+/// reuse on its freed number, then invoke the REPEATED probe
+/// retirement. The tick gate skips the direct kill (and the
+/// wait) while the group signal still fires for genuinely
+/// stranded strays. Pre-fix the blind numeric kill murders
+/// the replacement (RED). The replacement's survival is
+/// SETTLED (death is async — an instant read misreads a
+/// mid-death task as live). Durations 891/892 are unique to
+/// this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn repeated_probe_retirement_spares_recycled_number() {
+    use std::os::unix::process::CommandExt as _;
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    // The probe: self-grouped (every retire_probe_tree caller
+    // self-groups — a test-group probe would make the group
+    // signal suite-suicidal).
+    let mut probe = std::process::Command::new("/bin/sleep");
+    probe
+        .arg("891")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        probe.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut probe = probe.spawn().expect("probe spawns");
+    let id = probe.id() as i32;
+    let probe_tick = task_starttime_checked(id)
+        .expect("probe stat readable")
+        .expect("probe visible");
+    // Reap through the handle (the caller shape the finding
+    // names: try_wait reaps, THEN retirement runs blind).
+    // SAFETY: retiring our own probe.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = probe.try_wait().expect("probe wait") {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < end, "probe never reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Controlled reuse: a LIVE replacement on the probe's
+    // number at a DIFFERENT birth tick (same-tick is the
+    // exotic accepted residual, not this finding).
+    let mut replacement = None;
+    {
+        // R12-005: cross-process placement lock.
+        let _nsflock = ns_last_pid_flock();
+        for _ in 0..100 {
+            if !steer_next_pid(id) {
+                break;
+            }
+            let mut cand = std::process::Command::new("/bin/sleep")
+                .arg("892")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("replacement spawns");
+            if cand.id() as i32 != id {
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            let placed_different = match task_starttime_checked(id) {
+                Ok(Some(tick)) => tick != probe_tick,
+                _ => false,
+            };
+            if !placed_different {
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            replacement = Some(cand);
+            break;
+        }
+    }
+    let mut replacement = replacement.expect("replacement placed on probe's number");
+    let revived_tick = task_starttime_checked(id)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    // R12-005: the repeated retirement (tick-gated — the
+    // probe's number now names a live replacement, so the
+    // direct kill must skip twice).
+    retire_probe_tree(&mut probe, probe_tick);
+    retire_probe_tree(&mut probe, probe_tick);
+    // Observe before cleanup (R12-014): identity now, then
+    // SETTLED aliveness, then retire.
+    let revived_now = task_starttime_checked(id);
+    let revived_spared = settle_spared(id);
+    // SAFETY: retiring our own replacement.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let owned = replacement.wait();
+    let _ = std::fs::write(last_path, &last_before);
+    assert_eq!(
+        revived_now,
+        Ok(Some(revived_tick)),
+        "recycled probe number keeps its holder"
+    );
+    assert!(
+        revived_spared,
+        "recycled probe number must hold a LIVE task (settled)"
+    );
+    let status = owned.expect("replacement owner keeps its status");
+    assert!(!status.success(), "killed replacement reports signal death");
 }
 
 /// R10-013: drain an exited probe child's piped output WITHOUT
@@ -3853,6 +4259,10 @@ fn probe_tree_retirement_kills_stranded_group() {
         });
     }
     let mut child = child.spawn().expect("spawn failing stage");
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged = task_starttime_checked(child.id() as i32)
+        .expect("stage stat readable")
+        .expect("stage visible");
     let status = child.wait().expect("stage exit");
     assert!(!status.success());
     assert_eq!(status.code(), Some(3));
@@ -3860,8 +4270,8 @@ fn probe_tree_retirement_kills_stranded_group() {
     // IR1: the 31s sleeper dies with the test on every path
     // (failed asserts unwind through this guard).
     let _guard = KillGroupOnDrop { group };
-    retire_probe_tree(&mut child);
-    retire_probe_tree(&mut child);
+    retire_probe_tree(&mut child, staged);
+    retire_probe_tree(&mut child, staged);
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         // SAFETY: signal 0 probes existence only.
@@ -3891,24 +4301,33 @@ fn probe_tree_retirement_kills_stranded_group() {
 /// Used on timeout AND on failure exit (a failed probe may
 /// strand its group) — always before reporting failure.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn retire_probe_tree(child: &mut std::process::Child) {
+/// R12-005: `expected` is the probe's birth tick pinned at
+/// spawn — the direct kill and the wait run ONLY while the
+/// number still names it (reaped-and-freed is the normal
+/// post-call shape: signal nothing, wait nothing). killpg
+/// still fires blind: the group may hold our strays after the
+/// probe's reap (that is this function's job on failure
+/// paths), and a single call cannot sample continuity — the
+/// residual is a foreign regroup of the exact number within
+/// ms of our reap (exotic: our strays all dead plus a
+/// same-number self-grouper; foreign groups here form only by
+/// self-grouping, so it needs an exact-pid recycle in a ms
+/// window).
+fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
     // SAFETY: signal-only to the probe's own group, then the
     // probe itself; errors ignored (house discipline).
     let id = child.id() as libc::pid_t;
     // R12-003: the probe may be reaped already (a second call,
-    // or the caller reaped it reporting failure) — read who the
-    // number names BEFORE signaling so the wait below never
-    // addresses a recycled holder. (The numeric signals are
-    // R12-005's finding, not this one.)
-    let expected = match task_starttime_checked(id) {
-        Ok(Some(started)) => Some(started),
-        _ => None,
-    };
+    // or the caller reaped it reporting failure) — the wait
+    // below never addresses a recycled holder.
+    let ours = task_starttime_checked(id) == Ok(Some(expected));
     unsafe {
         libc::killpg(id, libc::SIGKILL);
-        libc::kill(id, libc::SIGKILL);
+        if ours {
+            libc::kill(id, libc::SIGKILL);
+        }
     }
-    if let Some(expected) = expected {
+    if ours {
         wait_child_unless_reaped(child, id, expected);
     }
 }
@@ -3936,6 +4355,10 @@ fn unframed_report_expiry_retires_everything() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn unframed-expiry probe");
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged = task_starttime_checked(child.id() as i32)
+        .expect("probe stat readable")
+        .expect("probe visible");
     let end = Instant::now() + Duration::from_secs(90);
     loop {
         match child.try_wait().expect("probe wait") {
@@ -3946,7 +4369,7 @@ fn unframed_report_expiry_retires_everything() {
                 if !status.success() {
                     // R11-016(b2): a failed probe may strand
                     // its group — retire before reporting.
-                    retire_probe_tree(&mut child);
+                    retire_probe_tree(&mut child, staged);
                 }
                 assert!(
                     status.success(),
@@ -3963,7 +4386,7 @@ fn unframed_report_expiry_retires_everything() {
             None => {}
         }
         if Instant::now() >= end {
-            retire_probe_tree(&mut child);
+            retire_probe_tree(&mut child, staged);
             panic!("unframed-expiry probe hung past 90s");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -3993,18 +4416,19 @@ fn spawn_unframed_probe() -> std::process::Child {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn await_unframed_probe(
     child: &mut std::process::Child,
+    expected: u64,
 ) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
     let end = Instant::now() + Duration::from_secs(90);
     loop {
         if let Some(status) = child.try_wait().expect("probe wait") {
             let (stdout, stderr) = drain_exited_child_output(child);
             if !status.success() {
-                retire_probe_tree(child);
+                retire_probe_tree(child, expected);
             }
             return (status, stdout, stderr);
         }
         if Instant::now() >= end {
-            retire_probe_tree(child);
+            retire_probe_tree(child, expected);
             panic!("unframed-expiry probe hung past 90s");
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -4025,6 +4449,10 @@ fn unframed_probe_ignores_foreign_sleep_95() {
         .spawn()
         .expect("spawn foreign sleep 95");
     let mut probe = spawn_unframed_probe();
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged = task_starttime_checked(probe.id() as i32)
+        .expect("probe stat readable")
+        .expect("probe visible");
     // The foreign sleeper inherits OUR group; the probe
     // self-groups to its own pid — distinct by construction
     // (fail loud on a cosmic pid collision, not mysteriously).
@@ -4035,7 +4463,7 @@ fn unframed_probe_ignores_foreign_sleep_95() {
         probe.id() as libc::pid_t,
         "probe pid collides with our process group; rerun"
     );
-    let (status, stdout, stderr) = await_unframed_probe(&mut probe);
+    let (status, stdout, stderr) = await_unframed_probe(&mut probe, staged);
     // Retire-before-assert: the foreign sleeper must be alive
     // here (the probe never touches foreign processes)...
     let alive = foreign.try_wait().expect("foreign wait").is_none();
@@ -4065,11 +4493,18 @@ fn unframed_probe_ignores_foreign_sleep_95() {
 fn concurrent_unframed_probes_ignore_each_other() {
     let mut first = spawn_unframed_probe();
     let mut second = spawn_unframed_probe();
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged_a = task_starttime_checked(first.id() as i32)
+        .expect("first probe stat readable")
+        .expect("first probe visible");
+    let staged_b = task_starttime_checked(second.id() as i32)
+        .expect("second probe stat readable")
+        .expect("second probe visible");
     // Distinct groups by construction (both live → distinct
     // pids → distinct self-groups).
     assert_ne!(first.id(), second.id(), "probe pids must differ");
-    let (status_a, stdout_a, stderr_a) = await_unframed_probe(&mut first);
-    let (status_b, stdout_b, stderr_b) = await_unframed_probe(&mut second);
+    let (status_a, stdout_a, stderr_a) = await_unframed_probe(&mut first, staged_a);
+    let (status_b, stdout_b, stderr_b) = await_unframed_probe(&mut second, staged_b);
     assert!(
         status_a.success(),
         "first probe must pass alongside a concurrent probe, got {status_a}: {}",
