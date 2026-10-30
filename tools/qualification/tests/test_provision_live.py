@@ -510,6 +510,26 @@ def native_loop_probe_verdict(returncode, stdout):
     return "LOOP_VIABLE" in (stdout or "")
 
 
+def fixture_root_gone(run):
+    """True only when the fixture root is proven absent. (R11-010)
+
+    ``os.path.exists`` swallows every OSError into False, so an
+    unstatable-but-surviving root (EACCES, I/O failure) would
+    read as removed and disable preservation. Only ENOENT
+    counts as gone; any other stat failure reports surviving
+    (False) — unobservable is not removed. Follows symlinks,
+    exactly like the prior exists() (R11-007 residual: no
+    in-system producer symlinks a fixture root). Never raises.
+    """
+    try:
+        os.stat(run)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def e2e_retirement_verdict(cleanup_ok, leftovers, host_clean,
                            root_gone):
     """'retired' only when cleanup worked with no residue. (S118)
@@ -1892,7 +1912,9 @@ class LiveBindTests(unittest.TestCase):
             sudo("chown", "-R",
                  "%d:%d" % (os.geteuid(), os.getegid()), run)
         self.assertEqual(rc, 0)
-        self.assertFalse(os.path.exists(run))
+        # R11-010: proven absence, not exists()-silence — an
+        # unstatable survivor must fail loudly, not pass.
+        self.assertTrue(fixture_root_gone(run))
 
     # S76-round4 live: the same 0775 self-owned parent stays
     # admissible across the controller-to-helper UID transition.
@@ -2559,8 +2581,10 @@ class LiveBindTests(unittest.TestCase):
                     f"residue unobservable: {exc!r}")
             # R10-010: the fixture root itself is verdict
             # residue — observed once so the verdict and the
-            # assertion below agree by construction.
-            root_gone = not os.path.exists(run)
+            # assertion below agree by construction. R11-010:
+            # only proven absence counts; an unstatable root
+            # reports surviving (preserve + loud failure).
+            root_gone = fixture_root_gone(run)
             verdict = e2e_retirement_verdict(
                 cleanup_ok, leftovers, host_clean, root_gone)
             # S130: removal of the ORIGINAL fixture is
@@ -3477,6 +3501,51 @@ class E2ERetirementTests(unittest.TestCase):
         with open(os.path.join(dest, "manifest.json")) as handle:
             self.assertEqual(handle.read(), "{}")
         self.assertIn("PRESERVED", captured.getvalue())
+
+    def test_root_gone_proven_absence(self):
+        # R11-010: only ENOENT counts as removed.
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.assertTrue(
+            fixture_root_gone(os.path.join(tmp, "run")))
+
+    def test_root_present_reports_surviving(self):
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(run)
+        self.assertFalse(fixture_root_gone(run))
+
+    def test_root_unstatable_reports_surviving(self):
+        # R11-010 regression: deny the actual root stat while
+        # every other observation appears clean — the verdict
+        # must preserve, never retire. Sensitivity: exists()
+        # lies here (False despite the present root).
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.makedirs(run)
+        os.chmod(tmp, 0)
+        try:
+            self.assertFalse(os.path.exists(run))
+            self.assertFalse(fixture_root_gone(run))
+            self.assertEqual(
+                e2e_retirement_verdict(
+                    True, [], True, fixture_root_gone(run)),
+                "preserve")
+        finally:
+            os.chmod(tmp, 0o700)
+
+    def test_root_dangling_symlink_reads_gone(self):
+        # R11-007 residual, pinned deliberately: the
+        # observation follows symlinks (same as the prior
+        # exists()), so a dangling link reads as gone. No
+        # in-system producer symlinks a fixture root.
+        tmp = tempfile.mkdtemp(prefix="e2e-pin-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        run = os.path.join(tmp, "run")
+        os.symlink(os.path.join(tmp, "target"), run)
+        self.assertTrue(fixture_root_gone(run))
 
     def test_retain_decision_matrix(self):
         # S130: automatic removal of the ORIGINAL fixture is
