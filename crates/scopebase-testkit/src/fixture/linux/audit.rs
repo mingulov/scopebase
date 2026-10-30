@@ -5876,14 +5876,9 @@ mod tests {
         // sleeper never exits on its own), then retire.
         let foreign_now = proc_starttime(id);
         std::thread::sleep(Duration::from_millis(200));
-        let mut status = 0;
-        // SAFETY: waitpid on our own child, first and only.
-        let survived = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } == 0;
-        // SAFETY: retiring our own foreigner (kill ignored —
-        // a RED zombie is already reaped above).
-        unsafe {
-            libc::kill(id, libc::SIGKILL);
-        }
+        // R14-006: shared observed cleanup (a reaped number
+        // spares whoever recycled it).
+        let survived = observe_then_retire_foreigner(id, foreign_tick);
         let owned = foreigner.wait();
         audit_locked_restore_hint(&last_before);
         assert!(first.is_none(), "null stdio must route to expiry");
@@ -5948,14 +5943,9 @@ mod tests {
         // settle, then retire.
         let foreign_now = proc_starttime(id);
         std::thread::sleep(Duration::from_millis(200));
-        let mut status = 0;
-        // SAFETY: waitpid on our own child, first and only.
-        let survived = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } == 0;
-        // SAFETY: retiring our own foreigner (kill ignored —
-        // a RED zombie is already reaped above).
-        unsafe {
-            libc::kill(id, libc::SIGKILL);
-        }
+        // R14-006: shared observed cleanup (a reaped number
+        // spares whoever recycled it).
+        let survived = observe_then_retire_foreigner(id, foreign_tick);
         let owned = foreigner.wait();
         assert_eq!(
             foreign_now,
@@ -6052,6 +6042,166 @@ mod tests {
         assert!(present, "unreadable foreigner must survive expiry");
         assert!(unreaped, "no zombie may pre-exist for the owner");
         assert_eq!(got, id, "owner keeps the foreigner's status");
+    }
+
+    /// R14-006: observe-then-retire a possibly-murdered
+    /// foreigner, shared by the regroup-test cleanups. WNOHANG
+    /// probe first: a reaped number is free and must never be
+    /// signaled (returns false). A live holder is signaled
+    /// ONLY while its tick still names our fixture (returns
+    /// true) — a recycled stranger or unreadable identity is
+    /// spared (returns false). Residual: same-tick recycle in
+    /// the µs tick-read→signal window (S100-class).
+    #[cfg(target_arch = "x86_64")]
+    fn observe_then_retire_foreigner(id: libc::pid_t, expected: u64) -> bool {
+        let mut status = 0;
+        // SAFETY: WNOHANG probe of our own child.
+        if unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } != 0 {
+            // Reaped (RED shape) or ECHILD (stolen): the number
+            // is free — never signal whoever holds it now.
+            return false;
+        }
+        if proc_starttime(id) == Ok(Some(expected)) {
+            // SAFETY: retiring our own live foreigner.
+            unsafe {
+                libc::kill(id, libc::SIGKILL);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// R14-006: failure cleanup must not signal a reaped-then-
+    /// recycled number. Fixture killed and reaped through the
+    /// observer probe, then a different-tick replacement
+    /// steered onto the number; the observed cleanup must spare
+    /// it and report unreaped-false. Pre-fix the unconditional
+    /// kill murders the replacement (RED); post-fix it skips
+    /// reaped numbers (GREEN). Duration 67 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn observed_cleanup_spares_recycled_replacement() {
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let fixture = std::process::Command::new("/bin/sleep")
+            .arg("67")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("fixture spawns");
+        let id = fixture.id() as libc::pid_t;
+        let first_tick = proc_starttime(id)
+            .expect("fixture stat readable")
+            .expect("fixture visible");
+        // Observer-reap the fixture (the RED-path shape: a
+        // zombie the WNOHANG probe consumes), then force a tick
+        // advance so the replacement differs.
+        // SAFETY: retiring our own fixture.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        // Bounded reap poll (SIGKILL-to-zombie is µs-ms; an
+        // immediate WNOHANG races the delivery).
+        let reap_end = Instant::now() + Duration::from_secs(5);
+        let got = loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own dying child.
+            let got = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) };
+            if got != 0 {
+                break got;
+            }
+            assert!(
+                Instant::now() < reap_end,
+                "fixture never reached zombie state"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(got, id, "observer probe reaps the zombie");
+        // Status consumed by the observer probe; the handle is
+        // vestigial from here (the helper below takes the id).
+        drop(fixture);
+        std::thread::sleep(Duration::from_millis(50));
+        let _flock = ns_last_pid_flock();
+        let mut placed = None;
+        for _ in 0..100 {
+            if !audit_steer_next_pid_unlocked(id) {
+                break;
+            }
+            let cand = std::process::Command::new("/bin/sleep")
+                .arg("67")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("candidate spawns");
+            if cand.id() as libc::pid_t != id {
+                let mut cand = cand;
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            placed = Some(cand);
+            break;
+        }
+        drop(_flock);
+        audit_locked_restore_hint(&last_before);
+        let mut placed = match placed {
+            Some(placed) => placed,
+            None => {
+                eprintln!("skip: fixture number not retaken (contended)");
+                return;
+            }
+        };
+        let replacement_tick = proc_starttime(id)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if replacement_tick == first_tick {
+            let _ = placed.kill();
+            let _ = placed.wait();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // The observed cleanup over the reaped-then-recycled
+        // number: must spare the replacement (its tick differs
+        // from the reaped fixture's) and report not-retired.
+        // Liveness via the HANDLE-bound probe — a starttime
+        // assert would pass on a zombie (kept starttime); the
+        // replacement's owner then retires it.
+        let retired_ours = observe_then_retire_foreigner(id, first_tick);
+        assert!(
+            !retired_ours,
+            "recycled stranger must not be signaled"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            placed.try_wait().expect("replacement try_wait works"),
+            None,
+            "replacement must survive the observed cleanup"
+        );
+        assert_eq!(
+            proc_starttime(id),
+            Ok(Some(replacement_tick)),
+            "survivor is the placed replacement, not a second recycle"
+        );
+        let _ = placed.kill();
+        let status = placed.wait().expect("replacement owner keeps its status");
+        assert!(!status.success(), "killed replacement reports signal death");
     }
 
     /// R13-004: expiry must not drain a proven-foreign group.

@@ -5541,9 +5541,13 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
 /// assertion by 26s. R14-001: disarms after the group is
 /// proven dead (a bare drop would re-signal the pgid number,
 /// which a steered stranger may have self-grouped onto).
+/// R14-006: the armed drop re-decides through
+/// `probe_group_kill_allowed` (a stranger-reformed group is
+/// spared even on panic paths).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct KillGroupOnDrop {
     group: libc::pid_t,
+    tick: u64,
     disarmed: bool,
 }
 
@@ -5558,6 +5562,13 @@ impl KillGroupOnDrop {
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
         if self.disarmed {
+            return;
+        }
+        // R14-006: re-decide at drop — after our probe retired,
+        // a stranger may have reformed the group (self-grouped
+        // onto the freed pgid); fire only while the decision
+        // still allows it. Best-effort (never panics).
+        if !probe_group_kill_allowed(self.group, self.tick) {
             return;
         }
         // SAFETY: signal-only to the test's own group;
@@ -5607,6 +5618,7 @@ fn probe_tree_retirement_kills_stranded_group() {
     // (failed asserts unwind through this guard).
     let mut guard = KillGroupOnDrop {
         group,
+        tick: staged,
         disarmed: false,
     };
     retire_probe_tree(&mut child, staged);
@@ -5631,6 +5643,63 @@ fn probe_tree_retirement_kills_stranded_group() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// R14-006: an armed group guard must not signal a reformed
+/// stranger group. Plant a live foreign self-grouped sleeper
+/// and arm a guard over its number with a mismatched probe
+/// tick (the post-retirement reformed state — planted directly
+/// as a current state); dropping the guard must spare it.
+/// Pre-fix the armed drop killpgs blind (RED); post-fix the
+/// drop reuses the group-signal decision (GREEN). Duration 896
+/// is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_drop_spares_reformed_stranger() {
+    use std::os::unix::process::CommandExt as _;
+    let mut stranger = std::process::Command::new("/bin/sleep");
+    stranger
+        .arg("896")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stranger.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut stranger = stranger.spawn().expect("stranger spawns");
+    let id = stranger.id() as i32;
+    task_starttime_checked(id)
+        .expect("stranger stat readable")
+        .expect("stranger visible");
+    // SAFETY: getpgid queries only.
+    assert_eq!(unsafe { libc::getpgid(id) }, id, "stranger must self-group");
+    // Mismatched probe tick: the guard believes the group is
+    // our retired probe's; the live holder is a stranger.
+    let guard = KillGroupOnDrop {
+        group: id as libc::pid_t,
+        tick: 0xDEAD_BEEF_DEAD_BEEF,
+        disarmed: false,
+    };
+    drop(guard);
+    // Settle, then proven-live (not just present — a zombie
+    // keeps its starttime), then loud owner cleanup (the
+    // handle-bound wait reaps OUR child, never a replacement).
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        task_retired_checked(id),
+        Ok(false),
+        "reformed stranger must survive the armed drop"
+    );
+    // SAFETY: retiring our own stranger.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let status = stranger.wait().expect("owner keeps its status");
+    assert!(!status.success(), "killed stranger reports signal death");
 }
 
 /// R11-016(b2): retire a probe's whole process group plus
