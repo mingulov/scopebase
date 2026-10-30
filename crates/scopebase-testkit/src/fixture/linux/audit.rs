@@ -429,10 +429,7 @@ fn retire_preflight_child(pid: libc::pid_t, pidfd: Option<libc::c_int>) -> bool 
     if first < 0 && last_errno_is(libc::ECHILD) {
         return true;
     }
-    if matches!(
-        signal_preflight_child(pid, pidfd),
-        PreflightSignal::Gone
-    ) {
+    if matches!(signal_preflight_child(pid, pidfd), PreflightSignal::Gone) {
         return true;
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -556,9 +553,7 @@ fn preflight_x86_64() -> Result<String, AuditError> {
         let wrote = loop {
             // SAFETY: one byte to the release pipe; the child
             // holds the read end.
-            let wrote = unsafe {
-                libc::write(release[1], byte.as_ptr() as *const _, 1)
-            };
+            let wrote = unsafe { libc::write(release[1], byte.as_ptr() as *const _, 1) };
             if wrote == 1 {
                 break true;
             }
@@ -1995,7 +1990,12 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn proc_state(pid: libc::pid_t) -> Option<char> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        stat.rsplit_once(") ")?.1.split_whitespace().next()?.chars().next()
+        stat.rsplit_once(") ")?
+            .1
+            .split_whitespace()
+            .next()?
+            .chars()
+            .next()
     }
 
     /// R12-005: in-process steerer serialization for audit
@@ -2273,8 +2273,7 @@ mod tests {
     /// discharged (a wait after discharge can only catch a recycled
     /// number owned by another test thread).
     #[cfg(target_arch = "x86_64")]
-    static TRAILING_WAITS: std::sync::Mutex<Vec<libc::pid_t>> =
-        std::sync::Mutex::new(Vec::new());
+    static TRAILING_WAITS: std::sync::Mutex<Vec<libc::pid_t>> = std::sync::Mutex::new(Vec::new());
 
     #[cfg(target_arch = "x86_64")]
     fn take_trailing_waits() -> Vec<libc::pid_t> {
@@ -2606,10 +2605,7 @@ mod tests {
             if proc_state(pid) == Some('t') {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "child never reached ptrace-stop"
-            );
+            assert!(Instant::now() < deadline, "child never reached ptrace-stop");
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -2665,10 +2661,7 @@ mod tests {
             if proc_state(pid) == Some('t') {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "child never reached ptrace-stop"
-            );
+            assert!(Instant::now() < deadline, "child never reached ptrace-stop");
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(
@@ -4856,7 +4849,11 @@ mod tests {
             // publication); unarmed callers keep one long wait.
             // The slice applies AFTER the guard check above, so
             // the deadline semantics never change.
-            let remaining = if birth_watch { remaining.min(20) } else { remaining };
+            let remaining = if birth_watch {
+                remaining.min(20)
+            } else {
+                remaining
+            };
             let mut waiting = libc::pollfd {
                 fd: pipe[0],
                 events: libc::POLLIN,
@@ -5296,9 +5293,7 @@ mod tests {
                 // and the reap below would steal the
                 // replacement owner's zombie status.
                 if group_is_foreign(id, expected) {
-                    eprintln!(
-                        "expiry: group {id} reformed mid-drain — drain stops (no theft)"
-                    );
+                    eprintln!("expiry: group {id} reformed mid-drain — drain stops (no theft)");
                     break;
                 }
                 // One reap pass over our children in this group.
@@ -6259,19 +6254,19 @@ mod tests {
                 // Die with the parent (never a pipe-holding
                 // orphan that hangs the harness past a setup
                 // failure).
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+                libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGKILL as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
                 if libc::getppid() != me {
                     libc::_exit(0);
                 }
                 libc::setpgid(0, 0);
                 let name = b"\xff\xfeforeign\x00";
-                libc::prctl(
-                    libc::PR_SET_NAME,
-                    name.as_ptr() as libc::c_ulong,
-                    0,
-                    0,
-                    0,
-                );
+                libc::prctl(libc::PR_SET_NAME, name.as_ptr() as libc::c_ulong, 0, 0, 0);
                 loop {
                     libc::pause();
                 }
@@ -6467,10 +6462,7 @@ mod tests {
         // assert would pass on a zombie (kept starttime); the
         // replacement's owner then retires it.
         let retired_ours = observe_then_retire_foreigner(id, first_tick);
-        assert!(
-            !retired_ours,
-            "recycled stranger must not be signaled"
-        );
+        assert!(!retired_ours, "recycled stranger must not be signaled");
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(
             placed.try_wait().expect("replacement try_wait works"),
@@ -6605,6 +6597,11 @@ mod tests {
                         Ok(())
                     });
                 }
+                // The placed candidate is waited via the owner
+                // cell below (clippy cannot see through the cell:
+                // allow the false-positive lint on this spawn;
+                // every other path waits inline).
+                #[allow(clippy::zombie_processes)]
                 let cand = cmd.spawn().expect("candidate spawns");
                 if cand.id() as libc::pid_t != id {
                     let mut cand = cand;
@@ -6618,6 +6615,12 @@ mod tests {
                     replacement_tick.set(tick);
                     *replacement.borrow_mut() = Some(cand);
                     reformed.set(true);
+                } else {
+                    // Unstatable at birth (≈ impossible — a fresh
+                    // sleep): retire at once, never drop unwatched.
+                    let mut cand = cand;
+                    let _ = cand.kill();
+                    let _ = cand.wait();
                 }
                 break;
             }
@@ -6906,15 +6909,14 @@ mod tests {
         // bounded retire (a surviving fixture fails loud below —
         // the injection must take, never pass vacuously).
         let slot_a = std::cell::Cell::new(-1);
-        let observed =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let pid = birth();
-                slot_a.set(pid);
-                // R14-012: custody AT birth (the fix under test).
-                let _guard = FixtureGuard::new(pid);
-                retire_audit_child_silent(pid);
-                observe(pid);
-            }));
+        let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pid = birth();
+            slot_a.set(pid);
+            // R14-012: custody AT birth (the fix under test).
+            let _guard = FixtureGuard::new(pid);
+            retire_audit_child_silent(pid);
+            observe(pid);
+        }));
         // A birth panic stages nothing (slot stays -1 — never
         // waitpid(-1): that would reap ANY sibling child).
         if slot_a.get() > 0 {
@@ -6929,17 +6931,26 @@ mod tests {
         // fixture must still disappear with its status
         // discharged.
         let slot = std::cell::Cell::new(-1);
-        let spawned =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let pid = birth();
-                slot.set(pid);
-                // R14-012: custody AT birth (the fix under test).
-                let _guard = FixtureGuard::new(pid);
-                observe(pid);
-                std::process::Command::new("/scopebase-definitely-missing-binary-r14012")
-                    .spawn()
-                    .expect("later spawn must succeed");
-            }));
+        let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let pid = birth();
+            slot.set(pid);
+            // R14-012: custody AT birth (the fix under test).
+            let _guard = FixtureGuard::new(pid);
+            observe(pid);
+            // Later-spawn failure (injected): a missing
+            // binary. Both arms diverge (the failure must
+            // report); the impossible-Ok arm retires first so
+            // even it stays clean (and clippy sees the wait).
+            match std::process::Command::new("/scopebase-definitely-missing-binary-r14012").spawn()
+            {
+                Ok(mut stray) => {
+                    let _ = stray.kill();
+                    let _ = stray.wait();
+                    panic!("later spawn unexpectedly succeeded");
+                }
+                Err(_) => panic!("injected later-spawn failure"),
+            }
+        }));
         let pid = slot.get();
         assert!(pid > 0, "{tag}: birth must stage a fixture");
         // Record state, clean best-effort (RED runs stay clean),
@@ -6953,10 +6964,7 @@ mod tests {
             "{tag}: spawn-failure must not leak the fixture"
         );
         assert_audit_pid_free(pid, tag);
-        assert!(
-            spawned.is_err(),
-            "{tag}: later-spawn failure must report"
-        );
+        assert!(spawned.is_err(), "{tag}: later-spawn failure must report");
     }
 
     /// R14-012: self-grouped-holder staging custody (foreign-group
@@ -7012,8 +7020,8 @@ mod tests {
                 use std::time::{Duration, Instant};
                 let end = Instant::now() + Duration::from_secs(5);
                 loop {
-                    let row = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                        .expect("exiter stat");
+                    let row =
+                        std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("exiter stat");
                     let state = row
                         .rsplit_once(") ")
                         .and_then(|(_, after)| after.split_whitespace().next());
@@ -7530,7 +7538,10 @@ mod tests {
         unsafe { libc::kill(vpid, libc::SIGKILL) };
         let _ = victim.wait();
         assert!(survived, "forged victim must survive the read");
-        assert!(refused.is_err(), "foreign-owned record must be refused loud");
+        assert!(
+            refused.is_err(),
+            "foreign-owned record must be refused loud"
+        );
     }
 
     /// R14-003: when publication fails, the probe must retire
@@ -7571,7 +7582,9 @@ mod tests {
             .expect("writer stat readable")
             .expect("writer visible");
         // R14-010: serialize in-suite rendezvous publishers.
-        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _lock = RENDEZVOUS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
         let _env_guard = EnvGuard;
         let failed = std::panic::catch_unwind(|| {
@@ -7733,10 +7746,7 @@ mod tests {
         // EIO: opens (owned, O_NOFOLLOW-clean) but never reads.
         let mem = std::path::Path::new("/proc/self/mem");
         let read = std::panic::catch_unwind(|| read_published_grandchild_strays(mem));
-        assert!(
-            read.is_err(),
-            "EIO record read must fail loud, not empty"
-        );
+        assert!(read.is_err(), "EIO record read must fail loud, not empty");
     }
 
     /// R14-010: a set-but-non-UTF-8 rendezvous path fails LOUD
@@ -7767,7 +7777,9 @@ mod tests {
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
-        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _lock = RENDEZVOUS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(
             GRANDCHILD_PIDFILE_ENV,
             std::ffi::OsString::from_vec(vec![b'/', b't', b'm', b'p', 0xff, 0xfe]),
@@ -7823,7 +7835,9 @@ mod tests {
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
-        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _lock = RENDEZVOUS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
         let _env_guard = EnvGuard;
         publish_reported_grandchild(&GrandchildState::Live(wpid, wtick));
@@ -7882,9 +7896,11 @@ mod tests {
         use std::time::{Duration, Instant};
         let exe = std::env::current_exe().expect("probe test binary path");
         // (spec, sleep duration, expected code, writer live after?)
-        for (spec, duration, expect, live_after) in
-            [("none", "70", 21, false), ("pidfd", "71", 20, true), ("read", "72", 20, true)]
-        {
+        for (spec, duration, expect, live_after) in [
+            ("none", "70", 21, false),
+            ("pidfd", "71", 20, true),
+            ("read", "72", 20, true),
+        ] {
             let mut writer = std::process::Command::new("/bin/sleep")
                 .arg(duration)
                 .stdin(std::process::Stdio::null())
@@ -8011,11 +8027,7 @@ mod tests {
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
                 // group + probe, retires published strays).
-                timeout_retire_hung_probe(
-                    &mut child,
-                    &pidfile,
-                    "abandoning probe hung past 60s",
-                );
+                timeout_retire_hung_probe(&mut child, &pidfile, "abandoning probe hung past 60s");
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -8462,8 +8474,7 @@ mod tests {
                     "timeout branch must panic the parent message, got: {text}"
                 );
             }
-            Ok(never) => {
-                let _ = never;
+            Ok(_) => {
                 panic!("timeout branch must diverge (it returned)");
             }
         }
@@ -9351,10 +9362,7 @@ mod tests {
                     eprintln!("skip: seccomp unavailable for the wait denial");
                     return;
                 }
-                assert_eq!(
-                    code, 10,
-                    "pin-less drop under wait denial must survive"
-                );
+                assert_eq!(code, 10, "pin-less drop under wait denial must survive");
                 return;
             }
             if got < 0 {
@@ -9364,10 +9372,7 @@ mod tests {
                 }
                 panic!("confined wait-denial probe failed: {error}");
             }
-            assert!(
-                Instant::now() < deadline,
-                "confined wait-denial probe hung"
-            );
+            assert!(Instant::now() < deadline, "confined wait-denial probe hung");
             std::thread::sleep(Duration::from_millis(10));
         }
     }

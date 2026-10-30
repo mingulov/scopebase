@@ -2932,7 +2932,10 @@ fn hang_sweep_spares_unrelated_matching_task() {
         "orphan pinned"
     );
     let swept = hang_sweep(&[("sleep", &["91"])], Some(start_tick));
-    assert!(swept.is_empty(), "unrelated task must be spared, got: {swept:?}");
+    assert!(
+        swept.is_empty(),
+        "unrelated task must be spared, got: {swept:?}"
+    );
     assert_eq!(
         task_retired_checked(pid),
         Ok(false),
@@ -3293,8 +3296,7 @@ fn assert_pid_free(pid: i32, what: &str) {
     let mut status = 0;
     let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
     assert!(
-        got < 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+        got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
         "{what} {pid} status undischarged (waitpid gave {got})"
     );
 }
@@ -3313,11 +3315,7 @@ fn assert_pid_free(pid: i32, what: &str) {
 /// ours-885; plain command = decision plain-886 + R14-001
 /// fixture-890.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn staging_custody_holds(
-    tag: &str,
-    birth: impl Fn() -> i32,
-    observe: impl Fn(i32),
-) {
+fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i32)) {
     // R12-002: serialize against steerers (whole-test hold) —
     // this driver's fork bursts must not steal steered
     // placements from concurrent tests.
@@ -3329,15 +3327,14 @@ fn staging_custody_holds(
     // retire (a surviving fixture fails loud below — the
     // injection must take, never pass vacuously).
     let slot_a = std::cell::Cell::new(-1);
-    let observed =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let pid = birth();
-            slot_a.set(pid);
-            // R14-012: custody AT birth (the fix under test).
-            let _guard = SilentChildGuard::new(pid);
-            retire_child_silent(pid);
-            observe(pid);
-        }));
+    let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let pid = birth();
+        slot_a.set(pid);
+        // R14-012: custody AT birth (the fix under test).
+        let _guard = SilentChildGuard::new(pid);
+        retire_child_silent(pid);
+        observe(pid);
+    }));
     // A birth panic stages nothing (slot stays -1 — never
     // waitpid(-1): that would reap ANY sibling child).
     if slot_a.get() > 0 {
@@ -3351,17 +3348,25 @@ fn staging_custody_holds(
     // then a missing-binary spawn panics; the live fixture must
     // still disappear with its status discharged.
     let slot = std::cell::Cell::new(-1);
-    let spawned =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let pid = birth();
-            slot.set(pid);
-            // R14-012: custody AT birth (the fix under test).
-            let _guard = SilentChildGuard::new(pid);
-            observe(pid);
-            std::process::Command::new("/scopebase-definitely-missing-binary-r14012")
-                .spawn()
-                .expect("later spawn must succeed");
-        }));
+    let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let pid = birth();
+        slot.set(pid);
+        // R14-012: custody AT birth (the fix under test).
+        let _guard = SilentChildGuard::new(pid);
+        observe(pid);
+        // Later-spawn failure (injected): a missing binary.
+        // Both arms diverge (the failure must report); the
+        // impossible-Ok arm retires first so even it stays
+        // clean (and clippy sees the wait).
+        match std::process::Command::new("/scopebase-definitely-missing-binary-r14012").spawn() {
+            Ok(mut stray) => {
+                let _ = stray.kill();
+                let _ = stray.wait();
+                panic!("later spawn unexpectedly succeeded");
+            }
+            Err(_) => panic!("injected later-spawn failure"),
+        }
+    }));
     let pid = slot.get();
     assert!(pid > 0, "{tag}: birth must stage a fixture");
     // Record state, clean best-effort (RED runs stay clean),
@@ -3375,10 +3380,7 @@ fn staging_custody_holds(
         "{tag}: spawn-failure must not leak the fixture"
     );
     assert_pid_free(pid, tag);
-    assert!(
-        spawned.is_err(),
-        "{tag}: later-spawn failure must report"
-    );
+    assert!(spawned.is_err(), "{tag}: later-spawn failure must report");
 }
 
 /// R14-012: pauser-birth staging custody (driver
@@ -3386,15 +3388,11 @@ fn staging_custody_holds(
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn staging_custody_pauser_birth() {
-    staging_custody_holds(
-        "pauser",
-        fork_pauser,
-        |pid| {
-            task_starttime_checked(pid)
-                .expect("pauser stat readable")
-                .expect("pauser live");
-        },
-    );
+    staging_custody_holds("pauser", fork_pauser, |pid| {
+        task_starttime_checked(pid)
+            .expect("pauser stat readable")
+            .expect("pauser live");
+    });
 }
 
 /// R14-012: raw-fork-birth staging custody (driver zombie
@@ -3549,7 +3547,7 @@ fn drop_guard_spares_recycled_number() {
     let owned = fixture.id() as i32;
     // R14-012: custody AT birth (auto-pins the tick the stale
     // drop below deliberately holds).
-    let mut guard = SilentChildGuard::new(owned);
+    let guard = SilentChildGuard::new(owned);
     let owned_tick = task_starttime_checked(owned)
         .expect("fixture stat readable")
         .expect("fixture visible");
@@ -4354,8 +4352,7 @@ fn allocator_lock_probe() {
         Ok(path) => path,
         Err(_) => return,
     };
-    let paths =
-        std::env::var("SCOPEBASE_R13009_PATHS").expect("probe paths selector set");
+    let paths = std::env::var("SCOPEBASE_R13009_PATHS").expect("probe paths selector set");
     let current =
         std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").expect("probe reads current hint");
     let current = current.trim().to_string();
@@ -6118,19 +6115,19 @@ fn probe_group_kill_refuses_unreadable_identity() {
         unsafe {
             // Die with the parent (never a pipe-holding orphan
             // that hangs the harness past a setup failure).
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+            libc::prctl(
+                libc::PR_SET_PDEATHSIG,
+                libc::SIGKILL as libc::c_ulong,
+                0,
+                0,
+                0,
+            );
             if libc::getppid() != me {
                 libc::_exit(0);
             }
             libc::setpgid(0, 0);
             let name = b"\xff\xfeforeign\x00";
-            libc::prctl(
-                libc::PR_SET_NAME,
-                name.as_ptr() as libc::c_ulong,
-                0,
-                0,
-                0,
-            );
+            libc::prctl(libc::PR_SET_NAME, name.as_ptr() as libc::c_ulong, 0, 0, 0);
             loop {
                 libc::pause();
             }
