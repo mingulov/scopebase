@@ -1986,6 +1986,16 @@ fn syscall_exit(
 mod tests {
     use super::*;
 
+    /// IR-007: true when the suite runs as uid 0 — permission
+    /// and ownership discriminators (chmod-000 unreadability,
+    /// foreign-uid plants) do not exist for root, so tests
+    /// staging them skip instead of failing.
+    #[cfg(target_arch = "x86_64")]
+    fn running_as_root() -> bool {
+        // SAFETY: getuid queries only.
+        unsafe { libc::getuid() == 0 }
+    }
+
     /// /proc state letter of `pid` (None when unreadable/gone).
     #[cfg(target_arch = "x86_64")]
     fn proc_state(pid: libc::pid_t) -> Option<char> {
@@ -7741,6 +7751,12 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn rendezvous_refuses_foreign_owned_record() {
+        // IR-007: as root the sudo plant is own-uid (no foreign
+        // discriminator) — skip before staging anything.
+        if running_as_root() {
+            eprintln!("skip: root-owned plant is not foreign to root");
+            return;
+        }
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-grandchild-r14003a-{}.pid",
             std::process::id()
@@ -7806,6 +7822,12 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn publish_failure_retires_writer_first() {
         use std::os::unix::fs::PermissionsExt as _;
+        // IR-007: root writes chmod-444 files (no unwritable
+        // discriminator) — skip before staging anything.
+        if running_as_root() {
+            eprintln!("skip: root writes chmod-444 files");
+            return;
+        }
         struct EnvGuard;
         impl Drop for EnvGuard {
             fn drop(&mut self) {
@@ -7863,6 +7885,13 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn rendezvous_setup_refuses_preplant() {
+        // IR-007: as root the sudo plant is own-uid and
+        // reclaims (no foreign discriminator) — skip before
+        // staging anything.
+        if running_as_root() {
+            eprintln!("skip: root-owned plant reclaims for root");
+            return;
+        }
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-grandchild-r14003c-{}.pid",
             std::process::id()
@@ -7977,6 +8006,12 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn rendezvous_read_errors_fail_closed() {
         use std::os::unix::fs::PermissionsExt as _;
+        // IR-007: root reads chmod-000 files (no EACCES
+        // discriminator) — skip before staging anything.
+        if running_as_root() {
+            eprintln!("skip: root reads chmod-000 files");
+            return;
+        }
         // EACCES: our own file, made unreadable.
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-grandchild-r14010b-{}.pid",
@@ -10111,6 +10146,17 @@ mod tests {
     #[test]
     fn drain_tracked_kills_and_reaps_all() {
         use std::process::{Command, Stdio};
+        // IR-007: serialize against steerers (whole-test hold).
+        // This R31-era test predates the R12-002 discipline; as
+        // root, steering tests run (ns_last_pid writable) and a
+        // parallel steered fork snipes our just-reaped numbers
+        // (caught: a fork-only `(fixture::linux:)` child holding
+        // a drained sleep's number), tripping the /proc-absence
+        // asserts below. Non-root suites never steer, so the
+        // race is root-only — but the hold is free everywhere.
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let kids: Vec<std::process::Child> = (0..2)
             .map(|_| {
                 Command::new("sleep")
