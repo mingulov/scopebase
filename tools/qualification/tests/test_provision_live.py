@@ -270,21 +270,26 @@ def adopt_recorded_replacement(pidfile, stale, lives):
     Fixtured entries must never spawn; when one does, it
     replaces the private record, orphaning the new pid from
     ``lives``. Compare the record against the pre-entry
-    snapshot ``stale``: unchanged or unreadable records mean
-    nothing to adopt (False). A changed record flags the
-    fixture retained (True) and, when the recorded pid is
+    snapshot ``stale``: an unchanged record, or a record
+    that never existed (``stale`` None), means nothing to
+    adopt (False). A changed record flags the fixture
+    retained (True) and, when the recorded pid is
     identifiable and provably alive, appends its
     (pid, current-starttime) binding so the finalizer kills
     the verified replacement instead of leaking it.
     Malformed, dead, or unreadable replacements adopt
     nothing — the record alone is retained for manual
-    recovery. Never raises.
+    recovery. In particular an unreadable-or-gone record
+    after a record existed at entry (R11-008) flags retained
+    (True): silent False would let teardown erase the
+    recovery state of a replacement the finalizer never saw.
+    Never raises.
     """
     try:
         with open(pidfile, "rb") as handle:
             current = handle.read()
     except OSError:
-        return False
+        return stale is not None
     if current == stale:
         return False
     state = provision._parse_keeper_state(current)
@@ -3216,12 +3221,54 @@ class AdoptReplacementTests(unittest.TestCase):
                 adopt_recorded_replacement(pidfile, stale, lives))
             self.assertEqual(lives, [(4242, 1234)])
 
-    def test_missing_pidfile_noop(self):
+    def test_missing_pidfile_noop_when_nothing_ensured(self):
         with tempfile.TemporaryDirectory() as tmp:
             lives = []
             self.assertFalse(
                 adopt_recorded_replacement(
-                    os.path.join(tmp, "gone.pid"), b"stale", lives))
+                    os.path.join(tmp, "gone.pid"), None, lives))
+            self.assertEqual(lives, [])
+
+    def test_missing_pidfile_after_stale_retains(self):
+        # R11-008: a record that existed at entry but is gone
+        # at finalization is suspicious, not a noop — the
+        # fixture must be retained for manual recovery.
+        with tempfile.TemporaryDirectory() as tmp:
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    os.path.join(tmp, "gone.pid"), b"stale",
+                    lives))
+            self.assertEqual(lives, [])
+
+    def test_appeared_record_with_no_stale_adopts(self):
+        # R11-008 mirror: stale None but a record exists now
+        # (a replacement published where nothing was
+        # ensured) — changed-record path, adopted + retained.
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(b"not-a-record")
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, None, lives))
+            self.assertEqual(lives, [])
+
+    def test_unreadable_record_after_stale_retains(self):
+        # R11-008: publish a replacement, deny the finalizer
+        # record read — the adopter must flag retention
+        # (adopting nothing: no verifiable identity), never
+        # silently report "nothing to adopt".
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(b"4321 77 %s\n" % (b"cd" * 16))
+            os.chmod(pidfile, 0)
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, b"stale", lives))
             self.assertEqual(lives, [])
 
     def test_malformed_record_retains_without_adopting(self):
