@@ -4945,15 +4945,16 @@ mod tests {
         strays: &[(libc::pid_t, u64)],
         group_died: bool,
     ) {
-        use std::time::Duration;
-        // R13-003 anchor check: the number's current holder is a
-        // live foreign SELF-GROUPED task (presence sampling
-        // cannot see a regroup with no observable gap).
-        // R14-005: unreadable fails closed (treated as foreign —
-        // neither signal nor drain): a non-UTF8 comm, EMFILE, or
-        // EPERM on a live foreign self-grouper must not fire.
-        // Known strays below still retire individually (their
-        // own pin+tick gates apply).
+        expire_probe_collection_with_hook(id, expected, strays, group_died, None);
+    }
+
+    /// R13-003 anchor check, shared by the up-front decision
+    /// and the R14-007 per-pass drain recheck: the number's
+    /// current holder is a live foreign SELF-GROUPED task
+    /// (presence sampling cannot see a regroup with no
+    /// observable gap). Unreadable fails closed (R14-005).
+    #[cfg(target_arch = "x86_64")]
+    fn group_is_foreign(id: libc::pid_t, expected: u64) -> bool {
         let (holder_tick, unreadable) = match proc_starttime(id) {
             Ok(tick) => (tick, false),
             Err(error) => {
@@ -4963,10 +4964,29 @@ mod tests {
         };
         // SAFETY: getpgid queries only. ESRCH (died between the
         // reads) is freed-equivalent.
-        let grouped_stranger = unreadable
+        unreadable
             || (holder_tick != Some(expected)
                 && holder_tick.is_some()
-                && (unsafe { libc::getpgid(id) }) == id);
+                && (unsafe { libc::getpgid(id) }) == id)
+    }
+
+    /// R14-007: `pass_hook` runs after every drain pass (a
+    /// between-passes barrier for the regression); the drain
+    /// re-decides foreignness every pass (a regroup between
+    /// passes reforms the number — draining on would reap the
+    /// replacement owner's zombie).
+    #[cfg(target_arch = "x86_64")]
+    fn expire_probe_collection_with_hook(
+        id: libc::pid_t,
+        expected: u64,
+        strays: &[(libc::pid_t, u64)],
+        group_died: bool,
+        pass_hook: Option<&dyn Fn()>,
+    ) {
+        use std::time::Duration;
+        // Known strays below still retire individually (their
+        // own pin+tick gates apply).
+        let grouped_stranger = group_is_foreign(id, expected);
         // R13-004: a proven-foreign group (died-and-reformed per
         // the sampler, or a sampler-invisible regroup per the
         // anchor) gets NEITHER the signal NOR the drain — the
@@ -5025,6 +5045,16 @@ mod tests {
             use std::time::Instant;
             let drain_end = Instant::now() + Duration::from_secs(5);
             loop {
+                // R14-007: re-decide foreignness EVERY pass —
+                // a regroup between passes reforms the number,
+                // and the reap below would steal the
+                // replacement owner's zombie status.
+                if group_is_foreign(id, expected) {
+                    eprintln!(
+                        "expiry: group {id} reformed mid-drain — drain stops (no theft)"
+                    );
+                    break;
+                }
                 // One reap pass over our children in this group.
                 loop {
                     let mut status = 0;
@@ -5041,6 +5071,13 @@ mod tests {
                         }
                     }
                     break;
+                }
+                // Between-passes barrier (regression seam; None
+                // in production calls). Runs after every reap
+                // pass — even one that empties the group — so a
+                // planted reform is visible to the next recheck.
+                if let Some(hook) = pass_hook {
+                    hook();
                 }
                 // Group-empty proof: ESRCH means no task (live or
                 // zombie) still names the pgid. Any other outcome
@@ -6202,6 +6239,177 @@ mod tests {
         let _ = placed.kill();
         let status = placed.wait().expect("replacement owner keeps its status");
         assert!(!status.success(), "killed replacement reports signal death");
+    }
+
+    /// R14-007: the adopted-zombie drain must re-decide
+    /// foreignness EVERY pass, not once. Own group G with a
+    /// zombie (reaped legitimately on pass 1); a barrier hook
+    /// then retires our last member and reforms a
+    /// different-birth group on the freed pgid with its own
+    /// zombie; pass 2 must NOT reap the replacement's status.
+    /// Pre-fix the stale decision drains it (RED: status
+    /// theft); post-fix the recheck breaks (GREEN). Duration
+    /// 68 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn drain_rechecks_foreignness_each_pass() {
+        use std::cell::{Cell, RefCell};
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // Own group G: self-grouped sleeper S.
+        let mut sleeper = std::process::Command::new("/bin/sleep");
+        sleeper
+            .arg("68")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            sleeper.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let sleeper = sleeper.spawn().expect("sleeper spawns");
+        let id = sleeper.id() as libc::pid_t;
+        let own_tick = proc_starttime(id)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        // Own zombie Z1 in G (joins the live group, exits 3).
+        let mut z1 = std::process::Command::new("/bin/sh");
+        z1.arg("-c")
+            .arg("exit 3")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid into our live group pre-exec.
+        unsafe {
+            z1.pre_exec(move || {
+                libc::setpgid(0, id);
+                Ok(())
+            });
+        }
+        let mut z1 = z1.spawn().expect("z1 spawns");
+        // Z1 must be a zombie BEFORE expiry (else pass 1 may
+        // see only S and the barrier plants early).
+        let z_end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if z1.try_wait().expect("z1 try_wait works").is_some() {
+                break;
+            }
+            assert!(Instant::now() < z_end, "z1 never exited");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Barrier plant (fires once, after pass 1's reap):
+        // retire S, reform group G at a different birth with
+        // its own zombie R. Outputs via cells (Fn, not FnMut).
+        let planted = Cell::new(false);
+        let replacement_tick = Cell::new(0u64);
+        let replacement: RefCell<Option<std::process::Child>> = RefCell::new(None);
+        let reformed = Cell::new(false);
+        let barrier = || {
+            if planted.get() {
+                return;
+            }
+            planted.set(true);
+            // SAFETY: retiring our own sleeper.
+            unsafe {
+                libc::kill(id, libc::SIGKILL);
+            }
+            let reap_end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of our own dying child.
+                if unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } != 0 {
+                    break;
+                }
+                assert!(Instant::now() < reap_end, "sleeper never reaped");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let _flock = ns_last_pid_flock();
+            for _ in 0..100 {
+                if !audit_steer_next_pid_unlocked(id) {
+                    break;
+                }
+                let mut cmd = std::process::Command::new("/bin/sh");
+                cmd.arg("-c")
+                    .arg("exit 3")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec.
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                let cand = cmd.spawn().expect("candidate spawns");
+                if cand.id() as libc::pid_t != id {
+                    let mut cand = cand;
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                // Placed at the freed pgid AND self-grouped:
+                // the group is reformed at a different birth.
+                if let Ok(Some(tick)) = proc_starttime(id) {
+                    replacement_tick.set(tick);
+                    *replacement.borrow_mut() = Some(cand);
+                    reformed.set(true);
+                }
+                break;
+            }
+        };
+        expire_probe_collection_with_hook(id, own_tick, &[], false, Some(&barrier));
+        audit_locked_restore_hint(&last_before);
+        // Loud owner cleanup of our fixtures either way, then
+        // skips, then the verdict.
+        let _ = z1.wait();
+        let mut replacement = replacement.borrow_mut().take();
+        if !reformed.get() {
+            drop(sleeper);
+            eprintln!("skip: group number not reformed (contended)");
+            return;
+        }
+        if replacement_tick.get() == own_tick {
+            if let Some(mut child) = replacement.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            drop(sleeper);
+            eprintln!("skip: same-tick reform (S100 — untestable this run)");
+            return;
+        }
+        let mut child = replacement.take().expect("replacement stored");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(id) },
+            id,
+            "replacement must reform the group"
+        );
+        let status = child.wait().expect("replacement owner keeps its status");
+        drop(sleeper);
+        assert_eq!(
+            status.code(),
+            Some(3),
+            "replacement status must survive the drain (no theft)"
+        );
     }
 
     /// R13-004: expiry must not drain a proven-foreign group.
