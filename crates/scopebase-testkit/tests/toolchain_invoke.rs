@@ -2262,6 +2262,15 @@ fn sole_child_pid(pid: i32) -> i32 {
 /// passwordless sudo fallback; false when unwritable (the
 /// regression skips — without reuse control the replacement
 /// shape is unconstructible).
+/// IR1 contract (internal review round 1): this mutates
+/// GLOBAL allocator state during parallel libtest — but the
+/// kernel never hands one live pid to two tasks, so sibling
+/// tests (which assert freshness/inequality, never pid
+/// magnitude or ordering) are unaffected; pid-steals of OUR
+/// steered number retry bounded and loud (100 tries), and
+/// the test restores the prior hint politely after. No
+/// in-process fork serialization: the only shared invariant
+/// is live-pid uniqueness, which the kernel guarantees.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn steer_next_pid(want: i32) -> bool {
     use std::process::Stdio;
@@ -3142,6 +3151,26 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
     (out, err)
 }
 
+/// IR1 (internal review round 1): best-effort group kill
+/// on drop — the 31s sleeper must not outlive a failed
+/// assertion by 26s. Drop-after-success is a harmless nop
+/// (kill on an empty group is ESRCH).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct KillGroupOnDrop {
+    group: libc::pid_t,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        // SAFETY: signal-only to the test's own group;
+        // best-effort (failure paths must not panic).
+        unsafe {
+            libc::killpg(self.group, libc::SIGKILL);
+        }
+    }
+}
+
 /// R11-016(b2): retiring a failed probe's tree kills the
 /// stranded group (not just the exited probe): a child in its
 /// own group forks a 31s sleeper and exits 3 at once — the
@@ -3173,6 +3202,9 @@ fn probe_tree_retirement_kills_stranded_group() {
     assert!(!status.success());
     assert_eq!(status.code(), Some(3));
     let group = child.id() as libc::pid_t;
+    // IR1: the 31s sleeper dies with the test on every path
+    // (failed asserts unwind through this guard).
+    let _guard = KillGroupOnDrop { group };
     retire_probe_tree(&mut child);
     retire_probe_tree(&mut child);
     let end = Instant::now() + Duration::from_secs(5);

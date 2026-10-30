@@ -3671,6 +3671,12 @@ class AdoptReplacementTests(unittest.TestCase):
                 adopt_recorded_replacement(pidfile, stale, lives))
             self.assertEqual(lives, [(4242, 1234)])
 
+    @unittest.skipIf(os.geteuid() == 0,
+                         "chmod denial needs non-root "
+                         "(as root the read succeeds and the test "
+                         "passes via the changed-record path, not "
+                         "the OSError arm — covered universally "
+                         "by the ENOENT twin)")
     def test_unreadable_record_after_stale_retains(self):
         # R11-008: publish a replacement, deny the finalizer
         # record read — the adopter must flag retention
@@ -3836,6 +3842,10 @@ class E2ERetirementTests(unittest.TestCase):
         os.makedirs(run)
         self.assertFalse(fixture_root_gone(run))
 
+    @unittest.skipIf(os.geteuid() == 0,
+                         "chmod denial needs non-root "
+                         "(as root the stat succeeds and the "
+                         "sensitivity assert fails)")
     def test_root_unstatable_reports_surviving(self):
         # R11-010 regression: deny the actual root stat while
         # every other observation appears clean — the verdict

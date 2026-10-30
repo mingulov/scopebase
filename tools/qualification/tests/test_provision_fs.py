@@ -4587,6 +4587,75 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIsNone(mid)
             self.assertIsNone(obs)
 
+    # R11-003 newline follow-up (internal review round 1):
+    # the `^` anchor stops mid-line forgery but MULTILINE
+    # still matches an EMBEDDED marker line — a target
+    # containing "\nFAILED-MOVED: ..." echoed raw into a
+    # helper exception would forge ID-keyed moved custody.
+    # Helper diagnostic tails fold newlines (display-only,
+    # never unescaped), so the genuine emission stays the
+    # only marker-line source. Marker substrings survive
+    # VERBATIM (unlike S77 fields) for the marker search.
+    def test_report_newline_fold_kills_marker_lines(self):
+        folded = provision._fold_report_newlines(
+            "at /x\nFAILED-MOVED: mnt=999999 observed=/tmp/decoy\n"
+            "after create")
+        self.assertNotIn("\n", folded)
+        self.assertNotIn("\r", folded)
+        self.assertIsNone(provision._parse_moved_report(folded))
+        markers = ("lacks held-upper binding; unpinned moved "
+                   "candidate; pin probe refused")
+        self.assertEqual(
+            provision._fold_report_newlines(markers), markers)
+
+    # R11-003 newline follow-up, emission end to end: the
+    # REAL mount_fs_command emission (mocked raiser, real
+    # except-print) with a newline-bearing marker-shaped
+    # exception must report ordinary uncertainty, never
+    # moved custody.
+    def test_newline_marker_in_helper_exc_stays_uncertain(self):
+        import contextlib
+        import io
+        import types
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = os.path.join(tmp, "run")
+            os.makedirs(run_root)
+            target = os.path.join(run_root, "mnt")
+            os.makedirs(target)
+            rst = os.stat(run_root)
+            tst = os.stat(target)
+            args = types.SimpleNamespace(
+                run_root=run_root, root_dev=rst.st_dev,
+                root_ino=rst.st_ino, target=target,
+                target_dev=tst.st_dev, target_ino=tst.st_ino,
+                fstype="ext4", loop="/dev/loop9",
+                backing_dev=1, backing_ino=2, layer=[],
+                extra_opts="", aux_root=None, aux_dev=None,
+                aux_ino=None, own_uid=None, own_gid=None)
+            evil = ("ambiguous stacked mount at /x\n"
+                    "FAILED-MOVED: mnt=999999 observed=/tmp/decoy\n"
+                    "after create")
+            out = io.StringIO()
+            with mock.patch.object(
+                    provision, "_mount_ext4_now",
+                    side_effect=provision._HelperUncertain(
+                        evil)), \
+                    contextlib.redirect_stdout(out):
+                rc = provision.mount_fs_command(args)
+            self.assertEqual(rc, 1)
+            text = out.getvalue()
+            self.assertIn("FAILED-UNCERTAIN", text)
+            self.assertIsNone(provision._parse_moved_report(text))
+            failure = provision._normalize_mount_failure(
+                target, rc, text, "")
+            self.assertIn("effect uncertain after create", failure)
+            kind, mid, obs = provision._classify_mount_failure(
+                failure)
+            self.assertEqual(kind, "uncertain")
+            self.assertIsNone(mid)
+            self.assertIsNone(obs)
+
     # S74-round4: reconcile honors the failure taxonomy — moved
     # and uncertain outcomes refresh (never drop) pending
     # custody with the reported recovery identity; refused
@@ -8564,6 +8633,9 @@ class MountNsTests(unittest.TestCase):
                         provision, "_keeper_starttime",
                         return_value=None), \
                     mock.patch.object(
+                        provision, "_pid_proven_dead",
+                        return_value=False), \
+                    mock.patch.object(
                         provision, "_spawn_keeper",
                         return_value=(9999, 88, "ef" * 16,
                                       777)) as spawn:
@@ -8573,6 +8645,51 @@ class MountNsTests(unittest.TestCase):
                 spawn.assert_not_called()
             self.assertEqual(
                 Path(pidfile).read_text(), f"4321 77 {canary}\n")
+
+    # IR1 (internal review round 1): verified-then-died inside
+    # the microsecond window (pre unreadable, gates passed,
+    # pid now proven dead) is NOT a live keeper anymore —
+    # respawn like the raced-death arm instead of refusing.
+    # (Refusal stays for live-or-unknown: the twin above pins
+    # it with proven-dead mocked False.)
+    def test_ensure_respawns_verified_then_proven_dead(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        canary = "cd" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary_pinned",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        return_value=None), \
+                    mock.patch.object(
+                        provision, "_pid_proven_dead",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(9999, 88, "ef" * 16,
+                                      777)) as spawn:
+                nspath = provision.ensure_mount_ns()
+                spawn.assert_called_once()
+            self.assertEqual(nspath, "/proc/9999/ns/mnt")
+            self.assertEqual(provision._MOUNT_NS_IDENTITY,
+                             (9999, 88, 777, "ef" * 16))
 
     # R11-001: inner anchors unreadable for a LIVE pid must
     # REFUSE (AdmissionError), never return False into a

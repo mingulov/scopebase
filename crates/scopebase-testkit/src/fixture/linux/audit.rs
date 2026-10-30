@@ -3450,11 +3450,40 @@ mod tests {
     /// false on expiry. Never panics — the caller decides.
     /// R11-005: `expected` starttime-gates the numeric wait (see
     /// body): absence and reuse return true without waiting.
+    /// IR1 (internal review round 1): the wait also skips on
+    /// unreadable stats (the Err arm proves nothing — waiting
+    /// there could reap an unrelated same-number child), and
+    /// the gate-to-wait gap is documented below. Residual: the
+    /// stat read and the wait are separate syscalls
+    /// (descheduling widens the gap): the expected task could
+    /// exit, be reaped elsewhere, and the number recycled to
+    /// OUR new child between them — WNOHANG would then
+    /// consume the newcomer's status. Accepted: the recycle
+    /// must land on a number we fork concurrently in the same
+    /// microsecond window (our forks are sparse and never
+    /// target dead numbers), WNOHANG never blocks, and the
+    /// consequence is bounded to status confusion in test
+    /// retirement (never a signal). A pin-based waitid would
+    /// close it; disproportionate here.
     #[cfg(target_arch = "x86_64")]
     fn await_proc_gone_reaping(
         pid: libc::pid_t,
         expected: u64,
         timeout: std::time::Duration,
+    ) -> bool {
+        await_proc_gone_reaping_with(pid, expected, timeout, proc_starttime)
+    }
+
+    /// IR1: seam for the unreadable-stat regression: `gate`,
+    /// when it reports Err, must skip the wait (unknown is
+    /// never waited on). Production callers use
+    /// [`await_proc_gone_reaping`].
+    #[cfg(target_arch = "x86_64")]
+    fn await_proc_gone_reaping_with(
+        pid: libc::pid_t,
+        expected: u64,
+        timeout: std::time::Duration,
+        gate: impl Fn(libc::pid_t) -> Result<Option<u64>, String>,
     ) -> bool {
         let end = std::time::Instant::now() + timeout;
         loop {
@@ -3467,18 +3496,20 @@ mod tests {
             // another) both return true WITHOUT waiting, so an
             // unrelated same-number child is detected and
             // spared, never reaped by us. Unreadable stats keep
-            // polling (never claimed gone).
-            match proc_starttime(pid) {
+            // polling (never claimed gone, never waited on).
+            match gate(pid) {
                 Ok(None) => return true,
                 Ok(Some(now)) if now != expected => return true,
-                Ok(Some(_)) => {}
+                Ok(Some(_)) => {
+                    // SAFETY: waitpid on the verified holder;
+                    // reaps an adopted zombie, ECHILD
+                    // otherwise — always ignored.
+                    let mut status = 0;
+                    unsafe {
+                        libc::waitpid(pid, &mut status, libc::WNOHANG);
+                    }
+                }
                 Err(_) => {}
-            }
-            // SAFETY: waitpid on the verified holder; reaps an
-            // adopted zombie, ECHILD otherwise — always ignored.
-            let mut status = 0;
-            unsafe {
-                libc::waitpid(pid, &mut status, libc::WNOHANG);
             }
             if std::time::Instant::now() >= end {
                 return false;
@@ -3653,6 +3684,16 @@ mod tests {
         // exit/report assertion (the bogus-path test failed
         // 6/10 paired runs this way). The child clears
         // cloexec on the write end pre-exec below.
+        // IR1 residual (internal review round 1): cloexec
+        // guards EXEC'D siblings only — a FORK-ONLY sibling
+        // child (no exec) inherits the write end and holds
+        // EOF for its lifetime, cloexec or not. Accepted:
+        // every fork-only child in this lib test process is
+        // short-lived (exits or is retired in milliseconds —
+        // R10-007/R11-018 shapes), while flipping the bogus
+        // runner needs EOF held past its 2 s guard deadline;
+        // a future 2 s+ fork-only child must close inherited
+        // fds (close_range) or this race returns.
         // SAFETY: valid out-pointer for the pipe ends.
         assert_eq!(
             unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
@@ -4058,16 +4099,31 @@ mod tests {
     /// under `end` (poll + nonblocking read, 1 MiB per pipe);
     /// on expiry retire the probe's whole group and return
     /// None. Returns Some(stdout, stderr) with whatever
-    /// arrived. Never blocks past `end`; never panics on I/O
-    /// (a dead probe's partial output is still evidence).
-    /// Callers pass the SAME `end` as their try_wait loop — one
-    /// deadline covers exit AND collection by construction.
+    /// arrived. Never blocks past `end` — except a 2 s grace
+    /// when ENTERING already expired (a slow-but-successful
+    /// probe still recovers; a hung pipe still expires);
+    /// never panics on I/O (a dead probe's partial output is
+    /// still evidence). Callers pass the SAME `end` as their
+    /// try_wait loop — one deadline covers exit AND collection
+    /// by construction.
     #[cfg(target_arch = "x86_64")]
     fn collect_probe_output_bounded(
         child: &mut std::process::Child,
         end: std::time::Instant,
     ) -> Option<(Vec<u8>, Vec<u8>)> {
         use std::os::unix::io::AsRawFd as _;
+        // IR1 (internal review round 1): the try_wait loop
+        // may consume the whole deadline while the probe
+        // exits at the last instant — entering with an
+        // already-expired `end` must not fail that
+        // successful probe outright. A short grace recovers
+        // arrived output (and certain EOF); a still-hung
+        // pipe expires normally below (group retired).
+        let end = if std::time::Instant::now() >= end {
+            std::time::Instant::now() + std::time::Duration::from_secs(2)
+        } else {
+            end
+        };
         // Read dry (nonblocking: stops at WouldBlock; EOF or
         // any other error ends the pipe — partial output is
         // still evidence). Past the cap the drain discards
@@ -4300,6 +4356,48 @@ mod tests {
         );
     }
 
+    /// IR1 (internal review round 1): entering collection with
+    /// an already-expired `end` must not fail a successful
+    /// probe — the try_wait loop may consume the whole
+    /// deadline while the probe exits at the last instant.
+    /// A short grace recovers arrived output (EOF certain:
+    /// no live descendants here); only a still-hung pipe
+    /// expires. Pre-fix the immediate-expire returns None
+    /// and discards the evidence (RED).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_collection_expired_end_recovers_output() {
+        use std::time::{Duration, Instant};
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo OUT; echo ERR >&2")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn echo stage");
+        let status = loop {
+            match child.try_wait().expect("stage wait") {
+                Some(status) => break status,
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        assert!(status.success());
+        let started = Instant::now();
+        let got = collect_probe_output_bounded(
+            &mut child,
+            started.checked_sub(Duration::from_secs(1)).unwrap(),
+        );
+        let (stdout, stderr) = got.expect("expired end must still recover");
+        assert_eq!(stdout, b"OUT\n");
+        assert_eq!(stderr, b"ERR\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "grace must stay bounded, took {:?}",
+            started.elapsed()
+        );
+    }
+
     /// R10-012: the unresolved-retirement controls must clean up
     /// even when the runner ADOPTS the grandchild (subreaper or
     /// PID-1 runner): the retired task is then our own zombie
@@ -4490,6 +4588,58 @@ mod tests {
             got < 0,
             "owned zombie must be reaped by the await, got {got}"
         );
+    }
+
+    /// IR1 (internal review round 1): the Err arm must never
+    /// wait — an unreadable stat proves nothing, and a blind
+    /// wait could reap an unrelated same-number child. Stable
+    /// zombie X + stubbed gate (Err once, then None): the
+    /// await returns true (gone) while X stays unreaped for
+    /// its owner. Pre-fix the Err fall-through reaps X (RED).
+    /// Deterministic: the stub drives the gate, no timing.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_err_arm_never_waits() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        // SAFETY: child exits at once (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(45) };
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while proc_state(pid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < end,
+                "setup child never reached zombie state"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let real = proc_starttime(pid)
+            .expect("zombie stat readable")
+            .expect("zombie present");
+        let calls = AtomicUsize::new(0);
+        let gate = |observed: libc::pid_t| {
+            assert_eq!(observed, pid, "gate observes the awaited pid");
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err("injected unreadable stat".to_string())
+            } else {
+                Ok(None)
+            }
+        };
+        assert!(await_proc_gone_reaping_with(
+            pid,
+            real,
+            Duration::from_secs(5),
+            gate
+        ));
+        // Still ours and still unreaped: WE reap it now, proving
+        // the Err arm never waited.
+        let mut status = 0;
+        // SAFETY: our own child, first wait.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(got, pid, "zombie must survive the Err arm unreaped");
     }
 
     /// R11-005: an absent number returns true immediately

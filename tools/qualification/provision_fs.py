@@ -1497,6 +1497,13 @@ def ensure_mount_ns():
                 # stranger's starttime.
                 pre = _keeper_starttime(pid)
                 nspath = _verify_recorded_keeper(state)
+                if (nspath is not None and pre is None
+                        and _pid_proven_dead(pid)):
+                    # IR1: verified-then-died inside the
+                    # microsecond window — not a live keeper
+                    # anymore; respawn like an unverified
+                    # record instead of refusing.
+                    nspath = None
                 if nspath is not None:
                     if pre is None:
                         # R10-002: verified alive (link+canary)
@@ -7530,13 +7537,13 @@ def mount_fs_command(args):
         # capped so the line survives the caller's error tail.
         observed = _escape_report_field(str(exc.observed))[:150]
         print(f"FAILED-MOVED: mnt={exc.mnt_id} observed={observed} "
-              f"{str(exc)[:120]}")
+              f"{_fold_report_newlines(exc)[:120]}")
         return 1
     except _HelperUncertain as exc:
-        print(f"FAILED-UNCERTAIN: {exc}")
+        print(f"FAILED-UNCERTAIN: {_fold_report_newlines(exc)}")
         return 1
     except _HelperFail as exc:
-        print(f"FAILED: {exc}")
+        print(f"FAILED: {_fold_report_newlines(exc)}")
         return 1
     print(_format_mounted_line(
         args.target, row["mnt_id"],
@@ -8275,7 +8282,10 @@ def _parse_moved_report(text):
     R11-003: anchored to line start (the helper's genuine
     emission is one print per line) — a marker-shaped
     substring inside an echoed pathname (mid-line) must not
-    forge ID-keyed moved custody.
+    forge ID-keyed moved custody. Newline-bearing paths are
+    folded at emission (_fold_report_newlines), so helper
+    output carries no embedded marker lines for MULTILINE
+    to match.
     """
     match = re.search(
         r"^FAILED-MOVED:\s+mnt=(\d+)\s+observed=(\S+)",
@@ -8391,6 +8401,21 @@ def _escape_report_field(text):
     the single-line success report instead of splitting it.
     """
     return "".join(_REPORT_ESCAPES.get(char, char) for char in text)
+
+
+def _fold_report_newlines(text):
+    """Single-line helper diagnostic tails. (R11-003)
+
+    Newline follow-up: the moved parser line-anchors helper
+    output, so a raw newline in an exception tail would admit
+    an embedded marker line (a target containing
+    "\\nFAILED-MOVED: ..." echoed via OSError text forges
+    ID-keyed moved custody). Tails are display-only — never
+    unescaped — so CR/LF fold to backslash escapes while
+    spaces and marker substrings survive VERBATIM for the
+    marker search (unlike S77 fields, which round-trip).
+    """
+    return str(text).replace("\r", "\\r").replace("\n", "\\n")
 
 
 def _unescape_report_field(text):
