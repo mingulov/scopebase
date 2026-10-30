@@ -1614,6 +1614,20 @@ fn spawn_orphan_sleeper(duration: &str) -> (i32, u64) {
 /// touched.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn retire_reported_orphan(buffer: &[u8], duration: &str) -> String {
+    retire_reported_orphan_with_hook(buffer, duration, None)
+}
+
+/// R11-015: seam for the swap regression — `window_hook` runs
+/// after an argv match and before the starttime sample (the
+/// finding's window: verification → acquisition). The hook
+/// takes no arguments (the pid is known to its caller).
+/// Production callers use [`retire_reported_orphan`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_reported_orphan_with_hook(
+    buffer: &[u8],
+    duration: &str,
+    window_hook: Option<&dyn Fn()>,
+) -> String {
     if !buffer.contains(&b'\n') {
         return "orphan pid never reported".to_string();
     }
@@ -1628,26 +1642,293 @@ fn retire_reported_orphan(buffer: &[u8], duration: &str) -> String {
     let mut expected = b"sleep\0".to_vec();
     expected.extend_from_slice(duration.as_bytes());
     expected.push(0);
+    match verify_reported_orphan(
+        pid,
+        &expected,
+        &|| std::fs::read(format!("/proc/{pid}/cmdline")),
+        &|| task_starttime_checked(pid),
+        Duration::from_secs(5),
+        window_hook,
+    ) {
+        Ok(pinned) => {
+            retire_orphan(pid, pinned);
+            format!("orphan {pid} retired")
+        }
+        Err(note) => note,
+    }
+}
+
+/// R11-015: pair the argv match with its starttime sample — one
+/// paired observation, never a sample after an unverified gap.
+/// Only a life proven CONTINUOUS across starttime→argv→starttime
+/// with matching argv verifies; Ok(pinned) authorizes the kill
+/// (the caller re-verifies at signal time through
+/// [`retire_orphan`]); every other outcome is a NAMED verdict
+/// (Err — never touched). The kill binds to the FIRST
+/// argv-verified life (locked starttime): post-lock, any holder
+/// change means OUR life exited — whoever holds the number now
+/// (matching argv or not) is definitionally not ours. Readers
+/// are injected (production reads /proc; the regression scripts
+/// them); `window_hook` runs after an argv match and before the
+/// second sample.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn verify_reported_orphan(
+    pid: i32,
+    expected: &[u8],
+    read_cmdline: &dyn Fn() -> std::io::Result<Vec<u8>>,
+    read_starttime: &dyn Fn() -> Result<Option<u64>, String>,
+    bound: std::time::Duration,
+    window_hook: Option<&dyn Fn()>,
+) -> Result<u64, String> {
     // Await exec-or-gone: a pre-exec task still carries the test
     // binary's argv and proves nothing yet.
-    let end = Instant::now() + Duration::from_secs(5);
+    let mut locked: Option<u64> = None;
+    let end = std::time::Instant::now() + bound;
     loop {
-        match std::fs::read(format!("/proc/{pid}/cmdline")) {
-            Err(_) => return format!("orphan {pid} exited on its own"),
-            Ok(cmdline) if cmdline == expected => break,
+        let first = match read_starttime() {
+            Ok(Some(first)) => first,
+            Ok(None) => return Err(format!("orphan {pid} exited on its own")),
+            Err(_) => {
+                return Err(format!(
+                    "orphan {pid} stat unreadable, left for manual retirement"
+                ))
+            }
+        };
+        if let Some(verified) = locked {
+            if first != verified {
+                return Err(format!(
+                    "orphan {pid} exited on its own (verified life replaced)"
+                ));
+            }
+        }
+        match read_cmdline() {
+            Err(_) => return Err(format!("orphan {pid} exited on its own")),
+            Ok(cmdline) if cmdline == expected => {
+                if locked.is_none() {
+                    locked = Some(first);
+                }
+                if let Some(hook) = window_hook {
+                    hook();
+                }
+                match read_starttime() {
+                    Ok(Some(second)) if second == first => return Ok(first),
+                    Ok(Some(_)) => {}
+                    Ok(None) => return Err(format!("orphan {pid} exited on its own")),
+                    Err(_) => {
+                        return Err(format!(
+                            "orphan {pid} stat unreadable, left for manual retirement"
+                        ))
+                    }
+                }
+            }
             Ok(_) => {}
         }
-        if Instant::now() >= end {
-            return format!("orphan {pid} unproven after 5s, left for manual retirement");
+        if std::time::Instant::now() >= end {
+            return Err(format!(
+                "orphan {pid} unproven after {bound:?}, left for manual retirement"
+            ));
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    let pinned = match task_starttime_checked(pid) {
-        Ok(Some(pinned)) => pinned,
-        _ => return format!("orphan {pid} stat unreadable, left for manual retirement"),
+}
+
+/// R11-015: scripted observation streams for the pairing
+/// regression — each read pops its scripted answer (exhaustion
+/// panics: the script is the test's contract). The function's
+/// only window into lives is this stream — swapping the stream
+/// IS swapping the observed life, exactly as the code sees it.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct OrphanScript {
+    cmdlines: std::cell::RefCell<std::collections::VecDeque<std::io::Result<Vec<u8>>>>,
+    starts: std::cell::RefCell<std::collections::VecDeque<Result<Option<u64>, String>>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl OrphanScript {
+    fn read_cmdline(&self) -> std::io::Result<Vec<u8>> {
+        self.cmdlines
+            .borrow_mut()
+            .pop_front()
+            .expect("script cmdline")
+    }
+    fn read_starttime(&self) -> Result<Option<u64>, String> {
+        self.starts
+            .borrow_mut()
+            .pop_front()
+            .expect("script starttime")
+    }
+}
+
+/// R11-015: replacing the observed life between argv verification
+/// and identity acquisition must spare the replacement (which
+/// need not match argv — the finding's literal shape). The swap
+/// is scripted into the observation stream (S1=A, MATCH, S2=B,
+/// S1'=B); the verdict must be Replaced (Err), never Verified —
+/// the kill is reachable only through Ok, so Err structurally
+/// proves no signal. Pre-fix the post-match sample binds B and
+/// the caller kills it (RED).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_verify_spares_swapped_unmatched() {
+    let expected = b"sleep\096\0".to_vec();
+    let script = OrphanScript {
+        cmdlines: std::cell::RefCell::new(std::collections::VecDeque::from([Ok(expected.clone())])),
+        starts: std::cell::RefCell::new(std::collections::VecDeque::from([
+            Ok(Some(1000)),
+            Ok(Some(2000)),
+            Ok(Some(2000)),
+        ])),
     };
-    retire_orphan(pid, pinned);
-    format!("orphan {pid} retired")
+    let verdict = verify_reported_orphan(
+        4242,
+        &expected,
+        &|| script.read_cmdline(),
+        &|| script.read_starttime(),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    let note = verdict.expect_err("swap must not verify");
+    assert!(
+        note.contains("replaced"),
+        "verdict must name the swap, got: {note}"
+    );
+}
+
+/// R11-015: a SAME-ARGV replacement survives the swap — this
+/// pins the first-verified lock. The trailing MATCH is never
+/// read post-lock (the S1'-vs-lock check returns first); it
+/// exists to fail the lockless pairing shape, which would
+/// re-verify B on the next iteration and return Ok (kill).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_verify_spares_swapped_same_argv() {
+    let expected = b"sleep\096\0".to_vec();
+    let script = OrphanScript {
+        cmdlines: std::cell::RefCell::new(std::collections::VecDeque::from([
+            Ok(expected.clone()),
+            Ok(expected.clone()),
+        ])),
+        starts: std::cell::RefCell::new(std::collections::VecDeque::from([
+            Ok(Some(1000)),
+            Ok(Some(2000)),
+            Ok(Some(2000)),
+            Ok(Some(2000)),
+        ])),
+    };
+    let verdict = verify_reported_orphan(
+        4242,
+        &expected,
+        &|| script.read_cmdline(),
+        &|| script.read_starttime(),
+        std::time::Duration::from_secs(5),
+        None,
+    );
+    let note = verdict.expect_err("same-argv swap must not verify");
+    assert!(
+        note.contains("replaced"),
+        "verdict must name the swap, got: {note}"
+    );
+}
+
+/// R11-015: an argv that never matches stays unproven past the
+/// bound (the preserved arm — nothing verified, nothing
+/// touched). The bound is a parameter so the test pays 50ms,
+/// not the production 5s.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_verify_unproven_after_bound() {
+    let expected = b"sleep\096\0".to_vec();
+    let other = b"sleep\097\0".to_vec();
+    let script = OrphanScript {
+        cmdlines: std::cell::RefCell::new((0..40).map(|_| Ok(other.clone())).collect()),
+        starts: std::cell::RefCell::new((0..40).map(|_| Ok(Some(1000))).collect()),
+    };
+    let verdict = verify_reported_orphan(
+        4242,
+        &expected,
+        &|| script.read_cmdline(),
+        &|| script.read_starttime(),
+        std::time::Duration::from_millis(50),
+        None,
+    );
+    let note = verdict.expect_err("silence must not verify");
+    assert!(
+        note.contains("unproven"),
+        "verdict must stay unproven, got: {note}"
+    );
+}
+
+/// R11-015: the window-hook seam fires with real pids and the
+/// verdict plumbing holds end to end. A (sleep 96, our child)
+/// verifies by argv; the hook retires A through pinned
+/// authority and reaps it (no steering: true pid reuse needs
+/// ns_last_pid, which refuses writes here despite world-writable
+/// mode bits — EPERM); the number is then empty, so the
+/// verdict is Exited (or Replaced under freak suite-noise
+/// recycling — both contain "exited on its own"). An unrelated
+/// sleeper B' (different number) proves no indiscriminate
+/// signal. The swap itself is pinned scripted above.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn orphan_hook_fires_and_spares_unrelated() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let unrelated = std::process::Command::new("sleep")
+        .arg("97")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn unrelated");
+    let other = unrelated.id() as i32;
+    let a = std::process::Command::new("sleep")
+        .arg("96")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn A");
+    let number = a.id() as i32;
+    let a_start = task_starttime_checked(number)
+        .expect("A stat readable")
+        .expect("A alive");
+    let fired = AtomicUsize::new(0);
+    let buffer = format!("{number}\n");
+    let note = retire_reported_orphan_with_hook(
+        buffer.as_bytes(),
+        "96",
+        Some(&|| {
+            fired.fetch_add(1, Ordering::SeqCst);
+            retire_orphan(number, a_start);
+            let mut status = 0;
+            // SAFETY: our own child, dead by SIGKILL — the
+            // blocking reap cannot hang.
+            let got = unsafe { libc::waitpid(number, &mut status, 0) };
+            assert_eq!(got, number, "hook must reap A");
+        }),
+    );
+    // The handle is stale (A reaped inside the hook — wait()
+    // would ECHILD); dropping reaps nothing twice.
+    drop(a);
+    assert!(
+        note.contains("exited on its own"),
+        "verdict must report the exit, got: {note}"
+    );
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "hook must fire exactly once"
+    );
+    // B' untouched (different number, never addressed).
+    let cmdline = std::fs::read(format!("/proc/{other}/cmdline")).expect("B' cmdline readable");
+    assert_eq!(cmdline, b"sleep\x0097\x00");
+    let other_start = task_starttime_checked(other)
+        .expect("B' stat readable")
+        .expect("B' alive");
+    retire_orphan(other, other_start);
+    let mut status = 0;
+    // SAFETY: our own child, dead.
+    let got = unsafe { libc::waitpid(other, &mut status, libc::WNOHANG) };
+    assert_eq!(got, other, "test must reap B'");
 }
 
 /// S138-round9: seam for the concurrent-inheritor regression:
