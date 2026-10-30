@@ -527,12 +527,15 @@ class LockDiagnosticControls(unittest.TestCase):
         self.addCleanup(lambda: policy.atomic_json(self.output/'report.json', self.execution.report))
         runtime = os.environ.get('XDG_RUNTIME_DIR')
         self.lock_root = Path(runtime)/'scopebase-locks' if runtime else Path.home()/'.cache/scopebase/locks'
+        self.mapped_btf_root = None
 
     def command(self, ident, toolchain, manifest):
         from unittest.mock import patch
         real_run = policy.run
         def owned_run(argv, *args, **kwargs):
             return real_run([ROOT/'bin/scopebase-build', '--lock-root', self.lock_root, '--', *argv], *args, **kwargs)
+        if self.mapped_btf_root is not None and not self.mapped_btf_root.is_dir():
+            raise policy.PolicyError('SOURCE_UNAVAILABLE', 'BLOCKED')
         self.execution.reserve(ident, toolchain=toolchain['id'], phase='metadata')
         with patch.object(policy, 'run', side_effect=owned_run):
             return self.execution.step(ident, lambda row: self.execution.command(
@@ -543,12 +546,36 @@ class LockDiagnosticControls(unittest.TestCase):
     def workspace(self):
         import shutil
         subject = self.output/'input'; subject.mkdir()
-        for name in ('Cargo.toml', 'Cargo.lock'):
-            shutil.copyfile(ROOT/name, subject/name)
+        shutil.copyfile(ROOT/'Cargo.toml', subject/'Cargo.toml')
+        inventory = json.loads(Path(self.matrix['cargo_inputs']['inventory']).read_text())
+        mapped = [entry for entry in inventory['cargo_vendor']['acquisition_locks']
+                  if 'mapped-workspace' in entry['manifest']]
+        if len(mapped) != 1:
+            raise policy.PolicyError('ACQUISITION_LOCK_UNAVAILABLE', 'BLOCKED')
+        shutil.copyfile(mapped[0]['lock'], subject/'Cargo.lock')
         for member in self.matrix['members']:
             path = Path(member['manifest']).parent
             shutil.copytree(ROOT/path, subject/path)
-        policy.stage_inputs(self.matrix['cargo_inputs'], self.output)
+        staging = policy.stage_inputs(self.matrix['cargo_inputs'], self.output)
+        btf = next((r for r in staging['packages'] if r['name'] == 'btf-rs'
+                    and r['source'] == policy.BTF_SOURCE), None)
+        if btf is None:
+            raise policy.PolicyError('SOURCE_UNAVAILABLE', 'BLOCKED')
+        for member in self.matrix['members']:
+            staged_manifest = subject/member['manifest']
+            raw = staged_manifest.read_text()
+            if policy.BTF_URL not in raw:
+                continue
+            effective = policy.map_btf_manifest(raw, btf['root'])
+            staged_manifest.write_text(effective)
+            self.execution.report['staged_inputs'].append(
+                {'kind': 'diagnostic-manifest-mapping',
+                 'manifest': member['manifest'],
+                 'original_manifest_sha256': policy.sha(ROOT/member['manifest']),
+                 'effective_manifest_sha256': policy.sha(staged_manifest),
+                 'upstream_source': policy.BTF_SOURCE,
+                 'local_source': str(btf['root'])})
+        self.mapped_btf_root = Path(btf['root'])
         return subject
 
     def assert_command(self, ident, toolchain, subject, wanted):
@@ -584,6 +611,17 @@ class LockDiagnosticControls(unittest.TestCase):
                     else: lock.write_bytes(raw)
                     self.assert_command(toolchain['id']+'-'+label, toolchain, subject, wanted)
                     self.assertEqual(lock.read_bytes() if lock.exists() else None, raw)
+
+    def test_removed_staged_btf_source_is_not_a_cargo_failure(self):
+        import shutil
+        subject = self.workspace()
+        self.assertIsNotNone(self.mapped_btf_root)
+        shutil.rmtree(self.mapped_btf_root)
+        for toolchain in self.matrix['toolchains']:
+            with self.subTest(compiler=toolchain['id']):
+                with self.assertRaises(policy.PolicyError) as refused:
+                    self.command(toolchain['id']+'-nobtf', toolchain, subject/'Cargo.toml')
+                self.assertEqual(refused.exception.code, 'SOURCE_UNAVAILABLE')
 
     def test_real_unavailable_offline_source_is_not_a_lock_refusal(self):
         subject = self.workspace()
