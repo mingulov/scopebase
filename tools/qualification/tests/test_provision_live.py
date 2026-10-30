@@ -338,6 +338,25 @@ def quiesce_private_lives(lives, timeout=15):
             unproven.append(
                 (pid, start, f"starttime unreadable: {exc!r}"))
             continue
+        if current is None:
+            # R11-006: None is unknown (gone, unreadable, or
+            # malformed — S100), never verified-foreign. The
+            # hardened poll splits it: ENOENT-gone retires
+            # silently; present-but-unobservable answers
+            # unproven (S131 — callers retain + fail loud),
+            # never silent discharge. timeout=0: a single
+            # presence probe — this life was never signaled,
+            # so no death wait is owed.
+            if poll_proc_gone(pid, timeout=0):
+                continue
+            sys.stderr.write(
+                "WARNING: private keeper life pid=%d start=%r "
+                "starttime unreadable but present; retirement "
+                "unproven, retire by hand\n" % (pid, start))
+            unproven.append(
+                (pid, start,
+                 "starttime unreadable but present; retire by hand"))
+            continue
         if current != start:
             continue
         try:
@@ -3227,16 +3246,21 @@ class QuiesceLivesTests(unittest.TestCase):
         kill_mock.assert_called_once_with(4242, 1234)
         gone_mock.assert_called_once_with(4242, timeout=15)
 
-    def test_recycled_and_dead_numbers_untouched(self):
+    def test_recycled_number_untouched(self):
+        # Proven-foreign (a recycled int starttime) is left
+        # alone, never signaled. The None (unknown) half of
+        # the old combined test asserted silent discharge —
+        # the R11-006 bug — and is superseded: None-gone
+        # retires silently while None-present answers unproven
+        # (see the R11-006 twins below).
         from unittest import mock
         with mock.patch.object(
                 provision, "_keeper_starttime",
-                side_effect=[9999, None]), \
+                return_value=9999), \
              mock.patch(__name__ + ".kill_bound_keeper") \
                 as kill_mock:
             self.assertEqual(
-                quiesce_private_lives([(4242, 1234),
-                                       (4243, 1234)]), [])
+                quiesce_private_lives([(4242, 1234)]), [])
         kill_mock.assert_not_called()
 
     def test_gap_exit_classifies_retired_without_signaling(self):
@@ -3362,6 +3386,61 @@ class QuiesceLivesTests(unittest.TestCase):
         self.assertIn("4242", captured.getvalue())
         self.assertEqual(len(unproven), 1)
         self.assertEqual(unproven[0][:2], (4242, 1234))
+
+    def test_unreadable_starttime_live_life_reported_unproven(self):
+        # R11-006: the life is LIVE but its stat is unreadable
+        # (hidepid-style denial) — the REAL reader returns
+        # None, and quiesce must report unproven (never
+        # silently discharge), never signal, and the non-empty
+        # return retains the original dir via the caller's
+        # S131 _retain_tmp wiring. Only the underlying open
+        # fails; _keeper_starttime itself is unpatched.
+        import io
+        from unittest import mock
+        sleeper = subprocess.Popen(
+            ["sleep", "30"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        start = provision._keeper_starttime(sleeper.pid)
+        self.assertIsNotNone(
+            start, "precondition: sleeper live and readable")
+        real_open = open
+
+        def deny_stat(path, *args, **kwargs):
+            if str(path) == f"/proc/{sleeper.pid}/stat":
+                raise PermissionError(13, "hidepid-style denial")
+            return real_open(path, *args, **kwargs)
+
+        captured = io.StringIO()
+        with mock.patch("builtins.open",
+                        side_effect=deny_stat), \
+             mock.patch("sys.stderr", captured):
+            unproven = quiesce_private_lives(
+                [(sleeper.pid, start)])
+        self.assertIsNone(
+            sleeper.poll(), "quiesce must not signal the life")
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (sleeper.pid, start))
+        self.assertIn(str(sleeper.pid), captured.getvalue())
+
+    def test_gone_life_with_none_starttime_retires_silently(self):
+        # R11-006 twin (anti-overcorrection): None that the
+        # hardened poll proves ENOENT-gone still retires
+        # silently — only present-but-unobservable answers
+        # unproven.
+        from unittest import mock
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=None), \
+             mock.patch(__name__ + ".poll_proc_gone",
+                        return_value=True) as gone_mock, \
+             mock.patch(__name__ + ".kill_bound_keeper") \
+                as kill_mock:
+            self.assertEqual(
+                quiesce_private_lives([(4242, 1234)]), [])
+        gone_mock.assert_called_once_with(4242, timeout=0)
+        kill_mock.assert_not_called()
 
 
 class AdoptReplacementTests(unittest.TestCase):
