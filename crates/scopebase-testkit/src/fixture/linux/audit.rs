@@ -3312,6 +3312,28 @@ mod tests {
     /// R12-007: rendezvous — the probe runs only when set.
     #[cfg(target_arch = "x86_64")]
     const EXPIRY_PROBE_ENV: &str = "SCOPEBASE_COLLECTION_EXPIRY_SUBREAPER_PROBE";
+    /// R13-005: rendezvous — when set, names the pidfile where an
+    /// outer probe publishes each reported grandchild (`pid:start`,
+    /// overwrite: these probes run middlemen sequentially and
+    /// retire between, so the latest publish names the only
+    /// possibly-live writer). The middleman itself cannot publish:
+    /// the write-denying specs refuse its file writes — the
+    /// unfiltered OUTER probe publishes from the report line
+    /// instead, BEFORE retiring, so a death between birth and
+    /// retirement still leaves the identity for the parent's
+    /// expiry strays. A stale entry is harmless (the strays arm
+    /// re-verifies (pin, starttime) before signaling).
+    #[cfg(target_arch = "x86_64")]
+    const GRANDCHILD_PIDFILE_ENV: &str = "SCOPEBASE_TT04_GRANDCHILD_PIDFILE";
+    /// R13-005: failure injection — when set, the subreaper probe
+    /// exits(42) after publishing a live grandchild but BEFORE
+    /// retiring it (the abandoned-writer shape: assert-failure and
+    /// early-exit paths skip retirement the same way). Gated on a
+    /// Live report — exiting 42 with no grandchild would make the
+    /// regression vacuous, so None proceeds normally and the
+    /// parent's status assert fails loud instead.
+    #[cfg(target_arch = "x86_64")]
+    const SUBREAPER_ABANDON_ENV: &str = "SCOPEBASE_TT04_SUBREAPER_ABANDON";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -3376,6 +3398,62 @@ mod tests {
             grandchild,
             err,
         }
+    }
+
+    /// R13-005: publish a reported grandchild to the rendezvous
+    /// pidfile ([`GRANDCHILD_PIDFILE_ENV`]) when set. Called by the
+    /// OUTER probe immediately after the runner returns — BEFORE
+    /// any retire/panic/exit — so a death between birth and
+    /// retirement still leaves the writer's (pid, starttime) for
+    /// the parent's expiry strays (the parked grandchild holds the
+    /// outer probe's pipes from its own middleman group, where the
+    /// expiry killpg cannot reach). `None` is a no-op (a setup
+    /// refusal publishes no writer); a set-but-unwritable pidfile
+    /// fails loud (an unpublished writer would strand silently).
+    #[cfg(target_arch = "x86_64")]
+    fn publish_reported_grandchild(state: &GrandchildState) {
+        let (pid, started) = match state {
+            GrandchildState::Live(pid, started) => (*pid, *started),
+            GrandchildState::None => return,
+        };
+        let path = match std::env::var(GRANDCHILD_PIDFILE_ENV) {
+            Ok(path) => path,
+            Err(_) => return,
+        };
+        std::fs::write(&path, format!("{pid}:{started}"))
+            .unwrap_or_else(|error| panic!("grandchild publish to {path:?} failed: {error}"));
+    }
+
+    /// R13-005: read the outer probe's published grandchild (if
+    /// any) as expiry strays. The path is explicit: the parent
+    /// sets the rendezvous on the CHILD's environment (its own
+    /// environment carries nothing — a global set_var would race
+    /// parallel tests). A missing file yields empty (a skip-path
+    /// probe publishes nothing) — the expiry then behaves exactly
+    /// as before. A present-but-unparseable file is OUR probe's
+    /// bug and fails loud (a silently-dropped writer would
+    /// strand).
+    #[cfg(target_arch = "x86_64")]
+    fn read_published_grandchild_strays(path: &std::path::Path) -> Vec<(libc::pid_t, u64)> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(_) => return Vec::new(),
+        };
+        let (pid_text, start_text) = text
+            .trim()
+            .split_once(':')
+            .unwrap_or_else(|| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
+        let pid: libc::pid_t = pid_text
+            .parse()
+            .unwrap_or_else(|_| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
+        let started: u64 = start_text
+            .parse()
+            .unwrap_or_else(|_| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
+        assert!(
+            pid > 0,
+            "grandchild pidfile {path:?} names no task: {text:?}"
+        );
+        vec![(pid, started)]
     }
 
     /// S140-round9: the probe's only report channel — write exactly
@@ -3711,9 +3789,22 @@ mod tests {
         );
         for spec in ["read-nopidfd", "read-nosignal"] {
             let outcome = run_preflight_middleman(spec, Duration::from_secs(30));
+            // R13-005: publish BEFORE any retire/panic/exit — a
+            // death from here to the retirement must still leave
+            // the writer's identity for the parent's expiry. A
+            // setup refusal (code 3) publishes nothing (None).
+            publish_reported_grandchild(&outcome.grandchild);
             if outcome.code == 3 {
                 eprintln!("skip: seccomp unavailable for {spec}");
                 return;
+            }
+            // R13-005: injected abandon — exit AFTER the birth is
+            // published but BEFORE the retirement below, leaving
+            // the parked writer for the parent's expiry path.
+            if std::env::var(SUBREAPER_ABANDON_ENV).is_ok()
+                && matches!(outcome.grandchild, GrandchildState::Live(..))
+            {
+                std::process::exit(42);
             }
             let cleaned = match outcome.grandchild {
                 GrandchildState::Live(pid, started) => retire_reported_grandchild(pid, started),
@@ -3823,10 +3914,22 @@ mod tests {
             done.store(true, Ordering::SeqCst);
             match outcome {
                 Err(err) => err,
-                Ok(reported) => panic!(
-                    "2s guard must fire mid-EINTR-spin, got exit {}",
-                    reported.code
-                ),
+                // R13-005: the lost race — the middleman reported
+                // before the guard fired, so no group retirement
+                // ran. Publish the reported writer for the parent's
+                // expiry, then retire it best-effort (never
+                // asserted: cleanup must not mask the guard
+                // evidence below) before the intended panic.
+                Ok(reported) => {
+                    publish_reported_grandchild(&reported.grandchild);
+                    if let GrandchildState::Live(pid, started) = reported.grandchild {
+                        retire_known_stray_best_effort(pid, started);
+                    }
+                    panic!(
+                        "2s guard must fire mid-EINTR-spin, got exit {}",
+                        reported.code
+                    )
+                }
             }
         });
         assert!(
@@ -4670,17 +4773,19 @@ mod tests {
     /// may have exited), then await disappearance (reaping an
     /// adopted zombie along the way). Never panics — expiry
     /// is fail-closed house discipline, not an assertion.
+    /// R13-005: returns the disappearance proof so the caller
+    /// can record accurate per-stray cleanup evidence.
     #[cfg(target_arch = "x86_64")]
-    fn retire_known_stray_best_effort(pid: libc::pid_t, started: u64) {
+    fn retire_known_stray_best_effort(pid: libc::pid_t, started: u64) -> bool {
         use std::time::Duration;
         let pin = match super::super::seccomp::pidfd_open_raw(pid) {
             Ok(pin) => pin,
-            Err(_) => return,
+            Err(_) => return true,
         };
         if proc_starttime(pid) != Ok(Some(started)) {
             // SAFETY: pin owned by this scope.
             unsafe { libc::close(pin) };
-            return;
+            return true;
         }
         // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
         unsafe {
@@ -4694,7 +4799,7 @@ mod tests {
         }
         // SAFETY: pin owned by this scope.
         unsafe { libc::close(pin) };
-        await_proc_gone_reaping(pid, started, Duration::from_secs(5));
+        await_proc_gone_reaping(pid, started, Duration::from_secs(5))
     }
 
     /// R11-014: fail-closed retirement for an expired (or
@@ -4753,10 +4858,13 @@ mod tests {
         // strays alive, never zombies.
         let group_foreign = group_died || grouped_stranger;
         if group_foreign {
+            // R13-005: strays retire individually below (each
+            // with its own proof line) — only the group signal
+            // and the group-zombie drain are skipped here.
             eprintln!(
                 "expiry skips foreign group {id} signal+drain \
                  (died={group_died} regrouped={grouped_stranger}; \
-                 strays, if any, leak loud)"
+                 strays retire individually below)"
             );
         } else {
             // SAFETY: signal-only to the group; errors ignored
@@ -4838,8 +4946,13 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        // R13-005: per-stray cleanup evidence — each known
+        // writer's retirement lands in the log with its
+        // disappearance proof (an expiry that leaves a stray
+        // alive must say so, never claim a clean group).
         for (pid, started) in strays {
-            retire_known_stray_best_effort(*pid, *started);
+            let gone = retire_known_stray_best_effort(*pid, *started);
+            eprintln!("expiry retired stray {pid} (gone: {gone})");
         }
         // No Child-handle wait here by design (not even a
         // parameter for it): the caller reaped via the handle
@@ -6110,10 +6223,19 @@ mod tests {
     fn adopted_grandchild_retires_under_subreaper() {
         use std::time::{Duration, Instant};
         let exe = std::env::current_exe().expect("probe test binary path");
+        // R13-005: the probe publishes each reported grandchild
+        // here; the parent's expiry retires it if the probe dies
+        // between birth and retirement.
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-subreaper-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
         let mut child = std::process::Command::new(exe)
             .arg(SUBREAPER_PROBE_PATH)
             .arg("--exact")
             .env(SUBREAPER_PROBE_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -6131,7 +6253,11 @@ mod tests {
                     // deadline — wait_with_output would wait for
                     // EOF past it whenever a descendant outlives
                     // the probe holding the pipes.
-                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                    // R13-005: the probe's published grandchild (if
+                    // any) rides as expiry strays — a writer the
+                    // probe died without retiring still retires.
+                    let strays = read_published_grandchild_strays(&pidfile);
+                    match collect_probe_output_bounded(&mut child, end, staged, &strays) {
                         Some((stdout, stderr)) => {
                             assert!(
                                 status.success(),
@@ -6148,6 +6274,7 @@ mod tests {
                              (probe exited {status}; group retired)"
                         ),
                     }
+                    let _ = std::fs::remove_file(&pidfile);
                     return;
                 }
                 None => {}
@@ -6163,6 +6290,142 @@ mod tests {
                 let _ = child.wait();
                 panic!("subreaper probe hung past 150s");
             }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R13-005: an outer probe that exits after grandchild birth
+    /// but before retirement must not strand its writer. The
+    /// parked grandchild holds the outer probe's pipes from its
+    /// own middleman group (the middleman groups itself on
+    /// entry), where the expiry killpg cannot reach — the parent
+    /// supplies the probe-published identity as expiry strays, so
+    /// the expiry retires the independently-grouped writer and
+    /// the middleman group probes ESRCH-empty after. Pre-fix the
+    /// expiry fires on an empty strays list and the writer stays
+    /// alive (RED); post-fix it retires by (pin, starttime) and
+    /// the log records the per-stray proof. The abandon injection
+    /// stands in for every death between birth and retirement
+    /// (assert-failure and early-exit paths skip retirement the
+    /// same way).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn abandoned_grandchild_retires_by_parent_expiry() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-abandon-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(SUBREAPER_ABANDON_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn abandoning subreaper probe");
+        // R12-005: pin before any wait (expiry identity gate).
+        let id = child.id() as libc::pid_t;
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        let end = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                break status;
+            }
+            assert!(Instant::now() < end, "abandoning probe hung past 60s");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // Skip path first: without seccomp the probe refuses
+        // setup (code 3), publishes nothing, and exits success
+        // with EOF — collecting must succeed and the skip line
+        // must name its cause (an unexplained success would be
+        // vacuous, never a skip).
+        if status.success() {
+            match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                Some((_, err)) => {
+                    let err = String::from_utf8_lossy(&err);
+                    assert!(
+                        err.contains("skip: seccomp unavailable"),
+                        "unexpected probe success must explain itself, got: {err}"
+                    );
+                    eprintln!("skip: seccomp unavailable for the abandon probe");
+                    let _ = std::fs::remove_file(&pidfile);
+                    return;
+                }
+                None => panic!("skip-path probe must EOF its output, got expiry"),
+            }
+        }
+        assert_eq!(
+            status.code(),
+            Some(42),
+            "probe must exit by abandon injection, got {status}"
+        );
+        // Staging proof: the published writer is live,
+        // tick-named, and grouped OUTSIDE the outer probe (a
+        // same-group writer would die by killpg without any
+        // strays list, making the expiry assert vacuous).
+        let strays = read_published_grandchild_strays(&pidfile);
+        assert_eq!(strays.len(), 1, "abandon must publish exactly one writer");
+        let (writer, writer_tick) = strays[0];
+        assert_eq!(
+            proc_starttime(writer),
+            Ok(Some(writer_tick)),
+            "published writer must be live at collection"
+        );
+        // SAFETY: getpgid queries only.
+        let writer_group = unsafe { libc::getpgid(writer) };
+        assert_ne!(
+            writer_group, id,
+            "abandoned writer must sit outside the outer probe group"
+        );
+        // The writer holds EOF past the deadline: collection must
+        // expire (an EOF here means the writer never held the
+        // pipes — dead fixture, not a passing test). A short
+        // collection budget — the 60s above covered the spawn.
+        // The published writer rides as expiry strays (the fix).
+        let end = Instant::now() + Duration::from_secs(3);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        // Post-expiry: the independently-grouped writer is retired
+        // and its group probes ESRCH-empty. Observe before cleanup
+        // (R12-014): capture the evidence first, retire any
+        // remainder so even RED runs stay clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        if !writer_gone {
+            retire_known_stray_best_effort(writer, writer_tick);
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            writer_gone,
+            "parent expiry must retire the abandoned writer"
+        );
+        let group_end = Instant::now() + Duration::from_secs(2);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            if unsafe { libc::killpg(writer_group, 0) } < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "writer group probe must fail ESRCH-only, got {errno}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < group_end,
+                "abandoned writer group {writer_group} survived the parent expiry"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -6716,10 +6979,19 @@ mod tests {
     fn guard_retires_adopted_grandchild() {
         use std::time::{Duration, Instant};
         let exe = std::env::current_exe().expect("probe test binary path");
+        // R13-005: the probe publishes each reported grandchild
+        // here; the parent's expiry retires it if the probe dies
+        // between birth and retirement.
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-guard-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
         let mut child = std::process::Command::new(exe)
             .arg(GUARD_PROBE_PATH)
             .arg("--exact")
             .env(GUARD_PROBE_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -6737,7 +7009,11 @@ mod tests {
                     // deadline — wait_with_output would wait for
                     // EOF past it whenever a descendant outlives
                     // the probe holding the pipes.
-                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                    // R13-005: the probe's published grandchild (if
+                    // any) rides as expiry strays — a writer the
+                    // probe died without retiring still retires.
+                    let strays = read_published_grandchild_strays(&pidfile);
+                    match collect_probe_output_bounded(&mut child, end, staged, &strays) {
                         Some((stdout, stderr)) => {
                             assert!(
                                 status.success(),
@@ -6754,6 +7030,7 @@ mod tests {
                              (probe exited {status}; group retired)"
                         ),
                     }
+                    let _ = std::fs::remove_file(&pidfile);
                     return;
                 }
                 None => {}
