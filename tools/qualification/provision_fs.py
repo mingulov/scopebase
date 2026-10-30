@@ -1467,15 +1467,26 @@ def ensure_mount_ns():
                 pre = _keeper_starttime(pid)
                 nspath = _verify_recorded_keeper(state)
                 if nspath is not None:
+                    if pre is None:
+                        # R10-002: verified alive (link+canary)
+                        # but never anchorable — respawning
+                        # would orphan a live keeper with no
+                        # record (S122's orphan logic). Refuse
+                        # like bind does; retire by hand.
+                        raise AdmissionError(
+                            "recorded keeper verified but "
+                            "unanchorable; refusing to orphan it "
+                            "(retire by hand before retrying)")
                     starttime = _keeper_starttime(pid)
-                    if (starttime is not None and pre is not None
+                    if (starttime is not None
                             and starttime == pre):
                         _MOUNT_NS = nspath
                         _MOUNT_NS_IDENTITY = (
                             pid, nsid, starttime, canary)
                         return nspath
                     # Verified but the anchor raced death or
-                    # recycle: treat as dead, fall to respawn.
+                    # recycle after verification: treat as
+                    # dead, fall to respawn.
             pid, nsid, canary, starttime = _spawn_keeper(
                 euid, candir, pidfile)
             _MOUNT_NS = f"/proc/{pid}/ns/mnt"

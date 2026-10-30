@@ -8499,6 +8499,50 @@ class MountNsTests(unittest.TestCase):
             self.assertEqual(
                 Path(pidfile).read_text(), f"4321 77 {canary}\n")
 
+    # R10-002 residual: a recorded keeper that verifies alive
+    # (link+canary) but never anchors (starttime unreadable)
+    # must REFUSE — respawning would orphan a live keeper
+    # with no record. (The finding's literal kill path is
+    # not in the tree: unknown propagates fatal from verify
+    # and ensure never kills a recorded pid; this is the
+    # true unknown->replacement kernel.)
+    def test_ensure_refuses_verified_but_unanchorable(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        canary = "cd" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(f"4321 77 {canary}\n")
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                    mock.patch.object(
+                        provision, "_read_ns_link",
+                        return_value="mnt:[77]"), \
+                    mock.patch.object(
+                        provision, "_ns_has_canary_pinned",
+                        return_value=True), \
+                    mock.patch.object(
+                        provision, "_keeper_starttime",
+                        return_value=None), \
+                    mock.patch.object(
+                        provision, "_spawn_keeper",
+                        return_value=(9999, 88, "ef" * 16,
+                                      777)) as spawn:
+                with self.assertRaisesRegex(
+                        provision.AdmissionError, "unanchorable"):
+                    provision.ensure_mount_ns()
+                spawn.assert_not_called()
+            self.assertEqual(
+                Path(pidfile).read_text(), f"4321 77 {canary}\n")
+
     # S134-round9: respawn requires PROVEN death — the real
     # link read runs (failed readlink plus the kernel's ESRCH
     # for an absurd pid), not a stubbed None. The unknown arm
