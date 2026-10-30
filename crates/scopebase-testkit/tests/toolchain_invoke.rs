@@ -6165,6 +6165,9 @@ fn group_guard_drop_spares_reformed_stranger() {
     assert!(!status.success(), "killed stranger reports signal death");
 }
 
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+/// IR-005: the cfg gate rides ABOVE the doc block (a gate
+/// buried mid-block re-breaks on the next doc reflow).
 /// R11-016(b2): retire a probe's whole process group plus
 /// the probe itself, then reap. The probe's pgid is its pid
 /// (every probe groups itself on entry), so stranded
@@ -6172,7 +6175,6 @@ fn group_guard_drop_spares_reformed_stranger() {
 /// idempotent: ESRCH/ECHILD mean already gone, never a hang.
 /// Used on timeout AND on failure exit (a failed probe may
 /// strand its group) — always before reporting failure.
-#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 /// R12-005: `expected` is the probe's birth tick pinned at
 /// spawn — the direct kill and the wait run ONLY while the
 /// number still names it (reaped-and-freed is the normal
