@@ -330,6 +330,13 @@ def quiesce_private_lives(lives, timeout=15):
             continue
         try:
             sent = kill_bound_keeper(pid, start)
+        except provision.ProcAbsent:
+            # R10-014: gone between the starttime check and the
+            # pin — proven absence (pidfd_open ESRCH: the number
+            # hosts nothing, so the observed life is dead),
+            # retired without signaling. ProcUnknown and
+            # AdmissionError stay below: unproven, never retired.
+            continue
         except Exception as exc:
             sys.stderr.write(
                 "WARNING: private keeper life pid=%d start=%r "
@@ -3046,6 +3053,29 @@ class QuiesceLivesTests(unittest.TestCase):
                 quiesce_private_lives([(4242, 1234),
                                        (4243, 1234)]), [])
         kill_mock.assert_not_called()
+
+    def test_gap_exit_classifies_retired_without_signaling(self):
+        # R10-014: the life exits between the starttime
+        # observation and pin acquisition — pin_proc raises
+        # ProcAbsent (proven absence; kill_bound_keeper's own
+        # contract pins the propagation) and the quiesce must
+        # classify retired: no unproven entry, no signal sent,
+        # no disappearance poll.
+        from unittest import mock
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234), \
+             mock.patch.object(
+                provision, "pin_proc",
+                side_effect=provision.ProcAbsent("gone")), \
+             mock.patch.object(
+                provision, "signal_owned") as signal_mock, \
+             mock.patch(__name__ + ".poll_proc_gone") \
+                as gone_mock:
+            self.assertEqual(
+                quiesce_private_lives([(4242, 1234)]), [])
+        signal_mock.assert_not_called()
+        gone_mock.assert_not_called()
 
     def test_kill_error_warns_and_never_raises(self):
         import io
