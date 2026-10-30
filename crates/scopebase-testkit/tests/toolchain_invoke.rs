@@ -911,10 +911,30 @@ fn proc_ppid(pid: i32) -> Option<i32> {
 /// process) through live parent links. Any unreadable link, a
 /// cycle-guard trip, or reaching init first answers false —
 /// custody unproven means SPARED, never swept.
+/// R11-004: each hop starttime-binds its parent and the next
+/// hop re-verifies the binding, so a number recycled between
+/// hops (or mid-hop) spares instead of following a
+/// replacement into a forged descent.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn is_test_descendant(pid: i32, ancestor: u32) -> bool {
+    is_test_descendant_with_hook(pid, ancestor, None)
+}
+
+/// R11-004: seam for the intermediate-replacement regression:
+/// `bind_hook`, when set, runs after each intermediate parent
+/// is starttime-bound and before the walk advances past it,
+/// receiving that number — the regression kills+reaps+replaces
+/// the bound parent there. Production callers use
+/// [`is_test_descendant`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn is_test_descendant_with_hook(pid: i32, ancestor: u32, bind_hook: Option<&dyn Fn(i32)>) -> bool {
     let ancestor = ancestor as i32;
     let mut cursor = pid;
+    // Starttime bound by the previous hop for the CURRENT
+    // holder: None on the first hop (the target's identity is
+    // the caller's — pinned plus argv plus window plus
+    // re-verified before the signal).
+    let mut bound: Option<u64> = None;
     for _ in 0..64 {
         if cursor == ancestor {
             return true;
@@ -922,10 +942,51 @@ fn is_test_descendant(pid: i32, ancestor: u32) -> bool {
         if cursor <= 1 {
             return false;
         }
-        match proc_ppid(cursor) {
-            Some(ppid) if ppid > 0 => cursor = ppid,
+        // The current holder must still be the task the
+        // previous hop bound: a changed holder means the
+        // number recycled between hops — unproven, spare.
+        if let Some(want) = bound {
+            match task_starttime_checked(cursor) {
+                Ok(Some(now)) if now == want => {}
+                _ => return false,
+            }
+        }
+        // Bind this hop: cursor starttime, ppid, parent
+        // starttime, ppid again, cursor starttime again. A
+        // stable cursor (S100: equal starttimes name one task)
+        // with a stable ppid proves the parent lived throughout
+        // (a dead parent reparents a live cursor) — so the
+        // mid-pair parent starttime is the parent's own, and a
+        // recycle anywhere in the pair spares instead of
+        // following a replacement.
+        let cursor_before = match task_starttime_checked(cursor) {
+            Ok(Some(started)) => started,
+            _ => return false,
+        };
+        let ppid_first = match proc_ppid(cursor) {
+            Some(ppid) if ppid > 0 => ppid,
+            _ => return false,
+        };
+        let parent_started = match task_starttime_checked(ppid_first) {
+            Ok(Some(started)) => started,
+            _ => return false,
+        };
+        let ppid_second = match proc_ppid(cursor) {
+            Some(ppid) if ppid > 0 => ppid,
+            _ => return false,
+        };
+        match task_starttime_checked(cursor) {
+            Ok(Some(now)) if now == cursor_before => {}
             _ => return false,
         }
+        if ppid_first != ppid_second {
+            return false;
+        }
+        if let Some(hook) = bind_hook {
+            hook(ppid_first);
+        }
+        bound = Some(parent_started);
+        cursor = ppid_first;
     }
     false
 }
@@ -1873,6 +1934,172 @@ fn hang_sweep_spares_unrelated_matching_task() {
         "same task, not a replacement"
     );
     retire_orphan(pid, pinned);
+}
+
+/// R11-004: sole child pid of `pid` (via the children file),
+/// polled bounded.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn sole_child_pid(pid: i32) -> i32 {
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")) {
+            let kids: Vec<i32> = text
+                .split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect();
+            if kids.len() == 1 {
+                return kids[0];
+            }
+        }
+        assert!(Instant::now() < end, "child of {pid} never appeared");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R11-004: steer the pid allocator so the next fork takes
+/// `want` (ns_last_pid = want - 1). Direct write first,
+/// passwordless sudo fallback; false when unwritable (the
+/// regression skips — without reuse control the replacement
+/// shape is unconstructible).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn steer_next_pid(want: i32) -> bool {
+    use std::process::Stdio;
+    let path = "/proc/sys/kernel/ns_last_pid";
+    let text = format!("{}", want - 1);
+    if std::fs::write(path, &text).is_ok() {
+        return true;
+    }
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("echo {text} | sudo -n tee {path} >/dev/null 2>&1"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// R11-004: replacing an intermediate parent DURING the
+/// ancestry walk must not forge descent. P (our child) parents
+/// A (our grandchild); the walk binds P, then the hook
+/// kills+reaps P and forces the allocator to hand P's number
+/// to a NEW child of the test process. The unchained walk
+/// follows the replacement to the test process (TRUE = RED);
+/// the starttime-chained walk detects the changed holder
+/// (FALSE = GREEN) and the unrelated target survives.
+/// Deterministic: the hook pauses the walk mid-traversal (no
+/// timing luck); pid-steals retry bounded and loud. Skipped
+/// where ns_last_pid is unwritable. Duration 96 is unique to
+/// this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn descendant_walk_survives_intermediate_replacement() {
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::sync::Mutex;
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    // No-op write-back proves writability without changing
+    // allocator state (skips before any fixture exists).
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let me = std::process::id();
+    let mut p = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 96 & wait")
+        .spawn()
+        .expect("P spawns");
+    let p_pid = p.id() as i32;
+    let a = sole_child_pid(p_pid);
+    let pinned_a = match task_starttime_checked(a) {
+        Ok(Some(started)) => started,
+        other => panic!("A starttime unreadable: {other:?}"),
+    };
+    // Anti-vacuity: the stable chain genuinely proves descent
+    // (so FALSE-after means detection, not a broken fixture).
+    assert!(is_test_descendant(a, me), "stable chain must prove descent");
+    let acted = AtomicBool::new(false);
+    let reused = AtomicI32::new(-1);
+    let adoptee = Mutex::new(None);
+    let hook = |bound: i32| {
+        if acted.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        assert_eq!(bound, p_pid, "first bind must be P");
+        // SAFETY: P is our own child.
+        unsafe {
+            libc::kill(p_pid, libc::SIGKILL);
+        }
+        // Reap P (ours): bounded WNOHANG poll.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid on our own child.
+            let got = unsafe { libc::waitpid(p_pid, &mut status, libc::WNOHANG) };
+            if got == p_pid || got < 0 {
+                break;
+            }
+            assert!(Instant::now() < end, "P unreaped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Force P's number onto a new child of ours (steals
+        // retry bounded and loud).
+        let mut placed = false;
+        for _ in 0..100 {
+            if !steer_next_pid(p_pid) {
+                break;
+            }
+            let mut kid = std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .expect("adoptee spawns");
+            if kid.id() as i32 == p_pid {
+                reused.store(p_pid, Ordering::SeqCst);
+                adoptee.lock().unwrap().replace(kid);
+                placed = true;
+                break;
+            }
+            let _ = kid.kill();
+            let _ = kid.wait();
+        }
+        assert!(placed, "pid allocator too contested to retake P={p_pid}");
+    };
+    let verdict = is_test_descendant_with_hook(a, me, Some(&hook));
+    // Cleanup first (every path leak-free): P's handle (hook
+    // reaped it — ECHILD expected) or kill+reap when the hook
+    // never ran.
+    if acted.load(Ordering::SeqCst) {
+        let _ = p.try_wait();
+    } else {
+        let _ = p.kill();
+        let _ = p.wait();
+    }
+    assert!(
+        acted.load(Ordering::SeqCst),
+        "bind hook never fired — fixture broken"
+    );
+    assert_eq!(
+        reused.load(Ordering::SeqCst),
+        p_pid,
+        "P's number not retaken by our child"
+    );
+    assert!(!verdict, "replaced intermediate must not forge descent");
+    // A orphaned onto init when P died; the adoptee is ours.
+    retire_orphan(a, pinned_a);
+    if let Some(mut kid) = adoptee.lock().unwrap().take() {
+        let _ = kid.kill();
+        let _ = kid.wait();
+    }
+    // Polite restore (advisory hint; harmless either way).
+    let _ = std::fs::write(last_path, &last_before);
 }
 
 /// S128-round9: the pin must be acquired BEFORE custody evidence is
