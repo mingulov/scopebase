@@ -3449,8 +3449,52 @@ mod tests {
             Ok(path) => path,
             Err(_) => return,
         };
-        std::fs::write(&path, format!("{pid}:{started}"))
-            .unwrap_or_else(|error| panic!("grandchild publish to {path:?} failed: {error}"));
+        if let Err(error) = std::fs::write(&path, format!("{pid}:{started}")) {
+            // R14-003: retire the known writer BEFORE failing
+            // loud — a panic that skips retirement strands it
+            // while the parent trusts a stale record.
+            let _ = retire_known_stray_best_effort(pid, started);
+            panic!("grandchild publish to {path:?} failed: {error}");
+        }
+    }
+
+    /// R14-003: claim a rendezvous pidfile BEFORE spawning
+    /// (O_EXCL). Any preplant — any owner — refuses loud here,
+    /// where no writer exists yet and nothing can strand; the
+    /// old ignore-removal-failure idiom burned a doomed probe
+    /// whose failed publication panicked past retirement. Our
+    /// own stale file (a killed run under a wrapped pid) unlinks
+    /// safely and retries once; a foreign plant never proceeds.
+    #[cfg(target_arch = "x86_64")]
+    fn claim_pidfile(path: &std::path::Path) -> Result<(), String> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let attempt = || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .map(|_| ())
+        };
+        match attempt() {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::os::unix::fs::MetadataExt as _;
+                // SAFETY: getuid queries only.
+                let ours = std::fs::symlink_metadata(path)
+                    .map(|meta| meta.uid() == unsafe { libc::getuid() })
+                    .unwrap_or(false);
+                if !ours {
+                    return Err(format!(
+                        "pidfile {path:?} preplanted by another owner: refusing"
+                    ));
+                }
+                std::fs::remove_file(path)
+                    .map_err(|error| format!("pidfile {path:?} stale reclaim failed: {error}"))?;
+                attempt().map_err(|error| format!("pidfile {path:?} reclaim failed: {error}"))
+            }
+            Err(error) => Err(format!("pidfile {path:?} claim failed: {error}")),
+        }
     }
 
     /// R13-005: read the outer probe's published grandchild (if
@@ -3462,12 +3506,42 @@ mod tests {
     /// as before. A present-but-unparseable file is OUR probe's
     /// bug and fails loud (a silently-dropped writer would
     /// strand).
+    /// R14-003: the record is trusted only from OUR OWN claimed
+    /// file (O_NOFOLLOW + uid check — a forged pid:starttime
+    /// from another UID would otherwise grant signal authority
+    /// over a non-fixture process). An empty file is a
+    /// claimed-but-unpublished rendezvous (skip paths) and
+    /// yields empty like a missing one.
     #[cfg(target_arch = "x86_64")]
     fn read_published_grandchild_strays(path: &std::path::Path) -> Vec<(libc::pid_t, u64)> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut file = match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+        {
+            Ok(file) => file,
             Err(_) => return Vec::new(),
         };
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            // SAFETY: getuid queries only.
+            let ours = file
+                .metadata()
+                .map(|meta| meta.uid() == unsafe { libc::getuid() })
+                .unwrap_or(false);
+            if !ours {
+                panic!("grandchild pidfile {path:?} not owned by us: refusing forged record");
+            }
+        }
+        use std::io::Read as _;
+        let mut text = String::new();
+        if file.read_to_string(&mut text).is_err() {
+            return Vec::new();
+        }
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
         let (pid_text, start_text) = text
             .trim()
             .split_once(':')
@@ -6021,7 +6095,9 @@ mod tests {
         // writer's pid through a file, then exiting at once.
         let pidfile =
             std::env::temp_dir().join(format!("scopebase-r12006-{}.pid", std::process::id()));
-        let _ = std::fs::remove_file(&pidfile);
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
         let mark = format!("{STAGED_PROBE_MARK}-R12006");
         let script = format!(
             "# {mark}\nimport os, sys\nkid = os.fork()\nif kid == 0:\n    os.close(2)\n    os.execlp('yes', 'yes')\nopen(r'{}', 'w').write(str(kid))\n",
@@ -6339,7 +6415,9 @@ mod tests {
             "scopebase-grandchild-subreaper-{}.pid",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&pidfile);
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
         let mut child = std::process::Command::new(exe)
             .arg(SUBREAPER_PROBE_PATH)
             .arg("--exact")
@@ -6403,6 +6481,181 @@ mod tests {
         }
     }
 
+    /// R14-003: a rendezvous record owned by another UID must
+    /// never grant signal authority. Preplant a root-owned
+    /// readable record naming a live independent victim's real
+    /// (pid, starttime); the read path must refuse it loud.
+    /// Pre-fix the forged pair is trusted (RED); post-fix the
+    /// ownership check fails loud (GREEN). sudo-gated: without
+    /// passwordless root file ops the plant is unmakable.
+    /// Duration 64 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_refuses_foreign_owned_record() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14003a-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let mut victim = std::process::Command::new("/bin/sleep")
+            .arg("64")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("victim spawns");
+        let vpid = victim.id() as libc::pid_t;
+        let vtick = proc_starttime(vpid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        let planted = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("sh")
+            .arg("-c")
+            .arg(format!(
+                "echo {vpid}:{vtick} > {} && chmod 644 {}",
+                pidfile.display(),
+                pidfile.display()
+            ))
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !planted {
+            unsafe { libc::kill(vpid, libc::SIGKILL) };
+            let _ = victim.wait();
+            eprintln!("skip: passwordless sudo unavailable (no other-UID plant)");
+            return;
+        }
+        let refused = std::panic::catch_unwind(|| read_published_grandchild_strays(&pidfile));
+        // The victim must survive regardless of the verdict;
+        // then root-file cleanup plus loud victim retirement.
+        let survived = proc_starttime(vpid) == Ok(Some(vtick));
+        let _ = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("rm")
+            .arg("-f")
+            .arg(&pidfile)
+            .status();
+        unsafe { libc::kill(vpid, libc::SIGKILL) };
+        let _ = victim.wait();
+        assert!(survived, "forged victim must survive the read");
+        assert!(refused.is_err(), "foreign-owned record must be refused loud");
+    }
+
+    /// R14-003: when publication fails, the probe must retire
+    /// its known writer BEFORE failing loud — a panic that
+    /// skips retirement strands the writer while the parent
+    /// trusts a stale record. Deterministic: a chmod-444
+    /// pidfile makes the probe-side write EACCES-fail against
+    /// a live stand-in writer. Pre-fix the writer stays parked
+    /// (RED); post-fix it retires first (GREEN). Duration 65
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_failure_retires_writer_first() {
+        use std::os::unix::fs::PermissionsExt as _;
+        struct EnvGuard;
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                std::env::remove_var(GRANDCHILD_PIDFILE_ENV);
+            }
+        }
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14003b-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        std::fs::write(&pidfile, "").expect("pidfile created");
+        std::fs::set_permissions(&pidfile, std::fs::Permissions::from_mode(0o444))
+            .expect("pidfile read-only");
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("65")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
+        let _env_guard = EnvGuard;
+        let failed = std::panic::catch_unwind(|| {
+            publish_reported_grandchild(&GrandchildState::Live(wpid, wtick))
+        });
+        // Observe before cleanup: the writer must be gone
+        // (retired before the loud failure), then loud cleanup
+        // of whatever remains either way.
+        let retired = proc_starttime(wpid) != Ok(Some(wtick));
+        std::fs::set_permissions(&pidfile, std::fs::Permissions::from_mode(0o644)).ok();
+        let _ = std::fs::remove_file(&pidfile);
+        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        let _ = writer.wait();
+        assert!(failed.is_err(), "unwritable pidfile must fail loud");
+        assert!(retired, "writer must retire before the loud failure");
+    }
+
+    /// R14-003: rendezvous setup must refuse a FOREIGN-preplanted
+    /// pidfile BEFORE spawning (O_EXCL claim) — proceeding
+    /// past a foreign plant burns a doomed probe whose failed
+    /// publication panics. Root-preplant (sudo-gated); the claim
+    /// must fail. (Our own stale file reclaims — crash recovery
+    /// under a wrapped pid — so the plant must be foreign.)
+    /// Pre-fix there is no claim (RED: the stub accepts); post-fix
+    /// it errors (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_setup_refuses_preplant() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14003c-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let planted = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("sh")
+            .arg("-c")
+            .arg(format!("echo 1:1 > {}", pidfile.display()))
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !planted {
+            eprintln!("skip: passwordless sudo unavailable (no other-UID plant)");
+            return;
+        }
+        let claimed = claim_pidfile(&pidfile);
+        let _ = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("rm")
+            .arg("-f")
+            .arg(&pidfile)
+            .status();
+        assert!(
+            claimed.is_err(),
+            "setup must refuse a foreign-preplanted pidfile before spawning"
+        );
+    }
+
+    /// R14-003: our own stale pidfile (a killed run under a
+    /// wrapped pid) reclaims instead of refusing — crash
+    /// recovery. Pins the non-refusal branch of the claim.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_setup_reclaims_own_stale() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14003d-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        std::fs::write(&pidfile, "1:1").expect("stale file writes");
+        let claimed = claim_pidfile(&pidfile);
+        let content = std::fs::read_to_string(&pidfile).expect("claimed file readable");
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(claimed.is_ok(), "own stale pidfile must reclaim");
+        assert!(content.is_empty(), "reclaim must start empty");
+    }
+
     /// R13-005: an outer probe that exits after grandchild birth
     /// but before retirement must not strand its writer. The
     /// parked grandchild holds the outer probe's pipes from its
@@ -6426,7 +6679,9 @@ mod tests {
             "scopebase-grandchild-abandon-{}.pid",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&pidfile);
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
         let mut child = std::process::Command::new(exe)
             .arg(SUBREAPER_PROBE_PATH)
             .arg("--exact")
@@ -7095,7 +7350,9 @@ mod tests {
             "scopebase-grandchild-guard-{}.pid",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&pidfile);
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
         let mut child = std::process::Command::new(exe)
             .arg(GUARD_PROBE_PATH)
             .arg("--exact")
