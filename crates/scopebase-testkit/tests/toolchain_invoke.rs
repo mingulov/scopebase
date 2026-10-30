@@ -3340,22 +3340,63 @@ fn task_pgrp_matches_self_and_bogus() {
 /// unexpected-Ok path: an Ok identity must be retired (not
 /// dropped) and the holder killed — only then may the caller
 /// fail loud on the unexpected success. The holder kill runs
-/// FIRST and cannot panic (unchecked kill + blocking reap of
-/// our own child — already-retired surfaces as ESRCH/ECHILD),
-/// so it holds on every path including a panicking sleeper
-/// retirement. On Err (the expected expiry) the helper already
-/// retired its owned; the holder kill is belt-and-braces.
-/// Contract: `holder` is our own (possibly already reaped)
-/// child — never a foreign pid.
+/// FIRST and cannot panic, so it holds on every path including
+/// a panicking sleeper retirement. On Err (the expected
+/// expiry) the helper already retired its owned; the holder
+/// kill is belt-and-braces.
+/// R12-004: the kill+reap run ONLY while the holder's number
+/// still names `holder_tick` — the expiry path reaps the
+/// holder, and "already reaped" does not guarantee ESRCH: the
+/// number may now name an unrelated task. A freed number skips
+/// quietly (the normal post-expiry shape); a live impostor, an
+/// unknown tick, or an unresolvable stat skips LOUD (spare,
+/// don't hazard). The reap is a bounded WNOHANG poll, never a
+/// blocking wait on a recycled lifetime. Contract: `holder` is
+/// our own (possibly already reaped) child — never a foreign
+/// pid. Residual: a same-tick recycle is still killed+reaped
+/// as ours (S100-class exotic).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn retire_unexpected_orphan(outcome: &std::thread::Result<(i32, u64)>, holder: i32) {
+fn retire_unexpected_orphan(
+    outcome: &std::thread::Result<(i32, u64)>,
+    holder: i32,
+    holder_tick: Option<u64>,
+) {
     if holder > 0 {
-        // SAFETY: our own child (or already reaped by the
-        // expiry path — ESRCH/ECHILD then, never a hang).
-        unsafe {
-            libc::kill(holder, libc::SIGKILL);
-            let mut status = 0;
-            libc::waitpid(holder, &mut status, 0);
+        let ours = match (holder_tick, task_starttime_checked(holder)) {
+            (Some(want), Ok(Some(now))) if now == want => true,
+            (Some(_), Ok(None)) => false,
+            (Some(_), Ok(Some(_))) => {
+                eprintln!("holder {holder} recycled under cleanup; skipped");
+                false
+            }
+            (Some(_), Err(error)) => {
+                eprintln!("holder {holder} unresolved under cleanup ({error}); skipped");
+                false
+            }
+            (None, _) => {
+                eprintln!("holder {holder} tick unknown; skipped (leaks to process exit)");
+                false
+            }
+        };
+        if ours {
+            // SAFETY: the number still names our holder.
+            unsafe {
+                libc::kill(holder, libc::SIGKILL);
+            }
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of our own child.
+                let got = unsafe { libc::waitpid(holder, &mut status, libc::WNOHANG) };
+                if got == holder || got < 0 {
+                    break;
+                }
+                if Instant::now() >= end {
+                    eprintln!("holder {holder} unreaped past 5s; leaking to process exit");
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
     if let Ok((pid, pinned)) = outcome {
@@ -3379,7 +3420,7 @@ fn retire_unexpected_orphan(outcome: &std::thread::Result<(i32, u64)>, holder: i
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn tt04_orphan_unframed_expiry_probe() {
-    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
     if std::env::var(UNFRAMED_PROBE_ENV).is_err() {
         return;
     }
@@ -3389,6 +3430,10 @@ fn tt04_orphan_unframed_expiry_probe() {
     }
     let fds_before = own_fd_count();
     let holder_pid = AtomicI32::new(-1);
+    // R12-004: the holder's birth tick, read parent-side the
+    // instant it forks (u64::MAX = unreadable — the repeated
+    // cleanup then skips rather than killing blind).
+    let holder_tick = AtomicU64::new(u64::MAX);
     let start = Instant::now();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         spawn_orphan_sleeper_with_hook(
@@ -3409,6 +3454,9 @@ fn tt04_orphan_unframed_expiry_probe() {
                     }
                 }
                 holder_pid.store(holder, Ordering::SeqCst);
+                if let Ok(Some(tick)) = task_starttime_checked(holder) {
+                    holder_tick.store(tick, Ordering::SeqCst);
+                }
                 holder
             }),
             false,
@@ -3453,7 +3501,12 @@ fn tt04_orphan_unframed_expiry_probe() {
     // identity is retired here (not dropped below) and the
     // holder killed on every path; only then may the success
     // assertion fail loud.
-    retire_unexpected_orphan(&outcome, holder);
+    let tick = holder_tick.load(Ordering::SeqCst);
+    retire_unexpected_orphan(
+        &outcome,
+        holder,
+        if tick == u64::MAX { None } else { Some(tick) },
+    );
     assert!(outcome.is_err(), "unframed held read must expire");
     assert!(
         elapsed < Duration::from_secs(60),
@@ -3526,7 +3579,10 @@ fn unexpected_ok_retires_orphan_and_holder() {
     let pinned = task_starttime_checked(sleeper)
         .expect("sleeper stat readable")
         .expect("sleeper alive");
-    retire_unexpected_orphan(&Ok((sleeper, pinned)), holder);
+    let holder_live = task_starttime_checked(holder)
+        .expect("holder stat readable")
+        .expect("holder alive");
+    retire_unexpected_orphan(&Ok((sleeper, pinned)), holder, Some(holder_live));
     // The holder is reaped by the helper (ECHILD now).
     let mut status = 0;
     // SAFETY: WNOHANG probe of our own child.
@@ -3573,7 +3629,10 @@ fn unexpected_ok_skips_sleeper_on_err() {
         .id() as i32;
     let err: std::thread::Result<(i32, u64)> =
         Err(Box::new("synthetic expiry") as Box<dyn std::any::Any + Send>);
-    retire_unexpected_orphan(&err, holder);
+    let holder_live = task_starttime_checked(holder)
+        .expect("holder stat readable")
+        .expect("holder alive");
+    retire_unexpected_orphan(&err, holder, Some(holder_live));
     // Holder reaped; the unrelated sleeper never addressed.
     let mut status = 0;
     // SAFETY: WNOHANG probe of our own child.
@@ -3594,6 +3653,112 @@ fn unexpected_ok_skips_sleeper_on_err() {
         other,
         "test must reap the unrelated"
     );
+}
+
+/// R12-004: the expiry path retires AND reaps the holder,
+/// freeing its number — the repeated cleanup must not send a
+/// NUMERIC SIGKILL plus waitpid to that same number. The
+/// tick-gated cleanup skips (a live replacement at a different
+/// birth tick is none of its business) and the replacement
+/// survives for its owner. Pre-fix the kill murders the
+/// replacement and the wait steals its status (RED). Durations
+/// 889/890 are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn repeated_holder_cleanup_spares_recycled_number() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let holder = std::process::Command::new("sleep")
+        .arg("889")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn holder")
+        .id() as i32;
+    let holder_tick = task_starttime_checked(holder)
+        .expect("holder stat readable")
+        .expect("holder alive");
+    // Simulate the expiry path: retire AND reap the holder, so
+    // its number is free (not zombie) at cleanup time.
+    // SAFETY: retiring our own holder.
+    unsafe {
+        libc::kill(holder, libc::SIGKILL);
+    }
+    let mut status = 0;
+    // SAFETY: blocking reap of our own dead child.
+    assert_eq!(
+        unsafe { libc::waitpid(holder, &mut status, 0) },
+        holder,
+        "expiry simulation reaps the holder"
+    );
+    // Controlled reuse: a LIVE replacement on the holder's
+    // number at a DIFFERENT birth tick.
+    let mut replacement = None;
+    for _ in 0..100 {
+        if !steer_next_pid(holder) {
+            break;
+        }
+        let mut cand = std::process::Command::new("sleep")
+            .arg("890")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("replacement spawns");
+        if cand.id() as i32 != holder {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        let placed_different = match task_starttime_checked(holder) {
+            Ok(Some(tick)) => tick != holder_tick,
+            _ => false,
+        };
+        if !placed_different {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        replacement = Some(cand);
+        break;
+    }
+    let mut replacement = replacement.expect("replacement placed on holder's number");
+    // R12-004: the repeated cleanup, tick-gated (the
+    // holder's number now names a live replacement).
+    let err: std::thread::Result<(i32, u64)> =
+        Err(Box::new("synthetic expiry") as Box<dyn std::any::Any + Send>);
+    retire_unexpected_orphan(&err, holder, Some(holder_tick));
+    // The replacement must survive the repeated cleanup, and
+    // its status must stay with its owner.
+    assert_eq!(
+        task_retired_checked(holder),
+        Ok(false),
+        "recycled holder number must survive repeated cleanup"
+    );
+    // SAFETY: retiring our own live replacement.
+    unsafe {
+        libc::kill(holder, libc::SIGKILL);
+    }
+    let status = replacement
+        .wait()
+        .expect("replacement owner keeps its status");
+    assert!(!status.success(), "killed replacement reports signal death");
+    let _ = std::fs::write(last_path, &last_before);
 }
 
 /// R10-013: drain an exited probe child's piped output WITHOUT
