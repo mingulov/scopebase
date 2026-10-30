@@ -3809,6 +3809,281 @@ mod tests {
         );
     }
 
+    /// R11-014: per-pipe accumulation cap for bounded probe
+    /// collection. Reachable probe runs total under 10 KiB;
+    /// past the cap the drain keeps reading toward
+    /// EOF-or-deadline but discards — memory stays bounded
+    /// even against a chattering holder.
+    #[cfg(target_arch = "x86_64")]
+    const PROBE_OUTPUT_CAP: usize = 1 << 20;
+
+    /// R11-014: fail-closed retirement for an expired (or
+    /// unobservable) probe collection: signal the probe's own
+    /// group, then the probe itself, then reap. The probe's
+    /// pgid is its pid — every probe groups itself on entry —
+    /// so the holders stranded in its group die with it.
+    #[cfg(target_arch = "x86_64")]
+    fn expire_probe_collection(child: &mut std::process::Child, id: libc::pid_t) {
+        // SAFETY: signal-only to the probe's own group, then
+        // the probe itself; errors ignored (house discipline).
+        unsafe {
+            libc::killpg(id, libc::SIGKILL);
+            libc::kill(id, libc::SIGKILL);
+        }
+        let _ = child.wait();
+    }
+
+    /// R11-014: bounded probe-output collection shared by the
+    /// R10-012/R11-013 probe parents. `wait_with_output` waits
+    /// for EOF — but descendants inherit the pipe write ends,
+    /// so a live descendant at probe exit holds EOF open past
+    /// any try_wait deadline (the parent hangs indefinitely
+    /// collecting a dead probe's output). Drain both pipes
+    /// under `end` (poll + nonblocking read, 1 MiB per pipe);
+    /// on expiry retire the probe's whole group and return
+    /// None. Returns Some(stdout, stderr) with whatever
+    /// arrived. Never blocks past `end`; never panics on I/O
+    /// (a dead probe's partial output is still evidence).
+    /// Callers pass the SAME `end` as their try_wait loop — one
+    /// deadline covers exit AND collection by construction.
+    #[cfg(target_arch = "x86_64")]
+    fn collect_probe_output_bounded(
+        child: &mut std::process::Child,
+        end: std::time::Instant,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        use std::os::unix::io::AsRawFd as _;
+        // Read dry (nonblocking: stops at WouldBlock; EOF or
+        // any other error ends the pipe — partial output is
+        // still evidence). Past the cap the drain discards
+        // toward EOF-or-deadline.
+        fn drain<T: std::io::Read>(
+            pipe: &mut Option<T>,
+            acc: &mut Vec<u8>,
+            buf: &mut [u8; 8192],
+            done: &mut bool,
+        ) {
+            let Some(pipe) = pipe else {
+                *done = true;
+                return;
+            };
+            loop {
+                match pipe.read(buf) {
+                    Ok(0) => {
+                        *done = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        let room = PROBE_OUTPUT_CAP.saturating_sub(acc.len());
+                        acc.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        break;
+                    }
+                    Err(_) => {
+                        *done = true;
+                        break;
+                    }
+                }
+            }
+        }
+        fn nonblocking<T: std::os::unix::io::AsRawFd>(pipe: &Option<T>) -> bool {
+            match pipe {
+                Some(pipe) => {
+                    let fd = pipe.as_raw_fd();
+                    // SAFETY: flag-set on an owned descriptor.
+                    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                    if flags < 0 {
+                        return false;
+                    }
+                    // SAFETY: same descriptor.
+                    (unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) }) >= 0
+                }
+                None => false,
+            }
+        }
+        let id = child.id() as libc::pid_t;
+        let mut stdout = child.stdout.take();
+        let mut stderr = child.stderr.take();
+        // A blocking read could outlive `end` — fail closed.
+        if !nonblocking(&stdout) || !nonblocking(&stderr) {
+            expire_probe_collection(child, id);
+            return None;
+        }
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut out_done = false;
+        let mut err_done = false;
+        let mut buf = [0u8; 8192];
+        loop {
+            if out_done && err_done {
+                let _ = child.wait();
+                return Some((out, err));
+            }
+            if std::time::Instant::now() >= end {
+                expire_probe_collection(child, id);
+                return None;
+            }
+            // Negative fds are skipped by poll: done pipes
+            // simply leave the set.
+            let mut waiting = [
+                libc::pollfd {
+                    fd: match &stdout {
+                        Some(pipe) if !out_done => pipe.as_raw_fd(),
+                        _ => -1,
+                    },
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: match &stderr {
+                        Some(pipe) if !err_done => pipe.as_raw_fd(),
+                        _ => -1,
+                    },
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let remaining = end
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            // SAFETY: valid pollfds for owned descriptors.
+            let ready = unsafe {
+                libc::poll(
+                    waiting.as_mut_ptr(),
+                    waiting.len() as libc::nfds_t,
+                    remaining,
+                )
+            };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                expire_probe_collection(child, id);
+                return None;
+            }
+            if ready == 0 {
+                continue;
+            }
+            for i in 0..2 {
+                if waiting[i].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+                    continue;
+                }
+                if i == 0 {
+                    if !out_done {
+                        drain(&mut stdout, &mut out, &mut buf, &mut out_done);
+                    }
+                } else if !err_done {
+                    drain(&mut stderr, &mut err, &mut buf, &mut err_done);
+                }
+            }
+        }
+    }
+
+    /// R11-014: collection must stay inside the deadline even
+    /// when a pipe writer outlives the awaited child, and the
+    /// expiry must retire the holder's group (independent
+    /// descendant retirement). Stages it directly: a child in
+    /// its own group forks a 30s pipe-holding sleeper and exits
+    /// at once — the exit is observable immediately while EOF
+    /// needs the sleeper. wait_with_output would hang past any
+    /// try_wait deadline here (probed out-of-suite: EOF never
+    /// arrives); the bounded helper expires at ~2s with the
+    /// group provably dead (killpg ESRCH inside 5s — SIGKILL
+    /// delivery is async but prompt — and total elapsed far
+    /// below the sleeper's own 30s clock).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_collection_expires_bounded_and_retires_group() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let mut child = std::process::Command::new("/bin/sh");
+        child
+            .arg("-c")
+            .arg("sleep 30 &")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state
+        // (the probes group themselves the same way on entry).
+        unsafe {
+            child.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut child = child.spawn().expect("spawn pipe-holding stage");
+        // The shell exits at once; its sleeper inherits the
+        // group AND the pipe write ends.
+        let status = child.wait().expect("stage exit");
+        assert!(status.success());
+        let group = child.id() as libc::pid_t;
+        let started = Instant::now();
+        let got = collect_probe_output_bounded(&mut child, started + Duration::from_secs(2));
+        assert!(got.is_none(), "collection must expire, not hang for EOF");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "expiry must stay bounded, took {:?}",
+            started.elapsed()
+        );
+        // Independent retirement: the 30s sleeper died by OUR
+        // group kill (far ahead of its own clock).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            if unsafe { libc::killpg(group, 0) } < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "group probe must fail ESRCH-only, got {errno}"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < end,
+                "holder group {group} survived retirement"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R11-014: the bounded helper must not break the normal
+    /// path — an exited child with small output collects
+    /// exactly, fast.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_collection_delivers_small_output() {
+        use std::time::{Duration, Instant};
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("echo OUT; echo ERR >&2")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn echo stage");
+        let status = loop {
+            match child.try_wait().expect("stage wait") {
+                Some(status) => break status,
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+        assert!(status.success());
+        let started = Instant::now();
+        let got = collect_probe_output_bounded(&mut child, started + Duration::from_secs(10));
+        let (stdout, stderr) = got.expect("small output must collect");
+        assert_eq!(stdout, b"OUT\n");
+        assert_eq!(stderr, b"ERR\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "small collection must be instant, took {:?}",
+            started.elapsed()
+        );
+    }
+
     /// R10-012: the unresolved-retirement controls must clean up
     /// even when the runner ADOPTS the grandchild (subreaper or
     /// PID-1 runner): the retired task is then our own zombie
@@ -3839,16 +4114,27 @@ mod tests {
         loop {
             match child.try_wait().expect("probe wait") {
                 Some(status) => {
-                    let out = child.wait_with_output().expect("probe output");
-                    assert!(
-                        status.success(),
-                        "subreaper probe must exit success, got {status}: {}",
-                        String::from_utf8_lossy(&out.stderr)
-                    );
-                    assert!(
-                        String::from_utf8_lossy(&out.stdout).contains("1 passed"),
-                        "probe must run its one test (path exact)"
-                    );
+                    // R11-014: bounded collection under the SAME
+                    // deadline — wait_with_output would wait for
+                    // EOF past it whenever a descendant outlives
+                    // the probe holding the pipes.
+                    match collect_probe_output_bounded(&mut child, end) {
+                        Some((stdout, stderr)) => {
+                            assert!(
+                                status.success(),
+                                "subreaper probe must exit success, got {status}: {}",
+                                String::from_utf8_lossy(&stderr)
+                            );
+                            assert!(
+                                String::from_utf8_lossy(&stdout).contains("1 passed"),
+                                "probe must run its one test (path exact)"
+                            );
+                        }
+                        None => panic!(
+                            "subreaper probe output collection expired \
+                             (probe exited {status}; group retired)"
+                        ),
+                    }
                     return;
                 }
                 None => {}
@@ -4186,9 +4472,9 @@ mod tests {
     /// (a renamed probe path fails here instead of passing
     /// vacuously on zero tests). On timeout the parent retires
     /// the probe's whole process group before failing loud.
-    /// NOTE: output collection mirrors the R10-012 parent
-    /// exactly — its boundedness is R11-014's call, adjudicated
-    /// next; both parents share whatever verdict lands there.
+    /// R11-014: output collection runs through the shared
+    /// bounded helper under this same deadline (both parents
+    /// changed together).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn guard_retires_adopted_grandchild() {
@@ -4210,16 +4496,27 @@ mod tests {
         loop {
             match child.try_wait().expect("probe wait") {
                 Some(status) => {
-                    let out = child.wait_with_output().expect("probe output");
-                    assert!(
-                        status.success(),
-                        "adopting-guard probe must exit success, got {status}: {}",
-                        String::from_utf8_lossy(&out.stderr)
-                    );
-                    assert!(
-                        String::from_utf8_lossy(&out.stdout).contains("1 passed"),
-                        "probe must run its one test (path exact)"
-                    );
+                    // R11-014: bounded collection under the SAME
+                    // deadline — wait_with_output would wait for
+                    // EOF past it whenever a descendant outlives
+                    // the probe holding the pipes.
+                    match collect_probe_output_bounded(&mut child, end) {
+                        Some((stdout, stderr)) => {
+                            assert!(
+                                status.success(),
+                                "adopting-guard probe must exit success, got {status}: {}",
+                                String::from_utf8_lossy(&stderr)
+                            );
+                            assert!(
+                                String::from_utf8_lossy(&stdout).contains("1 passed"),
+                                "probe must run its one test (path exact)"
+                            );
+                        }
+                        None => panic!(
+                            "adopting-guard probe output collection expired \
+                             (probe exited {status}; group retired)"
+                        ),
+                    }
                     return;
                 }
                 None => {}
