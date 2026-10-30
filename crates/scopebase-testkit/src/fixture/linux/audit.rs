@@ -3118,18 +3118,37 @@ mod tests {
     /// errors ignored: ECHILD means someone else owns it) before
     /// polling disappearance. True when gone within `timeout`,
     /// false on expiry. Never panics — the caller decides.
+    /// R11-005: `expected` starttime-gates the numeric wait (see
+    /// body): absence and reuse return true without waiting.
     #[cfg(target_arch = "x86_64")]
-    fn await_proc_gone_reaping(pid: libc::pid_t, timeout: std::time::Duration) -> bool {
+    fn await_proc_gone_reaping(
+        pid: libc::pid_t,
+        expected: u64,
+        timeout: std::time::Duration,
+    ) -> bool {
         let end = std::time::Instant::now() + timeout;
         loop {
-            // SAFETY: waitpid on a possibly-owned pid; reaps an
+            // R11-005: the numeric wait is starttime-gated —
+            // waitpid fires ONLY while /proc proves the number
+            // still hosts the expected task. Absence (nothing
+            // left to reap: our own zombie would still show)
+            // and reuse (a different holder means the awaited
+            // task is gone, else the number could not host
+            // another) both return true WITHOUT waiting, so an
+            // unrelated same-number child is detected and
+            // spared, never reaped by us. Unreadable stats keep
+            // polling (never claimed gone).
+            match proc_starttime(pid) {
+                Ok(None) => return true,
+                Ok(Some(now)) if now != expected => return true,
+                Ok(Some(_)) => {}
+                Err(_) => {}
+            }
+            // SAFETY: waitpid on the verified holder; reaps an
             // adopted zombie, ECHILD otherwise — always ignored.
             let mut status = 0;
             unsafe {
                 libc::waitpid(pid, &mut status, libc::WNOHANG);
-            }
-            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                return true;
             }
             if std::time::Instant::now() >= end {
                 return false;
@@ -3158,13 +3177,7 @@ mod tests {
         // Verify the CURRENT holder is the reported task: a changed
         // holder (or none) means the original retired — close the
         // pin and report nothing to do WITHOUT signaling.
-        let current: Option<u64> = std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .ok()
-            .and_then(|row| {
-                let after_comm = row.rsplit_once(") ")?.1;
-                after_comm.split_whitespace().nth(19)?.parse().ok()
-            });
-        if current != Some(started) {
+        if proc_starttime(pid) != Ok(Some(started)) {
             // SAFETY: pin owned by this scope.
             unsafe { libc::close(pin) };
             return false;
@@ -3186,7 +3199,7 @@ mod tests {
             "reported grandchild must be signalable through its pin"
         );
         assert!(
-            await_proc_gone_reaping(pid, std::time::Duration::from_secs(5)),
+            await_proc_gone_reaping(pid, started, std::time::Duration::from_secs(5)),
             "reported grandchild {pid} resisted retirement"
         );
         true
@@ -3449,8 +3462,8 @@ mod tests {
                 // a second panic must not mask the guard).
                 retire_hung_middleman_group(pid);
                 let note = match &outcome.grandchild {
-                    GrandchildState::Live(gpid, _) => {
-                        let gone = await_proc_gone_reaping(*gpid, Duration::from_secs(5));
+                    GrandchildState::Live(gpid, started) => {
+                        let gone = await_proc_gone_reaping(*gpid, *started, Duration::from_secs(5));
                         format!("; reported grandchild {gpid} gone: {gone}")
                     }
                     GrandchildState::None => String::new(),
@@ -3667,6 +3680,148 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// R11-005: starttime of the CURRENT holder of `pid`
+    /// (field 22 of /proc/PID/stat). Ok(None) is proven
+    /// absence (ENOENT only); Err is unreadable-or-unparseable
+    /// (never absence — our own tasks stay stat-visible under
+    /// every hidepid level, so an unreadable stat is someone
+    /// else's problem, not a gone task). The await's stat gate
+    /// and the retire's holder check share this one parser.
+    #[cfg(target_arch = "x86_64")]
+    fn proc_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
+        let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(row) => row,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("task {pid} stat unreadable: {error}")),
+        };
+        match (|| {
+            let after_comm = row.rsplit_once(") ")?.1;
+            after_comm.split_whitespace().nth(19)?.parse().ok()
+        })() {
+            Some(starttime) => Ok(Some(starttime)),
+            None => Err(format!("task {pid} stat unparseable")),
+        }
+    }
+
+    /// R11-005: a zombie stand-in holding the awaited number
+    /// must be DETECTED (starttime mismatch) and SPARED (never
+    /// reaped by us). Our own exited-unreaped child X keeps its
+    /// number; awaiting X's number with a DIFFERENT expected
+    /// starttime returns true (the awaited task is gone —
+    /// otherwise X's number could not host X) while X stays
+    /// unreaped for its owner. Pre-fix the blind numeric
+    /// waitpid reaps X (RED); post-fix the stat gate spares it.
+    /// Deterministic: no timing, no reuse control — X is a
+    /// stable zombie throughout.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_number_stand_in_spared() {
+        use std::time::{Duration, Instant};
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("stand-in spawns");
+        let pid = child.id() as libc::pid_t;
+        // Leave it unreaped (our zombie); wait for the Z state
+        // so the pre-fix blind waitpid would reap it.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|row| {
+                    row.rsplit_once(") ")
+                        .and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("Z") {
+                break;
+            }
+            assert!(Instant::now() < end, "stand-in never zombied");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let real = proc_starttime(pid)
+            .expect("zombie stat readable")
+            .expect("zombie present");
+        assert!(await_proc_gone_reaping(
+            pid,
+            real.wrapping_add(1),
+            Duration::from_secs(5)
+        ));
+        // Still ours and still unreaped: WE reap it now, proving
+        // the await never touched it.
+        let mut status = 0;
+        // SAFETY: our own child, first wait.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(got, pid, "stand-in must survive the await unreaped");
+    }
+
+    /// R11-005: the stat gate must not break the intended case —
+    /// our own zombie with the EXPECTED starttime is still
+    /// reaped by the wait (true, and already reaped after).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_owned_zombie_still_reaped() {
+        use std::time::{Duration, Instant};
+        let child = std::process::Command::new("true")
+            .spawn()
+            .expect("zombie spawns");
+        let pid = child.id() as libc::pid_t;
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_starttime(pid), Ok(Some(_))) {
+                break;
+            }
+            assert!(Instant::now() < end, "child stat never readable");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Settle into the zombie state (spawned `true` exits at
+        // once; the poll absorbs loader scheduling).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|row| {
+                    row.rsplit_once(") ")
+                        .and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("Z") {
+                break;
+            }
+            assert!(Instant::now() < end, "child never zombied");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let real = proc_starttime(pid)
+            .expect("zombie stat readable")
+            .expect("zombie present");
+        assert!(await_proc_gone_reaping(pid, real, Duration::from_secs(5)));
+        // Already reaped: nothing left for us.
+        let mut status = 0;
+        // SAFETY: our own (reaped) child; ECHILD expected.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            got < 0,
+            "owned zombie must be reaped by the await, got {got}"
+        );
+    }
+
+    /// R11-005: an absent number returns true immediately
+    /// (nothing to reap, no hang). The pid exceeds pid_max, so
+    /// no task can ever hold it.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_absent_number_true() {
+        use std::time::{Duration, Instant};
+        let started = Instant::now();
+        assert!(await_proc_gone_reaping(
+            1073741824,
+            1234,
+            Duration::from_secs(5)
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "absent number must answer at once, took {:?}",
+            started.elapsed()
+        );
     }
 
     /// S140-round9: the middleman must not depend on inherited
