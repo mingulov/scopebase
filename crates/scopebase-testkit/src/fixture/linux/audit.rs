@@ -3369,6 +3369,23 @@ mod tests {
     /// R14-011: rendezvous — the retire target as `pid:starttime`.
     #[cfg(target_arch = "x86_64")]
     const R14011_TARGET_ENV: &str = "SCOPEBASE_TT04_R14011_TARGET";
+    /// IR-003: the unreadable-firstborn probe path (exact — the
+    /// parent requires exit success plus a verdict file, so a
+    /// renamed path running zero tests fails loud instead of
+    /// passing vacuously).
+    #[cfg(target_arch = "x86_64")]
+    const IR003_PROBE_PATH: &str = "fixture::linux::audit::tests::ir003_firstborn_stat_probe";
+    /// IR-003: failure injection — when set, the firstborn stat
+    /// in the birth watch fails synthesized (the ~EMFILE-only
+    /// trigger, staged deterministically). Set solely on the
+    /// fresh probe child's command, never process-wide (a
+    /// sibling probe inheriting it would inject too).
+    #[cfg(target_arch = "x86_64")]
+    const IR003_INJECT_ENV: &str = "SCOPEBASE_IR003_FIRSTBORN_STAT_ERR";
+    /// IR-003: rendezvous — the verdict file (`pgid` line, then
+    /// the panic message) the probe writes for the parent.
+    #[cfg(target_arch = "x86_64")]
+    const IR003_VERDICT_ENV: &str = "SCOPEBASE_IR003_VERDICT";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -4127,6 +4144,54 @@ mod tests {
         assert_eq!(stragglers, 0, "retirement must leave no child status");
     }
 
+    /// IR-003 probe (fresh image only — runs only when
+    /// IR003_INJECT_ENV is set): drives the middleman op with
+    /// the firstborn-stat failure injected and reports the
+    /// panic message + observed pgid to the verdict file named
+    /// by IR003_VERDICT_ENV. Never asserts (the parent
+    /// judges); exit success bounds the run. Under a normal
+    /// suite run (no rendezvous variable) this passes
+    /// silently.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn ir003_firstborn_stat_probe() {
+        use std::time::Duration;
+        if std::env::var(IR003_INJECT_ENV).is_err() {
+            return;
+        }
+        // Own process group first (mirror the subreaper probe:
+        // a hung probe run lets the parent retire the whole
+        // tree by group).
+        // SAFETY: setpgid on self, no userspace state.
+        unsafe {
+            libc::setpgid(0, 0);
+        }
+        let verdict = std::env::var(IR003_VERDICT_ENV).expect("ir003 verdict path set");
+        let observed = std::sync::atomic::AtomicI32::new(-1);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_preflight_middleman_observed(
+                "read-nopidfd",
+                Duration::from_secs(30),
+                &observed,
+                PROBE_TEST_PATH,
+            )
+        }));
+        let message = match outcome {
+            Ok(_) => "ir003: no panic (injection missed)".to_string(),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|message| message.to_string())
+                })
+                .unwrap_or_else(|| "ir003: non-string panic".to_string()),
+        };
+        let pgid = observed.load(std::sync::atomic::Ordering::SeqCst);
+        std::fs::write(&verdict, format!("{pgid}\n{message}\n")).expect("ir003 verdict written");
+    }
+
     /// R11-013: the confined-subreaper GUARD probe (see
     /// [`guard_retires_adopted_grandchild`]). Under a normal
     /// suite run (no rendezvous variable) this passes silently;
@@ -4816,19 +4881,52 @@ mod tests {
             // the return still leaves the writer's identity).
             if birth_watch {
                 match (middleman_first_child(pid), birth_published) {
-                    (Some(born), None) => match proc_starttime(born) {
-                        Ok(Some(tick)) => {
-                            publish_reported_grandchild(&GrandchildState::Live(born, tick));
-                            birth_published = Some((born, tick));
+                    (Some(born), None) => {
+                        // IR-003 test injection (fresh-image probe
+                        // only — the env rides solely on the probe
+                        // child's command): synthesize the
+                        // ~EMFILE-only stat failure so the real
+                        // Err arm below runs end to end.
+                        let stat = if std::env::var_os(IR003_INJECT_ENV).is_some() {
+                            Err("ir003-injected firstborn stat failure".to_string())
+                        } else {
+                            proc_starttime(born)
+                        };
+                        match stat {
+                            Ok(Some(tick)) => {
+                                publish_reported_grandchild(&GrandchildState::Live(born, tick));
+                                birth_published = Some((born, tick));
+                            }
+                            // Listed but already gone: a fleeting task,
+                            // not the parked writer — keep watching.
+                            Ok(None) => {}
+                            // Our own tasks stay stat-visible: an
+                            // unreadable birth identity fails closed,
+                            // never half-published.
+                            Err(error) => {
+                                // IR-003: the birth number is known
+                                // but its tick is not — no record can
+                                // publish, and the unwinding probe
+                                // would strand the born writer in the
+                                // middleman group. Retire the whole
+                                // group first (the writer shares it);
+                                // the verdict folds into the panic
+                                // text (R11-013), and the report read
+                                // end closes (mirror the timeout
+                                // path) so the catching probe keeps
+                                // no stale fd.
+                                let retired = retire_hung_middleman_group(pid);
+                                // SAFETY: read end owned by this scope.
+                                unsafe {
+                                    libc::close(pipe[0]);
+                                }
+                                panic!(
+                                    "middleman firstborn stat unreadable: {error} \
+                                     (group {pid} retired: {retired})"
+                                );
+                            }
                         }
-                        // Listed but already gone: a fleeting task,
-                        // not the parked writer — keep watching.
-                        Ok(None) => {}
-                        // Our own tasks stay stat-visible: an
-                        // unreadable birth identity fails closed,
-                        // never half-published.
-                        Err(error) => panic!("middleman firstborn stat unreadable: {error}"),
-                    },
+                    }
                     (Some(born), Some((latched, _))) if born != latched => {
                         panic!("middleman forked twice ({latched}, then {born}): fixture broken")
                     }
@@ -8064,6 +8162,101 @@ mod tests {
         assert_eq!(
             content, b"ir001-sentinel",
             "publish must write no byte through a planted tmp symlink"
+        );
+    }
+
+    /// IR-003: an unreadable firstborn stat must retire the
+    /// middleman group BEFORE panicking (the birth number is
+    /// known but its tick is not — no record can publish, and
+    /// the unwinding probe would strand the born writer). The
+    /// trigger is ~EMFILE-only, so a fresh probe image injects
+    /// the failure via IR003_INJECT_ENV (set solely on the
+    /// probe child's command — never process-wide, or a
+    /// sibling probe inheriting it would inject too) and
+    /// reports the panic message + observed pgid. Pre-fix the
+    /// message names no retirement and the group survives
+    /// (RED); post-fix the message folds in `retired: true`
+    /// (the retire verified the group ESRCH-empty) and no
+    /// hygiene is needed (GREEN). The message must ALSO name
+    /// the stat arm (not the timeout arm). RED-path hygiene
+    /// kills the leaked group by its reported pgid (safe: a
+    /// live group cannot have recycled) before asserting.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn unreadable_firstborn_retires_group_before_panic() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let stem = format!("scopebase-grandchild-ir003a-{}", std::process::id());
+        let pidfile = std::env::temp_dir().join(format!("{stem}.pid"));
+        let verdict = std::env::temp_dir().join(format!("{stem}.verdict"));
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::remove_file(&verdict);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(IR003_PROBE_PATH)
+            .arg("--exact")
+            .env(IR003_INJECT_ENV, "1")
+            .env(IR003_VERDICT_ENV, &verdict)
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn ir003 probe");
+        let end = Instant::now() + Duration::from_secs(150);
+        let status = loop {
+            match child.try_wait().expect("probe wait") {
+                Some(status) => break status,
+                None => {}
+            }
+            if Instant::now() >= end {
+                timeout_retire_hung_probe(&mut child, &pidfile, "ir003 probe hung past 150s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(
+            status.success(),
+            "ir003 probe must exit success, got {status}"
+        );
+        let report = std::fs::read_to_string(&verdict).expect("ir003 verdict readable");
+        let (pgid_line, message) = report.split_once('\n').expect("verdict has pgid line");
+        let pgid = pgid_line
+            .trim()
+            .parse::<libc::pid_t>()
+            .expect("pgid parses");
+        assert!(pgid > 0, "probe must observe a middleman pgid, got {pgid}");
+        let retired = message.contains("retired: true");
+        if !retired {
+            // RED-path hygiene only: the leaked group is ours
+            // and live (a live group cannot have recycled), so
+            // a targeted killpg is exact. GREEN runs need
+            // nothing (the retire verified ESRCH-empty before
+            // panicking).
+            // SAFETY: signal-only to our own leaked group.
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                // SAFETY: signal 0 probes existence only.
+                let probed = unsafe { libc::killpg(pgid, 0) };
+                if probed < 0 {
+                    break;
+                }
+                assert!(Instant::now() < end, "leaked ir003 group must die");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::remove_file(&verdict);
+        assert!(
+            message.contains("firstborn stat unreadable"),
+            "panic must come from the stat arm, got: {message}"
+        );
+        assert!(
+            retired,
+            "unreadable firstborn must retire its group before panicking, got: {message}"
         );
     }
 
