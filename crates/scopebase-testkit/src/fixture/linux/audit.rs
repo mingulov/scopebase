@@ -4479,16 +4479,27 @@ mod tests {
         // any other error ends the pipe — partial output is
         // still evidence). Past the cap the drain discards
         // toward EOF-or-deadline.
+        // R12-006: slice budget — one drain call moves at most
+        // 128 successful reads (~1MB at 8KB), then yields to the
+        // outer loop WITHOUT marking done (level-triggered poll
+        // re-arms: data still ready → next slice; EOF → done
+        // next call). Ordinary writers already yield via
+        // WouldBlock backpressure gaps; the budget bounds even a
+        // gapless one, so the deadline/stderr/sampler checks run
+        // every ~ms under any writer. Normal probes (KBs) never
+        // touch the budget.
         fn drain<T: std::io::Read>(
             pipe: &mut Option<T>,
             acc: &mut Vec<u8>,
             buf: &mut [u8; 8192],
             done: &mut bool,
         ) {
+            const SLICE_READS: u32 = 128;
             let Some(pipe) = pipe else {
                 *done = true;
                 return;
             };
+            let mut reads = 0u32;
             loop {
                 match pipe.read(buf) {
                     Ok(0) => {
@@ -4498,6 +4509,10 @@ mod tests {
                     Ok(n) => {
                         let room = PROBE_OUTPUT_CAP.saturating_sub(acc.len());
                         acc.extend_from_slice(&buf[..n.min(room)]);
+                        reads += 1;
+                        if reads >= SLICE_READS {
+                            break;
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         break;
@@ -5094,6 +5109,170 @@ mod tests {
         let status = owned.expect("foreigner owner keeps its status");
         assert!(!status.success(), "killed foreigner reports signal death");
         assert!(holder_gone, "staged holder retires in cleanup");
+    }
+
+    /// R12-006: collection must expire under a saturated stdout.
+    /// The finding feared an unbounded inner drain loop starving
+    /// the outer deadline check — but backpressure physics
+    /// self-yields: a spinning reader always beats writer
+    /// wakeup+refill at buffer-cycle end, so WouldBlock gaps let
+    /// the outer loop run every ~ms (measured: 2.04s expiry
+    /// pre-fix under `yes`; 29k gaps/3s even against a zero-copy
+    /// splice pump). The hang is unreproducible; the drain slice
+    /// budget below is defense-in-depth (a structural yield no
+    /// writer can outrun). This characterization test locks the
+    /// behavior: saturate stdout (1MB pipe buffer for maximum
+    /// pressure), collect under a 2s deadline with a 15s watchdog
+    /// that kills the writer only if collection hangs; require
+    /// expiry (None), prompt return, watchdog silence, and writer
+    /// retirement. It guards against drain refactors that remove
+    /// the yield (proven: deleting both the WouldBlock break and
+    /// the slice break hangs to the 15s watchdog; either yield
+    /// alone still expires — the slice is defense-in-depth no
+    /// buildable writer can trigger). (stderr starvation shares
+    /// the root cause with no separate observable: expiry drops
+    /// both buffers.)
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_collection_expiry_survives_saturated_stdout() {
+        use std::os::unix::process::CommandExt as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // No steering here (no PID reuse) — no placement locks.
+        // The probe: self-grouped python forking a same-group
+        // writer that execs `yes` (stdout forever, stderr
+        // closed so stderr EOFs at probe exit), reporting the
+        // writer's pid through a file, then exiting at once.
+        let pidfile =
+            std::env::temp_dir().join(format!("scopebase-r12006-{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pidfile);
+        let mark = format!("{STAGED_PROBE_MARK}-R12006");
+        let script = format!(
+            "# {mark}\nimport os, sys\nkid = os.fork()\nif kid == 0:\n    os.close(2)\n    os.execlp('yes', 'yes')\nopen(r'{}', 'w').write(str(kid))\n",
+            pidfile.display()
+        );
+        let mut probe = std::process::Command::new("python3");
+        probe
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("saturating probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let expected = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Pin the writer (it must exist before collection —
+        // else EOF arrives at once and the expiry assert below
+        // fails loud on a dead fixture, not a hang).
+        let writer: libc::pid_t = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                    if let Ok(pid) = text.trim().parse() {
+                        break pid;
+                    }
+                }
+                assert!(Instant::now() < end, "writer pid never reported");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let writer_tick = proc_starttime(writer)
+            .expect("writer stat readable")
+            .expect("writer live");
+        // Reap the probe (the caller-side wait the R12-005
+        // contract names): only the writer holds stdout now.
+        let status = probe.wait().expect("probe exit");
+        assert!(status.success());
+        // Slack for saturation (best-effort; 64KB still usually
+        // hangs pre-fix on multicore).
+        if let Some(out) = probe.stdout.as_ref() {
+            use std::os::unix::io::AsRawFd as _;
+            // SAFETY: F_SETPIPE_SZ on an owned pipe fd.
+            unsafe {
+                libc::fcntl(out.as_raw_fd(), libc::F_SETPIPE_SZ, 1 << 20);
+            }
+        }
+        let done = AtomicBool::new(false);
+        let fired = AtomicBool::new(false);
+        let (got, elapsed) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // 15s watchdog in 100ms slices; exits within a
+                // slice once collection returns.
+                for _ in 0..150 {
+                    if done.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if done.load(Ordering::SeqCst) {
+                    return;
+                }
+                // Collection hung: retire the writer through its
+                // pin (numeric signals on non-children are
+                // forbidden — S115). Firing here unblocks the
+                // drain into EOF so the hang fails LOUD below
+                // instead of forever.
+                let pin = super::super::seccomp::pidfd_open_raw(writer)
+                    .expect("watchdog pins a hung writer");
+                assert_eq!(
+                    proc_starttime(writer),
+                    Ok(Some(writer_tick)),
+                    "watchdog identity holds"
+                );
+                // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
+                let sent = unsafe {
+                    libc::syscall(
+                        libc::SYS_pidfd_send_signal,
+                        pin as libc::c_long,
+                        libc::SIGKILL as libc::c_long,
+                        0 as libc::c_long,
+                        0 as libc::c_long,
+                    )
+                };
+                assert_eq!(sent, 0, "watchdog signals writer");
+                // SAFETY: pin owned by this scope.
+                unsafe { libc::close(pin) };
+                fired.store(true, Ordering::SeqCst);
+            });
+            let end = Instant::now() + Duration::from_secs(2);
+            let t0 = Instant::now();
+            let got = collect_probe_output_bounded(&mut probe, end, expected, &[]);
+            let elapsed = t0.elapsed();
+            done.store(true, Ordering::SeqCst);
+            (got, elapsed)
+        });
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "watchdog fired — collection hung past 15s (drain never yielded)"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "collection must expire near the 2s deadline, took {elapsed:?}"
+        );
+        assert!(got.is_none(), "saturated collection must expire");
+        // The expiry retired the writer (nothing else signals
+        // it — the watchdog never fired): its number is freed
+        // or recycled (a foreign tick proves ours retired).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match proc_starttime(writer) {
+                Ok(None) => break,
+                Ok(Some(now)) if now != writer_tick => break,
+                Ok(Some(_)) => {}
+                Err(error) => panic!("writer retirement unresolved: {error}"),
+            }
+            assert!(Instant::now() < end, "saturated writer survived expiry");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// R11-014: the bounded helper must not break the normal
