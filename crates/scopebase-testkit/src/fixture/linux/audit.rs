@@ -3682,6 +3682,9 @@ mod tests {
     /// writer survives the killpg — without this the timeout
     /// leaks it parked), removes the pidfile, then panics with
     /// `what` (a timeout is a failure — loud, never a leak).
+    /// IR-004: a corrupt record fails the stray read loud, but
+    /// the pidfile is still removed and `what` still headlines
+    /// (the read failure chains as evidence).
     #[cfg(target_arch = "x86_64")]
     fn timeout_retire_hung_probe(
         child: &mut std::process::Child,
@@ -3701,12 +3704,30 @@ mod tests {
         // R14-009: the timeout retires the published strays — an
         // independently-grouped writer survives the killpg above
         // and would otherwise stay parked past the failure.
-        let strays = read_published_grandchild_strays(pidfile);
-        for (pid, started) in strays {
-            retire_known_stray_best_effort(pid, started);
-        }
+        // IR-004: the stray read can fail loud (forged /
+        // unparseable / unreadable record) — but the TIMEOUT is
+        // the verdict under report, and the pidfile must not
+        // litter either way. Run the read+retire under catch,
+        // remove the pidfile regardless, then panic with `what`
+        // (chaining any read failure as evidence, never as the
+        // headline).
+        let stray_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let strays = read_published_grandchild_strays(pidfile);
+            for (pid, started) in strays {
+                retire_known_stray_best_effort(pid, started);
+            }
+        }));
         let _ = std::fs::remove_file(pidfile);
-        panic!("{what}");
+        match stray_outcome {
+            Ok(()) => panic!("{what}"),
+            Err(payload) => {
+                let detail = payload
+                    .downcast::<String>()
+                    .map(|boxed| *boxed)
+                    .unwrap_or_else(|_| String::from("<non-string panic>"));
+                panic!("{what} (stray retirement failed: {detail})");
+            }
+        }
     }
 
     /// S140-round9: the probe's only report channel — write exactly
@@ -8257,6 +8278,66 @@ mod tests {
         assert!(
             retired,
             "unreadable firstborn must retire its group before panicking, got: {message}"
+        );
+    }
+
+    /// IR-004: a corrupt rendezvous record must not litter the
+    /// pidfile or mask the timeout verdict. The timeout body
+    /// reads strays before removing the pidfile — a
+    /// forged/unparseable/unreadable record panics past the
+    /// removal (litter) with the read failure as the headline
+    /// (the parent's timeout masked). Pre-fix the pidfile
+    /// survives and the message names only the read failure
+    /// (RED); post-fix the pidfile is gone and the message
+    /// leads with the timeout, chaining the read failure as
+    /// evidence (GREEN). The child is a plain sleep (its
+    /// number-as-pgid killpg ESRCHs harmlessly); only the
+    /// pidfile content is hostile. Duration 57 is unique to
+    /// this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn timeout_masks_no_corrupt_record_and_litters_nothing() {
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-ir004a-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous claimed");
+        std::fs::write(&pidfile, "ir004-not-a-record").expect("corrupt record staged");
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("57")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleep spawns");
+        let what = "ir004 probe hung past 0s";
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            timeout_retire_hung_probe(&mut child, &pidfile, what)
+        }));
+        // Observe before cleanup (R12-014): capture the
+        // evidence first, remove any remainder so even RED
+        // runs stay clean, then assert.
+        let littered = pidfile.exists();
+        let _ = std::fs::remove_file(&pidfile);
+        let text = match fired {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("timeout branch must diverge (it returned)"),
+        };
+        assert!(
+            !littered,
+            "timeout over a corrupt record must still remove the pidfile"
+        );
+        assert!(
+            text.contains(what),
+            "timeout branch must lead with the parent message, got: {text}"
+        );
+        assert!(
+            text.contains("unparseable"),
+            "timeout branch must chain the read failure as evidence, got: {text}"
         );
     }
 
