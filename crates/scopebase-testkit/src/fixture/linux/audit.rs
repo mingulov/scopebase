@@ -4949,12 +4949,24 @@ mod tests {
         // R13-003 anchor check: the number's current holder is a
         // live foreign SELF-GROUPED task (presence sampling
         // cannot see a regroup with no observable gap).
-        let holder_tick = proc_starttime(id).ok().flatten();
+        // R14-005: unreadable fails closed (treated as foreign —
+        // neither signal nor drain): a non-UTF8 comm, EMFILE, or
+        // EPERM on a live foreign self-grouper must not fire.
+        // Known strays below still retire individually (their
+        // own pin+tick gates apply).
+        let (holder_tick, unreadable) = match proc_starttime(id) {
+            Ok(tick) => (tick, false),
+            Err(error) => {
+                eprintln!("expiry treats unreadable group {id} as foreign: {error}");
+                (None, true)
+            }
+        };
         // SAFETY: getpgid queries only. ESRCH (died between the
         // reads) is freed-equivalent.
-        let grouped_stranger = holder_tick != Some(expected)
-            && holder_tick.is_some()
-            && (unsafe { libc::getpgid(id) }) == id;
+        let grouped_stranger = unreadable
+            || (holder_tick != Some(expected)
+                && holder_tick.is_some()
+                && (unsafe { libc::getpgid(id) }) == id);
         // R13-004: a proven-foreign group (died-and-reformed per
         // the sampler, or a sampler-invisible regroup per the
         // anchor) gets NEITHER the signal NOR the drain — the
@@ -5953,6 +5965,93 @@ mod tests {
         assert!(survived, "invisible regroup must survive expiry (settled)");
         let status = owned.expect("foreigner owner keeps its status");
         assert!(!status.success(), "killed foreigner reports signal death");
+    }
+
+    /// R14-005: unreadable identity fails closed — a live
+    /// foreign self-grouped task with non-UTF8 comm must
+    /// survive expiry (no signal, no drain). Pre-fix the
+    /// gate collapses the read error into the freed arm and
+    /// murders it (RED); post-fix it skips loud (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expiry_spares_unreadable_self_grouped_task() {
+        use std::time::{Duration, Instant};
+        // SAFETY: fork; the child only calls prctl/setpgid/
+        // pause (async-signal-safe, no locks, no allocation).
+        let me = std::process::id() as libc::pid_t;
+        let id = unsafe { libc::fork() };
+        assert!(id >= 0, "foreigner fork failed");
+        if id == 0 {
+            unsafe {
+                // Die with the parent (never a pipe-holding
+                // orphan that hangs the harness past a setup
+                // failure).
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+                if libc::getppid() != me {
+                    libc::_exit(0);
+                }
+                libc::setpgid(0, 0);
+                let name = b"\xff\xfeforeign\x00";
+                libc::prctl(
+                    libc::PR_SET_NAME,
+                    name.as_ptr() as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        // Setup gate: the child sets group-then-name after the
+        // fork — poll for BOTH (an immediate read races the
+        // child and panics past cleanup, orphaning the pauser).
+        // Timeout retires before failing loud.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let unreadable = proc_starttime(id).is_err();
+            // SAFETY: getpgid queries only.
+            let grouped = unsafe { libc::getpgid(id) } == id;
+            if unreadable && grouped {
+                break;
+            }
+            if Instant::now() >= end {
+                // SAFETY: retiring our own unsettled foreigner.
+                unsafe {
+                    libc::kill(id, libc::SIGKILL);
+                    let mut status = 0;
+                    libc::waitpid(id, &mut status, 0);
+                }
+                panic!("foreigner never set group+non-UTF8 name");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let bogus = 0xDEAD_BEEF_DEAD_BEEFu64;
+        expire_probe_collection(id, bogus, &[], false);
+        // Settle, then aliveness WITHOUT stat (unreadable by
+        // construction): kill-0 plus no reapable zombie.
+        std::thread::sleep(Duration::from_millis(200));
+        // SAFETY: signal 0 probes existence only.
+        let present = unsafe { libc::kill(id, 0) } == 0;
+        let mut status = 0;
+        // SAFETY: WNOHANG reap probe of our own child.
+        let unreaped = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } == 0;
+        // Loud cleanup (kill ONLY while unreaped — a reaped
+        // number is free and must never be signaled), then the
+        // verdict (owner keeps status).
+        if unreaped {
+            // SAFETY: retiring our own live foreigner.
+            unsafe {
+                libc::kill(id, libc::SIGKILL);
+            }
+        }
+        let mut owned_status = 0;
+        // SAFETY: blocking reap of our own dead child.
+        let got = unsafe { libc::waitpid(id, &mut owned_status, 0) };
+        assert!(present, "unreadable foreigner must survive expiry");
+        assert!(unreaped, "no zombie may pre-exist for the owner");
+        assert_eq!(got, id, "owner keeps the foreigner's status");
     }
 
     /// R13-004: expiry must not drain a proven-foreign group.

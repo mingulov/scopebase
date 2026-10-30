@@ -5683,23 +5683,102 @@ fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
     }
 }
 
+/// R14-005: an UNREADABLE holder must refuse the group
+/// signal (non-UTF8 comm, EMFILE, EPERM — unreadable is never
+/// absence and never proof of ours). A live foreign
+/// self-grouped task with non-UTF8 identity text: the decision
+/// must be false. Pre-fix unreadable collapses into the freed
+/// arm and fires (RED); post-fix it fails closed (GREEN).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn probe_group_kill_refuses_unreadable_identity() {
+    // SAFETY: fork; the child only calls prctl/setpgid/pause
+    // (async-signal-safe, no locks, no allocation).
+    let me = std::process::id() as libc::pid_t;
+    let id = unsafe { libc::fork() };
+    assert!(id >= 0, "foreigner fork failed");
+    if id == 0 {
+        unsafe {
+            // Die with the parent (never a pipe-holding orphan
+            // that hangs the harness past a setup failure).
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+            if libc::getppid() != me {
+                libc::_exit(0);
+            }
+            libc::setpgid(0, 0);
+            let name = b"\xff\xfeforeign\x00";
+            libc::prctl(
+                libc::PR_SET_NAME,
+                name.as_ptr() as libc::c_ulong,
+                0,
+                0,
+                0,
+            );
+            loop {
+                libc::pause();
+            }
+        }
+    }
+    // Setup gate: the child sets group-then-name after the
+    // fork — poll for BOTH (an immediate read races the child
+    // and panics past cleanup, orphaning the pauser). Timeout
+    // retires before failing loud.
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let unreadable = task_starttime_checked(id).is_err();
+        // SAFETY: getpgid queries only.
+        let grouped = unsafe { libc::getpgid(id) } == id;
+        if unreadable && grouped {
+            break;
+        }
+        if Instant::now() >= end {
+            // SAFETY: retiring our own unsettled foreigner.
+            unsafe {
+                libc::kill(id, libc::SIGKILL);
+                let mut status = 0;
+                libc::waitpid(id, &mut status, 0);
+            }
+            panic!("foreigner never set group+non-UTF8 name");
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let bogus = 0xDEAD_BEEF_DEAD_BEEF;
+    let allowed = probe_group_kill_allowed(id, bogus);
+    // Loud cleanup either way, then the verdict.
+    // SAFETY: retiring our own foreigner.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+        let mut status = 0;
+        libc::waitpid(id, &mut status, 0);
+    }
+    assert!(!allowed, "unreadable holder must refuse the group signal");
+}
+
 /// R13-003: group-signal decision for `retire_probe_tree`,
 /// extracted for direct unit coverage (a mid-call recycle is
 /// unplantable without steering, but every decision state is
 /// plantable as a current state). True while the number names
-/// our probe, names nothing (freed or unreadable — our
-/// strays alone in the group), or names a live foreigner
-/// OUTSIDE the group (getpgid proves the signal cannot reach
-/// it). False only for a live foreign SELF-GROUPED holder.
+/// our probe, names nothing (freed — our strays alone in the
+/// group), or names a live foreigner OUTSIDE the group
+/// (getpgid proves the signal cannot reach it). False for a
+/// live foreign SELF-GROUPED holder and for UNREADABLE identity
+/// (R14-005: fail closed — unreadable is never absence).
 /// R14-004: each helper keeps its own gate (sharing one
 /// attribute left `retire_probe_tree` compiling ungated;
 /// verify: cargo test -p scopebase-testkit --features toolchain
 /// --test toolchain_invoke --no-run).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn probe_group_kill_allowed(id: i32, expected: u64) -> bool {
-    // None covers freed AND unreadable (unproven, never
-    // foreign — the group signal still retires our strays).
-    let holder_tick = task_starttime_checked(id).ok().flatten();
+    // R14-005: unreadable is NEVER absence and never proof of
+    // ours (non-UTF8 comm, EMFILE, EPERM) — fail closed and
+    // skip the signal. Only a PROVEN-absent number fires for
+    // our strays. Residual: our strays leak loud (the caller
+    // reports the refusal) when our own probe's stat is
+    // unreadable — a loud leak beats a silent stranger-kill.
+    let holder_tick = match task_starttime_checked(id) {
+        Ok(tick) => tick,
+        Err(_) => return false,
+    };
     if holder_tick == Some(expected) {
         return true;
     }
