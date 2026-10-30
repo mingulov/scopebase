@@ -3432,22 +3432,33 @@ mod tests {
     /// R13-005: publish a reported grandchild to the rendezvous
     /// pidfile ([`GRANDCHILD_PIDFILE_ENV`]) when set. Called by the
     /// OUTER probe immediately after the runner returns — BEFORE
-    /// any retire/panic/exit — so a death between birth and
-    /// retirement still leaves the writer's (pid, starttime) for
-    /// the parent's expiry strays (the parked grandchild holds the
-    /// outer probe's pipes from its own middleman group, where the
-    /// expiry killpg cannot reach). `None` is a no-op (a setup
-    /// refusal publishes no writer); a set-but-unwritable pidfile
-    /// fails loud (an unpublished writer would strand silently).
+    /// any retire/panic/exit — and by the runner itself at birth
+    /// (R14-008), so a death between birth and retirement still
+    /// leaves the writer's (pid, starttime) for the parent's
+    /// expiry strays (the parked grandchild holds the outer
+    /// probe's pipes from its own middleman group, where the
+    /// expiry killpg cannot reach). `None` CLEARS any birth
+    /// record (a report naming no writer ends the birth's
+    /// authority); a set-but-unwritable pidfile fails loud on
+    /// `Live` (an unpublished writer would strand silently).
     #[cfg(target_arch = "x86_64")]
     fn publish_reported_grandchild(state: &GrandchildState) {
-        let (pid, started) = match state {
-            GrandchildState::Live(pid, started) => (*pid, *started),
-            GrandchildState::None => return,
-        };
         let path = match std::env::var(GRANDCHILD_PIDFILE_ENV) {
             Ok(path) => path,
             Err(_) => return,
+        };
+        let (pid, started) = match state {
+            GrandchildState::Live(pid, started) => (*pid, *started),
+            // R14-008: the birth publication may have fired
+            // before the middleman retired its child — the stale
+            // record must not outlive a report naming no writer.
+            // A failed clear stays silent: any surviving record
+            // names a middleman-retired task the expiry
+            // holder-check refuses (nothing strands).
+            GrandchildState::None => {
+                let _ = std::fs::write(&path, "");
+                return;
+            }
         };
         if let Err(error) = std::fs::write(&path, format!("{pid}:{started}")) {
             // R14-003: retire the known writer BEFORE failing
@@ -4451,6 +4462,16 @@ mod tests {
     /// that path). Every guard-fire path retires the whole
     /// group through [`retire_hung_middleman_group`] before
     /// panicking — the failure stays loud, never a leak.
+    /// R14-008: while the report is awaited, the subreaper
+    /// probe's runner publishes the middleman's firstborn the
+    /// slice it appears (birth publication — a probe death
+    /// between birth and report still leaves the writer's
+    /// identity for the parent's expiry). Dual gate: armed only
+    /// when BOTH [`SUBREAPER_PROBE_ENV`] and
+    /// [`GRANDCHILD_PIDFILE_ENV`] are set — every other caller
+    /// (guard probe, in-suite runners) keeps the single long
+    /// poll with zero behavior change, and a transient ambient
+    /// rendezvous (R14-003's own-env window) can never arm it.
     #[cfg(target_arch = "x86_64")]
     fn run_preflight_middleman_observed(
         spec: &'static str,
@@ -4600,6 +4621,12 @@ mod tests {
         // SAFETY: write end owned by the middleman now.
         unsafe { libc::close(pipe[1]) };
         let deadline = Instant::now() + guard;
+        // R14-008: birth watch, armed once (the subreaper probe's
+        // rendezvous is process-stable; a per-slice env read
+        // would chase ambient windows).
+        let birth_watch = std::env::var(SUBREAPER_PROBE_ENV).is_ok()
+            && std::env::var(GRANDCHILD_PIDFILE_ENV).is_ok();
+        let mut birth_published: Option<(libc::pid_t, u64)> = None;
         // Bounded newline-framed report read: the probe writes one
         // line (even on setup refusal) and a parked grandchild
         // holding the write end must not stall the parent — EOF is
@@ -4613,6 +4640,32 @@ mod tests {
                 line.len() < 4096,
                 "middleman report line overruns its frame"
             );
+            // R14-008: publish the firstborn the slice it appears
+            // (birth before report — a probe death from here to
+            // the return still leaves the writer's identity).
+            if birth_watch {
+                match (middleman_first_child(pid), birth_published) {
+                    (Some(born), None) => match proc_starttime(born) {
+                        Ok(Some(tick)) => {
+                            publish_reported_grandchild(&GrandchildState::Live(born, tick));
+                            birth_published = Some((born, tick));
+                        }
+                        // Listed but already gone: a fleeting task,
+                        // not the parked writer — keep watching.
+                        Ok(None) => {}
+                        // Our own tasks stay stat-visible: an
+                        // unreadable birth identity fails closed,
+                        // never half-published.
+                        Err(error) => panic!("middleman firstborn stat unreadable: {error}"),
+                    },
+                    (Some(born), Some((latched, _))) if born != latched => {
+                        panic!("middleman forked twice ({latched}, then {born}): fixture broken")
+                    }
+                    // Same birth, or the latched birth already
+                    // retired ahead of the report — nothing to do.
+                    _ => {}
+                }
+            }
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
                 .as_millis()
@@ -4636,6 +4689,11 @@ mod tests {
                      group {pid} retired: {retired}, no report received)"
                 );
             }
+            // R14-008: slice the poll while birth-armed (prompt
+            // publication); unarmed callers keep one long wait.
+            // The slice applies AFTER the guard check above, so
+            // the deadline semantics never change.
+            let remaining = if birth_watch { remaining.min(20) } else { remaining };
             let mut waiting = libc::pollfd {
                 fd: pipe[0],
                 events: libc::POLLIN,
@@ -7124,9 +7182,11 @@ mod tests {
     /// expiry fires on an empty strays list and the writer stays
     /// alive (RED); post-fix it retires by (pin, starttime) and
     /// the log records the per-stray proof. The abandon injection
-    /// stands in for every death between birth and retirement
-    /// (assert-failure and early-exit paths skip retirement the
-    /// same way).
+    /// stands in for deaths AFTER publication (assert-failure and
+    /// early-exit paths skip retirement the same way); deaths
+    /// between birth and publication are R14-008's mid-flight
+    /// regression (the runner publishes at birth, during the
+    /// operation — never only after it returns).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn abandoned_grandchild_retires_by_parent_expiry() {
@@ -7246,6 +7306,203 @@ mod tests {
             assert!(
                 Instant::now() < group_end,
                 "abandoned writer group {writer_group} survived the parent expiry"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R14-008: a probe killed AFTER grandchild birth but BEFORE
+    /// report completion must still leave the writer's identity.
+    /// The runner publishes at birth (during the operation), not
+    /// after it returns — a death in the birth-to-report window
+    /// otherwise leaves the parent with no strays while the
+    /// writer sits parked in the middleman group. Birth is
+    /// observed independently via /proc (never via the pidfile);
+    /// the kill lands mid-flight (the probe still runs and dies
+    /// by our SIGKILL, never exit 42). Pre-fix the pidfile is
+    /// empty at kill time (RED: no strays, the writer survives
+    /// the expiry); post-fix the birth record rides the parent's
+    /// expiry and the writer retires (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn midflight_probe_kill_retires_birth_published_writer() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-midflight-{}.pid",
+            std::process::id()
+        ));
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(SUBREAPER_ABANDON_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn abandoning subreaper probe");
+        // R12-005: pin before any wait (expiry identity gate).
+        let id = child.id() as libc::pid_t;
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Birth, observed independently: the middleman (child of
+        // the probe) and its firstborn (child of the middleman),
+        // both via /proc task-children — never via the pidfile
+        // (that would assume the publication under test).
+        let end = Instant::now() + Duration::from_secs(60);
+        let (writer, writer_tick) = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                // Exited before any birth: the seccomp skip
+                // path (mirrors the abandon regression), or a
+                // broken fixture.
+                if status.success() {
+                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                        Some((_, err)) => {
+                            let err = String::from_utf8_lossy(&err);
+                            assert!(
+                                err.contains("skip: seccomp unavailable"),
+                                "unexpected probe success must explain itself, got: {err}"
+                            );
+                            eprintln!("skip: seccomp unavailable for the mid-flight probe");
+                            let _ = std::fs::remove_file(&pidfile);
+                            return;
+                        }
+                        None => panic!("skip-path probe must EOF its output, got expiry"),
+                    }
+                }
+                panic!("probe exited {status} before grandchild birth (fixture broken)");
+            }
+            assert!(Instant::now() < end, "grandchild never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                if let Some(born) = middleman_first_child(mid) {
+                    if let Ok(Some(tick)) = proc_starttime(born) {
+                        break (born, tick);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // The runner's poll slices publish within ~50ms of birth;
+        // wait up to 2s for the record. Pre-fix this never fills
+        // (the publication sits after the runner's return) — the
+        // kill below still lands mid-flight either way (the
+        // report needs preflight's 5s floor), and the empty
+        // strays then prove the hole.
+        let published = Instant::now() + Duration::from_secs(2);
+        loop {
+            let filled = std::fs::read_to_string(&pidfile)
+                .map(|text| !text.trim().is_empty())
+                .unwrap_or(false);
+            if filled || Instant::now() >= published {
+                break;
+            }
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before the kill (fixture broken)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Mid-flight proof: still running, then dead by OUR
+        // signal — never exit 42 (a completed probe would have
+        // published post-return, voiding the window).
+        assert!(
+            child.try_wait().expect("probe wait").is_none(),
+            "probe must still run at kill time (mid-flight)"
+        );
+        // SAFETY: SIGKILL to our own pinned probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGKILL) }, 0, "probe kill");
+        let end = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("probe reap") {
+                break status;
+            }
+            assert!(Instant::now() < end, "killed probe never reaped");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        use std::os::unix::process::ExitStatusExt as _;
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "probe must die by our SIGKILL, got {status}"
+        );
+        // Staging proof: the birth record names the independently
+        // observed grandchild, live and grouped OUTSIDE the outer
+        // probe (a same-group writer would die by killpg without
+        // any strays list, making the expiry assert vacuous). RED
+        // path first: with no record the writer stays parked, so
+        // retire it best-effort before failing (RED runs stay
+        // clean), then fail loud on the missing publication.
+        let strays = read_published_grandchild_strays(&pidfile);
+        if strays.len() != 1 {
+            retire_known_stray_best_effort(writer, writer_tick);
+            let _ = std::fs::remove_file(&pidfile);
+            assert_eq!(
+                strays.len(),
+                1,
+                "mid-flight kill must still publish the birth (R14-008)"
+            );
+        }
+        assert_eq!(
+            strays[0],
+            (writer, writer_tick),
+            "published birth must name the observed grandchild"
+        );
+        assert_eq!(
+            proc_starttime(writer),
+            Ok(Some(writer_tick)),
+            "published writer must be live at collection"
+        );
+        // SAFETY: getpgid queries only.
+        let writer_group = unsafe { libc::getpgid(writer) };
+        assert_ne!(
+            writer_group, id,
+            "mid-flight writer must sit outside the outer probe group"
+        );
+        // The writer holds EOF past the deadline: collection must
+        // expire (an EOF here means the writer never held the
+        // pipes — dead fixture, not a passing test). The birth
+        // record rides as expiry strays (the fix).
+        let end = Instant::now() + Duration::from_secs(3);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        // Post-expiry: the independently-grouped writer is retired.
+        // Observe before cleanup (R12-014): capture the evidence
+        // first, retire any remainder so even RED runs stay
+        // clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        if !writer_gone {
+            retire_known_stray_best_effort(writer, writer_tick);
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            writer_gone,
+            "parent expiry must retire the mid-flight writer"
+        );
+        let group_end = Instant::now() + Duration::from_secs(2);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            if unsafe { libc::killpg(writer_group, 0) } < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "writer group probe must fail ESRCH-only, got {errno}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < group_end,
+                "mid-flight writer group {writer_group} survived the parent expiry"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -7613,6 +7870,33 @@ mod tests {
             }
         }
         false
+    }
+
+    /// R14-008: the firstborn pid of `mid` (if any), via the same
+    /// per-task `children` scan as [`middleman_has_child`]. The
+    /// mid-flight regression and the runner's birth publication
+    /// share this observer (birth seen through one lens, never
+    /// two divergent scans).
+    #[cfg(target_arch = "x86_64")]
+    fn middleman_first_child(mid: i32) -> Option<libc::pid_t> {
+        if mid <= 1 {
+            return None;
+        }
+        let tasks = format!("/proc/{mid}/task");
+        let Ok(entries) = std::fs::read_dir(&tasks) else {
+            return None;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path().join("children");
+            if let Ok(list) = std::fs::read_to_string(&path) {
+                if let Some(word) = list.split_whitespace().next() {
+                    if let Ok(pid) = word.parse::<libc::pid_t>() {
+                        return Some(pid);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// R10-011: the infinite-retry SHAPE must die bounded with
