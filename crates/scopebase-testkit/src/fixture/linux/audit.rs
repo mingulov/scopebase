@@ -2006,6 +2006,39 @@ mod tests {
     /// test forgets to disarm); a disarmed drop is a pure no-op
     /// (never signals, never waits — misuse leaks instead of
     /// hanging). Disarm only after proved retirement.
+    ///
+    /// R10-007 regression seam: every trailing numeric wait is
+    /// recorded so tests can require its absence after custody is
+    /// discharged (a wait after discharge can only catch a recycled
+    /// number owned by another test thread).
+    #[cfg(target_arch = "x86_64")]
+    static TRAILING_WAITS: std::sync::Mutex<Vec<libc::pid_t>> =
+        std::sync::Mutex::new(Vec::new());
+
+    #[cfg(target_arch = "x86_64")]
+    fn take_trailing_waits() -> Vec<libc::pid_t> {
+        std::mem::take(&mut TRAILING_WAITS.lock().unwrap())
+    }
+
+    /// Serializes the R10-007 tests: the trailing-wait log is
+    /// process-global and drained per test, so concurrent R10
+    /// tests could steal each other's entries. Other tests only
+    /// push, and R10 assertions match per-pid, so holding this
+    /// for the whole test body removes the flake.
+    #[cfg(target_arch = "x86_64")]
+    static R10_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(target_arch = "x86_64")]
+    fn trailing_reap(pid: libc::pid_t) {
+        TRAILING_WAITS.lock().unwrap().push(pid);
+        // SAFETY: valid status out-pointer for an owned child;
+        // ECHILD when already reaped elsewhere.
+        unsafe {
+            let mut status = 0;
+            libc::waitpid(pid, &mut status, 0);
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     struct ChildGuard {
         pid: libc::pid_t,
@@ -2046,10 +2079,18 @@ mod tests {
                 Some(fd) => {
                     // Pin-held kill: safe post-reap (ESRCH-nop
                     // names OUR task, never a recycled number).
-                    super::pidfd_signal(fd, libc::SIGKILL);
+                    let err = super::pidfd_signal(fd, libc::SIGKILL);
                     // SAFETY: fd owned by this guard.
                     unsafe {
                         libc::close(fd);
+                    }
+                    // R10-007: ESRCH through the pin proves OUR
+                    // task is gone and reaped (a zombie still
+                    // answers the signal) — there is nothing to
+                    // wait for, and the number may already be
+                    // recycled to another thread's child.
+                    if err == libc::ESRCH {
+                        return;
                     }
                 }
                 // S119-round8: no pin, NO numeric signal — the
@@ -2079,14 +2120,13 @@ mod tests {
                         );
                         return;
                     }
+                    // R10-007: reaped above or ECHILD means
+                    // custody is discharged — a trailing wait
+                    // could only catch a recycled number.
+                    return;
                 }
             }
-            // SAFETY: valid status out-pointer for an owned child;
-            // ECHILD when already reaped elsewhere.
-            unsafe {
-                let mut status = 0;
-                libc::waitpid(self.pid, &mut status, 0);
-            }
+            trailing_reap(self.pid);
         }
     }
 
@@ -2427,6 +2467,179 @@ mod tests {
         assert!(
             proc_state(me).is_some(),
             "a pin-less drop over a non-child number must spare it"
+        );
+    }
+
+    /// R10-007: pin-less drop where the recheck itself reaps the
+    /// child must not issue a second numeric wait — the freed
+    /// number may already name another test thread's child.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r10_pinless_drop_after_reap_issues_no_second_wait() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        // SAFETY: child exits at once (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(41) };
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match proc_state(pid) {
+                Some('Z') => break,
+                None => {
+                    eprintln!("skip: /proc unavailable for zombie observation");
+                    return;
+                }
+                _ => {}
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never reached zombie state"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let guard = ChildGuard {
+            pid,
+            pidfd: None,
+            armed: true,
+        };
+        drop(guard);
+        assert!(
+            !take_trailing_waits().contains(&pid),
+            "pin-less drop after an in-drop reap must not wait again"
+        );
+        // SAFETY: valid status out-pointer; ECHILD proves the
+        // recheck reaped (not the trailing wait).
+        let mut status = 0;
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "the recheck must have reaped the zombie"
+        );
+    }
+
+    /// R10-007: pin-less drop observing ECHILD (already reaped
+    /// elsewhere) must return without another numeric wait.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r10_pinless_drop_on_echild_issues_no_second_wait() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        let me = std::process::id() as libc::pid_t;
+        let guard = ChildGuard {
+            pid: me,
+            pidfd: None,
+            armed: true,
+        };
+        drop(guard);
+        assert!(
+            !take_trailing_waits().contains(&me),
+            "pin-less drop on ECHILD must not wait again"
+        );
+    }
+
+    /// R10-007: pinned drop whose kill observes ESRCH (task proven
+    /// gone through the pin) must not fall through to a numeric
+    /// wait on the possibly recycled number.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r10_pinned_drop_on_esrch_issues_no_second_wait() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        // SAFETY: child exits at once (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(42) };
+        }
+        let guard = ChildGuard::new(pid);
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(reaped, pid, "setup must reap the child first");
+        drop(guard);
+        assert!(
+            !take_trailing_waits().contains(&pid),
+            "pinned drop on ESRCH must not wait again"
+        );
+    }
+
+    /// R10-007 positive twin: the pinned kill path still reaps
+    /// through the trailing wait (guards against over-correction).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r10_pinned_kill_path_still_reaps() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        // SAFETY: child pauses forever (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        let guard = ChildGuard::new(pid);
+        assert!(
+            proc_state(pid).is_some(),
+            "guarded child must be observable"
+        );
+        drop(guard);
+        assert!(
+            take_trailing_waits().contains(&pid),
+            "pinned kill path must still reap"
+        );
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "pinned kill path must leave no zombie"
+        );
+    }
+
+    /// R10-007 assumption check: a zombie still answers the pin
+    /// signal (no ESRCH), so the pinned drop reaps it instead of
+    /// skipping. Fails if pidfd_send_signal ever reports ESRCH
+    /// for an unreaped zombie.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r10_pinned_drop_on_zombie_still_reaps() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        // SAFETY: child exits at once (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(43) };
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match proc_state(pid) {
+                Some('Z') => break,
+                None => {
+                    eprintln!("skip: /proc unavailable for zombie observation");
+                    return;
+                }
+                _ => {}
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never reached zombie state"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let guard = ChildGuard::new(pid);
+        drop(guard);
+        assert!(
+            take_trailing_waits().contains(&pid),
+            "pinned drop on a zombie must still reap"
+        );
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "pinned drop on a zombie must leave no zombie"
         );
     }
 
