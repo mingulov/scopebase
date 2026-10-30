@@ -3441,11 +3441,18 @@ mod tests {
     /// record (a report naming no writer ends the birth's
     /// authority); a set-but-unwritable pidfile fails loud on
     /// `Live` (an unpublished writer would strand silently).
+    /// R14-010: the `Live` publish is atomic (tmp + rename —
+    /// readers see the old complete record or the new complete
+    /// record, never the truncate-then-write tear), and presence
+    /// is `var_os` (a set-but-non-UTF-8 path retires the known
+    /// writer, then fails loud — never a silent skip).
     #[cfg(target_arch = "x86_64")]
     fn publish_reported_grandchild(state: &GrandchildState) {
-        let path = match std::env::var(GRANDCHILD_PIDFILE_ENV) {
-            Ok(path) => path,
-            Err(_) => return,
+        // R14-010: presence via var_os — a set-but-non-UTF-8
+        // value is a setup bug, never "unset".
+        let path_os = match std::env::var_os(GRANDCHILD_PIDFILE_ENV) {
+            Some(path) => path,
+            None => return,
         };
         let (pid, started) = match state {
             GrandchildState::Live(pid, started) => (*pid, *started),
@@ -3454,13 +3461,56 @@ mod tests {
             // record must not outlive a report naming no writer.
             // A failed clear stays silent: any surviving record
             // names a middleman-retired task the expiry
-            // holder-check refuses (nothing strands).
+            // holder-check refuses (nothing strands). A
+            // non-UTF-8 path skips likewise (hygiene only —
+            // nothing is at stake on this arm).
             GrandchildState::None => {
-                let _ = std::fs::write(&path, "");
+                if let Some(path) = path_os.to_str() {
+                    let _ = std::fs::write(path, "");
+                }
                 return;
             }
         };
-        if let Err(error) = std::fs::write(&path, format!("{pid}:{started}")) {
+        // A Live writer is at stake: a non-UTF-8 path retires
+        // first, then fails loud (never a silent skip over a
+        // live writer).
+        let path = match path_os.to_str() {
+            Some(path) => path,
+            None => {
+                let _ = retire_known_stray_best_effort(pid, started);
+                panic!("grandchild rendezvous path not UTF-8: {path_os:?}");
+            }
+        };
+        // R14-003: writability probe (plain O_WRONLY — no create,
+        // no truncate, closed at once): a set-but-unwritable
+        // pidfile retires the known writer, then fails loud.
+        if let Err(error) = std::fs::OpenOptions::new().write(true).open(path) {
+            let _ = retire_known_stray_best_effort(pid, started);
+            panic!("grandchild publish to {path:?} failed: {error}");
+        }
+        // R14-010: atomic publish (tmp 600 + rename) — readers
+        // see the old complete record or the new complete
+        // record, never the truncate-then-write tear (an
+        // empty-after-truncate file reads back as silent
+        // unpublished over a live writer). The tmp is removed on
+        // every failure path (no litter).
+        let tmp = format!("{path}.tmp");
+        let published = (|| -> std::io::Result<()> {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(format!("{pid}:{started}").as_bytes())?;
+            drop(file);
+            std::fs::rename(&tmp, path)?;
+            Ok(())
+        })();
+        if let Err(error) = published {
+            let _ = std::fs::remove_file(&tmp);
             // R14-003: retire the known writer BEFORE failing
             // loud — a panic that skips retirement strands it
             // while the parent trusts a stale record.
@@ -3523,6 +3573,9 @@ mod tests {
     /// over a non-fixture process). An empty file is a
     /// claimed-but-unpublished rendezvous (skip paths) and
     /// yields empty like a missing one.
+    /// R14-010: only a MISSING file means "unpublished" — every
+    /// other read failure fails closed (an empty strays list
+    /// over a published writer would strand it silently).
     #[cfg(target_arch = "x86_64")]
     fn read_published_grandchild_strays(path: &std::path::Path) -> Vec<(libc::pid_t, u64)> {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -3532,7 +3585,13 @@ mod tests {
             .open(path)
         {
             Ok(file) => file,
-            Err(_) => return Vec::new(),
+            // Only ENOENT means "unpublished" (a probe that
+            // never published); every other open failure —
+            // EACCES, EMFILE, ELOOP on a swapped symlink, EIO —
+            // fails loud: silent empty would strand a published
+            // writer.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(error) => panic!("grandchild pidfile {path:?} unreadable: {error}"),
         };
         {
             use std::os::unix::fs::MetadataExt as _;
@@ -3547,25 +3606,30 @@ mod tests {
         }
         use std::io::Read as _;
         let mut text = String::new();
-        if file.read_to_string(&mut text).is_err() {
-            return Vec::new();
+        // R14-010: a mid-read failure fails closed with the
+        // bytes so far (an I/O-torn record is untrusted — same
+        // as unparseable below, never silent empty).
+        if let Err(error) = file.read_to_string(&mut text) {
+            panic!("grandchild pidfile {path:?} unreadable mid-read ({error}): {text:?} (unresolved custody — no retirement attempted, writer fate unknown)");
         }
         if text.trim().is_empty() {
             return Vec::new();
         }
-        let (pid_text, start_text) = text
-            .trim()
-            .split_once(':')
-            .unwrap_or_else(|| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
-        let pid: libc::pid_t = pid_text
-            .parse()
-            .unwrap_or_else(|_| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
-        let started: u64 = start_text
-            .parse()
-            .unwrap_or_else(|_| panic!("grandchild pidfile {path:?} unparseable: {text:?}"));
+        // R14-010: an untrusted identity can neither retire nor
+        // silently drop — report explicit unresolved custody.
+        let custody = "unresolved custody — no retirement attempted, writer fate unknown";
+        let (pid_text, start_text) = text.trim().split_once(':').unwrap_or_else(|| {
+            panic!("grandchild pidfile {path:?} unparseable: {text:?} ({custody})")
+        });
+        let pid: libc::pid_t = pid_text.parse().unwrap_or_else(|_| {
+            panic!("grandchild pidfile {path:?} unparseable: {text:?} ({custody})")
+        });
+        let started: u64 = start_text.parse().unwrap_or_else(|_| {
+            panic!("grandchild pidfile {path:?} unparseable: {text:?} ({custody})")
+        });
         assert!(
             pid > 0,
-            "grandchild pidfile {path:?} names no task: {text:?}"
+            "grandchild pidfile {path:?} names no task: {text:?} ({custody})"
         );
         vec![(pid, started)]
     }
@@ -4663,8 +4727,11 @@ mod tests {
         // is process-stable; a per-slice env read would chase
         // ambient windows). R14-009: the guard probe arms it too
         // (same middleman ops, same birth-to-report window, same
-        // rendezvous read by its parent).
-        let birth_watch = std::env::var(GRANDCHILD_PIDFILE_ENV).is_ok()
+        // rendezvous read by its parent). R14-010: rendezvous
+        // presence via var_os (a set-but-non-UTF-8 value still
+        // arms — the first birth publish then fails loud there,
+        // never silently suppressed here).
+        let birth_watch = std::env::var_os(GRANDCHILD_PIDFILE_ENV).is_some()
             && (std::env::var(SUBREAPER_PROBE_ENV).is_ok()
                 || std::env::var(GUARD_PROBE_ENV).is_ok());
         let mut birth_published: Option<(libc::pid_t, u64)> = None;
@@ -7129,6 +7196,8 @@ mod tests {
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
+        // R14-010: serialize in-suite rendezvous publishers.
+        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
         let _env_guard = EnvGuard;
         let failed = std::panic::catch_unwind(|| {
@@ -7204,6 +7273,219 @@ mod tests {
         let _ = std::fs::remove_file(&pidfile);
         assert!(claimed.is_ok(), "own stale pidfile must reclaim");
         assert!(content.is_empty(), "reclaim must start empty");
+    }
+
+    /// R14-010: the rendezvous variable is process-global — tests
+    /// that set it in-suite (R14-003's failure pin, R14-010's
+    /// publish pins) serialize on this lock so neither reads the
+    /// other's value mid-publish. Spawned probes are unaffected
+    /// (their environment is fixed at spawn). Holders ignore
+    /// poisoning (`into_inner`) — the mutex guards scheduling,
+    /// not data (each holder's `EnvGuard` restores the variable
+    /// on every path, including panics), so a RED panic must not
+    /// wedge the other pins.
+    #[cfg(target_arch = "x86_64")]
+    static RENDEZVOUS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// R14-010: a partial/unparseable record fails loud with
+    /// EXPLICIT unresolved custody — the parent reports that no
+    /// retirement was attempted and the writer's fate is unknown
+    /// (an untrusted identity can neither retire nor silently
+    /// drop). Pre-fix the panic names only the parse failure
+    /// (RED); post-fix it names the custody (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_partial_record_reports_unresolved_custody() {
+        for (tag, content) in [
+            ("truncated-pid", "12"),
+            ("missing-tick", "1234:"),
+            ("missing-pid", ":5678"),
+            ("non-numeric", "abc:def"),
+            ("extra-field", "1:2:3"),
+        ] {
+            let pidfile = std::env::temp_dir().join(format!(
+                "scopebase-grandchild-r14010a-{tag}-{}.pid",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&pidfile);
+            std::fs::write(&pidfile, content).expect("partial record writes");
+            let read = std::panic::catch_unwind(|| read_published_grandchild_strays(&pidfile));
+            let _ = std::fs::remove_file(&pidfile);
+            match read {
+                Err(payload) => {
+                    let text = payload
+                        .downcast::<String>()
+                        .map(|boxed| *boxed)
+                        .unwrap_or_else(|_| String::from("<non-string panic>"));
+                    assert!(
+                        text.contains("unresolved custody"),
+                        "{tag}: partial record must report unresolved custody, got: {text}"
+                    );
+                }
+                Ok(strays) => panic!("{tag}: partial record must fail loud, got {strays:?}"),
+            }
+        }
+    }
+
+    /// R14-010: record-read failures fail CLOSED, never as silent
+    /// empty. Only a missing file means "unpublished" (ENOENT —
+    /// skip paths); EACCES (chmod-000 own file) and EIO
+    /// (/proc/self/mem opens but never reads) must panic loud —
+    /// an empty strays list over a published writer would strand
+    /// it silently. EMFILE shares the open-failure arm (same
+    /// `Err` branch — staging process-wide fd exhaustion would
+    /// fail parallel tests collaterally, so EACCES pins it).
+    /// Pre-fix both read empty (RED); post-fix both panic (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_read_errors_fail_closed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // EACCES: our own file, made unreadable.
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14010b-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        std::fs::write(&pidfile, "1:1").expect("record writes");
+        std::fs::set_permissions(&pidfile, std::fs::Permissions::from_mode(0o000))
+            .expect("record unreadable");
+        let read = std::panic::catch_unwind(|| read_published_grandchild_strays(&pidfile));
+        std::fs::set_permissions(&pidfile, std::fs::Permissions::from_mode(0o644)).ok();
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            read.is_err(),
+            "EACCES record read must fail loud, not empty"
+        );
+        // EIO: opens (owned, O_NOFOLLOW-clean) but never reads.
+        let mem = std::path::Path::new("/proc/self/mem");
+        let read = std::panic::catch_unwind(|| read_published_grandchild_strays(mem));
+        assert!(
+            read.is_err(),
+            "EIO record read must fail loud, not empty"
+        );
+    }
+
+    /// R14-010: a set-but-non-UTF-8 rendezvous path fails LOUD
+    /// (after retiring the known writer) — never a silent
+    /// publication skip over a live writer. Pre-fix `env::var`
+    /// reads the value as unset and returns quietly (RED: no
+    /// panic, writer live); post-fix the publish retires first,
+    /// then panics naming the path (GREEN). Duration 66 is unique
+    /// to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_non_utf8_path_fails_loud_after_retire() {
+        use std::os::unix::ffi::OsStringExt as _;
+        struct EnvGuard;
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                std::env::remove_var(GRANDCHILD_PIDFILE_ENV);
+            }
+        }
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("66")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(
+            GRANDCHILD_PIDFILE_ENV,
+            std::ffi::OsString::from_vec(vec![b'/', b't', b'm', b'p', 0xff, 0xfe]),
+        );
+        let _env_guard = EnvGuard;
+        let failed = std::panic::catch_unwind(|| {
+            publish_reported_grandchild(&GrandchildState::Live(wpid, wtick))
+        });
+        // Observe before cleanup: the writer must be gone
+        // (retired before the loud failure), then loud cleanup
+        // of whatever remains either way.
+        let retired = proc_starttime(wpid) != Ok(Some(wtick));
+        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        let _ = writer.wait();
+        assert!(failed.is_err(), "non-UTF-8 rendezvous must fail loud");
+        assert!(retired, "writer must retire before the loud failure");
+    }
+
+    /// R14-010 pin (passes pre- and post-fix — it guards the
+    /// atomic-publish refactor, not a behavior change): a Live
+    /// publish leaves exactly one complete record and no temp
+    /// litter, and a publish whose directory vanished fails loud
+    /// after retiring the writer. The truncate-then-write tear
+    /// (SIGKILL between truncate and write reads back as silent
+    /// unpublished) has no deterministic discriminator — a
+    /// concurrent read-while-publish loop would be timing-flaky —
+    /// so atomicity is structural (tmp + rename) and this pins
+    /// the observable contract around it. Duration 69 is unique
+    /// to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn rendezvous_publish_leaves_single_complete_record() {
+        struct EnvGuard;
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                std::env::remove_var(GRANDCHILD_PIDFILE_ENV);
+            }
+        }
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14010c-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous claimed");
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("69")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let _lock = RENDEZVOUS_ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
+        let _env_guard = EnvGuard;
+        publish_reported_grandchild(&GrandchildState::Live(wpid, wtick));
+        let content = std::fs::read_to_string(&pidfile).expect("record readable");
+        assert_eq!(
+            content,
+            format!("{wpid}:{wtick}"),
+            "publish must leave exactly one complete record"
+        );
+        let tmp = pidfile.with_extension("pid.tmp");
+        assert!(
+            !tmp.exists(),
+            "publish must leave no temp litter at {}",
+            tmp.display()
+        );
+        // Failure arm: the directory vanishes after the claim —
+        // the publish fails loud (after retiring the writer).
+        let dir = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r14010d-{}.dir",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("rendezvous dir created");
+        let doomed = dir.join("writer.pid");
+        claim_pidfile(&doomed).expect("doomed rendezvous claimed");
+        std::fs::remove_dir_all(&dir).expect("rendezvous dir removed");
+        std::env::set_var(GRANDCHILD_PIDFILE_ENV, &doomed);
+        let failed = std::panic::catch_unwind(|| {
+            publish_reported_grandchild(&GrandchildState::Live(wpid, wtick))
+        });
+        let retired = proc_starttime(wpid) != Ok(Some(wtick));
+        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        let _ = writer.wait();
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(failed.is_err(), "doomed publish must fail loud");
+        assert!(retired, "writer must retire before the loud failure");
     }
 
     /// R13-005: an outer probe that exits after grandchild birth
