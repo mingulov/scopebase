@@ -295,6 +295,47 @@ def snapshot_entry_record(pidfile):
         return _ENTRY_SNAPSHOT_UNREADABLE
 
 
+def userns_unshare_available():
+    """True when unprivileged `unshare -rm` works. (R12-012)
+
+    Tool presence (shutil.which) does not establish
+    capability: sysctl, LSM, or container policy may deny
+    user-namespace creation while the binary sits installed.
+    Probe with a trivial `unshare -rm true` (no namespaces
+    escape: true exits at once).
+    """
+    unshare = shutil.which("unshare")
+    if not unshare:
+        return False
+    try:
+        probe = subprocess.run(
+            [unshare, "-rm", "true"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
+def spawn_real_mountns_sleeper():
+    """Spawn sleep under unprivileged unshare -rm. (R12-012)
+
+    Raises unittest.SkipTest with an explicit capability
+    message when user namespaces are unavailable (tool
+    present but creation denied) — ordinary discovery must
+    report the missing capability, never run into a dead-
+    child readlink raise or a never-left-namespace failure.
+    Caller owns cleanup (kill+wait).
+    """
+    if not userns_unshare_available():
+        raise unittest.SkipTest(
+            "needs unprivileged user namespaces "
+            "(unshare -rm refused)")
+    return subprocess.Popen(
+        ["unshare", "-rm", "sleep", "120"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def adopt_recorded_replacement(pidfile, stale, lives):
     """Adopt an erroneously spawned replacement into lives (R10-009).
 
@@ -3721,9 +3762,9 @@ class AdoptReplacementTests(unittest.TestCase):
         # unprivileged `unshare -rm`; the canary stays
         # fictitious (adoption binds the namespace, not the
         # mount secret — see the adopter docstring).
-        sleeper = subprocess.Popen(
-            ["unshare", "-rm", "sleep", "120"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # R12-012: capability-gated spawn (skips explicitly
+        # when user namespaces are denied).
+        sleeper = spawn_real_mountns_sleeper()
         self.addCleanup(sleeper.wait)
         self.addCleanup(sleeper.kill)
         own_ns = os.readlink("/proc/self/ns/mnt")
@@ -3750,6 +3791,41 @@ class AdoptReplacementTests(unittest.TestCase):
             self.assertIsNotNone(bound)
             self.assertEqual(
                 lives, [(4242, 1234), (sleeper.pid, bound)])
+
+    def test_userns_probe_classifies_tool_and_capability(self):
+        # R12-012: tool presence never implies capability —
+        # sysctl, LSM, or container policy may deny
+        # user-namespace creation with unshare installed. The
+        # probe answers False for a missing tool, a refused
+        # unshare, or a spawn failure; True only for a clean
+        # `unshare -rm true`.
+        from unittest import mock
+        with mock.patch("shutil.which", return_value=None):
+            self.assertFalse(userns_unshare_available())
+        with mock.patch("shutil.which",
+                        return_value="/fake/unshare"), \
+             mock.patch("subprocess.run") as run_mock:
+            run_mock.return_value.returncode = 1
+            self.assertFalse(userns_unshare_available())
+            run_mock.return_value.returncode = 0
+            self.assertTrue(userns_unshare_available())
+            run_mock.side_effect = OSError(1, "denied")
+            self.assertFalse(userns_unshare_available())
+
+    def test_denied_userns_skips_with_capability_message(self):
+        # R12-012: unshare installed but user namespaces
+        # denied must SKIP with an explicit capability
+        # message — never run discovery into an unexpected
+        # setup error (dead-child readlink raise or a 5 s
+        # never-left-namespace failure).
+        from unittest import mock
+        with mock.patch("shutil.which",
+                        return_value="/fake/unshare"), \
+             mock.patch("subprocess.run") as run_mock:
+            run_mock.return_value.returncode = 1
+            with self.assertRaisesRegex(
+                    unittest.SkipTest, "user namespaces"):
+                spawn_real_mountns_sleeper()
 
     def test_unchanged_record_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
