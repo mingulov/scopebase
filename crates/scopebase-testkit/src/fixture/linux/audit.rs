@@ -8262,9 +8262,8 @@ mod tests {
             .expect("spawn ir003 probe");
         let end = Instant::now() + Duration::from_secs(150);
         let status = loop {
-            match child.try_wait().expect("probe wait") {
-                Some(status) => break status,
-                None => {}
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                break status;
             }
             if Instant::now() >= end {
                 timeout_retire_hung_probe(&mut child, &pidfile, "ir003 probe hung past 150s");
