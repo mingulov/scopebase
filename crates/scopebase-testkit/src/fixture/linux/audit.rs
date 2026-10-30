@@ -2130,6 +2130,86 @@ mod tests {
         }
     }
 
+    /// R11-018: zombie-watch outcome. The failure arms return
+    /// AFTER the owned child is retired, so the caller can
+    /// skip or panic without leaking a zombie under ordinary
+    /// SIGCHLD disposition. The zombie arm returns WITHOUT
+    /// waiting (custody stays with the caller).
+    #[cfg(target_arch = "x86_64")]
+    enum ZombieWatch {
+        Zombie,
+        DeniedRetired,
+        ExpiredRetired,
+    }
+
+    /// R11-018: retire an OWNED, NEVER-REAPED child: SIGKILL
+    /// (best-effort) + blocking wait to ECHILD. Sound ONLY
+    /// while the caller holds the child unreaped: the kernel
+    /// cannot recycle the number of a live-or-zombie owned
+    /// child, so the numeric signal/wait provably name OUR
+    /// task — this is the owned-unreaped exception to the
+    /// S119 no-numeric-signal rule (which governs
+    /// possibly-recycled numbers). ESRCH/ECHILD are tolerated
+    /// (a cleanup path must not fail on a lost race); EINTR
+    /// retries. Never logs to TRAILING_WAITS: this wait
+    /// precedes discharge by construction.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_owned_unreaped(pid: libc::pid_t) {
+        // SAFETY: numeric signal on an owned-unreaped child
+        // (caller contract — the number cannot be recycled).
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        loop {
+            let mut status = 0;
+            // SAFETY: valid status out-pointer for an owned
+            // child; ECHILD when already reaped elsewhere.
+            let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+            if reaped == pid || (reaped < 0 && last_errno_is(libc::ECHILD)) {
+                return;
+            }
+            if reaped < 0 && last_errno_is(libc::EINTR) {
+                continue;
+            }
+            assert!(
+                reaped >= 0,
+                "retiring owned child {pid} failed unexpectedly"
+            );
+        }
+    }
+
+    /// R11-018: watch `pid` (an owned, never-reaped child)
+    /// until it is a zombie, observation is denied, or
+    /// `deadline` passes. The denied/expired arms retire the
+    /// child (live-safe, not just zombie-safe) BEFORE
+    /// returning. `observe` is a seam: production callers pass
+    /// [`proc_state`]; the denied regression stubs it (a
+    /// reaped pid would risk number recycle, and hiding real
+    /// /proc needs namespaces — the stubbed arm is the same
+    /// shipped code path).
+    #[cfg(target_arch = "x86_64")]
+    fn observe_zombie_or_retire(
+        pid: libc::pid_t,
+        deadline: std::time::Instant,
+        observe: impl Fn(libc::pid_t) -> Option<char>,
+    ) -> ZombieWatch {
+        loop {
+            match observe(pid) {
+                Some('Z') => return ZombieWatch::Zombie,
+                None => {
+                    retire_owned_unreaped(pid);
+                    return ZombieWatch::DeniedRetired;
+                }
+                _ => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                retire_owned_unreaped(pid);
+                return ZombieWatch::ExpiredRetired;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     /// S52-round5: an exited (zombie) child retires true on its
     /// terminal status. The zombie is observed via /proc first, so
     /// retirement is provably the first waiter (the ECHILD path is
@@ -2483,27 +2563,26 @@ mod tests {
         if pid == 0 {
             unsafe { libc::_exit(41) };
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match proc_state(pid) {
-                Some('Z') => break,
-                None => {
-                    eprintln!("skip: /proc unavailable for zombie observation");
-                    return;
-                }
-                _ => {}
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "child never reached zombie state"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        // R11-018: custody from birth (the failure arms below
+        // retire explicitly; the guard backstops unforeseen
+        // panics and no-ops over the retired child).
         let guard = ChildGuard {
             pid,
             pidfd: None,
             armed: true,
         };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // R11-018: the failure arms return AFTER retiring the
+        // owned child (live-safe) — the skip return and the
+        // expiry panic below can no longer leak a zombie.
+        match observe_zombie_or_retire(pid, deadline, proc_state) {
+            ZombieWatch::Zombie => {}
+            ZombieWatch::DeniedRetired => {
+                eprintln!("skip: /proc unavailable for zombie observation");
+                return;
+            }
+            ZombieWatch::ExpiredRetired => panic!("child never reached zombie state"),
+        }
         drop(guard);
         assert!(
             !take_trailing_waits().contains(&pid),
@@ -2612,23 +2691,22 @@ mod tests {
         if pid == 0 {
             unsafe { libc::_exit(43) };
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match proc_state(pid) {
-                Some('Z') => break,
-                None => {
-                    eprintln!("skip: /proc unavailable for zombie observation");
-                    return;
-                }
-                _ => {}
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "child never reached zombie state"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        // R11-018: custody from birth (the failure arms below
+        // retire explicitly; the guard backstops unforeseen
+        // panics and no-ops over the retired child).
         let guard = ChildGuard::new(pid);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // R11-018: the failure arms return AFTER retiring the
+        // owned child (live-safe) — the skip return and the
+        // expiry panic below can no longer leak a zombie.
+        match observe_zombie_or_retire(pid, deadline, proc_state) {
+            ZombieWatch::Zombie => {}
+            ZombieWatch::DeniedRetired => {
+                eprintln!("skip: /proc unavailable for zombie observation");
+                return;
+            }
+            ZombieWatch::ExpiredRetired => panic!("child never reached zombie state"),
+        }
         drop(guard);
         assert!(
             take_trailing_waits().contains(&pid),
@@ -2640,6 +2718,122 @@ mod tests {
         assert!(
             again < 0 && last_errno_is(libc::ECHILD),
             "pinned drop on a zombie must leave no zombie"
+        );
+    }
+
+    /// R11-018: retiring an owned live child leaves no owned
+    /// child status (ECHILD-only — no zombie, no survivor).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r11_retire_owned_unreaped_reaps_live_child() {
+        // SAFETY: child pauses forever (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        retire_owned_unreaped(pid);
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "retired live child must leave no owned status"
+        );
+    }
+
+    /// R11-018: retiring an owned zombie leaves no owned child
+    /// status either (the already-exited arm).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r11_retire_owned_unreaped_reaps_zombie() {
+        // SAFETY: child exits at once (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(44) };
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while proc_state(pid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "setup child never reached zombie state"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        retire_owned_unreaped(pid);
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "retired zombie must leave no owned status"
+        );
+    }
+
+    /// R11-018: observation expiry in isolation — a child that
+    /// never zombies (pausing) past a short deadline reports
+    /// expiry AND retires (no remaining owned child status).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r11_observe_expiry_retires_in_isolation() {
+        // SAFETY: child pauses forever (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
+        assert!(matches!(
+            observe_zombie_or_retire(pid, deadline, proc_state),
+            ZombieWatch::ExpiredRetired
+        ));
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "expiry must leave no remaining owned child status"
+        );
+    }
+
+    /// R11-018: denied observation in isolation — a stubbed
+    /// observer (always None, standing in for unavailable
+    /// /proc) over a LIVE child reports denial AND retires
+    /// (stronger than the production shape: live-safe, not
+    /// just zombie-safe).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r11_observe_denied_retires_live_child_in_isolation() {
+        // SAFETY: child pauses forever (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert!(matches!(
+            observe_zombie_or_retire(pid, deadline, |_| None),
+            ZombieWatch::DeniedRetired
+        ));
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "denial must leave no remaining owned child status"
         );
     }
 
