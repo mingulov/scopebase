@@ -6692,6 +6692,10 @@ mod tests {
         }
         let mut holder = holder.spawn().expect("holder spawns");
         let id = holder.id() as libc::pid_t;
+        // R14-012: custody AT birth (auto-pins) — the reads, the
+        // group assert, and the victim spawn below panic safe;
+        // disarmed after the owner cleanup.
+        let mut holder_guard = FixtureGuard::new(id);
         let holder_tick = proc_starttime(id)
             .expect("holder stat readable")
             .expect("holder visible");
@@ -6714,6 +6718,10 @@ mod tests {
         }
         let mut victim = victim.spawn().expect("victim spawns");
         let victim_id = victim.id() as libc::pid_t;
+        // R14-012: custody AT birth — the Z-poll assert below
+        // panics safe, and the drop discharges the status;
+        // disarmed once the owner collects it.
+        let mut victim_guard = FixtureGuard::new(victim_id);
         // Settle V into a zombie BEFORE expiry (bounded poll on
         // /proc state — never a reaping wait).
         let end = Instant::now() + Duration::from_secs(5);
@@ -6747,6 +6755,11 @@ mod tests {
             libc::kill(id, libc::SIGKILL);
         }
         let owned = holder.wait();
+        // Both statuses are owner-collected now (victim via the
+        // try_wait above, holder via the wait): stand the guards
+        // down before the asserts below.
+        holder_guard.disarm();
+        victim_guard.disarm();
         let kept = kept.expect("victim status must survive expiry");
         assert!(
             kept.is_some(),
@@ -6759,6 +6772,287 @@ mod tests {
         );
         let status = owned.expect("holder owner keeps its status");
         assert!(!status.success(), "killed holder reports signal death");
+    }
+
+    /// R14-012: custody AT birth for lib-test fixtures — the
+    /// audit twin of the toolchain's `SilentChildGuard`
+    /// (separate harnesses, same contract): auto-pins the birth
+    /// tick (our unreaped child cannot have recycled), blind
+    /// drop when the birth read failed (OUR unreaped child —
+    /// reaps-or-ECHILDs, never murders), tick-gated drop
+    /// otherwise (R14-001: a recycled number is spared),
+    /// disarm after explicit retires.
+    #[cfg(target_arch = "x86_64")]
+    struct FixtureGuard {
+        pid: libc::pid_t,
+        tick: Option<u64>,
+        disarmed: bool,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl FixtureGuard {
+        /// Never panics: construction itself must not be a
+        /// staging failure (the birth→read window it closes).
+        fn new(pid: libc::pid_t) -> Self {
+            let tick = proc_starttime(pid).ok().flatten();
+            FixtureGuard {
+                pid,
+                tick,
+                disarmed: false,
+            }
+        }
+        /// Stand down after an explicit loud retire — without
+        /// this the drop double-retires the (possibly recycled)
+        /// number.
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for FixtureGuard {
+        fn drop(&mut self) {
+            if self.disarmed {
+                return;
+            }
+            match self.tick {
+                None => retire_audit_child_silent(self.pid),
+                Some(tick) => {
+                    if proc_starttime(self.pid) == Ok(Some(tick)) {
+                        retire_audit_child_silent(self.pid);
+                    }
+                }
+            }
+        }
+    }
+
+    /// R14-012: SIGKILL + bounded silent reap of an owned child
+    /// (staging cleanup and guard drops). Never panics — a
+    /// stuck child reports through the caller's loud verify,
+    /// never from inside unwind.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_audit_child_silent(pid: libc::pid_t) {
+        use std::time::{Duration, Instant};
+        // SAFETY: signal-only to an owned child; errors ignored.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid on an owned child; WNOHANG never blocks.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid || got < 0 {
+                return;
+            }
+            if Instant::now() >= end {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R14-012: a birth number is free only when /proc proves
+    /// absence AND waitpid proves discharge (ECHILD — reaped). A
+    /// zombie fails the first (it keeps its tick); an unreaped
+    /// death fails the second. Checked in this order so the
+    /// discharge probe can never mask a zombie by reaping it
+    /// mid-check.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_audit_pid_free(pid: libc::pid_t, what: &str) {
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(None),
+            "{what} {pid} survived retirement"
+        );
+        // SAFETY: WNOHANG discharge probe of our own child.
+        let mut status = 0;
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        // SAFETY: errno location for this thread.
+        let errno = unsafe { libc::__errno_location().read() };
+        assert!(
+            got < 0 && errno == libc::ECHILD,
+            "{what} {pid} status undischarged (waitpid gave {got})"
+        );
+    }
+
+    /// R14-012: staging custody driver — every birth shape takes
+    /// custody AT birth (guard before any fallible read), proved
+    /// by two genuine injections per birth: (A) observation
+    /// failure (the fixture dies before the read — the read's
+    /// expect panics); (B) later-spawn failure (birth +
+    /// observation succeed, then a spawn of a missing binary
+    /// panics). Each case requires disappearance + status
+    /// discharge BEFORE the failure report (assert order mirrors
+    /// it; the guard drops during unwind, ahead of the panic).
+    /// Shapes → sites: self-grouped holder = foreign-group
+    /// holder-63; exiting true = foreign-group victim shape (the
+    /// group-join is incidental to custody — discharge is what
+    /// matters).
+    #[cfg(target_arch = "x86_64")]
+    fn fixture_staging_custody_holds(
+        tag: &str,
+        birth: impl Fn() -> libc::pid_t,
+        observe: impl Fn(libc::pid_t),
+    ) {
+        // R12-002: serialize against steerers (whole-test hold) —
+        // this driver's fork bursts must not steal steered
+        // placements from concurrent tests.
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Case A: death before observation — the read must fail,
+        // and the (already reaped) fixture must stay free. Silent
+        // bounded retire (a surviving fixture fails loud below —
+        // the injection must take, never pass vacuously).
+        let slot_a = std::cell::Cell::new(-1);
+        let observed =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let pid = birth();
+                slot_a.set(pid);
+                // R14-012: custody AT birth (the fix under test).
+                let _guard = FixtureGuard::new(pid);
+                retire_audit_child_silent(pid);
+                observe(pid);
+            }));
+        // A birth panic stages nothing (slot stays -1 — never
+        // waitpid(-1): that would reap ANY sibling child).
+        if slot_a.get() > 0 {
+            assert_audit_pid_free(slot_a.get(), tag);
+        }
+        assert!(
+            observed.is_err(),
+            "{tag}: dead-before-read must fail the observation"
+        );
+        // Case B: later-spawn failure — birth + observation
+        // succeed, then a missing-binary spawn panics; the live
+        // fixture must still disappear with its status
+        // discharged.
+        let slot = std::cell::Cell::new(-1);
+        let spawned =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let pid = birth();
+                slot.set(pid);
+                // R14-012: custody AT birth (the fix under test).
+                let _guard = FixtureGuard::new(pid);
+                observe(pid);
+                std::process::Command::new("/scopebase-definitely-missing-binary-r14012")
+                    .spawn()
+                    .expect("later spawn must succeed");
+            }));
+        let pid = slot.get();
+        assert!(pid > 0, "{tag}: birth must stage a fixture");
+        // Record state, clean best-effort (RED runs stay clean),
+        // then assert: disappearance, discharge, and only then
+        // the failure report.
+        let state = proc_starttime(pid);
+        retire_audit_child_silent(pid);
+        assert_eq!(
+            state,
+            Ok(None),
+            "{tag}: spawn-failure must not leak the fixture"
+        );
+        assert_audit_pid_free(pid, tag);
+        assert!(
+            spawned.is_err(),
+            "{tag}: later-spawn failure must report"
+        );
+    }
+
+    /// R14-012: self-grouped-holder staging custody (foreign-group
+    /// holder-63 shape). Duration 75 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fixture_staging_custody_grouped_holder() {
+        use std::os::unix::process::CommandExt as _;
+        fixture_staging_custody_holds(
+            "holder",
+            || {
+                let mut holder = std::process::Command::new("/bin/sleep");
+                holder
+                    .arg("75")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec, no userspace state.
+                unsafe {
+                    holder.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                holder.spawn().expect("holder spawns").id() as libc::pid_t
+            },
+            |pid| {
+                proc_starttime(pid)
+                    .expect("holder stat readable")
+                    .expect("holder visible");
+            },
+        );
+    }
+
+    /// R14-012: exiting-child staging custody (foreign-group
+    /// victim shape — `true` exits at once; the group-join is
+    /// incidental to custody).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fixture_staging_custody_exiting_child() {
+        fixture_staging_custody_holds(
+            "exiter",
+            || {
+                std::process::Command::new("true")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("exiter spawns")
+                    .id() as libc::pid_t
+            },
+            |pid| {
+                use std::time::{Duration, Instant};
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let row = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                        .expect("exiter stat");
+                    let state = row
+                        .rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next());
+                    if state == Some("Z") {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "child never zombied");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                proc_starttime(pid)
+                    .expect("exiter stat readable")
+                    .expect("exiter present");
+            },
+        );
+    }
+
+    /// R14-012 pin: a guard over an already-gone number (birth
+    /// read fails → unpinned) drops silently — kill ESRCHs,
+    /// waitpid ECHILDs, nothing panics, nothing murders. Pins
+    /// the None arm (the drivers above pin the tick-gated arm).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn unpinned_fixture_guard_over_gone_number_is_silent_noop() {
+        // R12-002: serialize against steerers (whole-test hold).
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut child = std::process::Command::new("true")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("exiter spawns");
+        let pid = child.id() as libc::pid_t;
+        let _ = child.wait();
+        {
+            let _guard = FixtureGuard::new(pid);
+        }
+        assert_audit_pid_free(pid, "gone-number");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
