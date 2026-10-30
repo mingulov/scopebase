@@ -3500,16 +3500,16 @@ mod tests {
         // empty-after-truncate file reads back as silent
         // unpublished over a live writer). The tmp is removed on
         // every failure path (no litter).
+        // IR-001: the tmp is claimed through the same O_EXCL
+        // helper as the pidfile — a planted symlink/fifo
+        // refuses or reclaims before any byte is written (the
+        // old create+truncate followed a planted symlink into
+        // an arbitrary runner-writable victim).
         let tmp = format!("{path}.tmp");
         let published = (|| -> std::io::Result<()> {
             use std::io::Write as _;
-            use std::os::unix::fs::OpenOptionsExt as _;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp)?;
+            let mut file = claim_excl_file(std::path::Path::new(&tmp), "publish tmp")
+                .map_err(std::io::Error::other)?;
             file.write_all(format!("{pid}:{started}").as_bytes())?;
             drop(file);
             std::fs::rename(&tmp, path)?;
@@ -3525,6 +3525,48 @@ mod tests {
         }
     }
 
+    /// IR-001: O_EXCL claim with owned-reclaim, shared by the
+    /// pidfile pre-spawn claim (R14-003) and the atomic-publish
+    /// tmp (R14-010) so the two can never drift apart again.
+    /// `create_new` never follows a symlink (an existing link
+    /// fails EEXIST) and never blocks on a fifo — a plant of
+    /// any shape refuses or reclaims before a byte is written.
+    /// An own-uid leftover (a SIGKILLed run's litter) unlinks
+    /// and retries once; a foreign plant refuses loud; anything
+    /// else fails loud. The reclaim retry races safe: a
+    /// re-plant between unlink and create fails EEXIST again
+    /// and refuses (never follows).
+    #[cfg(target_arch = "x86_64")]
+    fn claim_excl_file(path: &std::path::Path, what: &str) -> Result<std::fs::File, String> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let attempt = || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+        };
+        match attempt() {
+            Ok(file) => Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                use std::os::unix::fs::MetadataExt as _;
+                // SAFETY: getuid queries only.
+                let ours = std::fs::symlink_metadata(path)
+                    .map(|meta| meta.uid() == unsafe { libc::getuid() })
+                    .unwrap_or(false);
+                if !ours {
+                    return Err(format!(
+                        "{what} {path:?} preplanted by another owner: refusing"
+                    ));
+                }
+                std::fs::remove_file(path)
+                    .map_err(|error| format!("{what} {path:?} stale reclaim failed: {error}"))?;
+                attempt().map_err(|error| format!("{what} {path:?} reclaim failed: {error}"))
+            }
+            Err(error) => Err(format!("{what} {path:?} claim failed: {error}")),
+        }
+    }
+
     /// R14-003: claim a rendezvous pidfile BEFORE spawning
     /// (O_EXCL). Any preplant — any owner — refuses loud here,
     /// where no writer exists yet and nothing can strand; the
@@ -3534,34 +3576,7 @@ mod tests {
     /// safely and retries once; a foreign plant never proceeds.
     #[cfg(target_arch = "x86_64")]
     fn claim_pidfile(path: &std::path::Path) -> Result<(), String> {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        let attempt = || {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)
-                .map(|_| ())
-        };
-        match attempt() {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                use std::os::unix::fs::MetadataExt as _;
-                // SAFETY: getuid queries only.
-                let ours = std::fs::symlink_metadata(path)
-                    .map(|meta| meta.uid() == unsafe { libc::getuid() })
-                    .unwrap_or(false);
-                if !ours {
-                    return Err(format!(
-                        "pidfile {path:?} preplanted by another owner: refusing"
-                    ));
-                }
-                std::fs::remove_file(path)
-                    .map_err(|error| format!("pidfile {path:?} stale reclaim failed: {error}"))?;
-                attempt().map_err(|error| format!("pidfile {path:?} reclaim failed: {error}"))
-            }
-            Err(error) => Err(format!("pidfile {path:?} claim failed: {error}")),
-        }
+        claim_excl_file(path, "pidfile").map(|_| ())
     }
 
     /// R13-005: read the outer probe's published grandchild (if
@@ -7874,6 +7889,66 @@ mod tests {
         let _ = std::fs::remove_file(&pidfile);
         assert!(failed.is_err(), "doomed publish must fail loud");
         assert!(retired, "writer must retire before the loud failure");
+    }
+
+    /// IR-001: the atomic-publish tmp must never be written
+    /// through a plant. Pre-fix the tmp opens with
+    /// create+truncate (following a planted symlink into an
+    /// arbitrary runner-writable victim, or blocking on a
+    /// planted fifo until the parent timeout) and the rename
+    /// then succeeds — the victim is clobbered and the
+    /// pidfile becomes the symlink. Post-fix the tmp is
+    /// claimed O_EXCL exactly like the pidfile: an own-uid
+    /// plant is unlinked and retried (no byte follows the
+    /// link), a foreign plant refuses loud. RED: the victim
+    /// holds `pid:tick` instead of the sentinel. Duration 66
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_tmp_symlink_plant_leaves_victim_intact() {
+        struct EnvGuard;
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                std::env::remove_var(GRANDCHILD_PIDFILE_ENV);
+            }
+        }
+        let stem = format!("scopebase-grandchild-ir001a-{}", std::process::id());
+        let pidfile = std::env::temp_dir().join(format!("{stem}.pid"));
+        let victim = std::env::temp_dir().join(format!("{stem}.victim"));
+        let tmp = std::path::PathBuf::from(format!("{}.tmp", pidfile.display()));
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::remove_file(&victim);
+        let _ = std::fs::remove_file(&tmp);
+        claim_pidfile(&pidfile).expect("rendezvous claimed");
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("66")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        std::fs::write(&victim, "ir001-sentinel").expect("victim staged");
+        std::os::unix::fs::symlink(&victim, &tmp).expect("tmp symlink planted");
+        let _lock = RENDEZVOUS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
+        let _env_guard = EnvGuard;
+        publish_reported_grandchild(&GrandchildState::Live(wpid, wtick));
+        let content = std::fs::read(&victim).expect("victim readable");
+        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        let _ = writer.wait();
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&victim);
+        assert_eq!(
+            content, b"ir001-sentinel",
+            "publish must write no byte through a planted tmp symlink"
+        );
     }
 
     /// R14-011: pin and stat failures against a live writer stay
