@@ -219,13 +219,28 @@ def private_keeper_state(tmpdir):
 
 
 def poll_proc_gone(pid, timeout=15):
-    """True when /proc/<pid> vanishes within timeout. (S117)"""
+    """True when /proc/<pid> vanishes within timeout. (S117)
+
+    R10-008: only ENOENT counts as gone — an entry that
+    cannot be stated (EACCES: alive but unobservable, e.g.
+    hidepid) answers present, routing to the survivor /
+    unproven branch instead of counting as retirement.
+    """
+    def missing():
+        try:
+            os.stat(f"/proc/{pid}")
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if not os.path.exists(f"/proc/{pid}"):
+        if missing():
             return True
         time.sleep(0.2)
-    return not os.path.exists(f"/proc/{pid}")
+    return missing()
 
 
 def register_keeper_life(lives):
@@ -2918,6 +2933,21 @@ class PollGoneTests(unittest.TestCase):
         self.assertFalse(
             poll_proc_gone(os.getpid(), timeout=0))
 
+    # R10-008: only ENOENT counts as gone — an entry that
+    # cannot be stated (EACCES: alive but unobservable)
+    # answers present, never retired.
+    def test_unstatable_answers_present(self):
+        from unittest import mock
+        real_stat = os.stat
+
+        def deny_proc(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise PermissionError(13, "hidepid-style denial")
+            return real_stat(path, *args, **kwargs)
+
+        with mock.patch("os.stat", side_effect=deny_proc):
+            self.assertFalse(poll_proc_gone(4242, timeout=0))
+
 
 class QuiesceLivesTests(unittest.TestCase):
     # S117: mid-test-failure retirement of exclusively owned
@@ -3006,6 +3036,33 @@ class QuiesceLivesTests(unittest.TestCase):
                 quiesce_private_lives([(4242, 1234)]), [])
         kill_mock.assert_called_once_with(4242, 1234)
         gone_mock.assert_not_called()
+
+    def test_gone_state_unreadable_reported_unproven(self):
+        # R10-008: the signal went out but gone-state cannot
+        # be stated (EACCES) — unproven retirement with the
+        # records retained, never a quiet pass.
+        import io
+        from unittest import mock
+        real_stat = os.stat
+
+        def deny_proc(path, *args, **kwargs):
+            if str(path) == "/proc/4242":
+                raise PermissionError(13, "hidepid-style denial")
+            return real_stat(path, *args, **kwargs)
+
+        captured = io.StringIO()
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=1234), \
+             mock.patch(__name__ + ".kill_bound_keeper",
+                        return_value=True), \
+             mock.patch("os.stat", side_effect=deny_proc), \
+             mock.patch("sys.stderr", captured):
+            unproven = quiesce_private_lives(
+                [(4242, 1234)], timeout=0)
+        self.assertIn("4242", captured.getvalue())
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (4242, 1234))
 
     def test_starttime_error_returns_unproven_and_never_raises(self):
         # S131: unreadable state is unproven custody, not a
