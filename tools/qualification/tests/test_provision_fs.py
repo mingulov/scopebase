@@ -8492,7 +8492,7 @@ class MountNsTests(unittest.TestCase):
                 nspath = provision.ensure_mount_ns()
             link.assert_called_once_with(4321)
             check.assert_called_once_with(
-                "/proc/4321/ns/mnt", 77, canary)
+                4321, 77, canary)
             self.assertEqual(nspath, "/proc/4321/ns/mnt")
             self.assertEqual(provision._MOUNT_NS_IDENTITY,
                              (4321, 77, 777, canary))
@@ -8663,56 +8663,102 @@ class MountNsTests(unittest.TestCase):
                               mock.call(4321)])
             link.assert_called_once_with(4321)
             check.assert_called_once_with(
-                "/proc/4321/ns/mnt", 77, canary)
+                4321, 77, canary)
             self.assertEqual(nspath, "/proc/4321/ns/mnt")
             self.assertEqual(provision._MOUNT_NS_IDENTITY,
                              (4321, 77, 222, canary))
 
-    # S126-round9: bootstrap canary verification must prove
-    # the pinned namespace BEFORE the join (same-invocation
-    # open+verify+join, as the NEW-1 route proof) — the raw
-    # nsenter --mount={nspath} join trusts a pid that may
-    # have recycled since the link read, resolving grep in
-    # the replacement ns. The pin binds the recorded nsid
-    # (never the canary it is establishing: no circularity).
-    # Regression: replacement between link observation and
-    # verification dispatch refuses.
+    # S126-round9, mechanism superseded by R10-001:
+    # bootstrap canary verification must prove the namespace
+    # WITHOUT a join — the pin proof authenticated which ns
+    # but still resolved grep inside it, so a covered grep in
+    # a recycled-into hostile ns sailed it. Regression
+    # preserved: replacement between link observation and
+    # verification dispatch refuses; every gate binary
+    # resolves host-side (sudo readlink/cat only).
     def test_verify_recorded_keeper_pins_before_canary(self):
         from unittest import mock
         canary = "cd" * 16
         state = (4321, 77, canary)
-        refused = mock.Mock(returncode=1, stdout=b"",
-                            stderr=b"")
-        passed = mock.Mock(returncode=0, stdout=b"",
-                           stderr=b"")
+        link = mock.Mock(returncode=0, stdout="mnt:[77]\n",
+                         stderr="")
+        absent = mock.Mock(
+            returncode=0, stdout="31 1 0:27 / / rw - rootfs\n",
+            stderr="")
+        present = mock.Mock(
+            returncode=0,
+            stdout=f"31 1 0:27 / /mnt/canary-{canary} rw - tmpfs\n",
+            stderr="")
+
+        def run_for(mounts):
+            def fake(argv, **kwargs):
+                if argv[-2:] == ["readlink", "/proc/4321/ns/mnt"]:
+                    return link
+                if argv[-2:] == ["cat", "/proc/4321/mountinfo"]:
+                    return mounts
+                raise AssertionError(f"unexpected argv: {argv}")
+            return fake
+
         with mock.patch.object(
-                provision, "_read_ns_link",
-                return_value="mnt:[77]"), \
+                provision, "_keeper_starttime",
+                return_value=999), \
                 mock.patch.object(
                     provision.subprocess, "run",
-                    return_value=refused) as run:
+                    side_effect=run_for(absent)) as run:
             self.assertIsNone(
                 provision._verify_recorded_keeper(state))
-        argv = run.call_args[0][0]
-        # The join runs behind the pin proof: the same sudo
-        # invocation opens the ns path, demands the recorded
-        # nsid, and joins through the pinned fd — never a
-        # re-resolved pathname join.
-        self.assertEqual(argv[:3], ["sudo", "-n", "sh"])
-        self.assertIn("exec 3<", " ".join(argv))
-        self.assertIn("77", argv)
-        self.assertNotIn("nsenter", argv)
-        self.assertFalse(
-            any(item.startswith("--mount=") for item in argv))
+        for call in run.call_args_list:
+            text = " ".join(call[0][0])
+            self.assertNotIn("nsenter", text)
+            self.assertNotIn("exec 3<", text)
         with mock.patch.object(
-                provision, "_read_ns_link",
-                return_value="mnt:[77]"), \
+                provision, "_keeper_starttime",
+                return_value=999), \
                 mock.patch.object(
                     provision.subprocess, "run",
-                    return_value=passed):
+                    side_effect=run_for(present)):
             self.assertEqual(
                 provision._verify_recorded_keeper(state),
                 "/proc/4321/ns/mnt")
+
+    # R10-001: the canary gate must never resolve its payload
+    # inside the candidate namespace — a recycled-into hostile
+    # ns ships a covered grep that always exits 0. The gate
+    # reads the candidate's mountinfo from the host side (no
+    # join at all) inside a starttime sandwich. Regression:
+    # every sudo invocation is host-resolved cat/readlink;
+    # nsenter must not appear anywhere in the gate's argv.
+    def test_canary_gate_never_joins_candidate_ns(self):
+        from unittest import mock
+        canary = "cd" * 16
+        link = mock.Mock(returncode=0, stdout="mnt:[77]\n", stderr="")
+        mounts = mock.Mock(
+            returncode=0,
+            stdout="31 1 0:27 / /proc/self/mountinfo rw - canary-fs\n",
+            stderr="")
+
+        def fake_sudo(argv, **kwargs):
+            if argv[-2:] == ["readlink", "/proc/4321/ns/mnt"]:
+                return link
+            if argv[-2:] == ["cat", "/proc/4321/mountinfo"]:
+                return mounts
+            raise AssertionError(f"unexpected gate argv: {argv}")
+
+        with mock.patch.object(
+                provision.subprocess, "run",
+                side_effect=fake_sudo) as run, \
+                mock.patch.object(
+                    provision, "_keeper_starttime",
+                    return_value=12345):
+            self.assertFalse(
+                provision._ns_has_canary_pinned(
+                    4321, 77, canary))
+        for call in run.call_args_list:
+            argv = call[0][0]
+            self.assertEqual(argv[:2], ["sudo", "-n"])
+            text = " ".join(argv)
+            self.assertNotIn("nsenter", text)
+            self.assertNotIn("/proc/self/fd/", text)
 
     # S100-round6: the starttime anchor reads the world-readable
     # field and fails closed on gone/unparseable pids.
@@ -8898,7 +8944,7 @@ class MountNsTests(unittest.TestCase):
             self.assertEqual(result, (7777, 55, canary, 31337))
             link.assert_called_once_with(7777)
             check.assert_called_once_with(
-                "/proc/7777/ns/mnt", 55, canary)
+                7777, 55, canary)
             self.assertIn(child, provision._KEEPERS)
             self.assertEqual(len(provision._KEEPERS), before + 1)
             retired.assert_not_called()

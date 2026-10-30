@@ -808,36 +808,55 @@ def _read_ns_link(pid):
         f"mount-ns link unreadable for pid {pid} (live)")
 
 
-def _ns_has_canary_pinned(nspath, nsid, canary):
-    """True when the PINNED ns shows our canary mount. (S126-round9)
+def _ns_has_canary_pinned(pid, nsid, canary):
+    """True when the candidate's CURRENT life shows our canary. (R10-001)
 
     Raw subprocess (foundation primitive — must not depend on
-    _MOUNT_NS state or run_sudo). The canary grep runs behind
-    the same-invocation pin proof as the NEW-1 route
-    (_ns_pin_proof_script): the sudo invocation opens the ns
-    path (pinning the namespace object), demands the pinned
-    description IS the ns the link read observed, and only
-    then joins through the pinned fd — a keeper that died and
-    recycled between the link read and this dispatch refuses
-    before any join, instead of resolving grep in the
-    replacement ns. The pin binds the observed nsid, never
-    the canary it is establishing (no circularity). Raises
-    AdmissionError when the check itself cannot run; a
-    missing canary (or a pin refusal) is False (stale/wrong
-    ns → respawn), never an error.
+    _MOUNT_NS state or run_sudo). No join at all: the S126 pin
+    proof authenticated WHICH namespace object to enter but
+    still resolved grep INSIDE it, so a recycled-into hostile
+    mount namespace sailed the gate with a covered grep
+    (R10-001). Every binary and path here resolves on the
+    host side instead — sudo/readlink/cat — and binding is a
+    starttime sandwich: pre-read, elevated link read,
+    elevated /proc/PID/mountinfo read, post-read; all four
+    must agree on one pid life (two lives never share a
+    starttime, S100), and the canary line must be present.
+    A recycle anywhere inside refuses (post mismatch);
+    joined-namespace content can no longer authenticate
+    itself because nothing executes there. Raises
+    AdmissionError when the check itself cannot run
+    (S134 unknown propagates); proven-absent/wrong is
+    False (stale/wrong ns → respawn), never an error.
     """
+    if not isinstance(pid, int) or pid <= 1:
+        raise AdmissionError("mount-ns canary check needs a live pid")
+    pre = _keeper_starttime(pid)
+    link = _read_ns_link(pid)
+    if link != f"mnt:[{nsid}]":
+        return False
     try:
         proc = subprocess.run(
-            ["sudo", "-n", "sh", "-c",
-             _ns_pin_proof_script(), nspath, str(nsid),
-             "grep", "-q", f"canary-{canary}",
-             "/proc/self/mountinfo"],
-            capture_output=True, timeout=30)
+            ["sudo", "-n", "cat", f"/proc/{pid}/mountinfo"],
+            capture_output=True, text=True, timeout=30)
     except OSError as exc:
-        raise AdmissionError(f"mount-ns canary check failed: {exc}")
+        raise AdmissionError(f"mount-ns canary read failed: {exc}")
     except subprocess.TimeoutExpired:
-        raise AdmissionError("mount-ns canary check timed out")
-    return proc.returncode == 0
+        raise AdmissionError("mount-ns canary read timed out")
+    if proc.returncode != 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError as exc:
+            raise AdmissionError(
+                f"mount-ns canary read failed: {exc}")
+        raise AdmissionError(
+            f"mount-ns canary unreadable for live pid {pid}")
+    post = _keeper_starttime(pid)
+    if pre is None or post is None or pre != post:
+        return False
+    return f"canary-{canary}" in proc.stdout
 
 
 def _ns_pin_proof_script():
@@ -967,7 +986,7 @@ def _verify_recorded_keeper(state):
     live = _read_ns_link(pid)
     if live != f"mnt:[{nsid}]":
         return None
-    if not _ns_has_canary_pinned(nspath, nsid, canary):
+    if not _ns_has_canary_pinned(pid, nsid, canary):
         return None
     return nspath
 
@@ -1310,9 +1329,11 @@ def _spawn_keeper(euid, candir, publish_to):
     # nsid above has nothing recorded to compare against, so
     # only the secret mount proves this pid's namespace is
     # ours (a recycled pid's namespace lacks canary-<secret>).
-    nspath = f"/proc/{pid}/ns/mnt"
+    # R10-001: the gate re-verifies link + mountinfo inside a
+    # starttime sandwich with no join — the outer reads above
+    # only obtain the nsid, they are not the authority.
     try:
-        fresh_ok = _ns_has_canary_pinned(nspath, nsid, canary)
+        fresh_ok = _ns_has_canary_pinned(pid, nsid, canary)
     except AdmissionError as exc:
         fail(f"mount-ns keeper canary check failed: {exc}")
     if not fresh_ok:

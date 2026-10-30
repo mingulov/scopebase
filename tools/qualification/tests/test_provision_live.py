@@ -2790,6 +2790,79 @@ class KeeperSignalTests(unittest.TestCase):
         close_mock.assert_not_called()
 
 
+@unittest.skipUnless(live_mounts_enabled(),
+                     "needs TT04_LIVE_MOUNTS=1 + passwordless sudo")
+class HostileNsCanaryTests(unittest.TestCase):
+    # R10-001: a hostile mount namespace ships a covered grep
+    # that always exits 0. Pre-fix the gate joined the
+    # candidate ns and trusted that grep (True = wrong); the
+    # anchored gate never joins and reads the candidate's
+    # mountinfo host-side, which lacks our canary (False).
+    # The interception probe below fails loudly if the
+    # fixture ever stops covering grep — the refusal must
+    # never pass vacuously.
+    def test_covered_grep_cannot_authenticate_hostile_ns(self):
+        canary = "ab" * 16
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = os.path.join(tmp, "grep")
+            with open(fake, "w") as handle:
+                handle.write("#!/bin/sh\necho HOSTILE-GREP-COVERED\nexit 0\n")
+            os.chmod(fake, 0o755)
+            pidfile = os.path.join(tmp, "victim.pid")
+            runner = subprocess.Popen(
+                ["sudo", "-n", "unshare", "-m", "sh", "-c",
+                 "mount --make-rprivate / && "
+                 f"mount --bind {fake} /usr/bin/grep && "
+                 f"echo $$ > {pidfile} && exec sleep 120"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.time() + 15
+                victim = None
+                while time.time() < deadline:
+                    try:
+                        with open(pidfile) as handle:
+                            victim = int(handle.read().strip())
+                        with open(f"/proc/{victim}/mountinfo") as handle:
+                            if "/usr/bin/grep" in handle.read():
+                                break
+                    except (OSError, ValueError):
+                        pass
+                    time.sleep(0.1)
+                self.assertIsNotNone(
+                    victim, "hostile fixture never published its pid")
+                with open(f"/proc/{victim}/mountinfo") as handle:
+                    hostile_mounts = handle.read()
+                self.assertIn("/usr/bin/grep", hostile_mounts)
+                self.assertNotIn(f"canary-{canary}", hostile_mounts)
+                probe = subprocess.run(
+                    ["sudo", "-n", "nsenter",
+                     f"--mount=/proc/{victim}/ns/mnt",
+                     "/usr/bin/grep", "anything", "/dev/null"],
+                    capture_output=True, text=True, timeout=30)
+                self.assertIn(
+                    "HOSTILE-GREP-COVERED", probe.stdout,
+                    "hostile fixture must intercept joined grep")
+                nslink = subprocess.run(
+                    ["sudo", "-n", "readlink",
+                     f"/proc/{victim}/ns/mnt"],
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(nslink.returncode, 0)
+                nsid = int(nslink.stdout.strip()[5:-1])
+                self.assertFalse(
+                    provision._ns_has_canary_pinned(
+                        victim, nsid, canary))
+            finally:
+                subprocess.run(["sudo", "-n", "kill", "-9", str(victim)]
+                               if victim is not None else ["true"],
+                               capture_output=True, timeout=30)
+                try:
+                    runner.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    runner.kill()
+                    runner.wait(timeout=15)
+
+
 class PrivateKeeperStateTests(unittest.TestCase):
     # S117: the redirection mechanics pin without privilege
     # (no ensure, no keeper spawned). The live destructive
