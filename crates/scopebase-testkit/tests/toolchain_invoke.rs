@@ -2501,12 +2501,14 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let forced = std::env::var("SCOPEBASE_R13008_FORCE").ok();
     // Live-ours: an owned pauser under its own tick.
     let live = fork_pauser();
-    // R13-008: custody before any exit can skip cleanup — a skip
-    // return or staging panic must not leak the perpetual pauser.
-    let live_guard = SilentChildGuard::new(live);
     let live_tick = task_starttime_checked(live)
         .expect("pauser stat readable")
         .expect("pauser live");
+    // R13-008: custody before any exit can skip cleanup — a skip
+    // return or staging panic must not leak the perpetual pauser.
+    // R14-001: the guard pins the birth tick (stale drops spare
+    // recycled numbers) and disarms after explicit retires.
+    let mut live_guard = SilentChildGuard::new(live, live_tick);
     // Zombie-ours: a fork-only child that exits at once and is
     // never reaped until cleanup — keeps its tick in state Z.
     // SAFETY: fork; the child only _exits (no runtime, no locks).
@@ -2535,12 +2537,12 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
         assert!(Instant::now() < end, "child never zombied");
         std::thread::sleep(Duration::from_millis(1));
     }
-    // R13-008: custody for the unreaped zombie — its status
-    // must discharge on every exit, not just the tail cleanup.
-    let zombie_guard = SilentChildGuard::new(zombie);
     let zombie_tick = task_starttime_checked(zombie)
         .expect("zombie stat readable")
         .expect("zombie present");
+    // R13-008: custody for the unreaped zombie — its status
+    // must discharge on every exit, not just the tail cleanup.
+    let mut zombie_guard = SilentChildGuard::new(zombie, zombie_tick);
     // Recycled: kill an owned pauser, force a tick advance, retake
     // its number with a steered squatter (R12-005: cross-process
     // placement lock; a racing sibling spawn may steal it —
@@ -2645,13 +2647,16 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     // Zombie-ours retires as before (dead is retired) — only live
     // same-tick polls on.
     let zombie_retired = orphan_retired_checked(zombie, zombie_tick);
-    // Explicit loud cleanup before every assert (the guards drop
-    // silent at the end — nothing left for them on this path).
+    // Explicit loud cleanup before every assert, then the
+    // guards disarm (R14-001: their numbers are free now — a
+    // stale drop would signal whoever recycled them).
     kill_wait_child(squatter);
     kill_wait_child(live);
     // SAFETY: our own zombie child.
     let mut status = 0;
     let got = unsafe { libc::waitpid(zombie, &mut status, 0) };
+    live_guard.disarm();
+    zombie_guard.disarm();
     assert_eq!(got, zombie, "zombie reaped in cleanup");
     // R13-007: the zombie must have reached the intended
     // immediate _exit site — only that path yields 17 (a
@@ -2965,6 +2970,16 @@ fn sole_child_pid(pid: i32) -> i32 {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// R14-002: serialize placement-lock TAKERS within this
+/// process. POSIX locks merge per-process (a second take
+/// succeeds instantly instead of excluding, and its drop
+/// releases the first holder early) — the mutex restores
+/// exclusion; the fd lock below still excludes foreign
+/// processes. Held for the guard's whole lifetime. Never
+/// nest takes (callers use `*_unlocked` under a held guard).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+static FLOCK_TAKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// R12-005: cross-process ns_last_pid placement lock (twin of
 /// the audit lib-tests' guard — SAME lockfile path, kept in
 /// sync by hand): lib tests and integration tests run as
@@ -2982,9 +2997,13 @@ static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// internally — never call them under a held guard (explicit
 /// drop/scope after placement first). Lock order everywhere:
 /// STEER_SERIAL first (test top), this guard second (loop top).
+/// R14-002: the in-process taker mutex rides inside the guard
+/// (POSIX locks merge per-process, so the fd lock alone does
+/// not exclude same-process takers).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct NsLastPidFlock {
     fd: libc::c_int,
+    _taker: std::sync::MutexGuard<'static, ()>,
 }
 
 /// R12-005: take the cross-process placement lock (blocking;
@@ -2993,6 +3012,12 @@ struct NsLastPidFlock {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn ns_last_pid_flock() -> NsLastPidFlock {
     use std::os::unix::ffi::OsStrExt as _;
+    // R14-002: in-process exclusion FIRST (POSIX takes merge
+    // within a process); the fd lock below then excludes
+    // foreign processes. Poison is ignored (as STEER_SERIAL).
+    let taker = FLOCK_TAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = std::env::temp_dir().join("scopebase-ns-last-pid.lock");
     let bytes = path.as_os_str().as_bytes();
     let cpath = std::ffi::CString::new(bytes).expect("lock path c-str");
@@ -3020,7 +3045,7 @@ fn ns_last_pid_flock() -> NsLastPidFlock {
         )
     };
     assert_eq!(locked, 0, "placement lock acquires");
-    NsLastPidFlock { fd }
+    NsLastPidFlock { fd, _taker: taker }
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
@@ -3043,6 +3068,34 @@ impl Drop for NsLastPidFlock {
             libc::close(self.fd);
         }
     }
+}
+
+/// R14-002: same-process placement-lock takes must exclude
+/// each other. POSIX locks merge within a process: a second
+/// take succeeds instantly instead of blocking, and its drop
+/// releases the first holder's lock early — the mechanism
+/// behind the driver's probe-completing-while-held flake. Hold
+/// the lock, require a taker thread still blocked after 300ms,
+/// release, require it acquire promptly.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn placement_lock_takes_exclude_in_process() {
+    let held = ns_last_pid_flock();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let taker = std::thread::spawn(move || {
+        let _second = ns_last_pid_flock();
+        let _ = tx.send(());
+        std::thread::sleep(Duration::from_millis(50));
+    });
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(300)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "second same-process take must block while held (RED: merged)"
+    );
+    drop(held);
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("taker acquires after release");
+    taker.join().expect("taker joins");
 }
 
 /// R12-002: fork a pausing child WITHOUT exec (microsecond
@@ -3131,19 +3184,42 @@ fn retire_child_silent(pid: i32) {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct SilentChildGuard {
     pid: i32,
+    tick: u64,
+    disarmed: bool,
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 impl SilentChildGuard {
-    fn new(pid: i32) -> Self {
-        SilentChildGuard { pid }
+    fn new(pid: i32, tick: u64) -> Self {
+        SilentChildGuard {
+            pid,
+            tick,
+            disarmed: false,
+        }
+    }
+    /// R14-001: stand down after an explicit loud retire —
+    /// without this the drop double-retires the (possibly
+    /// recycled) number.
+    fn disarm(&mut self) {
+        self.disarmed = true;
     }
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 impl Drop for SilentChildGuard {
     fn drop(&mut self) {
-        retire_child_silent(self.pid);
+        // R14-001: retire ONLY while the number still names
+        // our fixture. An explicit retire earlier (or a steal)
+        // frees the number for a sibling's task within
+        // milliseconds — a blind kill would murder it (the
+        // full-suite flake). Residual: a same-tick recycle
+        // inside the µs gate→signal window (S100-class).
+        if self.disarmed {
+            return;
+        }
+        if task_starttime_checked(self.pid) == Ok(Some(self.tick)) {
+            retire_child_silent(self.pid);
+        }
     }
 }
 
@@ -3160,6 +3236,91 @@ fn assert_child_gone(pid: i32, pinned: u64, what: &str) {
         Ok(Some(now)) => assert_ne!(now, pinned, "{what} {pid} survived retirement"),
         Err(error) => panic!("{what} {pid} retirement unresolved: {error}"),
     }
+}
+
+/// R14-001: a Drop guard must never signal a recycled number.
+/// The fixture is retired explicitly (kill+reap, number free),
+/// then a steered stand-in retakes the number at a different
+/// tick; dropping the guard must spare the stand-in. Pre-fix
+/// the guard kills blind (RED: the stand-in is murdered — the
+/// full-suite flake that SIGKILLs siblings' sleep fixtures);
+/// post-fix the tick gate skips (GREEN). Duration 890 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn drop_guard_spares_recycled_number() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let mut fixture = std::process::Command::new("/bin/sleep")
+        .arg("890")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("fixture spawns");
+    let owned = fixture.id() as i32;
+    let owned_tick = task_starttime_checked(owned)
+        .expect("fixture stat readable")
+        .expect("fixture visible");
+    let guard = SilentChildGuard::new(owned, owned_tick);
+    // Explicit loud retire (the R13-003/R13-008 tail shape):
+    // from here the number is free and the guard is stale.
+    // SAFETY: retiring our own fixture.
+    unsafe {
+        libc::kill(owned, libc::SIGKILL);
+    }
+    let _ = fixture.wait();
+    std::thread::sleep(Duration::from_millis(50));
+    let _nsflock = ns_last_pid_flock();
+    let mut standin = -1;
+    for _ in 0..100 {
+        if !steer_next_pid_unlocked(owned) {
+            break;
+        }
+        let kid = fork_pauser();
+        if kid == owned {
+            standin = kid;
+            break;
+        }
+        kill_wait_child(kid);
+    }
+    drop(_nsflock);
+    locked_restore_hint(&last_before);
+    if standin != owned {
+        eprintln!("skip: fixture number not retaken (contended)");
+        return;
+    }
+    let standin_tick = task_starttime_checked(owned)
+        .expect("stand-in stat readable")
+        .expect("stand-in visible");
+    if standin_tick == owned_tick {
+        kill_wait_child(owned);
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    drop(guard);
+    // The stand-in (a pauser: never exits by itself) must
+    // survive the stale guard drop — then loud cleanup.
+    assert_eq!(
+        task_starttime_checked(owned),
+        Ok(Some(standin_tick)),
+        "stale guard drop must spare the recycled holder"
+    );
+    kill_wait_child(owned);
 }
 
 /// R13-006: settle P's Child handle after the ancestry run. When
@@ -5266,12 +5427,9 @@ fn freed_probe_group_still_reaps_strays() {
 #[test]
 fn probe_group_kill_decision_states() {
     use std::os::unix::process::CommandExt as _;
-    struct KillOnDrop(i32);
-    impl Drop for KillOnDrop {
-        fn drop(&mut self) {
-            kill_wait_child(self.0);
-        }
-    }
+    // R14-001: tick-gated disarmable guards (the old local
+    // KillOnDrop double-retired: explicit kill_wait below plus
+    // an ungated drop, SIGKILLing whoever recycled the number).
     // Ours, live and self-grouped.
     let mut ours = std::process::Command::new("/bin/sleep");
     ours.arg("885")
@@ -5286,10 +5444,10 @@ fn probe_group_kill_decision_states() {
         });
     }
     let ours_id = ours.spawn().expect("ours spawns").id() as i32;
-    let _ours_guard = KillOnDrop(ours_id);
     let ours_tick = task_starttime_checked(ours_id)
         .expect("ours stat readable")
         .expect("ours visible");
+    let mut ours_guard = SilentChildGuard::new(ours_id, ours_tick);
     assert!(
         probe_group_kill_allowed(ours_id, ours_tick),
         "ours must allow the group signal"
@@ -5303,10 +5461,10 @@ fn probe_group_kill_decision_states() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let plain_id = plain.spawn().expect("plain spawns").id() as i32;
-    let _plain_guard = KillOnDrop(plain_id);
     let plain_tick = task_starttime_checked(plain_id)
         .expect("plain stat readable")
         .expect("plain visible");
+    let mut plain_guard = SilentChildGuard::new(plain_id, plain_tick);
     // SAFETY: getpgid queries only.
     assert_ne!(
         unsafe { libc::getpgid(plain_id) },
@@ -5324,11 +5482,13 @@ fn probe_group_kill_decision_states() {
     );
     // Freed: retire ours, then the number names nothing.
     kill_wait_child(ours_id);
+    ours_guard.disarm();
     assert!(
         probe_group_kill_allowed(ours_id, ours_tick),
         "freed number must allow the group signal"
     );
     kill_wait_child(plain_id);
+    plain_guard.disarm();
 }
 
 /// R10-013: drain an exited probe child's piped output WITHOUT
@@ -5378,16 +5538,28 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
 
 /// IR1 (internal review round 1): best-effort group kill
 /// on drop — the 31s sleeper must not outlive a failed
-/// assertion by 26s. Drop-after-success is a harmless nop
-/// (kill on an empty group is ESRCH).
+/// assertion by 26s. R14-001: disarms after the group is
+/// proven dead (a bare drop would re-signal the pgid number,
+/// which a steered stranger may have self-grouped onto).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct KillGroupOnDrop {
     group: libc::pid_t,
+    disarmed: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl KillGroupOnDrop {
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
         // SAFETY: signal-only to the test's own group;
         // best-effort (failure paths must not panic).
         unsafe {
@@ -5433,7 +5605,10 @@ fn probe_tree_retirement_kills_stranded_group() {
     let group = child.id() as libc::pid_t;
     // IR1: the 31s sleeper dies with the test on every path
     // (failed asserts unwind through this guard).
-    let _guard = KillGroupOnDrop { group };
+    let mut guard = KillGroupOnDrop {
+        group,
+        disarmed: false,
+    };
     retire_probe_tree(&mut child, staged);
     retire_probe_tree(&mut child, staged);
     let end = Instant::now() + Duration::from_secs(5);
@@ -5447,6 +5622,7 @@ fn probe_tree_retirement_kills_stranded_group() {
                 libc::ESRCH,
                 "group probe must fail ESRCH-only, got {errno}"
             );
+            guard.disarm();
             return;
         }
         assert!(
