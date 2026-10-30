@@ -2656,6 +2656,15 @@ mod tests {
     const PROBE_DENIAL_ENV: &str = "SCOPEBASE_TT04_PREFLIGHT_DENIAL";
     #[cfg(target_arch = "x86_64")]
     const PROBE_REPORT_FD_ENV: &str = "SCOPEBASE_TT04_PREFLIGHT_REPORT_FD";
+    /// R10-012: the confined-subreaper retirement probe path
+    /// (exact — the parent requires one passed test in the
+    /// probe output, so a renamed path fails loud instead of
+    /// passing vacuously on zero tests).
+    #[cfg(target_arch = "x86_64")]
+    const SUBREAPER_PROBE_PATH: &str = "fixture::linux::audit::tests::tt04_subreaper_retire_probe";
+    /// R10-012: rendezvous — the probe runs only when set.
+    #[cfg(target_arch = "x86_64")]
+    const SUBREAPER_PROBE_ENV: &str = "SCOPEBASE_TT04_SUBREAPER_PROBE";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -3020,11 +3029,123 @@ mod tests {
         }
     }
 
+    /// R10-012: the confined-subreaper retirement probe (see
+    /// [`adopted_grandchild_retires_under_subreaper`]). Under a
+    /// normal suite run (no rendezvous variable) this passes
+    /// silently; the parent test spawns a FRESH test-binary
+    /// process at this exact path with the rendezvous set, and
+    /// the probe marks ITSELF a child subreaper (confined — the
+    /// flag dies with this process; the suite binary never sets
+    /// it globally) before running both unresolved-retirement
+    /// controls. Pre-fix the retired grandchild is the probe's
+    /// own zombie and `retire_reported_grandchild` panics after
+    /// five seconds (RED); post-fix the wait loop reaps what it
+    /// adopted. The probe finally proves no child status
+    /// remains anywhere (reaping stragglers so even RED runs
+    /// stay clean, then requiring zero).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn tt04_subreaper_retire_probe() {
+        use std::time::Duration;
+        if std::env::var(SUBREAPER_PROBE_ENV).is_err() {
+            return;
+        }
+        // Own process group first: a hung probe run lets the
+        // parent retire the whole tree by group.
+        // SAFETY: setpgid on self, no userspace state.
+        unsafe {
+            libc::setpgid(0, 0);
+        }
+        // SAFETY: prctl on self; marking a fresh probe process.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "probe must become a child subreaper"
+        );
+        for spec in ["read-nopidfd", "read-nosignal"] {
+            let outcome = run_preflight_middleman(spec, Duration::from_secs(30));
+            if outcome.code == 3 {
+                eprintln!("skip: seccomp unavailable for {spec}");
+                return;
+            }
+            let cleaned = match outcome.grandchild {
+                GrandchildState::Live(pid, started) => retire_reported_grandchild(pid, started),
+                GrandchildState::None => false,
+            };
+            assert_eq!(
+                outcome.code, 21,
+                "{spec}: unresolved retirement must refuse, got exit {}",
+                outcome.code
+            );
+            assert!(
+                outcome.err.contains("not proven reaped"),
+                "{spec}: production must report the unresolved custody, got: {}",
+                outcome.err
+            );
+            assert!(
+                cleaned,
+                "{spec}: the parked grandchild must need independent cleanup"
+            );
+        }
+        // No child status may remain: the middlemen were reaped
+        // by the runner, the grandchildren by the retirement —
+        // reap stragglers (RED runs stay clean) then require
+        // zero.
+        let mut stragglers = 0;
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid(-1) reaps any owned child.
+            let got = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if got > 0 {
+                stragglers += 1;
+                continue;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+            }
+            break;
+        }
+        assert_eq!(stragglers, 0, "retirement must leave no child status");
+    }
+
+    /// R10-012: await /proc disappearance, reaping an adopted
+    /// zombie along the way. Under a subreaper (or PID-1) runner
+    /// the signaled grandchild reparents to US — its /proc entry
+    /// survives until WE reap it, so the loop waitpids (WNOHANG,
+    /// errors ignored: ECHILD means someone else owns it) before
+    /// polling disappearance. True when gone within `timeout`,
+    /// false on expiry. Never panics — the caller decides.
+    #[cfg(target_arch = "x86_64")]
+    fn await_proc_gone_reaping(pid: libc::pid_t, timeout: std::time::Duration) -> bool {
+        let end = std::time::Instant::now() + timeout;
+        loop {
+            // SAFETY: waitpid on a possibly-owned pid; reaps an
+            // adopted zombie, ECHILD otherwise — always ignored.
+            let mut status = 0;
+            unsafe {
+                libc::waitpid(pid, &mut status, libc::WNOHANG);
+            }
+            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                return true;
+            }
+            if std::time::Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// S140-round9: retire a grandchild the middleman reported
     /// alive: pin first, verify the reported starttime still names
     /// it, signal through the pin, prove disappearance. The
     /// grandchild reparented to init when the middleman exited, so
     /// init reaps it once dead — /proc disappearance is the proof.
+    /// R10-012: when the runner itself adopted the grandchild
+    /// (subreaper or PID-1 runner) the wait also reaps — an
+    /// owned zombie disappears only through our own waitpid.
     /// Returns true when the grandchild was found alive and retired
     /// (false: already gone — nothing needed cleanup).
     #[cfg(target_arch = "x86_64")]
@@ -3064,17 +3185,11 @@ mod tests {
             sent, 0,
             "reported grandchild must be signalable through its pin"
         );
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                return true;
-            }
-            assert!(
-                std::time::Instant::now() < end,
-                "reported grandchild {pid} resisted retirement"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        assert!(
+            await_proc_gone_reaping(pid, std::time::Duration::from_secs(5)),
+            "reported grandchild {pid} resisted retirement"
+        );
+        true
     }
 
     /// S110/S111-round8: run `preflight()` in a forked middleman
@@ -3335,15 +3450,7 @@ mod tests {
                 retire_hung_middleman_group(pid);
                 let note = match &outcome.grandchild {
                     GrandchildState::Live(gpid, _) => {
-                        let end = Instant::now() + Duration::from_secs(5);
-                        let mut gone = false;
-                        while Instant::now() < end {
-                            if !std::path::Path::new(&format!("/proc/{gpid}")).exists() {
-                                gone = true;
-                                break;
-                            }
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
+                        let gone = await_proc_gone_reaping(*gpid, Duration::from_secs(5));
                         format!("; reported grandchild {gpid} gone: {gone}")
                     }
                     GrandchildState::None => String::new(),
@@ -3501,6 +3608,65 @@ mod tests {
             cleaned,
             "the parked grandchild must need independent cleanup (else the leak is uncovered)"
         );
+    }
+
+    /// R10-012: the unresolved-retirement controls must clean up
+    /// even when the runner ADOPTS the grandchild (subreaper or
+    /// PID-1 runner): the retired task is then our own zombie
+    /// and /proc disappearance needs a reap, not just a wait.
+    /// The parent spawns a fresh probe process (a confined
+    /// subreaper — never the suite binary) and requires exit
+    /// success bounded; the probe runs both S132 controls and
+    /// proves no child status remains. On timeout the parent
+    /// retires the probe's whole process group before failing
+    /// loud. The probe output must name one passed test — a
+    /// renamed probe path fails here instead of passing
+    /// vacuously on zero tests.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn adopted_grandchild_retires_under_subreaper() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn subreaper probe");
+        let end = Instant::now() + Duration::from_secs(150);
+        loop {
+            match child.try_wait().expect("probe wait") {
+                Some(status) => {
+                    let out = child.wait_with_output().expect("probe output");
+                    assert!(
+                        status.success(),
+                        "subreaper probe must exit success, got {status}: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    assert!(
+                        String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+                        "probe must run its one test (path exact)"
+                    );
+                    return;
+                }
+                None => {}
+            }
+            if Instant::now() >= end {
+                // SAFETY: signal-only to the probe's own group,
+                // then the probe itself; errors ignored.
+                let id = child.id() as libc::pid_t;
+                unsafe {
+                    libc::killpg(id, libc::SIGKILL);
+                    libc::kill(id, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                panic!("subreaper probe hung past 150s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// S140-round9: the middleman must not depend on inherited
