@@ -2483,8 +2483,19 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
         eprintln!("skip: ns_last_pid unwritable (no reuse control)");
         return;
     }
+    // R13-008: failure injection (env-gated; inert otherwise).
+    // placement-failure skips the placement loop (forced
+    // contended exit); same-tick forces the same-tick branch
+    // after a real placement; observe-failure corrupts the
+    // live-ours observation into a real-assert failure. Unknown
+    // values ignore (the driver requires its reports, so a typo
+    // fails loud there, not silent here).
+    let forced = std::env::var("SCOPEBASE_R13008_FORCE").ok();
     // Live-ours: an owned pauser under its own tick.
     let live = fork_pauser();
+    // R13-008: custody before any exit can skip cleanup — a skip
+    // return or staging panic must not leak the perpetual pauser.
+    let live_guard = SilentChildGuard::new(live);
     let live_tick = task_starttime_checked(live)
         .expect("pauser stat readable")
         .expect("pauser live");
@@ -2516,6 +2527,9 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
         assert!(Instant::now() < end, "child never zombied");
         std::thread::sleep(Duration::from_millis(1));
     }
+    // R13-008: custody for the unreaped zombie — its status
+    // must discharge on every exit, not just the tail cleanup.
+    let zombie_guard = SilentChildGuard::new(zombie);
     let zombie_tick = task_starttime_checked(zombie)
         .expect("zombie stat readable")
         .expect("zombie present");
@@ -2531,50 +2545,100 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     std::thread::sleep(Duration::from_millis(50));
     let _nsflock = ns_last_pid_flock();
     let mut squatter = -1;
-    for _ in 0..100 {
-        if !steer_next_pid(victim) {
-            break;
+    // R13-008: forced placement failure skips the loop (the
+    // contended exit below runs with staged fixtures).
+    if forced.as_deref() != Some("placement-failure") {
+        for _ in 0..100 {
+            if !steer_next_pid(victim) {
+                break;
+            }
+            let kid = fork_pauser();
+            if kid == victim {
+                squatter = kid;
+                break;
+            }
+            kill_wait_child(kid);
         }
-        let kid = fork_pauser();
-        if kid == victim {
-            squatter = kid;
-            break;
-        }
-        kill_wait_child(kid);
     }
     drop(_nsflock);
     let _ = std::fs::write(last_path, &last_before);
     if squatter != victim {
-        eprintln!("skip: victim number not retaken (contended)");
+        // R13-008: the driver requires the R13008 line (fixture
+        // identities for its independent absence checks) before
+        // the report on forced runs.
+        if forced.is_some() {
+            eprintln!("R13008 live={live}:{live_tick} zombie={zombie}:{zombie_tick} squatter=none");
+        }
+        // R13-008: retire before reporting — drop the guards
+        // (silent) and VERIFY (loud) so the skip itself proves
+        // clean fixtures, never trusts them.
+        drop(live_guard);
+        drop(zombie_guard);
+        assert_child_gone(live, live_tick, "pauser");
+        assert_child_gone(zombie, zombie_tick, "zombie");
+        if forced.as_deref() == Some("placement-failure") {
+            eprintln!("skip: FORCED placement failure (inject)");
+        } else {
+            eprintln!("skip: victim number not retaken (contended)");
+        }
         return;
     }
     let now = task_starttime_checked(victim)
         .expect("squatter stat readable")
         .expect("squatter live");
-    if now == victim_tick {
+    // R13-008: forced same-tick rejection runs the branch after a
+    // real placement (a natural contended exit instead would miss
+    // the scenario — the driver requires the forced report).
+    if now == victim_tick || forced.as_deref() == Some("same-tick") {
+        if forced.is_some() {
+            eprintln!(
+                "R13008 live={live}:{live_tick} zombie={zombie}:{zombie_tick} squatter={victim}:{now}"
+            );
+        }
         kill_wait_child(squatter);
-        eprintln!("skip: same-tick recycle (S100, vacuous)");
+        // R13-008: retire before reporting (squatter explicit
+        // above; guards for the staged pair) and VERIFY all three.
+        drop(live_guard);
+        drop(zombie_guard);
+        assert_child_gone(squatter, now, "squatter");
+        assert_child_gone(live, live_tick, "pauser");
+        assert_child_gone(zombie, zombie_tick, "zombie");
+        if forced.as_deref() == Some("same-tick") {
+            eprintln!("skip: FORCED same-tick rejection (inject)");
+        } else {
+            eprintln!("skip: same-tick recycle (S100, vacuous)");
+        }
         return;
     }
     // The incident: a proven-foreign task under the number means
     // OUR orphan is definitionally retired (S98 principle).
-    assert_eq!(
-        orphan_retired_checked(victim, victim_tick),
-        Ok(true),
-        "recycled number is retired"
-    );
-    // Zombie-ours retires as before (dead is retired; the live
-    // parent reaps at test-end) — only live same-tick polls on.
-    assert_eq!(
-        orphan_retired_checked(zombie, zombie_tick),
-        Ok(true),
-        "zombie-ours is retired"
-    );
-    assert_eq!(
-        orphan_retired_checked(live, live_tick),
-        Ok(false),
-        "live-ours is not retired"
-    );
+    // R13-008: record BEFORE cleanup (R12-014 pattern) — the
+    // asserts below must not own live fixtures. Recording cannot
+    // skip cleanup: a recording panic still unwinds through the
+    // guards (silent retire), while assert panics land after
+    // explicit cleanup with nothing left to leak.
+    // The incident: a proven-foreign task under the number means
+    // OUR orphan is definitionally retired (S98 principle).
+    let recycled_retired = orphan_retired_checked(victim, victim_tick);
+    // Forced observation failure corrupts the live-ours
+    // observation into a real-assert failure (indistinguishable
+    // from a genuine poll regression); the driver requires the
+    // R13008 line plus the assert message.
+    if forced.as_deref() == Some("observe-failure") {
+        eprintln!(
+            "R13008 live={live}:{live_tick} zombie={zombie}:{zombie_tick} squatter={victim}:{now}"
+        );
+    }
+    let live_retired = if forced.as_deref() == Some("observe-failure") {
+        Ok(true)
+    } else {
+        orphan_retired_checked(live, live_tick)
+    };
+    // Zombie-ours retires as before (dead is retired) — only live
+    // same-tick polls on.
+    let zombie_retired = orphan_retired_checked(zombie, zombie_tick);
+    // Explicit loud cleanup before every assert (the guards drop
+    // silent at the end — nothing left for them on this path).
     kill_wait_child(squatter);
     kill_wait_child(live);
     // SAFETY: our own zombie child.
@@ -2594,6 +2658,124 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
         17,
         "zombie must reach the intended immediate exit"
     );
+    assert_eq!(recycled_retired, Ok(true), "recycled number is retired");
+    assert_eq!(zombie_retired, Ok(true), "zombie-ours is retired");
+    assert_eq!(live_retired, Ok(false), "live-ours is not retired");
+}
+
+/// R13-008: every forced exit of the predicate regression must
+/// retire its fixtures BEFORE reporting. Drives the test binary
+/// three times (placement-failure, same-tick, observe-failure)
+/// and requires on each: the right report (forced skip line or
+/// the real assert message), the R13008 line (fixture identities),
+/// and tick-gated absence of every named fixture (a recycled
+/// number with a different tick is NOT our fixture; same-tick
+/// presence is a leak, loud). The child also self-verifies (loud
+/// cleanup asserts before reporting), so a cleanup failure
+/// surfaces as the WRONG report — the driver's /proc checks are
+/// independent teeth (a leaked pauser survives the child's exit
+/// and is observable here; zombie discharge is proven child-side,
+/// where only the owner can reap). Output is drained bounded
+/// (drain_exited_child_output) — never read to EOF: a RED-shape
+/// child leaks a pipe-holding pauser that would hang an EOF drain
+/// forever. Holds STEER_SERIAL across each child run (in-process
+/// steering siblings block while the child steers alone).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn predicate_forced_exits_retire_fixtures() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+    for (forced, success, message) in [
+        (
+            "placement-failure",
+            true,
+            "skip: FORCED placement failure (inject)",
+        ),
+        (
+            "same-tick",
+            true,
+            "skip: FORCED same-tick rejection (inject)",
+        ),
+        ("observe-failure", false, "live-ours is not retired"),
+    ] {
+        // R12-002: serialize steerers (whole-child hold).
+        let _steer = STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("orphan_retirement_predicate_ignores_recycled_number")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R13008_FORCE", forced)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn forced probe");
+        // R12-005: pin before any wait (retirement identity gate).
+        let staged = task_starttime_checked(child.id() as i32)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        let end = Instant::now() + Duration::from_secs(90);
+        let (status, stdout, stderr) = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                let (out, err) = drain_exited_child_output(&child);
+                break (status, out, err);
+            }
+            if Instant::now() >= end {
+                retire_probe_tree(&mut child, staged);
+                panic!("forced probe ({forced}) hung past 90s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let _ = stdout;
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        assert_eq!(
+            status.success(),
+            success,
+            "forced probe ({forced}) exit mismatch, got {status}: {stderr_text}"
+        );
+        assert!(
+            stderr_text.contains(message),
+            "forced probe ({forced}) must report '{message}': {stderr_text}"
+        );
+        let line = stderr_text
+            .lines()
+            .find(|l| l.starts_with("R13008 "))
+            .unwrap_or_else(|| {
+                panic!("forced probe ({forced}) missing R13008 line: {stderr_text}")
+            });
+        let field = |name: &str| -> &str {
+            line.split_whitespace()
+                .filter_map(|f| f.split_once('='))
+                .find(|(key, _)| *key == name)
+                .unwrap_or_else(|| panic!("R13008 missing {name}=: {line}"))
+                .1
+        };
+        // Every named fixture must be gone-or-recycled (tick-gated
+        // absence — same-tick presence is a leak, loud).
+        for name in ["live", "zombie", "squatter"] {
+            let value = field(name);
+            if value == "none" {
+                continue;
+            }
+            let (pid_text, tick_text) = value
+                .split_once(':')
+                .unwrap_or_else(|| panic!("R13008 {name} unparseable: {value}"));
+            let pid: i32 = pid_text.parse().expect("fixture pid numeric");
+            let tick: u64 = tick_text.parse().expect("fixture tick numeric");
+            if let Ok(Some(now)) = task_starttime_checked(pid) {
+                assert_ne!(now, tick, "fixture {name}={pid} survives (tick {now})");
+            }
+        }
+    }
 }
 
 /// S115/S123-round8: reap a confined probe child under a hang
@@ -2835,6 +3017,73 @@ fn kill_wait_child(pid: i32) {
         }
         assert!(Instant::now() < end, "pauser {pid} unreaped");
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R13-008: silent best-effort retirement for Drop guards (never
+/// panics — a panicking Drop during unwinding aborts). Kill, then
+/// bounded WNOHANG reap; every error ignored. Numeric kill+wait
+/// is exact here: these are OUR unreaped children, whose numbers
+/// cannot recycle under us. The loud paths retire explicitly
+/// (kill_wait_child / asserted waits) first, so a guard firing
+/// means an exit that skipped explicit cleanup.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_child_silent(pid: i32) {
+    // SAFETY: signal-only to an owned child; errors ignored.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid on an owned child; WNOHANG never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid || got < 0 {
+            return;
+        }
+        if Instant::now() >= end {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R13-008: Drop guard retiring an owned fixture child on every
+/// exit (early return or panic). Covers pausers (retire) and
+/// zombies (discharge status — the kill also reaches a child hung
+/// before its immediate exit; an already-exited zombie answers
+/// ESRCH and is simply reaped).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct SilentChildGuard {
+    pid: i32,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl SilentChildGuard {
+    fn new(pid: i32) -> Self {
+        SilentChildGuard { pid }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for SilentChildGuard {
+    fn drop(&mut self) {
+        retire_child_silent(self.pid);
+    }
+}
+
+/// R13-008: loud tick-gated absence proof after guard retirement
+/// (skip paths verify before reporting). A recycled number with a
+/// different tick is NOT our fixture; a same-tick recycle inside
+/// the µs guard-drop→verify window fails loud as a real bug, not
+/// a race (no fork lands there that fast). Unresolvable stat is
+/// never absence — it fails loud.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn assert_child_gone(pid: i32, pinned: u64, what: &str) {
+    match task_starttime_checked(pid) {
+        Ok(None) => {}
+        Ok(Some(now)) => assert_ne!(now, pinned, "{what} {pid} survived retirement"),
+        Err(error) => panic!("{what} {pid} retirement unresolved: {error}"),
     }
 }
 
