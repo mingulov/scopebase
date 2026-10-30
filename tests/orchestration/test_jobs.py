@@ -1182,5 +1182,160 @@ class JobTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
 
+PACKET_FIELDS = ['purpose_scope', 'decisions', 'starting_bytes', 'origin',
+                 'inputs', 'outputs', 'preservation_map', 'license_boundary',
+                 'tests', 'effects_bounds', 'resources_parallelism',
+                 'acceptance']
+
+COMPLETE_PACKET = {
+    'purpose_scope': 'SB99 fixture increment; no production export.',
+    'decisions': 'D01 selected; no unresolved decisions.',
+    'starting_bytes': 'base HEAD; no donor slice.',
+    'origin': {'origins': ['PORT'], 'statement': 'Port one fixture vector.'},
+    'inputs': 'Accepted SB01 fixture record.',
+    'outputs': 'Owned path src/fixture.txt only.',
+    'preservation_map': 'Defect D1 to destination with oracle and twin.',
+    'license_boundary': 'User-owned fixture; Apache-2.0 destination.',
+    'tests': 'Case asserts the planted value; bad control inverts it.',
+    'effects_bounds': 'No privilege; 1 MiB / 60 s bounds.',
+    'resources_parallelism': 'Sole writer; isolated target dir.',
+    'acceptance': 'Exact unittest command; reviewer scope fixture.',
+}
+
+
+class PacketGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='scopebase packet ')
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name) / 'repository'
+        self.repo.mkdir()
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Packet Tests')
+        self.git('config', 'user.email', 'test@example.invalid')
+        self.write('.gitignore', '/.scopebase/\n/.worktrees/\n')
+        self.write('AGENTS.md', 'Fixture repository rules.\n')
+        self.write(PLAN, '# Product plan\n\n**Spec:** [Product spec](../specs/product.md).\n\n' + GLOBAL +
+                   '## Tasks\n\n' + TASK)
+        self.write(SPEC, '# Product spec\n\nNo implicit acceptance.\n')
+        self.write('orchestration/policy.json', json.dumps(POLICY))
+        self.write('orchestration/common-rules.md', 'Preserve failed attempts.\n')
+        for name in ('worker', 'reviewer', 'fix', 'report'):
+            self.write(f'orchestration/templates/{name}.md', f'# {name.title()} template\n')
+        self.write(REGISTRY, json.dumps({'tasks': [
+            {'id': 'SB01', 'title': 'Intake', 'plan': PLAN, 'depends_on': [], 'status': 'PLANNED'}]}))
+        self.write('src/first.txt', 'base\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'fixture base')
+        self.goal = Path(self.temp.name) / 'goal.txt'
+        self.goal.write_text('Prepare the fixture component.\n')
+        self.packet_file = Path(self.temp.name) / 'packet.json'
+        self.packet_file.write_text(json.dumps(COMPLETE_PACKET))
+
+    def write(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def git(self, *args, cwd=None, check=True):
+        return subprocess.run(['git', '-C', str(cwd or self.repo), *args], text=True,
+                              capture_output=True, check=check)
+
+    def cli(self, *args, ok=True):
+        result = subprocess.run([sys.executable, str(HELPER), *map(str, args)], text=True,
+                                capture_output=True)
+        if ok:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+        self.assertNotEqual(result.returncode, 0, 'invalid packet unexpectedly admitted')
+        return result
+
+    def packet(self, **overrides):
+        import copy
+        data = copy.deepcopy(COMPLETE_PACKET)
+        data.update(overrides)
+        return data
+
+    def test_complete_packet_accepted(self):
+        summary = job_helper.validate_packet(self.packet())
+        self.assertEqual(summary['fields'], sorted(PACKET_FIELDS))
+        self.assertEqual(summary['origins'], ['PORT'])
+
+    def test_each_missing_field_rejected_at_named_assertion(self):
+        import copy
+        for field in PACKET_FIELDS:
+            with self.subTest(field=field):
+                data = copy.deepcopy(COMPLETE_PACKET)
+                del data[field]
+                with self.assertRaises(job_helper.JobError) as ctx:
+                    job_helper.validate_packet(data)
+                self.assertIn(field, str(ctx.exception))
+
+    def test_blank_field_rejected_at_named_assertion(self):
+        with self.assertRaises(job_helper.JobError) as ctx:
+            job_helper.validate_packet(self.packet(tests='   \n  '))
+        self.assertIn('tests', str(ctx.exception))
+
+    def test_unknown_field_rejected(self):
+        with self.assertRaises(job_helper.JobError) as ctx:
+            job_helper.validate_packet(self.packet(surprise='extra'))
+        self.assertIn('surprise', str(ctx.exception))
+
+    def test_origin_enum_violation_rejected(self):
+        bad = self.packet()
+        bad['origin'] = {'origins': ['REWRITE'], 'statement': 'Invented.'}
+        with self.assertRaises(job_helper.JobError) as ctx:
+            job_helper.validate_packet(bad)
+        self.assertIn('origin', str(ctx.exception))
+
+    def test_origin_without_statement_rejected(self):
+        bad = self.packet()
+        bad['origin'] = {'origins': ['PORT']}
+        with self.assertRaises(job_helper.JobError) as ctx:
+            job_helper.validate_packet(bad)
+        self.assertIn('origin', str(ctx.exception))
+
+    def test_non_object_packet_rejected(self):
+        with self.assertRaises(job_helper.JobError):
+            job_helper.validate_packet(['purpose_scope'])
+
+    def test_prepare_without_packet_marks_unsupplied(self):
+        prepared = self.cli('prepare', '--repo', self.repo, '--task', 'SB01',
+                            '--job=unsupplied', '--role', 'implementer',
+                            '--goal-file', self.goal,
+                            '--write-path', 'src/first.txt')
+        manifest = json.loads(Path(prepared['manifest']).read_text())
+        self.assertEqual(manifest['packet_state'], 'UNSUPPLIED')
+        self.assertNotIn('packet_sha256', manifest)
+
+    def test_prepare_with_complete_packet_marks_valid_and_snapshots(self):
+        prepared = self.cli('prepare', '--repo', self.repo, '--task', 'SB01',
+                            '--job=supplied', '--role', 'implementer',
+                            '--goal-file', self.goal,
+                            '--write-path', 'src/first.txt',
+                            '--packet', self.packet_file)
+        manifest = json.loads(Path(prepared['manifest']).read_text())
+        self.assertEqual(manifest['packet_state'], 'SUPPLIED_VALID')
+        self.assertEqual(manifest['packet_sha256'],
+                         hashlib.sha256(self.packet_file.read_bytes()).hexdigest())
+        snapshot = Path(manifest['packet_snapshot'])
+        self.assertTrue(snapshot.is_file())
+        self.assertEqual(snapshot.read_bytes(), self.packet_file.read_bytes())
+
+    def test_prepare_with_incomplete_packet_rejects_before_reservation(self):
+        bad = Path(self.temp.name) / 'bad-packet.json'
+        import copy
+        data = copy.deepcopy(COMPLETE_PACKET)
+        del data['preservation_map']
+        bad.write_text(json.dumps(data))
+        result = self.cli('prepare', '--repo', self.repo, '--task', 'SB01',
+                          '--job=rejected', '--role', 'implementer',
+                          '--goal-file', self.goal,
+                          '--write-path', 'src/first.txt',
+                          '--packet', bad, ok=False)
+        self.assertIn('preservation_map', result.stderr)
+        self.assertFalse(os.path.lexists(self.repo / '.scopebase' / 'jobs' / 'rejected'))
+
+
 if __name__ == '__main__':
     unittest.main()

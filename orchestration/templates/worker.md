@@ -2,7 +2,7 @@
 
 Controller supplies: task ID, goal snapshot, exact worktree/branch/base SHA, model/effort, allowed literal paths, spec/task inputs and hashes, expected outputs, independent acceptance, private TMPDIR/CARGO_TARGET_DIR/evidence/report paths and relevant rulings.
 
-Also supply the completed executor-contract packet: origin per mechanism, selected source symbols/original regressions, destination mapping, applicable WHAT/WHY decisions, owner/destination/target license roles, frozen kernel/compiler/profile inputs, independent oracle/control, effects/bounds/cleanup and actual predecessor artifacts. Broad file groups or a link to all research are insufficient. The current helper does not enforce completeness.
+Also supply the completed executor-contract packet: origin per mechanism, selected source symbols/original regressions, destination mapping, applicable WHAT/WHY decisions, owner/destination/target license roles, frozen kernel/compiler/profile inputs, independent oracle/control, effects/bounds/cleanup and actual predecessor artifacts. Broad file groups or a link to all research are insufficient. The helper enforces packet schema completeness via `prepare --packet`; semantic content stays expert-judged.
 
 Read AGENTS, orchestration/common-rules.md and the selected full specification. Follow the task's exact Global Constraints and interfaces. Port the selected donor fix/regression together. Write outside allowed paths only to the explicitly named private report/evidence locations. No subagents, direct user questions, global changes, donor edits, merges, pushes or publication.
 

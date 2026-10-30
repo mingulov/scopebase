@@ -138,7 +138,7 @@ For a ready supported capability:
 
 Add missing necessary work to TODO with the affected capability, dependency and exit criterion. Keep H, UC and G identifiers stable; update cross-references and counts when adding cases. Do not close an implementation item merely because its design or test source exists.
 
-Current planning inventory: 120 requirements, 86 tasks, 179 source-obligation mappings. H01–H32 retain their meanings; H33 appends license-boundary coverage. Original 119-requirement/32-family receipts remain historical. Packet completeness is currently a controller/expert obligation; the job helper does not enforce the new schema.
+Current planning inventory: 120 requirements, 86 tasks, 179 source-obligation mappings. H01–H32 retain their meanings; H33 appends license-boundary coverage. Original 119-requirement/32-family receipts remain historical. Packet schema completeness is enforced by the job helper (`prepare --packet`, PACKET-GUARD01); semantic content stays a controller/expert obligation.
 
 ## Workflow and delegation
 

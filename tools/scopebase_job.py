@@ -689,6 +689,45 @@ def admission(state, allowed, cap, *, resuming_job=None):
     return writers
 
 
+PACKET_FIELDS = ('purpose_scope', 'decisions', 'starting_bytes', 'origin',
+                 'inputs', 'outputs', 'preservation_map', 'license_boundary',
+                 'tests', 'effects_bounds', 'resources_parallelism',
+                 'acceptance')
+PACKET_ORIGINS = {'PORT', 'ADAPT', 'NEW', 'EVALUATE', 'QUALIFY'}
+PACKET_LIMIT = 65536
+
+
+def validate_packet(packet):
+    """Enforce the 12-field executor-packet schema (PACKET-GUARD01).
+
+    Schema completeness only: every field present, substantive, and
+    origin-restricted. Semantic content stays expert-judged. Returns a
+    summary dict; raises JobError naming the offending field.
+    """
+    require(isinstance(packet, dict), 'packet must be a JSON object')
+    for key in packet:
+        require(key in PACKET_FIELDS,
+                f'packet field {key!r} is not one of the 12 executor-contract fields')
+    for field in PACKET_FIELDS:
+        require(field in packet, f'packet field {field!r} is missing')
+    for field in PACKET_FIELDS:
+        if field == 'origin':
+            continue
+        value = packet[field]
+        require(isinstance(value, str) and value.strip(),
+                f'packet field {field!r} must be nonempty text')
+    origin = packet['origin']
+    require(isinstance(origin, dict), "packet field 'origin' must be an object")
+    origins = origin.get('origins')
+    require(isinstance(origins, list) and origins and
+            all(entry in PACKET_ORIGINS for entry in origins),
+            "packet field 'origin' origins must be a nonempty list of "
+            'PORT/ADAPT/NEW/EVALUATE/QUALIFY')
+    require(isinstance(origin.get('statement'), str) and origin['statement'].strip(),
+            "packet field 'origin' statement must be nonempty text")
+    return {'fields': sorted(PACKET_FIELDS), 'origins': list(origins)}
+
+
 def prepare(args):
     task_id = identifier(args.task, 'task')
     job_id = identifier(args.job, 'job')
@@ -707,6 +746,15 @@ def prepare(args):
         goal_path = Path(args.goal_file).absolute()
         goal = regular_bytes(goal_path, GOAL_LIMIT)
         require(decode_text(goal, 'goal').strip(), 'goal must be nonempty bounded text')
+        packet_bytes = None
+        if args.packet:
+            packet_path = Path(args.packet).absolute()
+            packet_bytes = regular_bytes(packet_path, PACKET_LIMIT)
+            try:
+                packet_data = json.loads(decode_text(packet_bytes, 'packet'))
+            except ValueError as exc:
+                raise JobError(f'packet is not valid JSON: {exc}') from exc
+            validate_packet(packet_data)
         base = commit(source, args.base)
         task, tasks, contents, task_text, constraints, specs = inputs(source, task_id)
         bound_to_commit(source, base, contents)
@@ -741,12 +789,18 @@ def prepare(args):
             'plan_sha256': digest(contents[task['plan']]),
             'spec_sha256': {name: digest(contents[name]) for name in specs},
             'acceptance': 'UNREVIEWED; controller only; no product task status changed',
+            'packet_state': 'SUPPLIED_VALID' if packet_bytes is not None else 'UNSUPPLIED',
         }
+        if packet_bytes is not None:
+            manifest['packet_sha256'] = digest(packet_bytes)
+            manifest['packet_snapshot'] = str(job / 'packet.json')
         new_file(job / 'job.json', json_bytes(manifest))
         try:
             for directory in ('tmp', 'cargo-target', 'evidence'):
                 (job / directory).mkdir(mode=0o700)
             new_file(job / 'goal.txt', goal)
+            if packet_bytes is not None:
+                new_file(job / 'packet.json', packet_bytes)
             worktree.mkdir(mode=0o700)
             git(source, 'worktree', 'add', '-b', branch, str(worktree), base)
             for path in allowed:
@@ -932,6 +986,7 @@ def main(argv=None):
     prep.add_argument('--base', default='HEAD')
     prep.add_argument('--effort')
     prep.add_argument('--reason')
+    prep.add_argument('--packet')
     prep.add_argument('--write-path', nargs='+', action='extend')
     review = commands.add_parser('review-package')
     for option in ('repo', 'job', 'head'):

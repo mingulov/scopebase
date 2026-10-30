@@ -29,7 +29,7 @@ Each task brief must contain the following table filled with concrete values or 
 
 `PACKET_READY` is an expert/controller statement that all implementation choices above are resolved for the selected increment. It is not a test result or runtime authority. A predecessor reference is usable only after the actual artifact exists and satisfies its contract. Future task packets are not ready merely because their task is listed in the DAG.
 
-The existing job helper binds files and prepares a worktree; it does **not** enforce this new packet completeness contract. Until SB01/EX integration adds and tests that admission check, the controller must check the table explicitly. Do not call the unimplemented guard a passing safety check.
+The job helper enforces the packet schema at `prepare --packet` (PACKET-GUARD01: 12 fields present and substantive, origin restricted to PORT/ADAPT/NEW/EVALUATE/QUALIFY, unknown fields refused; `packet_state` recorded machine-visibly in the manifest). Semantic content stays controller/expert-judged: the controller still checks the table explicitly for meaning. Do not call the schema guard a semantic review.
 
 ## Preservation sequence
 
