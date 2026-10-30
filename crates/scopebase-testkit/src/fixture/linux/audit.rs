@@ -4711,7 +4711,10 @@ mod tests {
     /// presence sampling cannot see a regroup with no
     /// observable gap, so the anchor reads identity at fire
     /// time; a latched death with live strays is impossible,
-    /// so a vetoed fire would have been pointless anyway);
+    /// so a vetoed fire would have been pointless anyway).
+    /// Either foreign proof also skips the adopted-zombie
+    /// drain (R13-004 — waitpid(-id) would steal another
+    /// owner's status in a recycled group);
     /// (b) kill + the wait run only while the number still
     /// names `expected` (a zombie keeps its starttime, so ours
     /// still reaps; anything else skips without waiting);
@@ -4731,30 +4734,35 @@ mod tests {
         group_died: bool,
     ) {
         use std::time::Duration;
-        if !group_died {
-            // R13-003 anchor check: fire while the number names
-            // our probe, names nothing (freed or unreadable —
-            // our strays alone), or names a live foreigner
-            // OUTSIDE the group (getpgid proves the signal
-            // cannot reach it). Only a live foreign
-            // SELF-GROUPED holder skips — loud.
-            let holder_tick = proc_starttime(id).ok().flatten();
-            // SAFETY: getpgid queries only. ESRCH (died between
-            // the reads) is freed-equivalent.
-            let grouped_stranger = holder_tick != Some(expected)
-                && holder_tick.is_some()
-                && (unsafe { libc::getpgid(id) }) == id;
-            if grouped_stranger {
-                eprintln!(
-                    "expiry skips group signal: pid {id} names a live foreign \
-                     self-grouped task (strays, if any, leak loud)"
-                );
-            } else {
-                // SAFETY: signal-only to the group; errors
-                // ignored (house discipline).
-                unsafe {
-                    libc::killpg(id, libc::SIGKILL);
-                }
+        // R13-003 anchor check: the number's current holder is a
+        // live foreign SELF-GROUPED task (presence sampling
+        // cannot see a regroup with no observable gap).
+        let holder_tick = proc_starttime(id).ok().flatten();
+        // SAFETY: getpgid queries only. ESRCH (died between the
+        // reads) is freed-equivalent.
+        let grouped_stranger = holder_tick != Some(expected)
+            && holder_tick.is_some()
+            && (unsafe { libc::getpgid(id) }) == id;
+        // R13-004: a proven-foreign group (died-and-reformed per
+        // the sampler, or a sampler-invisible regroup per the
+        // anchor) gets NEITHER the signal NOR the drain — the
+        // drain's waitpid(-id) would reap another owner's zombie
+        // in the recycled group (status theft). Nothing of ours
+        // is drainable there: a latched death saw the group fully
+        // empty, and an invisible regroup leaves our (unsignaled)
+        // strays alive, never zombies.
+        let group_foreign = group_died || grouped_stranger;
+        if group_foreign {
+            eprintln!(
+                "expiry skips foreign group {id} signal+drain \
+                 (died={group_died} regrouped={grouped_stranger}; \
+                 strays, if any, leak loud)"
+            );
+        } else {
+            // SAFETY: signal-only to the group; errors ignored
+            // (house discipline).
+            unsafe {
+                libc::killpg(id, libc::SIGKILL);
             }
         }
         // The probe itself: only while the number still names
@@ -4779,12 +4787,14 @@ mod tests {
         // Drain adopted group zombies (R11-013 pattern, bounded):
         // under a subreaper/PID-1 runner the dead strays became
         // OUR zombies and still hold the group observable — a
-        // plain killpg leaves them. A single pass races death
-        // (the pass runs µs after killpg; SIGKILL-to-zombie takes
-        // ~10-100µs), so retry until the group probes ESRCH-empty
-        // or the bound lapses. waitpid(-pgid) reaps only OUR
-        // children in THIS group (never another test's).
-        {
+        // plain killpg leaves them. Skipped for proven-foreign
+        // groups (R13-004): waitpid(-id) cannot tell our zombie
+        // from another owner's in a recycled group. A single
+        // pass races death (the pass runs µs after killpg;
+        // SIGKILL-to-zombie takes ~10-100µs), so retry until the
+        // group probes ESRCH-empty or the bound lapses.
+        // waitpid(-pgid) reaps only OUR children in THIS group.
+        if !group_foreign {
             use std::time::Instant;
             let drain_end = Instant::now() + Duration::from_secs(5);
             loop {
@@ -4807,10 +4817,9 @@ mod tests {
                 }
                 // Group-empty proof: ESRCH means no task (live or
                 // zombie) still names the pgid. Any other outcome
-                // (live members, or a foreign same-number group —
-                // never touched, never claimed) retries to the
-                // bound, then reports loud (fail-closed: expiry
-                // never panics).
+                // (live members — a foreign group never reaches
+                // here) retries to the bound, then reports loud
+                // (fail-closed: expiry never panics).
                 // SAFETY: killpg(id, 0) probes existence only.
                 if unsafe { libc::killpg(id, 0) } < 0 {
                     // SAFETY: errno location for this thread.
@@ -4822,7 +4831,7 @@ mod tests {
                 if Instant::now() >= drain_end {
                     eprintln!(
                         "expiry: group {id} still observable after drain bound \
-                         (member unkillable, unreaped, or foreign-recycled)"
+                         (member unkillable or unreaped)"
                     );
                     break;
                 }
@@ -5724,6 +5733,109 @@ mod tests {
         assert!(survived, "invisible regroup must survive expiry (settled)");
         let status = owned.expect("foreigner owner keeps its status");
         assert!(!status.success(), "killed foreigner reports signal death");
+    }
+
+    /// R13-004: expiry must not drain a proven-foreign group.
+    /// `group_died` suppresses the signal but pre-fix the
+    /// adopted-zombie drain still runs `waitpid(-id)` — reaping
+    /// another test's exited child in the recycled group
+    /// (status theft). Same for a sampler-invisible regroup
+    /// (group_died=false, grouped stranger). Setup: a live
+    /// self-grouped foreign holder H plus a zombie V of OURS
+    /// in H's group (V = another test thread's child shape —
+    /// same process, different owner). Expire twice (died,
+    /// then invisible); V's status must stay available to its
+    /// owner both times (pre-fix the first drain steals it —
+    /// RED), and H must survive. No steering: the function
+    /// cannot distinguish this from a true recycle. Duration
+    /// 63 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expiry_spares_proven_foreign_group_zombie() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let mut holder = std::process::Command::new("/bin/sleep");
+        holder
+            .arg("63")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            holder.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut holder = holder.spawn().expect("holder spawns");
+        let id = holder.id() as libc::pid_t;
+        let holder_tick = proc_starttime(id)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        // SAFETY: getpgid queries only.
+        assert_eq!(unsafe { libc::getpgid(id) }, id, "holder must self-group");
+        // V: exits at once inside the holder's group; a stable
+        // zombie owned by us (another owner's shape).
+        let mut victim = std::process::Command::new("true");
+        victim
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid into the live holder group pre-exec
+        // (id copied — 'static satisfied).
+        unsafe {
+            victim.pre_exec(move || {
+                libc::setpgid(0, id);
+                Ok(())
+            });
+        }
+        let mut victim = victim.spawn().expect("victim spawns");
+        let victim_id = victim.id() as libc::pid_t;
+        // Settle V into a zombie BEFORE expiry (bounded poll on
+        // /proc state — never a reaping wait).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{victim_id}/stat"))
+                .ok()
+                .and_then(|row| {
+                    row.rsplit_once(") ")
+                        .map(|(_, rest)| rest.split_whitespace().next().unwrap_or("?").to_string())
+                });
+            if state.as_deref() == Some("Z") {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "victim never reached zombie state (state={state:?})"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Bogus tick: always mismatched (wrapping +1).
+        let bogus = holder_tick.wrapping_add(1);
+        expire_probe_collection(id, bogus, &[], true);
+        expire_probe_collection(id, bogus, &[], false);
+        // Observe before cleanup (R12-014): the owner's wait
+        // must still find V's status (a stealing drain would
+        // ECHILD here), and the holder must live.
+        let kept = victim.try_wait();
+        let holder_now = proc_starttime(id);
+        // SAFETY: retiring our own holder.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let owned = holder.wait();
+        let kept = kept.expect("victim status must survive expiry");
+        assert!(
+            kept.is_some(),
+            "victim status must stay available to its owner"
+        );
+        assert_eq!(
+            holder_now,
+            Ok(Some(holder_tick)),
+            "foreign holder must survive expiry"
+        );
+        let status = owned.expect("holder owner keeps its status");
+        assert!(!status.success(), "killed holder reports signal death");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
