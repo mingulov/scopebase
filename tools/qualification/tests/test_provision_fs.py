@@ -4556,6 +4556,37 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIsNone(reported)
             self.assertIn("refused: rc=127", failure)
 
+    # R11-003: a marker-shaped substring inside an echoed
+    # pathname must not forge moved custody — the moved
+    # report parses only at line start (the helper's genuine
+    # emission shape). Mid-line marker text stays ordinary
+    # uncertainty, never ID-keyed moved custody.
+    def test_moved_marker_midline_in_pathname_not_forged(self):
+        from unittest import mock
+        import types
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = types.SimpleNamespace(dev=1, ino=2)
+            target = os.path.join(
+                tmp, "x FAILED-MOVED: mnt=999999 "
+                "observed=/tmp/decoy y", "mnt")
+            out = (f"FAILED-UNCERTAIN: ambiguous stacked mount "
+                   f"at {target} after create\n")
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    return_value=(1, out, "")):
+                reported, failure = provision.mount_fs_via_helper(
+                    tmp, guard, target, 3, 4, "overlay",
+                    layers=[])
+            self.assertIsNone(reported)
+            self.assertNotIn("moved during create", failure)
+            self.assertIn("effect uncertain after create",
+                          failure)
+            kind, mid, obs = provision._classify_mount_failure(
+                failure)
+            self.assertEqual(kind, "uncertain")
+            self.assertIsNone(mid)
+            self.assertIsNone(obs)
+
     # S74-round4: reconcile honors the failure taxonomy — moved
     # and uncertain outcomes refresh (never drop) pending
     # custody with the reported recovery identity; refused

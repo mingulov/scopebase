@@ -8271,9 +8271,15 @@ def _parse_moved_report(text):
     S74: `observed` is None when the escaped target does not
     decode (truncated mid-escape): the mount ID still
     identifies the effect for recovery.
+
+    R11-003: anchored to line start (the helper's genuine
+    emission is one print per line) — a marker-shaped
+    substring inside an echoed pathname (mid-line) must not
+    forge ID-keyed moved custody.
     """
     match = re.search(
-        r"FAILED-MOVED:\s+mnt=(\d+)\s+observed=(\S+)", text or "")
+        r"^FAILED-MOVED:\s+mnt=(\d+)\s+observed=(\S+)",
+        text or "", re.MULTILINE)
     if match is None:
         return None
     try:
