@@ -4331,18 +4331,22 @@ fn ancestry_cleanup_spares_sibling_zombie() {
 }
 
 /// R13-009: allocator-lock probe child (see
-/// [`allocator_writes_excluded_during_placement`]). Under a
+/// [`allocator_steer_excluded_during_placement`] and
+/// [`allocator_restore_excluded_during_placement`]). Under a
 /// normal suite run (no rendezvous) this passes silently; the
 /// driver spawns a FRESH test-binary process at this exact path
 /// with the rendezvous set. The probe reads the current hint,
-/// signals READY (it stands AT its first locked call), then
-/// performs each out-of-loop allocator write path (locked steer
-/// no-op write-back + locked bare restore — both no-ops, so the
-/// hint is undisturbed) and reports DONE. While the driver holds
-/// the lock, the probe must BLOCK at the first locked call
+/// signals READY (it stands AT its locked call), then performs
+/// ONE out-of-loop allocator write path selected by
+/// SCOPEBASE_R13009_PATHS (`steer` or `restore` — a no-op, so
+/// the hint is undisturbed) and reports DONE. While the driver
+/// holds the lock, the probe must BLOCK at its locked call
 /// (post-fix) or sail through (pre-fix RED). Writability is
 /// irrelevant here (only exclusion is measured), so steering
-/// failures never fail this probe.
+/// failures never fail this probe. R14-015: one path per probe
+/// run — a combined probe would block at the FIRST path and
+/// never prove the second's lock (an unlocked restore after a
+/// locked steer sails through invisibly).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn allocator_lock_probe() {
@@ -4350,30 +4354,38 @@ fn allocator_lock_probe() {
         Ok(path) => path,
         Err(_) => return,
     };
+    let paths =
+        std::env::var("SCOPEBASE_R13009_PATHS").expect("probe paths selector set");
     let current =
         std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").expect("probe reads current hint");
     let current = current.trim().to_string();
     std::fs::write(&ready_path, "ready").expect("probe signals ready");
-    // Each out-of-loop allocator write path, as a no-op (the
+    // One out-of-loop allocator write path, as a no-op (the
     // hint value is preserved — the probe disturbs nothing).
-    let _ = locked_steer_next_pid(current.parse::<i32>().unwrap_or(0) + 1);
-    locked_restore_hint(&current);
+    match paths.as_str() {
+        "steer" => {
+            let _ = locked_steer_next_pid(current.parse::<i32>().unwrap_or(0) + 1);
+        }
+        "restore" => locked_restore_hint(&current),
+        other => panic!("unknown probe paths selector: {other}"),
+    }
     eprintln!("R13009 DONE");
 }
 
-/// R13-009: out-of-loop allocator writes must take the
+/// R13-009: one out-of-loop allocator write path must take the
 /// cross-process placement lock. The driver holds the lock and
-/// spawns the probe child: the child must BLOCK at its first
-/// locked call (still running 2s after READY) and complete only
-/// after the release (exit 0 + DONE). Pre-fix the unlocked paths
-/// sail through (RED: child exits while held). The lock is
+/// spawns the probe child: the child must BLOCK at its locked
+/// call (still running 2s after READY) and complete only after
+/// the release (exit 0 + DONE). Pre-fix the unlocked path sails
+/// through (RED: child exits while held). The lock is
 /// blocking-absolute, so the verdict has no timing flakes — the
 /// windows only bound how long we observe. Holds STEER_SERIAL
 /// across the child run (in-process steering siblings block
-/// while this exclusion is measured).
+/// while this exclusion is measured). R14-015: driven once per
+/// write path (steer-only, restore-only) — each path's lock is
+/// proven independently.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-#[test]
-fn allocator_writes_excluded_during_placement() {
+fn allocator_path_excluded_during_placement(paths: &str) {
     use std::time::{Duration, Instant};
     // R12-002: serialize steerers (whole-child hold).
     let _steer = STEER_SERIAL
@@ -4382,8 +4394,10 @@ fn allocator_writes_excluded_during_placement() {
     // Hold the cross-process lock BEFORE spawning: the child's
     // locked calls must block on THIS hold.
     let placement_lock = ns_last_pid_flock();
-    let ready =
-        std::env::temp_dir().join(format!("scopebase-r13009-ready-{}.pid", std::process::id()));
+    let ready = std::env::temp_dir().join(format!(
+        "scopebase-r13009-ready-{paths}-{}.pid",
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&ready);
     let exe = std::env::current_exe().expect("probe test binary path");
     let mut child = std::process::Command::new(exe)
@@ -4391,6 +4405,7 @@ fn allocator_writes_excluded_during_placement() {
         .arg("--exact")
         .arg("--nocapture")
         .env("SCOPEBASE_R13009_READY", &ready)
+        .env("SCOPEBASE_R13009_PATHS", paths)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -4421,12 +4436,12 @@ fn allocator_writes_excluded_during_placement() {
     }
     // Exclusion window: 2s during which the locked child MUST
     // still run (post-fix: blocked in F_SETLKW; pre-fix RED: it
-    // already exited — the writes sailed through unlocked).
+    // already exited — the {paths} path sailed through unlocked).
     std::thread::sleep(Duration::from_secs(2));
     if let Some(status) = child.try_wait().expect("probe wait") {
         panic!(
             "probe completed while the placement lock was held (status {status}) — \
-             out-of-loop allocator writes bypass the lock (RED)"
+             out-of-loop allocator {paths} bypasses the lock (RED)"
         );
     }
     // Release: the blocked child must now complete promptly.
@@ -4439,20 +4454,38 @@ fn allocator_writes_excluded_during_placement() {
         }
         if Instant::now() >= end {
             retire_probe_tree(&mut child, staged);
-            panic!("lock probe hung past release (deadlock?)");
+            panic!("lock probe ({paths}) hung past release (deadlock?)");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
     let _ = std::fs::remove_file(&ready);
     assert!(
         status.success(),
-        "lock probe must exit success after release, got {status}"
+        "lock probe ({paths}) must exit success after release, got {status}"
     );
     let stderr_text = String::from_utf8_lossy(&stderr);
     assert!(
         stderr_text.contains("R13009 DONE"),
-        "lock probe must run its write paths after release: {stderr_text}"
+        "lock probe ({paths}) must run its write path after release: {stderr_text}"
     );
+}
+
+/// R14-015: the steer write path takes the placement lock
+/// (steer-only control — a lock removal here must fail this
+/// test while the restore-only control stays green).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn allocator_steer_excluded_during_placement() {
+    allocator_path_excluded_during_placement("steer");
+}
+
+/// R14-015: the restore write path takes the placement lock
+/// (restore-only control — a lock removal here must fail this
+/// test while the steer-only control stays green).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn allocator_restore_excluded_during_placement() {
+    allocator_path_excluded_during_placement("restore");
 }
 
 /// S128-round9: the pin must be acquired BEFORE custody evidence is
