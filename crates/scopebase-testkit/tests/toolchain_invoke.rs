@@ -4247,6 +4247,23 @@ fn ancestry_cleanup_spares_sibling_zombie() {
             let _ = cand.wait_with_output();
             continue;
         }
+        // R14-014: same-tick retakes are rejected (a same-tick
+        // zombie could be a P remnant — vacuous, not wrong):
+        // reap the squatter and retry (mirrors the check-sample
+        // loop above — retries span jiffies, so a different
+        // birth lands; the owner below always names a
+        // discriminating fixture).
+        let placed_tick = match task_starttime_checked(p_pid) {
+            Ok(Some(started)) => started,
+            _ => {
+                let _ = cand.wait_with_output();
+                continue;
+            }
+        };
+        if placed_tick == pinned_p {
+            let _ = cand.wait_with_output();
+            continue;
+        }
         owner = Some(cand);
         break;
     }
@@ -4258,9 +4275,10 @@ fn ancestry_cleanup_spares_sibling_zombie() {
     // BEFORE any locked_* call below (same-process POSIX locks
     // merge: a nested locked_* drop would release this guard).
     drop(_nsflock);
-    // Different birth (else the zombie could be a P remnant —
-    // vacuous), then zombie-state proof with the owner UNTOUCHED
-    // (a reap here would be ours, not the settler's).
+    // Different birth (the loop above rejects same-tick
+    // retakes, so this pins its postcondition), then
+    // zombie-state proof with the owner UNTOUCHED (a reap here
+    // would be ours, not the settler's).
     let sib_tick = match task_starttime_checked(p_pid) {
         Ok(Some(started)) => started,
         other => panic!("squatter starttime unreadable: {other:?}"),
