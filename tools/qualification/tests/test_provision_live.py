@@ -25,6 +25,7 @@ import contextlib
 import json
 import os
 import pwd
+import shlex
 import shutil
 import subprocess
 import sys
@@ -2912,6 +2913,73 @@ class KeeperSignalTests(unittest.TestCase):
         close_mock.assert_not_called()
 
 
+def hostile_cover_argv(fake, pidfile):
+    """sudo unshare argv that bind-covers grep in a private ns. (R10-001)
+
+    R11-011: both paths are shlex.quote()d — they live under
+    TemporaryDirectory(), which honors TMPDIR, so spaces must
+    not break the fixture and shell metacharacters in a
+    hostile TMPDIR must not execute as root. ``$$`` stays
+    unquoted: it is the fixture shell's own pid by design.
+    """
+    return ["sudo", "-n", "unshare", "-m", "sh", "-c",
+            "mount --make-rprivate / && "
+            f"mount --bind {shlex.quote(fake)} /usr/bin/grep && "
+            f"echo $$ > {shlex.quote(pidfile)} && exec sleep 120"]
+
+
+class HostileCoverArgvTests(unittest.TestCase):
+    # R11-011, ungated by design: the cover body is a pure
+    # string function of its paths, so stub mount/sleep on PATH
+    # prove the parsing (literal words, no substitution)
+    # without privilege or namespaces.
+    def test_evil_tmpdir_parses_literally(self):
+        base = tempfile.mkdtemp(prefix="evil-cover-")
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        marker = os.path.join(base, "PWNED")
+        evil = os.path.join(
+            base, "a b", "c$(touch " + marker + ")d")
+        os.makedirs(evil)
+        bindir = os.path.join(base, "bin")
+        os.makedirs(bindir)
+        argv_log = os.path.join(base, "argv.log")
+        for name in ("mount", "sleep"):
+            stub = os.path.join(bindir, name)
+            with open(stub, "w") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "{\n"
+                    f"printf '{name}:';\n"
+                    "printf '<%s>' \"$@\";\n"
+                    "printf '\\n';\n"
+                    f"}} >> {shlex.quote(argv_log)}\n")
+            os.chmod(stub, 0o755)
+        fake = os.path.join(evil, "grep")
+        with open(fake, "w") as handle:
+            handle.write("x\n")
+        pidfile = os.path.join(evil, "victim.pid")
+        body = hostile_cover_argv(fake, pidfile)[-1]
+        proc = subprocess.run(
+            ["sh", "-c", body],
+            capture_output=True, text=True,
+            env={**os.environ,
+                 "PATH": bindir + ":/usr/bin:/bin"},
+            timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # No substitution executed...
+        self.assertFalse(os.path.exists(marker))
+        # ...the bind saw ONE literal source path...
+        with open(argv_log) as handle:
+            log = handle.read()
+        self.assertIn(
+            f"mount:<--bind><{fake}></usr/bin/grep>", log)
+        # ...and the redirection landed literally — with the
+        # shell's own pid, so $$ survived quoting by design.
+        with open(pidfile) as handle:
+            content = handle.read().strip()
+        self.assertTrue(content.isdigit())
+
+
 @unittest.skipUnless(live_mounts_enabled(),
                      "needs TT04_LIVE_MOUNTS=1 + passwordless sudo")
 class HostileNsCanaryTests(unittest.TestCase):
@@ -2932,10 +3000,7 @@ class HostileNsCanaryTests(unittest.TestCase):
             os.chmod(fake, 0o755)
             pidfile = os.path.join(tmp, "victim.pid")
             runner = subprocess.Popen(
-                ["sudo", "-n", "unshare", "-m", "sh", "-c",
-                 "mount --make-rprivate / && "
-                 f"mount --bind {fake} /usr/bin/grep && "
-                 f"echo $$ > {pidfile} && exec sleep 120"],
+                hostile_cover_argv(fake, pidfile),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL)
             try:
