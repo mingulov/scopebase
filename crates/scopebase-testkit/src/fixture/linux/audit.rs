@@ -3363,6 +3363,19 @@ mod tests {
     /// parent's status assert fails loud instead.
     #[cfg(target_arch = "x86_64")]
     const SUBREAPER_ABANDON_ENV: &str = "SCOPEBASE_TT04_SUBREAPER_ABANDON";
+    /// R14-011: the retire-denial probe path (exact — the parent
+    /// asserts exact exit codes, so a renamed path running zero
+    /// tests exits 0 and fails loud instead of passing
+    /// vacuously).
+    #[cfg(target_arch = "x86_64")]
+    const R14011_PROBE_PATH: &str = "fixture::linux::audit::tests::tt04_r14011_retire_denial_probe";
+    /// R14-011: rendezvous — the denial spec (`pidfd`, `read`, or
+    /// `none`); the probe runs only when set.
+    #[cfg(target_arch = "x86_64")]
+    const R14011_DENIAL_ENV: &str = "SCOPEBASE_TT04_R14011_DENIAL";
+    /// R14-011: rendezvous — the retire target as `pid:starttime`.
+    #[cfg(target_arch = "x86_64")]
+    const R14011_TARGET_ENV: &str = "SCOPEBASE_TT04_R14011_TARGET";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -3878,6 +3891,48 @@ mod tests {
             ));
         }
         Ok(())
+    }
+
+    /// R14-011: the re-exec'd retire-denial probe. Under a
+    /// normal suite run (no rendezvous variables) this passes
+    /// silently; the parent spawns a FRESH test-binary process at
+    /// this exact path with a denial spec and a `pid:starttime`
+    /// target, and the probe installs the filter, calls
+    /// [`retire_known_stray_best_effort`] on the target, and
+    /// _exits with the verdict: 20 = unresolved (false), 21 =
+    /// disappearance certified (true), 3 = setup refused (filter
+    /// install failed — skipped by the caller, never a test
+    /// failure). A single-threaded fresh image: no fork hazards,
+    /// and _exit (never return) so no harness destructor runs
+    /// under the filter.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn tt04_r14011_retire_denial_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        let spec = match std::env::var(R14011_DENIAL_ENV) {
+            Ok(spec) => spec,
+            Err(_) => return,
+        };
+        let target = std::env::var(R14011_TARGET_ENV).expect("retire target set");
+        let (pid_text, tick_text) = target.split_once(':').expect("target is pid:tick");
+        let pid: libc::pid_t = pid_text.parse().expect("target pid numeric");
+        let tick: u64 = tick_text.parse().expect("target tick numeric");
+        // Parse BEFORE installing (allocation is filter-clean,
+        // but parse failures must be loud setup errors, never
+        // retire verdicts).
+        let installed = match spec.as_str() {
+            "pidfd" => install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_ok(),
+            "read" => install_deny_one(libc::SYS_read, DenyAction::Eperm).is_ok(),
+            "none" => true,
+            _ => false,
+        };
+        if !installed {
+            // SAFETY: raw _exit in a fresh probe image.
+            unsafe { libc::_exit(3) };
+        }
+        let certified = retire_known_stray_best_effort(pid, tick);
+        // SAFETY: raw _exit in a fresh probe image.
+        unsafe { libc::_exit(if certified { 21 } else { 20 }) };
     }
 
     /// S140-round9: the re-exec'd denial probe (see
@@ -5048,17 +5103,42 @@ mod tests {
     /// is fail-closed house discipline, not an assertion.
     /// R13-005: returns the disappearance proof so the caller
     /// can record accurate per-stray cleanup evidence.
+    /// R14-011: `true` certifies disappearance — proven absence
+    /// (ESRCH pin, ENOENT stat, recycled number) or a signaled
+    /// task awaited gone. Every UNPROVEN outcome (pin denied,
+    /// exhausted, or unimplemented; unreadable stat) returns
+    /// `false` WITHOUT signaling: a live unsignaled writer must
+    /// never produce `(gone: true)`.
     #[cfg(target_arch = "x86_64")]
     fn retire_known_stray_best_effort(pid: libc::pid_t, started: u64) -> bool {
         use std::time::Duration;
         let pin = match super::super::seccomp::pidfd_open_raw(pid) {
             Ok(pin) => pin,
-            Err(_) => return true,
+            // ESRCH proves absence (nothing to signal — the
+            // named task is gone); every other pin failure
+            // (denied, exhausted, unimplemented) leaves the
+            // task's fate unknown — unresolved, never certified.
+            Err(errno) => return errno == libc::ESRCH,
         };
-        if proc_starttime(pid) != Ok(Some(started)) {
-            // SAFETY: pin owned by this scope.
-            unsafe { libc::close(pin) };
-            return true;
+        match proc_starttime(pid) {
+            Ok(Some(now)) if now == started => {}
+            Ok(_) => {
+                // Absent or recycled: the NAMED task is gone
+                // (a recycled number could not host another
+                // birth otherwise) — close the pin and certify
+                // WITHOUT signaling (the number is unreserved).
+                // SAFETY: pin owned by this scope.
+                unsafe { libc::close(pin) };
+                return true;
+            }
+            // Unreadable stat (R11-005: our own tasks stay
+            // stat-visible, so this is never absence) — the
+            // task may be live and unsignaled: unresolved.
+            Err(_) => {
+                // SAFETY: pin owned by this scope.
+                unsafe { libc::close(pin) };
+                return false;
+            }
         }
         // SAFETY: pidfd_send_signal(pidfd, SIGKILL, NULL, 0).
         unsafe {
@@ -7486,6 +7566,103 @@ mod tests {
         let _ = std::fs::remove_file(&pidfile);
         assert!(failed.is_err(), "doomed publish must fail loud");
         assert!(retired, "writer must retire before the loud failure");
+    }
+
+    /// R14-011: pin and stat failures against a live writer stay
+    /// UNRESOLVED (false) — never certified disappearance. Each
+    /// case stages a fresh live writer and retires it under a
+    /// seccomp denial in a FRESH probe image (hermetic: no
+    /// suite-wide fd exhaustion, no ambient filter): pidfd-denial
+    /// (pin EPERM), read-denial (stat EPERM). The no-denial
+    /// control runs FIRST — a writer that cannot retire would
+    /// make the denial cases' live-after asserts vacuous: it must
+    /// certify (21) with the writer gone. Denial cases must
+    /// report 20 with the writer STILL LIVE (unproven means
+    /// unsignaled — signaling by number risks a recycled task).
+    /// Pre-fix the denial cases certify (RED: 21); post-fix they
+    /// report unresolved (GREEN: 20). Durations 70/71/72 are
+    /// unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_denial_reports_unresolved_not_gone() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        // (spec, sleep duration, expected code, writer live after?)
+        for (spec, duration, expect, live_after) in
+            [("none", "70", 21, false), ("pidfd", "71", 20, true), ("read", "72", 20, true)]
+        {
+            let mut writer = std::process::Command::new("/bin/sleep")
+                .arg(duration)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("writer spawns");
+            let wpid = writer.id() as libc::pid_t;
+            let wtick = proc_starttime(wpid)
+                .expect("writer stat readable")
+                .expect("writer visible");
+            let mut probe = std::process::Command::new(&exe)
+                .arg(R14011_PROBE_PATH)
+                .arg("--exact")
+                .env(R14011_DENIAL_ENV, spec)
+                .env(R14011_TARGET_ENV, format!("{wpid}:{wtick}"))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn retire-denial probe");
+            let end = Instant::now() + Duration::from_secs(30);
+            let status = loop {
+                if let Some(status) = probe.try_wait().expect("probe wait") {
+                    break status;
+                }
+                // Reap our writer under the probe: the probe's
+                // await proves disappearance via /proc, and only
+                // WE can reap our zombie (the probe's waitpid
+                // ECHILDs) — without this pump the control's
+                // await would time out on our unreaped zombie.
+                // SAFETY: WNOHANG reap of our own child; errors
+                // (no zombie yet) ignored.
+                let mut straggler = 0;
+                unsafe { libc::waitpid(wpid, &mut straggler, libc::WNOHANG) };
+                if Instant::now() >= end {
+                    let _ = probe.kill();
+                    let _ = probe.wait();
+                    unsafe { libc::kill(wpid, libc::SIGKILL) };
+                    let _ = writer.wait();
+                    panic!("{spec}: retire-denial probe hung past 30s");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            let mut err = Vec::new();
+            if let Some(mut stderr) = probe.stderr.take() {
+                use std::io::Read as _;
+                let _ = stderr.read_to_end(&mut err);
+            }
+            if status.code() == Some(3) {
+                unsafe { libc::kill(wpid, libc::SIGKILL) };
+                let _ = writer.wait();
+                eprintln!("skip: seccomp unavailable for the retire-denial probe");
+                return;
+            }
+            // Observe before cleanup (R12-014): capture liveness
+            // first, retire the writer either way (RED runs stay
+            // clean), then assert.
+            let live = proc_starttime(wpid) == Ok(Some(wtick));
+            unsafe { libc::kill(wpid, libc::SIGKILL) };
+            let _ = writer.wait();
+            assert_eq!(
+                status.code(),
+                Some(expect),
+                "{spec}: retire verdict wrong: {}",
+                String::from_utf8_lossy(&err)
+            );
+            assert_eq!(
+                live, live_after,
+                "{spec}: writer liveness after retire wrong (live={live})"
+            );
+        }
     }
 
     /// R13-005: an outer probe that exits after grandchild birth
