@@ -2711,9 +2711,17 @@ fn own_fd_count() -> usize {
         .count()
 }
 
-/// R10-013: true when no live task runs `sleep <duration>`.
+/// R11-019: true when no live task in process group `pgid`
+/// runs `sleep <duration>` — group-scoped (an unrelated
+/// sleeper, or a concurrent probe's same-duration sleeper in
+/// another group, must not fail us). Our own sleeper inherits
+/// our group (no setsid/setpgid on the middle→sleeper path;
+/// execlp preserves it), so a same-group match is
+/// unambiguously ours. Membership via /proc/PID/stat pgrp; an
+/// unreadable stat (exited mid-scan) skips like an unreadable
+/// cmdline.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn no_sleep_duration(duration: &str) -> bool {
+fn no_sleep_duration_in_group(duration: &str, pgid: libc::pid_t) -> bool {
     let want = format!("sleep\0{duration}\0").into_bytes();
     let procs = match std::fs::read_dir("/proc") {
         Ok(dirs) => dirs,
@@ -2725,12 +2733,108 @@ fn no_sleep_duration(duration: &str) -> bool {
             continue;
         }
         if let Ok(cmdline) = std::fs::read(format!("/proc/{text}/cmdline")) {
-            if cmdline == want {
+            if cmdline == want && task_pgrp_matches(&text, pgid) {
                 return false;
             }
         }
     }
     true
+}
+
+/// R11-019: true when /proc/`pid`/stat names process group
+/// `pgid` (fields after `) `: state ppid PGRP ...). False on
+/// any read/parse failure (exited mid-scan — retired or
+/// retiring, never a live leak we can still name).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn task_pgrp_matches(pid: &str, pgid: libc::pid_t) -> bool {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let after = match stat.rsplit_once(") ") {
+        Some((_, rest)) => rest,
+        None => return false,
+    };
+    match after.split_whitespace().nth(2) {
+        Some(pgrp) => pgrp.parse::<libc::pid_t>().is_ok_and(|g| g == pgid),
+        None => false,
+    }
+}
+
+/// R11-019: the group scan DETECTS a same-group sleeper
+/// (sensitivity — a broken pgrp parse must not pass
+/// silently) and reports clean after it is reaped.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_scan_detects_own_sleep() {
+    // Duration 9.51: unique to this unit test (sibling tests
+    // park their own sleepers in our shared test-binary
+    // group; the scan mechanism is duration-agnostic) and
+    // fractional (a RED run strands at most seconds, not
+    // minutes — retire-before-assert cannot apply here: the
+    // sleeper must be alive for the detection assert).
+    let mut sleeper = std::process::Command::new("sleep")
+        .arg("9.51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn own sleep 95");
+    // SAFETY: getpgrp reads our own group only.
+    let our_group = unsafe { libc::getpgrp() };
+    assert!(
+        !no_sleep_duration_in_group("9.51", our_group),
+        "same-group sleep 9.51 must be detected"
+    );
+    // SAFETY: our own child (kill + blocking reap).
+    unsafe {
+        libc::kill(sleeper.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = sleeper.wait();
+    assert!(
+        no_sleep_duration_in_group("9.51", our_group),
+        "reaped sleeper must read clean"
+    );
+}
+
+/// R11-019: the group scan IGNORES a live sleeper in a
+/// foreign group (unit-level specificity — the probe-level
+/// regressions prove the end-to-end wiring).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_scan_ignores_foreign_group() {
+    // Duration 9.52: unique to this unit test (see above).
+    let mut sleeper = std::process::Command::new("sleep")
+        .arg("9.52")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn sleep 95");
+    assert!(
+        no_sleep_duration_in_group("9.52", i32::MAX),
+        "foreign-group sleep 9.52 must be ignored"
+    );
+    // SAFETY: our own child (kill + blocking reap).
+    unsafe {
+        libc::kill(sleeper.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = sleeper.wait();
+}
+
+/// R11-019: the pgrp parser names our own group for self and
+/// rejects an impossible one (positive + negative control).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn task_pgrp_matches_self_and_bogus() {
+    // SAFETY: getpgrp reads our own group only.
+    let our_group = unsafe { libc::getpgrp() };
+    let me = std::process::id().to_string();
+    assert!(
+        task_pgrp_matches(&me, our_group),
+        "self must match our own group"
+    );
+    assert!(
+        !task_pgrp_matches(&me, i32::MAX),
+        "self must not match an impossible group"
+    );
 }
 
 /// R11-016(b1): retire-before-assert for the unframed probe's
@@ -2770,7 +2874,9 @@ fn retire_unexpected_orphan(outcome: &std::thread::Result<(i32, u64)>, holder: i
 /// pipe close, the middle reap, and the orphan retirement
 /// (RED: the 95s sleeper survives); post-fix the expiry path
 /// retires everything it owns before failing loud. Duration 95
-/// is unique to this test.
+/// is unique to this test; the leak scan is group-scoped
+/// (R11-019), so uniqueness is belt-and-braces, not
+/// load-bearing.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn tt04_orphan_unframed_expiry_probe() {
@@ -2854,8 +2960,15 @@ fn tt04_orphan_unframed_expiry_probe() {
         elapsed < Duration::from_secs(60),
         "expiry must stay bounded, took {elapsed:?}"
     );
-    // No sleeper: nothing on the box may run our argv.
-    assert!(no_sleep_duration("95"), "orphan sleeper 95 leaked");
+    // No sleeper of OURS: nothing in our process group may
+    // run our argv (a foreign sleep 95 — or a concurrent
+    // probe's — lives in another group and must not fail us).
+    // SAFETY: getpgrp reads our own group only.
+    let our_group = unsafe { libc::getpgrp() };
+    assert!(
+        no_sleep_duration_in_group("95", our_group),
+        "orphan sleeper 95 leaked in our process group"
+    );
     // No zombie middleman (or anything else of ours): reap
     // stragglers so RED runs stay clean, then require zero.
     let mut stragglers = 0;
@@ -3157,6 +3270,128 @@ fn unframed_report_expiry_retires_everything() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// R11-019: spawn one unframed-expiry probe (the probe
+/// self-groups on entry, so each probe's fixture lives in a
+/// distinct process group).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn spawn_unframed_probe() -> std::process::Child {
+    let exe = std::env::current_exe().expect("probe test binary path");
+    std::process::Command::new(exe)
+        .arg("tt04_orphan_unframed_expiry_probe")
+        .arg("--exact")
+        .env(UNFRAMED_PROBE_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn unframed-expiry probe")
+}
+
+/// R11-019: await one probe (90s bound): timeout retires the
+/// probe tree and panics; failure exit retires the tree and
+/// returns the status plus output for the caller to report.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn await_unframed_probe(
+    child: &mut std::process::Child,
+) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
+    let end = Instant::now() + Duration::from_secs(90);
+    loop {
+        if let Some(status) = child.try_wait().expect("probe wait") {
+            let (stdout, stderr) = drain_exited_child_output(child);
+            if !status.success() {
+                retire_probe_tree(child);
+            }
+            return (status, stdout, stderr);
+        }
+        if Instant::now() >= end {
+            retire_probe_tree(child);
+            panic!("unframed-expiry probe hung past 90s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// R11-019: an unrelated `sleep 95` (foreign group) must not
+/// fail the probe, and the probe must not touch it. Pre-fix
+/// the probe's host-global argv scan fails here (RED).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn unframed_probe_ignores_foreign_sleep_95() {
+    let mut foreign = std::process::Command::new("sleep")
+        .arg("95")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn foreign sleep 95");
+    let mut probe = spawn_unframed_probe();
+    // The foreign sleeper inherits OUR group; the probe
+    // self-groups to its own pid — distinct by construction
+    // (fail loud on a cosmic pid collision, not mysteriously).
+    // SAFETY: getpgrp reads our own group only.
+    let our_group = unsafe { libc::getpgrp() };
+    assert_ne!(
+        our_group,
+        probe.id() as libc::pid_t,
+        "probe pid collides with our process group; rerun"
+    );
+    let (status, stdout, stderr) = await_unframed_probe(&mut probe);
+    // Retire-before-assert: the foreign sleeper must be alive
+    // here (the probe never touches foreign processes)...
+    let alive = foreign.try_wait().expect("foreign wait").is_none();
+    // SAFETY: our own child (kill + blocking reap).
+    unsafe {
+        libc::kill(foreign.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = foreign.wait();
+    assert!(alive, "probe run must not kill the foreign sleeper");
+    assert!(
+        status.success(),
+        "probe must ignore foreign sleep 95, got {status}: {}",
+        String::from_utf8_lossy(&stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&stdout).contains("1 passed"),
+        "probe must run its one test: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+}
+
+/// R11-019: two concurrent probes must both pass — each
+/// probe's same-duration sleeper is foreign to the other.
+/// Pre-fix both fail (each sees the other's sleeper) (RED).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn concurrent_unframed_probes_ignore_each_other() {
+    let mut first = spawn_unframed_probe();
+    let mut second = spawn_unframed_probe();
+    // Distinct groups by construction (both live → distinct
+    // pids → distinct self-groups).
+    assert_ne!(first.id(), second.id(), "probe pids must differ");
+    let (status_a, stdout_a, stderr_a) = await_unframed_probe(&mut first);
+    let (status_b, stdout_b, stderr_b) = await_unframed_probe(&mut second);
+    assert!(
+        status_a.success(),
+        "first probe must pass alongside a concurrent probe, got {status_a}: {}",
+        String::from_utf8_lossy(&stdout_a)
+    );
+    assert!(
+        String::from_utf8_lossy(&stdout_a).contains("1 passed"),
+        "first probe must run its one test: {}",
+        String::from_utf8_lossy(&stderr_a)
+    );
+    assert!(
+        status_b.success(),
+        "second probe must pass alongside a concurrent probe, got {status_b}: {}",
+        String::from_utf8_lossy(&stdout_b)
+    );
+    assert!(
+        String::from_utf8_lossy(&stdout_b).contains("1 passed"),
+        "second probe must run its one test: {}",
+        String::from_utf8_lossy(&stderr_b)
+    );
 }
 
 /// S129-round9: retirement polling must never issue a numeric
