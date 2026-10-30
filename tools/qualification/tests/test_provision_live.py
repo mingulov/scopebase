@@ -264,6 +264,41 @@ def register_keeper_life(lives):
     return (pid, start)
 
 
+def adopt_recorded_replacement(pidfile, stale, lives):
+    """Adopt an erroneously spawned replacement into lives (R10-009).
+
+    Fixtured entries must never spawn; when one does, it
+    replaces the private record, orphaning the new pid from
+    ``lives``. Compare the record against the pre-entry
+    snapshot ``stale``: unchanged or unreadable records mean
+    nothing to adopt (False). A changed record flags the
+    fixture retained (True) and, when the recorded pid is
+    identifiable and provably alive, appends its
+    (pid, current-starttime) binding so the finalizer kills
+    the verified replacement instead of leaking it.
+    Malformed, dead, or unreadable replacements adopt
+    nothing — the record alone is retained for manual
+    recovery. Never raises.
+    """
+    try:
+        with open(pidfile, "rb") as handle:
+            current = handle.read()
+    except OSError:
+        return False
+    if current == stale:
+        return False
+    state = provision._parse_keeper_state(current)
+    if state is None:
+        return True
+    try:
+        bound = provision._keeper_starttime(state[0])
+    except Exception:
+        return True
+    if bound is not None:
+        lives.append((state[0], bound))
+    return True
+
+
 def quiesce_private_lives(lives, timeout=15):
     """Best-effort retire of owned private keeper lives. (S117)
 
@@ -2034,6 +2069,7 @@ class LiveBindTests(unittest.TestCase):
                     if word.isdigit()}
 
         quiesce_unproven = []
+        replacement_adopted = False
         with private_keeper_state(self.tmp) as (pidfile,
                                                priv_candir):
             handles_before = len(provision._KEEPERS)
@@ -2041,6 +2077,11 @@ class LiveBindTests(unittest.TestCase):
             # S131: registered immediately, before every
             # fallible observation below.
             lives = []
+            # R10-009: re-snapshotted after the bound kill,
+            # before the entries run; None means the record
+            # could not be read, so any record the finalizer
+            # finds is an unaccounted replacement.
+            stale = None
             keeper_pid, keeper_start = register_keeper_life(
                 lives)
             try:
@@ -2118,8 +2159,16 @@ class LiveBindTests(unittest.TestCase):
                     self.assertEqual(handle.read(), global_before)
                 self.assertTrue(sleepers() <= before)
             finally:
+                # R10-009: a fixtured entry that erroneously
+                # spawned replaced the private record — adopt
+                # the unaccounted replacement into lives so
+                # the quiesce retires it instead of leaking an
+                # unrecorded keeper, and retain the fixture.
+                replacement_adopted = \
+                    adopt_recorded_replacement(
+                        pidfile, stale, lives)
                 quiesce_unproven = quiesce_private_lives(lives)
-                if quiesce_unproven:
+                if quiesce_unproven or replacement_adopted:
                     # S131: retirement unproven — retain the
                     # ORIGINAL private records/dirs for manual
                     # recovery instead of letting tearDown
@@ -2127,8 +2176,10 @@ class LiveBindTests(unittest.TestCase):
                     self._retain_tmp = True
                     sys.stderr.write(
                         "UNPROVEN private lives "
-                        f"{quiesce_unproven!r}; original "
-                        f"fixture {self.tmp} retained\n")
+                        f"{quiesce_unproven!r} "
+                        f"(adopted={replacement_adopted}); "
+                        f"original fixture {self.tmp} "
+                        "retained\n")
         # The shared keeper this suite (and any other fixture)
         # depends on is untouched and recoverable: the cache
         # was dropped, so this re-ensure fully re-verifies
@@ -2140,11 +2191,12 @@ class LiveBindTests(unittest.TestCase):
                          global_identity)
         rows = provision.read_mount_table()
         self.assertIsInstance(rows, list)
-        if quiesce_unproven:
+        if quiesce_unproven or replacement_adopted:
             self.fail(
                 "private keeper lives not proven retired: "
-                f"{quiesce_unproven!r} (original fixture "
-                f"retained at {self.tmp})")
+                f"{quiesce_unproven!r} "
+                f"(adopted={replacement_adopted}; original "
+                f"fixture retained at {self.tmp})")
 
     # S100/S103-round6 live: killing the keeper drops every
     # later routing decision loudly, and the next ensure
@@ -3082,6 +3134,75 @@ class QuiesceLivesTests(unittest.TestCase):
         self.assertIn("4242", captured.getvalue())
         self.assertEqual(len(unproven), 1)
         self.assertEqual(unproven[0][:2], (4242, 1234))
+
+
+class AdoptReplacementTests(unittest.TestCase):
+    # R10-009: an entry that erroneously spawns replaces the
+    # private record — the finalizer must adopt the
+    # replacement into lives (never leak an unrecorded root
+    # keeper) and flag the fixture retained. Never raises.
+    def test_adopt_appends_live_replacement(self):
+        sleeper = subprocess.Popen(
+            ["sleep", "120"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(
+                    f"{sleeper.pid} 77 {'cd' * 16}\n".encode())
+            lives = [(4242, 1234)]
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, b"stale-bytes", lives))
+            bound = provision._keeper_starttime(sleeper.pid)
+            self.assertIsNotNone(bound)
+            self.assertEqual(
+                lives, [(4242, 1234), (sleeper.pid, bound)])
+
+    def test_unchanged_record_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(b"4321 77 %s\n" % (b"cd" * 16))
+            lives = [(4242, 1234)]
+            with open(pidfile, "rb") as handle:
+                stale = handle.read()
+            self.assertFalse(
+                adopt_recorded_replacement(pidfile, stale, lives))
+            self.assertEqual(lives, [(4242, 1234)])
+
+    def test_missing_pidfile_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lives = []
+            self.assertFalse(
+                adopt_recorded_replacement(
+                    os.path.join(tmp, "gone.pid"), b"stale", lives))
+            self.assertEqual(lives, [])
+
+    def test_malformed_record_retains_without_adopting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(b"not-a-record")
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, b"stale", lives))
+            self.assertEqual(lives, [])
+
+    def test_dead_replacement_retains_without_adopting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(
+                    f"{2 ** 30 - 1} 77 {'cd' * 16}\n".encode())
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    pidfile, b"stale", lives))
+            self.assertEqual(lives, [])
 
 
 class RegisterKeeperLifeTests(unittest.TestCase):
