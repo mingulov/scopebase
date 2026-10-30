@@ -356,7 +356,14 @@ def run_bounded_reader_case(reader, timeout=10):
                 # the reader never runs), and a tighter inherited
                 # soft limit is the environment's budget (raising
                 # it would weaken containment). Infinite bounds
-                # (RLIM_INFINITY) do not constrain.
+                # do not constrain, on either representation —
+                # IR-006: RLIM_INFINITY is -1 here (probed:
+                # Python 3.14, Linux), so the >= 0 filters skip
+                # it (a bare min would sink the finite computed
+                # cap to -1 = unlimited); a huge-positive
+                # infinity loses min() against the finite cap.
+                # Both lines are load-bearing — neither the
+                # filters nor the min() may go.
                 soft, hard = resource.getrlimit(resource.RLIMIT_AS)
                 if hard >= 0:
                     cap = min(cap, hard)
@@ -4230,6 +4237,62 @@ class AdoptReplacementTests(unittest.TestCase):
                         "%s: allocation missed the inherited budget "
                         "(reached %sMiB)" % (tag, reached))
                     self.assertEqual(exitcode, 0)
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
+                         "needs RLIMIT_AS worker budgets")
+    def test_worker_budget_ignores_infinite_inherited_limits(self):
+        # IR-006 pin (passes pre- and post-fix — it guards the
+        # >= 0 filters, not a behavior change): infinite
+        # inherited bounds must not constrain the worker. On
+        # -1 platforms (this box: RLIM_INFINITY == -1) the
+        # filters skip them; a bare min() would sink the
+        # finite computed cap to -1 (unlimited) and run the
+        # worker unbounded. The worker reports its applied
+        # rlimit through the ordinary reader channel; the
+        # applied pair must be (cap, cap) finite. Verified by
+        # mutation: with the filters removed the worker
+        # reports (-1, -1) and the inequality below fails.
+        import multiprocessing as _mp
+
+        def report_rlimit():
+            return resource.getrlimit(resource.RLIMIT_AS)
+
+        def middleman(queue):
+            inf = resource.RLIM_INFINITY
+            resource.setrlimit(resource.RLIMIT_AS, (inf, inf))
+            outcome = run_bounded_reader_case(
+                report_rlimit, timeout=10)
+            queue.put(outcome)
+
+        ctx = _mp.get_context("fork")
+        queue = ctx.Queue()
+        middle = ctx.Process(target=middleman, args=(queue,))
+        middle.start()
+        middle.join(90)
+        if middle.is_alive():
+            middle.terminate()
+            middle.join(5)
+            if middle.is_alive():
+                middle.kill()
+                middle.join(5)
+        self.assertEqual(
+            middle.exitcode, 0, "middleman must exit cleanly")
+        import queue as _queue
+        try:
+            finished, outcome, exitcode = queue.get(timeout=10)
+        except _queue.Empty:
+            self.fail("middleman must report")
+        self.assertIsNotNone(exitcode, "worker reaped")
+        self.assertTrue(
+            finished, "reader must execute, got %r" % (outcome,))
+        self.assertEqual(exitcode, 0)
+        soft, hard = outcome
+        self.assertEqual(
+            soft, hard, "applied pair must be (cap, cap)")
+        self.assertNotEqual(
+            soft, resource.RLIM_INFINITY,
+            "infinite inheritance must not leak through as unlimited")
+        self.assertGreaterEqual(soft, 512 * 1024 * 1024)
 
     @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
                          "needs RLIMIT_AS worker budgets")
