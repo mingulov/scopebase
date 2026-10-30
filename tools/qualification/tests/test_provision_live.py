@@ -270,6 +270,31 @@ def register_keeper_life(lives):
     return (pid, start)
 
 
+# R12-010: entry snapshot unreadable — distinct from None
+# (never existed). An unreadable entry never proves
+# nothingness: adoption retains on it whatever the final
+# read shows.
+_ENTRY_SNAPSHOT_UNREADABLE = object()
+
+
+def snapshot_entry_record(pidfile):
+    """Pre-entry record snapshot for adoption comparison. (R12-010)
+
+    Record bytes when readable; None when the record never
+    existed (FileNotFoundError); _ENTRY_SNAPSHOT_UNREADABLE
+    on any other read error (denial, I/O failure — never
+    collapsed into None, which would let entry+final read
+    failures around an erroneous spawn discharge custody).
+    """
+    try:
+        with open(pidfile, "rb") as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return _ENTRY_SNAPSHOT_UNREADABLE
+
+
 def adopt_recorded_replacement(pidfile, stale, lives):
     """Adopt an erroneously spawned replacement into lives (R10-009).
 
@@ -299,6 +324,10 @@ def adopt_recorded_replacement(pidfile, stale, lives):
     after a record existed at entry (R11-008) flags retained
     (True): silent False would let teardown erase the
     recovery state of a replacement the finalizer never saw.
+    R12-010: ``stale`` may be _ENTRY_SNAPSHOT_UNREADABLE (the
+    entry read itself failed) — the ``is not None`` arms below
+    retain on it whatever the final read shows, since entry
+    failure never proves never-existed.
     The read itself is production's S28 bounded reader
     (R11-009): O_NONBLOCK open, same-descriptor regular-file
     check, 1 MiB cap — a FIFO or device at the pidfile
@@ -2173,9 +2202,9 @@ class LiveBindTests(unittest.TestCase):
             # fallible observation below.
             lives = []
             # R10-009: re-snapshotted after the bound kill,
-            # before the entries run; None means the record
-            # could not be read, so any record the finalizer
-            # finds is an unaccounted replacement.
+            # before the entries run; R12-010: tri-state (bytes,
+            # None never-existed, UNREADABLE) so an unreadable
+            # entry never proves nothingness.
             stale = None
             keeper_pid, keeper_start = register_keeper_life(
                 lives)
@@ -2192,11 +2221,7 @@ class LiveBindTests(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.fail("private keeper tree did not "
                               "collapse after the bound kill")
-                try:
-                    with open(pidfile, "rb") as handle:
-                        stale = handle.read()
-                except OSError:
-                    stale = None
+                stale = snapshot_entry_record(pidfile)
                 before = sleepers()
                 # S137: the private stale paths go into the
                 # ACTUAL subprocess interpreters — the probe
@@ -3694,6 +3719,53 @@ class AdoptReplacementTests(unittest.TestCase):
                 adopt_recorded_replacement(
                     os.path.join(tmp, "gone.pid"), b"stale",
                     lives))
+            self.assertEqual(lives, [])
+
+    def test_unreadable_entry_snapshot_classified(self):
+        # R12-010: the entry snapshot is tri-state — record
+        # bytes, None (never existed), or the UNREADABLE
+        # sentinel (any non-missing read error). Collapsing
+        # unreadable into None lets entry+final read failures
+        # around an erroneous spawn discharge custody silently.
+        # The denial is mocked (deterministic as any uid —
+        # chmod denial needs non-root); missing/present are real.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            with open(pidfile, "wb") as handle:
+                handle.write(b"4321 77 %s\n" % (b"cd" * 16))
+            self.assertEqual(
+                snapshot_entry_record(pidfile),
+                b"4321 77 %s\n" % (b"cd" * 16))
+            os.unlink(pidfile)
+            self.assertIsNone(snapshot_entry_record(pidfile))
+            with open(pidfile, "wb") as handle:
+                handle.write(b"4321 77 %s\n" % (b"cd" * 16))
+            real_open = open
+
+            def deny_proc(path, *args, **kwargs):
+                if str(path) == pidfile:
+                    raise PermissionError(13, "denied")
+                return real_open(path, *args, **kwargs)
+
+            with mock.patch("builtins.open",
+                            side_effect=deny_proc):
+                self.assertIs(
+                    snapshot_entry_record(pidfile),
+                    _ENTRY_SNAPSHOT_UNREADABLE)
+
+    def test_unreadable_entry_snapshot_retains_on_final_failure(
+            self):
+        # R12-010: entry unreadable (sentinel) + final read
+        # failure retains (True) — entry failure never proves
+        # never-existed, so teardown keeps recovery custody for
+        # a replacement the finalizer never saw.
+        with tempfile.TemporaryDirectory() as tmp:
+            lives = []
+            self.assertTrue(
+                adopt_recorded_replacement(
+                    os.path.join(tmp, "gone.pid"),
+                    _ENTRY_SNAPSHOT_UNREADABLE, lives))
             self.assertEqual(lives, [])
 
     def test_appeared_record_with_no_stale_adopts(self):
