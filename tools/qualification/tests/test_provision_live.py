@@ -3031,6 +3031,29 @@ def hostile_cover_argv(fake, pidfile):
             f"echo $$ > {shlex.quote(pidfile)} && exec sleep 120"]
 
 
+def retire_proven_hostile_victim(victim, victim_start,
+                                 cover_proven):
+    """SIGKILL the hostile victim only on proven cover. (R12-011)
+
+    ``cover_proven`` must be True only after the fixture's
+    mountinfo cover was OBSERVED on the sampled number: a
+    sample taken after the original's death verifies BY
+    CONSTRUCTION against its own replacement, so killing on
+    an unproven sample is tautological authentication
+    (R11-012's mismatch-refusal protects pre-reuse samples
+    only). Unproven cover skips the kill loudly and never
+    raises — like retire_hostile_victim, which this
+    delegates to once proven.
+    """
+    if not cover_proven:
+        sys.stderr.write(
+            "WARNING: hostile victim %r not signaled: fixture "
+            "cover never proven (sample unauthenticated)\n"
+            % (victim,))
+        return
+    retire_hostile_victim(victim, victim_start)
+
+
 def retire_hostile_victim(victim, victim_start):
     """SIGKILL the hostile-cover victim through PIDFD authority. (R11-012)
 
@@ -3104,6 +3127,36 @@ class RetireHostileVictimTests(unittest.TestCase):
         else:
             self.fail("replacement was signaled")
         self.assertIn("not signaled", err.write.call_args[0][0])
+
+    def test_unproven_cover_leaves_fresh_sample_unsignaled(self):
+        # R12-011: cover never proven + a freshly sampled
+        # holder (the tautology shape: the sample postdates
+        # the original's death and verifies BY CONSTRUCTION)
+        # must not signal — the substitute survives the
+        # complete fixture finalization. R11-012's
+        # mismatch-refusal only protects pre-reuse samples.
+        from unittest import mock
+        proc = self._sleeper()
+        _, fresh = provision.stat_state_start(proc.pid)
+        with mock.patch("sys.stderr"):
+            retire_proven_hostile_victim(
+                proc.pid, fresh, cover_proven=False)
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            self.fail("substitute was signaled")
+
+    def test_proven_cover_still_retires(self):
+        # R12-011 anti-overcorrection twin: proven cover
+        # delegates to the bound kill — the fixture victim
+        # still retires through PIDFD authority.
+        proc = self._sleeper()
+        _, start = provision.stat_state_start(proc.pid)
+        retire_proven_hostile_victim(
+            proc.pid, start, cover_proven=True)
+        self.assertEqual(proc.wait(timeout=10), -9)
 
 
 class HostileCoverArgvTests(unittest.TestCase):
@@ -3185,6 +3238,7 @@ class HostileNsCanaryTests(unittest.TestCase):
                 deadline = time.time() + 15
                 victim = None
                 victim_start = None
+                cover_proven = False
                 while time.time() < deadline:
                     try:
                         with open(pidfile) as handle:
@@ -3197,6 +3251,10 @@ class HostileNsCanaryTests(unittest.TestCase):
                             provision.stat_state_start(victim)
                         with open(f"/proc/{victim}/mountinfo") as handle:
                             if "/usr/bin/grep" in handle.read():
+                                # R12-011: cover OBSERVED on the
+                                # sampled number — the sample is
+                                # fixture-bound from here.
+                                cover_proven = True
                                 break
                     except (OSError, ValueError, provision.ProcAbsent,
                             provision.ProcUnknown):
@@ -3229,8 +3287,12 @@ class HostileNsCanaryTests(unittest.TestCase):
                 # R11-012: PIDFD-authority kill against the
                 # retained starttime — exit or reuse before
                 # finalization refuses (loudly) instead of
-                # redirecting root SIGKILL by number.
-                retire_hostile_victim(victim, victim_start)
+                # redirecting root SIGKILL by number. R12-011:
+                # gated on proven cover — a sample taken after
+                # the original's death would verify by
+                # construction against its replacement.
+                retire_proven_hostile_victim(
+                    victim, victim_start, cover_proven)
                 try:
                     runner.wait(timeout=15)
                 except subprocess.TimeoutExpired:
