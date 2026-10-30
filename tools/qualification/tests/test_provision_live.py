@@ -25,6 +25,7 @@ import contextlib
 import json
 import os
 import pwd
+import resource
 import shlex
 import shutil
 import subprocess
@@ -299,15 +300,23 @@ def run_bounded_reader_case(reader, timeout=10):
 
     Returns (finished, payload, exitcode): ``finished`` True
     carries the reader's return as ``payload`` with a clean
-    (0) exit; anything else — bound lapse, child crash, a
-    raised reader, a missing payload — returns
-    (False, None, exitcode) with the child SIGKILL-
-    terminated (escalated from SIGTERM) and reaped.
+    (0) exit; a raised reader returns
+    (False, ("raised", repr), exitcode) with the child exited
+    cleanly after reporting; anything else — bound lapse
+    (SIGKILL-terminated, escalated from SIGTERM), child
+    crash, a missing payload — returns (False, None,
+    exitcode) with the child reaped.
     Independently enforceable termination: threads cannot
     be killed, so a restored unbounded read (FIFO block,
     /dev/zero alloc) in a daemon thread would wedge or OOM
     the shared interpreter past the assertion; a child
     process is killed and its address space freed.
+    R13-011: the child also runs under a memory budget
+    (RLIMIT_AS = parent VmSize + 512MiB, floored at 2GiB
+    when unreadable): an unbounded allocator raises
+    MemoryError in-child and reports it instead of
+    exhausting shared runner memory toward an OOM kill
+    (whose signal exit previously passed as "contained").
     Fork context (closures need no pickling; spawn would
     refuse them) with pre-fork stdio flush (no double
     flush into redirected suite logs). Payloads must be
@@ -319,8 +328,29 @@ def run_bounded_reader_case(reader, timeout=10):
     _sys.stderr.flush()
     ctx = _mp.get_context("fork")
     recv_conn, send_conn = ctx.Pipe(duplex=False)
+    # R13-011: worker address-space budget (see docstring).
+    # resource is imported at module top (no post-fork import:
+    # the import lock may be held across the fork).
+    budget = 2 * 1024 * 1024 * 1024
+    try:
+        with open("/proc/self/status") as handle:
+            for line in handle:
+                if line.startswith("VmSize:"):
+                    current_kb = int(line.split()[1])
+                    budget = (current_kb // 1024 + 512) * 1024 * 1024
+                    break
+    except OSError:
+        pass
 
-    def _target(conn, func):
+    def _target(conn, func, cap):
+        if cap is not None:
+            try:
+                resource.setrlimit(
+                    resource.RLIMIT_AS, (cap, cap))
+            except Exception as exc:
+                conn.send(("raised", "budget-unset:%r" % (exc,)))
+                conn.close()
+                return
         try:
             conn.send(("ok", func()))
         except BaseException as exc:
@@ -329,7 +359,7 @@ def run_bounded_reader_case(reader, timeout=10):
             conn.close()
 
     proc = ctx.Process(
-        target=_target, args=(send_conn, reader))
+        target=_target, args=(send_conn, reader, budget))
     proc.start()
     send_conn.close()
     proc.join(timeout)
@@ -357,6 +387,10 @@ def run_bounded_reader_case(reader, timeout=10):
             _sys.stderr.write(
                 "bounded reader raised in child: %s\n"
                 % (payload,))
+            # R13-011: the raised repr rides the payload slot so
+            # callers can require the budget-fired MemoryError
+            # (a timeout/OOM signal death arrives payload-less).
+            return (False, ("raised", payload), exitcode)
         return (False, None, exitcode)
     return (True, payload, exitcode)
 
@@ -4063,6 +4097,8 @@ class AdoptReplacementTests(unittest.TestCase):
             self.assertIsNotNone(exitcode, "worker reaped")
             self.assertNotEqual(exitcode, 0)
 
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
+                         "needs RLIMIT_AS worker budgets")
     def test_allocating_reader_contained_outside_interpreter(self):
         # R12-013: the known-bad device shape (an unbounded
         # /dev/zero read) run through the bounded runner must
@@ -4070,6 +4106,11 @@ class AdoptReplacementTests(unittest.TestCase):
         # the child (killed+reaped at the bound) while the
         # parent's RSS barely moves. Threshold: megabytes of
         # real growth vs gigabytes an in-process read adds.
+        # R13-011: the child runs under a memory budget, so the
+        # worker raises MemoryError and reports it — retirement
+        # by budget, proven by the raised payload plus a clean
+        # exit (a timeout signal or OOM kill arrives
+        # payload-less and nonzero, and fails below).
         import re as _re
 
         def parent_rss_mb():
@@ -4086,12 +4127,27 @@ class AdoptReplacementTests(unittest.TestCase):
                 handle.read()
 
         before = parent_rss_mb()
-        finished, _, exitcode = run_bounded_reader_case(
+        finished, outcome, exitcode = run_bounded_reader_case(
             allocate_forever, timeout=3)
         growth = parent_rss_mb() - before
         self.assertFalse(finished)
         self.assertIsNotNone(exitcode, "worker reaped")
-        self.assertNotEqual(exitcode, 0)
+        # R13-011: the worker must die BY THE BUDGET (MemoryError
+        # raised in-child and reported), not by timeout signal nor
+        # OOM kill — both of those arrive without a raised
+        # payload, and any nonzero exit previously passed as
+        # "contained". A clean exit-0 report excludes signal/OOM
+        # death (those are -9/-15, never 0 with a payload).
+        self.assertIsNotNone(
+            outcome, "worker must report (not die silent by signal/OOM)")
+        kind, detail = outcome
+        self.assertEqual(kind, "raised")
+        self.assertIn(
+            "MemoryError", detail,
+            "worker must hit its memory budget, got: %s" % (detail,))
+        self.assertEqual(
+            exitcode, 0,
+            "budget-fired worker must report cleanly, not die by signal")
         self.assertLess(
             growth, 1024,
             f"unbounded read leaked into suite RSS (+{growth}MB)")
