@@ -8543,6 +8543,92 @@ class MountNsTests(unittest.TestCase):
             self.assertEqual(
                 Path(pidfile).read_text(), f"4321 77 {canary}\n")
 
+    # R11-001: inner anchors unreadable for a LIVE pid must
+    # REFUSE (AdmissionError), never return False into a
+    # respawn over the live keeper. Real gate, real live pid
+    # (self), real kill-0; only the starttime reads are
+    # injected unreadable (sudo reads scripted: ungated suite).
+    def test_canary_gate_refuses_unreadable_anchor_for_live_pid(
+            self):
+        from unittest import mock
+        me = os.getpid()
+        link = os.readlink("/proc/self/ns/mnt")
+        self.assertTrue(link.startswith("mnt:["))
+        nsid = link[5:-1]
+        link_proc = mock.Mock(
+            returncode=0, stdout=f"{link}\n", stderr="")
+        cat_proc = mock.Mock(
+            returncode=0, stdout="no canary here\n", stderr="")
+        with mock.patch.object(
+                provision, "_keeper_starttime",
+                return_value=None), \
+             mock.patch.object(
+                provision.subprocess, "run",
+                side_effect=[link_proc, cat_proc]) as run_mock:
+            with self.assertRaisesRegex(
+                    provision.AdmissionError,
+                    "anchor unreadable"):
+                provision._ns_has_canary_pinned(
+                    me, int(nsid), "ab" * 16)
+        # Both elevated reads ran: the refusal comes from the
+        # anchor arm, after a matched link — not from an early
+        # mismatch, and before any canary-content verdict.
+        self.assertEqual(run_mock.call_count, 2)
+
+    # R11-001: the final outer anchor unreadable after a
+    # successful verification must REFUSE — falling to respawn
+    # would orphan the live verified keeper. Real gate with
+    # scripted elevated reads; the starttime sequence reads
+    # alive-alive-alive then unreadable; the pid is really
+    # alive so kill-0 proves it. Record byte-identical, no
+    # spawn.
+    def test_ensure_refuses_unreadable_final_anchor(self):
+        from unittest import mock
+        old_ns = provision._MOUNT_NS
+        old_ident = provision._MOUNT_NS_IDENTITY
+        self.addCleanup(setattr, provision, "_MOUNT_NS", old_ns)
+        self.addCleanup(
+            setattr, provision, "_MOUNT_NS_IDENTITY", old_ident)
+        provision._MOUNT_NS = None
+        provision._MOUNT_NS_IDENTITY = None
+        me = os.getpid()
+        canary = "cd" * 16
+        record = f"{me} 77 {canary}\n"
+        link_proc = mock.Mock(
+            returncode=0, stdout="mnt:[77]\n", stderr="")
+        cat_proc = mock.Mock(
+            returncode=0,
+            stdout=f"something canary-{canary} mounted\n",
+            stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            Path(pidfile).write_text(record)
+            os.chmod(pidfile, 0o600)
+            with mock.patch.object(
+                    provision, "_keeper_paths",
+                    return_value=(pidfile, tmp)), \
+                 mock.patch.object(
+                    provision.subprocess, "run",
+                    side_effect=[link_proc, link_proc,
+                                 cat_proc]) as run_mock, \
+                 mock.patch.object(
+                    provision, "_keeper_starttime",
+                    side_effect=[1234, 1234, 1234,
+                                  None]), \
+                 mock.patch.object(
+                    provision, "_spawn_keeper",
+                    side_effect=AssertionError(
+                        "must not spawn")) as spawn:
+                with self.assertRaisesRegex(
+                        provision.AdmissionError,
+                        "anchor unreadable"):
+                    provision.ensure_mount_ns()
+                spawn.assert_not_called()
+                # Two link reads (verify + gate) plus the
+                # canary read: verification genuinely ran.
+                self.assertEqual(run_mock.call_count, 3)
+            self.assertEqual(Path(pidfile).read_text(), record)
+
     # S134-round9: respawn requires PROVEN death — the real
     # link read runs (failed readlink plus the kernel's ESRCH
     # for an absurd pid), not a stubbed None. The unknown arm

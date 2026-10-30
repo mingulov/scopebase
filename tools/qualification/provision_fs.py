@@ -826,7 +826,9 @@ def _ns_has_canary_pinned(pid, nsid, canary):
     joined-namespace content can no longer authenticate
     itself because nothing executes there. Raises
     AdmissionError when the check itself cannot run
-    (S134 unknown propagates); proven-absent/wrong is
+    (S134 unknown propagates) — including anchors unreadable
+    for a still-live pid (R11-001: unknown must refuse, never
+    respawn over the live keeper); proven-absent/wrong is
     False (stale/wrong ns → respawn), never an error.
     """
     if not isinstance(pid, int) or pid <= 1:
@@ -854,7 +856,17 @@ def _ns_has_canary_pinned(pid, nsid, canary):
         raise AdmissionError(
             f"mount-ns canary unreadable for live pid {pid}")
     post = _keeper_starttime(pid)
-    if pre is None or post is None or pre != post:
+    if pre is None or post is None:
+        # R11-001: unreadable anchors prove nothing — a
+        # kill-0 ESRCH means the life is really gone (False →
+        # respawn), anything else means a live-but-unreadable
+        # pid whose keeper must not be replaced (refuse).
+        if _pid_proven_dead(pid):
+            return False
+        raise AdmissionError(
+            f"mount-ns canary anchor unreadable for live "
+            f"pid {pid}")
+    if pre != post:
         return False
     return f"canary-{canary}" in proc.stdout
 
@@ -943,6 +955,25 @@ def _keeper_starttime(pid):
         return int(fields[19])
     except ValueError:
         return None
+
+
+def _pid_proven_dead(pid):
+    """True only when kill(pid, 0) reports ESRCH. (R11-001)
+
+    Hidepid-proof and locale-independent: existence is a
+    syscall errno, not output text (the S134 pattern). Every
+    other outcome — signalable, EPERM, or any failure to
+    even attempt the check — answers False: the pid may
+    still host a life, so callers must treat it as unknown,
+    never absent.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _keeper_routing_verified():
@@ -1478,6 +1509,17 @@ def ensure_mount_ns():
                             "unanchorable; refusing to orphan it "
                             "(retire by hand before retrying)")
                     starttime = _keeper_starttime(pid)
+                    if (starttime is None
+                            and not _pid_proven_dead(pid)):
+                        # R11-001: verified alive (link+canary)
+                        # but the final anchor is unreadable for
+                        # a live pid — respawning would orphan
+                        # it. Refuse like the pre-anchor arm.
+                        raise AdmissionError(
+                            "recorded keeper anchor "
+                            "unreadable after verification; "
+                            "refusing to orphan it (retire by "
+                            "hand before retrying)")
                     if (starttime is not None
                             and starttime == pre):
                         _MOUNT_NS = nspath
