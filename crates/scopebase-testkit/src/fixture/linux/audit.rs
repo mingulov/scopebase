@@ -3158,29 +3158,15 @@ mod tests {
         let pgid = AtomicI32::new(-1);
         let born = AtomicBool::new(false);
         let done = AtomicBool::new(false);
-        std::thread::scope(|scope| {
+        let caught = std::thread::scope(|scope| {
             scope.spawn(|| {
                 // Birth watcher: the 2s guard spins with the
                 // grandchild born and barrier-parked — stable
-                // for observation, not a fleeting window. The
-                // `children` file is PER-THREAD and the preflight
-                // fork runs on a libtest thread, so every task's
-                // file is scanned, not just the leader's.
+                // for observation, not a fleeting window.
                 while !done.load(Ordering::SeqCst) {
-                    let mid = pgid.load(Ordering::SeqCst);
-                    if mid > 1 {
-                        let tasks = format!("/proc/{mid}/task");
-                        if let Ok(entries) = std::fs::read_dir(&tasks) {
-                            for entry in entries.flatten() {
-                                let path = entry.path().join("children");
-                                if let Ok(list) = std::fs::read_to_string(&path) {
-                                    if list.split_whitespace().next().is_some() {
-                                        born.store(true, Ordering::SeqCst);
-                                        return;
-                                    }
-                                }
-                            }
-                        }
+                    if middleman_has_child(pgid.load(Ordering::SeqCst)) {
+                        born.store(true, Ordering::SeqCst);
+                        return;
                     }
                     std::thread::sleep(Duration::from_millis(20));
                 }
@@ -3189,11 +3175,16 @@ mod tests {
             // across this boundary (no locks, no aliasing
             // invariants) — catching its guard panic is sound.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_preflight_middleman_observed("write-eintr", Duration::from_secs(2), &pgid)
+                run_preflight_middleman_observed(
+                    "write-eintr",
+                    Duration::from_secs(2),
+                    &pgid,
+                    PROBE_TEST_PATH,
+                )
             }));
             done.store(true, Ordering::SeqCst);
             match outcome {
-                Err(_) => {}
+                Err(err) => err,
                 Ok(reported) => panic!(
                     "2s guard must fire mid-EINTR-spin, got exit {}",
                     reported.code
@@ -3209,6 +3200,10 @@ mod tests {
             group > 1,
             "runner must publish the middleman pgid, got {group}"
         );
+        // R11-017: the caught panic must be the intended
+        // pre-report guard timeout (shared gate — any other
+        // panic fails loud here, never vacuously below).
+        assert_guard_pre_report_timeout(caught, Duration::from_secs(2), group);
         // Empty group first: a zombie still holds it observable.
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -3362,7 +3357,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn run_preflight_middleman(spec: &'static str, guard: Duration) -> MiddlemanOutcome {
         let observed = std::sync::atomic::AtomicI32::new(-1);
-        run_preflight_middleman_observed(spec, guard, &observed)
+        run_preflight_middleman_observed(spec, guard, &observed, PROBE_TEST_PATH)
     }
 
     /// R10-011: guard-fire retirement of a hung middleman AND its
@@ -3445,6 +3440,7 @@ mod tests {
         spec: &'static str,
         guard: Duration,
         observed_pgid: &std::sync::atomic::AtomicI32,
+        probe_path: &str,
     ) -> MiddlemanOutcome {
         use std::os::unix::ffi::OsStringExt as _;
         use std::sync::atomic::Ordering;
@@ -3453,11 +3449,19 @@ mod tests {
         // stay non-CLOEXEC (it crosses the exec); the read end is
         // cloexec'd so the probe never inherits it.
         let mut pipe = [0; 2];
+        // R11-017: BOTH ends cloexec from birth (pipe2 is
+        // atomic — no fcntl window). The write end must cross
+        // only OUR middleman's exec: with a plain pipe, a
+        // sibling guard test's concurrent fork inherits a
+        // non-cloexec copy of our write end, its exec keeps
+        // the copy, and our EOF never arrives — the runner
+        // then dies by its own guard deadline instead of the
+        // exit/report assertion (the bogus-path test failed
+        // 6/10 paired runs this way). The child clears
+        // cloexec on the write end pre-exec below.
         // SAFETY: valid out-pointer for the pipe ends.
-        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
-        // SAFETY: fcntl flag-set on an owned descriptor.
         assert_eq!(
-            unsafe { libc::fcntl(pipe[0], libc::F_SETFD, libc::FD_CLOEXEC) },
+            unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
             0
         );
         // Rendezvous strings, built pre-fork: the child borrows
@@ -3469,7 +3473,11 @@ mod tests {
                 .into_vec(),
         )
         .expect("test binary path is C-safe");
-        let probe = std::ffi::CString::new(PROBE_TEST_PATH).expect("static");
+        // R11-017: the probe path is a parameter (production
+        // callers pass PROBE_TEST_PATH) so the bogus-path
+        // regression can stage a middleman that runs zero
+        // tests.
+        let probe = std::ffi::CString::new(probe_path).expect("probe path is C-safe");
         let exact = std::ffi::CString::new("--exact").expect("static");
         let denial =
             std::ffi::CString::new(format!("{PROBE_DENIAL_ENV}={spec}")).expect("spec is C-safe");
@@ -3524,6 +3532,20 @@ mod tests {
             // SAFETY: setpgid on self, no userspace state.
             unsafe {
                 libc::setpgid(0, 0);
+            }
+            // R11-017: clear cloexec on the report write end
+            // (async-signal-safe fcntl, pre-exec) so ONLY this
+            // middleman carries it across exec — sibling
+            // forks' copies stay cloexec and die at their
+            // exec, so no sibling can hold our EOF hostage.
+            // SAFETY: fcntl flag-clear on an owned descriptor.
+            // No panic machinery post-fork (inherited-mutex
+            // hazard) — fail fast with _exit on the
+            // essentially-impossible error instead.
+            unsafe {
+                if libc::fcntl(pipe[1], libc::F_SETFD, 0) != 0 {
+                    libc::_exit(127);
+                }
             }
             unsafe {
                 libc::execve(exe.as_ptr(), argv.as_ptr(), envp.as_ptr());
@@ -4394,6 +4416,60 @@ mod tests {
         );
     }
 
+    /// R11-017: the guard-test gate — a caught panic counts ONLY
+    /// as the intended pre-report guard timeout (full-message
+    /// pin, EXPECTED_BARRIER_TIMEOUT precedent): the exact
+    /// pre-report guard text with this run's guard, group, and
+    /// a true retirement verdict. Any other panic (exit/report
+    /// asserts from a bogus probe path, poll/wait failures, ...)
+    /// fails loud here instead of passing vacuously below.
+    /// Both guard regressions (R10-011 and the R11-013 probe)
+    /// share it.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_guard_pre_report_timeout(
+        err: Box<dyn std::any::Any + Send>,
+        guard: std::time::Duration,
+        group: libc::pid_t,
+    ) {
+        let expected = format!(
+            "middleman hung past {guard:?} (deadlock under denial; group {group} retired: true, no report received)"
+        );
+        match err.downcast::<String>() {
+            Ok(text) => assert_eq!(
+                *text, expected,
+                "caught panic must be the intended pre-report guard timeout"
+            ),
+            Err(_) => panic!(
+                "caught panic must be the intended pre-report guard timeout (non-String payload)"
+            ),
+        }
+    }
+
+    /// R11-017: true when any task of `mid` currently has a
+    /// child (the `children` file is PER-THREAD and the
+    /// preflight fork runs on a libtest thread — every task's
+    /// file is scanned, not just the leader's). Shared by the
+    /// guard regressions' birth watchers.
+    #[cfg(target_arch = "x86_64")]
+    fn middleman_has_child(mid: i32) -> bool {
+        if mid <= 1 {
+            return false;
+        }
+        let tasks = format!("/proc/{mid}/task");
+        let Ok(entries) = std::fs::read_dir(&tasks) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path().join("children");
+            if let Ok(list) = std::fs::read_to_string(&path) {
+                if list.split_whitespace().next().is_some() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// R10-011: the infinite-retry SHAPE must die bounded with
     /// BOTH generations provably retired. A 2s guard (far below
     /// production's 5s EINTR deadline) fires while the
@@ -4409,35 +4485,67 @@ mod tests {
     /// observed), so this pins the guarantee rather than a
     /// manifesting leak — the group kill makes both-generation
     /// retirement unconditional instead of kernel-dependent.
+    /// R11-017: the caught panic must be the intended
+    /// pre-report guard timeout (full-message gate — a bogus
+    /// probe path's exit/report panic fails here, not below),
+    /// and grandchild birth must be proven by watcher (a
+    /// group can only retire generations that existed).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn eintr_spin_guard_retires_both_generations() {
-        use std::sync::atomic::{AtomicI32, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
         use std::time::{Duration, Instant};
         let pgid = AtomicI32::new(-1);
+        let born = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
         let started = Instant::now();
-        // The runner holds only raw descriptors and locals
-        // across this boundary (no locks, no aliasing
-        // invariants) — catching its guard panic is sound.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_preflight_middleman_observed("write-eintr", Duration::from_secs(2), &pgid)
-        }));
+        let outcome = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Birth watcher: the 2s guard spins with the
+                // grandchild born and barrier-parked — stable
+                // for observation, not a fleeting window.
+                while !done.load(Ordering::SeqCst) {
+                    if middleman_has_child(pgid.load(Ordering::SeqCst)) {
+                        born.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            // The runner holds only raw descriptors and locals
+            // across this boundary (no locks, no aliasing
+            // invariants) — catching its guard panic is sound.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_preflight_middleman_observed(
+                    "write-eintr",
+                    Duration::from_secs(2),
+                    &pgid,
+                    PROBE_TEST_PATH,
+                )
+            }));
+            done.store(true, Ordering::SeqCst);
+            outcome
+        });
         let elapsed = started.elapsed();
+        let group = pgid.load(Ordering::SeqCst);
+        assert!(
+            group > 1,
+            "runner must publish the middleman pgid, got {group}"
+        );
         match outcome {
-            Err(_) => {}
+            Err(err) => assert_guard_pre_report_timeout(err, Duration::from_secs(2), group),
             Ok(reported) => panic!(
                 "2s guard must fire mid-EINTR-spin, got exit {}",
                 reported.code
             ),
         }
         assert!(
+            born.load(Ordering::SeqCst),
+            "grandchild birth never observed before the guard fired"
+        );
+        assert!(
             elapsed < Duration::from_secs(30),
             "guard failure must stay bounded, took {elapsed:?}"
-        );
-        let group = pgid.load(Ordering::SeqCst);
-        assert!(
-            group > 1,
-            "runner must publish the middleman pgid, got {group}"
         );
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -4459,6 +4567,73 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// R11-017: a nonexistent probe path must FAIL the guard
+    /// regression's gates (not pass vacuously): the middleman
+    /// runs zero tests and the runner's exit/report assertion
+    /// panics — that panic is not the guard timeout, and no
+    /// grandchild is ever born (structurally absent — no
+    /// preflight runs without the probe — so the birth
+    /// assertion is deterministic, not a race). Both gates must
+    /// reject.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn bogus_probe_path_rejected_by_guard_gates() {
+        use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+        use std::time::Duration;
+        let pgid = AtomicI32::new(-1);
+        let born = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        let outcome = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !done.load(Ordering::SeqCst) {
+                    if middleman_has_child(pgid.load(Ordering::SeqCst)) {
+                        born.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_preflight_middleman_observed(
+                    "write-eintr",
+                    Duration::from_secs(2),
+                    &pgid,
+                    "nonexistent::probe::path",
+                )
+            }));
+            done.store(true, Ordering::SeqCst);
+            outcome
+        });
+        // The runner panics (exit/report mismatch on zero
+        // tests)...
+        let err = match outcome {
+            Err(err) => err,
+            Ok(reported) => panic!(
+                "bogus probe path must panic the runner, got exit {}",
+                reported.code
+            ),
+        };
+        // ...but NOT with the guard timeout (the
+        // classification gate rejects)...
+        let gate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_guard_pre_report_timeout(
+                err,
+                Duration::from_secs(2),
+                pgid.load(Ordering::SeqCst),
+            )
+        }));
+        assert!(
+            gate.is_err(),
+            "nonexistent probe path must fail the classification gate"
+        );
+        // ...and no grandchild is ever born (the birth gate
+        // rejects).
+        assert!(
+            !born.load(Ordering::SeqCst),
+            "no grandchild may exist without the probe"
+        );
     }
 
     /// R11-013: pre-report guard retirement must REAP the
