@@ -3147,6 +3147,9 @@ mod tests {
         if pid == 0 {
             unsafe { libc::_exit(44) };
         }
+        // R12-016: custody before the observing setup — an
+        // expiry panic above retirement must not leak.
+        let mut guard = ChildGuard::new(pid);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while proc_state(pid) != Some('Z') {
             assert!(
@@ -3156,6 +3159,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         retire_owned_unreaped(pid);
+        // Retirement proved — disarm so the ECHILD below
+        // proves the helper reaped (not the drop).
+        guard.disarm();
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
         let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
@@ -3224,6 +3230,44 @@ mod tests {
         assert!(
             again < 0 && last_errno_is(libc::ECHILD),
             "denial must leave no remaining owned child status"
+        );
+    }
+
+    /// R12-016: setup-custody pattern proof — a setup panic
+    /// (denied observation / expiry stand-in) with custody
+    /// established at fork must leave no remaining owned
+    /// child status. The guard drops during the unwind and
+    /// the pinned drop reaps. Pre-fix (no guard) the ECHILD
+    /// assert below fails (RED); the assert's own waitpid
+    /// reaps the zombie, so even the RED run litters nothing.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r12_setup_panic_leaves_no_owned_status() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::atomic::{AtomicI32, Ordering};
+        let slot = AtomicI32::new(-1);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: child exits at once (async-signal-safe).
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "unit fork failed");
+            if pid == 0 {
+                unsafe { libc::_exit(46) };
+            }
+            slot.store(pid, Ordering::SeqCst);
+            // R12-016: custody at fork — the guard drops during
+            // the unwind below and reaps.
+            let _guard = ChildGuard::new(pid);
+            panic!("injected setup observation failure");
+        }));
+        assert!(result.is_err(), "the setup must have panicked");
+        let pid = slot.load(Ordering::SeqCst);
+        assert!(pid >= 0, "the child must have forked before the panic");
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "setup panic must leave no remaining owned child status"
         );
     }
 
@@ -5825,6 +5869,9 @@ mod tests {
             .spawn()
             .expect("stand-in spawns");
         let pid = child.id() as libc::pid_t;
+        // R12-016: custody before the observing setup — a
+        // setup panic must not leak the stand-in.
+        let mut guard = ChildGuard::new(pid);
         // Leave it unreaped (our zombie); wait for the Z state
         // so the pre-fix blind waitpid would reap it.
         let end = Instant::now() + Duration::from_secs(5);
@@ -5855,6 +5902,9 @@ mod tests {
         // SAFETY: our own child, first wait.
         let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         assert_eq!(got, pid, "stand-in must survive the await unreaped");
+        // Survival proved and reaped by us — disarm so the
+        // drop stays silent.
+        guard.disarm();
     }
 
     /// R11-005: the stat gate must not break the intended case —
@@ -5868,6 +5918,9 @@ mod tests {
             .spawn()
             .expect("zombie spawns");
         let pid = child.id() as libc::pid_t;
+        // R12-016: custody before the observing setup — a
+        // setup panic must not leak the zombie.
+        let mut guard = ChildGuard::new(pid);
         let end = Instant::now() + Duration::from_secs(5);
         loop {
             if matches!(proc_starttime(pid), Ok(Some(_))) {
@@ -5904,6 +5957,9 @@ mod tests {
             got < 0,
             "owned zombie must be reaped by the await, got {got}"
         );
+        // The await's reap proved — disarm so the drop stays
+        // silent over the discharged number.
+        guard.disarm();
     }
 
     /// IR1 (internal review round 1): the Err arm must never
@@ -5924,6 +5980,9 @@ mod tests {
         if pid == 0 {
             unsafe { libc::_exit(45) };
         }
+        // R12-016: custody before the observing setup — a
+        // setup panic must not leak the zombie.
+        let mut guard = ChildGuard::new(pid);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while proc_state(pid) != Some('Z') {
             assert!(
@@ -5956,6 +6015,9 @@ mod tests {
         // SAFETY: our own child, first wait.
         let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         assert_eq!(got, pid, "zombie must survive the Err arm unreaped");
+        // Survival proved and reaped by us — disarm so the
+        // drop stays silent.
+        guard.disarm();
     }
 
     /// R11-005: an absent number returns true immediately
