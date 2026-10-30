@@ -3570,6 +3570,43 @@ mod tests {
         vec![(pid, started)]
     }
 
+    /// R14-009: timeout retirement for a hung outer probe — the
+    /// single body behind every rendezvous parent's deadline
+    /// branch (a hung probe is indistinguishable from a held one,
+    /// so the branch always assumes publication happened). Kills
+    /// the probe's group plus the probe itself (SIGKILL lands on
+    /// a stopped task too), reaps it, reads the rendezvous and
+    /// retires any published writer (an independently-grouped
+    /// writer survives the killpg — without this the timeout
+    /// leaks it parked), removes the pidfile, then panics with
+    /// `what` (a timeout is a failure — loud, never a leak).
+    #[cfg(target_arch = "x86_64")]
+    fn timeout_retire_hung_probe(
+        child: &mut std::process::Child,
+        pidfile: &std::path::Path,
+        what: &str,
+    ) -> ! {
+        let id = child.id() as libc::pid_t;
+        // SAFETY: signal-only to the probe's own group, then the
+        // probe itself; errors ignored. The probe is our unreaped
+        // child (alive-or-zombie — the number cannot have
+        // recycled), so both signals address our own tasks.
+        unsafe {
+            libc::killpg(id, libc::SIGKILL);
+            libc::kill(id, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        // R14-009: the timeout retires the published strays — an
+        // independently-grouped writer survives the killpg above
+        // and would otherwise stay parked past the failure.
+        let strays = read_published_grandchild_strays(pidfile);
+        for (pid, started) in strays {
+            retire_known_stray_best_effort(pid, started);
+        }
+        let _ = std::fs::remove_file(pidfile);
+        panic!("{what}");
+    }
+
     /// S140-round9: the probe's only report channel — write exactly
     /// one line, then _exit with the classification. Used on EVERY
     /// probe path (even setup refusal) so the parent never waits on
@@ -4462,16 +4499,17 @@ mod tests {
     /// that path). Every guard-fire path retires the whole
     /// group through [`retire_hung_middleman_group`] before
     /// panicking — the failure stays loud, never a leak.
-    /// R14-008: while the report is awaited, the subreaper
-    /// probe's runner publishes the middleman's firstborn the
-    /// slice it appears (birth publication — a probe death
-    /// between birth and report still leaves the writer's
-    /// identity for the parent's expiry). Dual gate: armed only
-    /// when BOTH [`SUBREAPER_PROBE_ENV`] and
-    /// [`GRANDCHILD_PIDFILE_ENV`] are set — every other caller
-    /// (guard probe, in-suite runners) keeps the single long
-    /// poll with zero behavior change, and a transient ambient
-    /// rendezvous (R14-003's own-env window) can never arm it.
+    /// R14-008: while the report is awaited, a probe's runner
+    /// publishes the middleman's firstborn the slice it appears
+    /// (birth publication — a probe death between birth and
+    /// report still leaves the writer's identity for the
+    /// parent's expiry). Dual gate: armed only when
+    /// [`GRANDCHILD_PIDFILE_ENV`] plus a probe identity
+    /// ([`SUBREAPER_PROBE_ENV`] or [`GUARD_PROBE_ENV`], R14-009)
+    /// are set — every other caller (in-suite runners) keeps
+    /// the single long poll with zero behavior change, and a
+    /// transient ambient rendezvous (R14-003's own-env window)
+    /// can never arm it.
     #[cfg(target_arch = "x86_64")]
     fn run_preflight_middleman_observed(
         spec: &'static str,
@@ -4621,11 +4659,14 @@ mod tests {
         // SAFETY: write end owned by the middleman now.
         unsafe { libc::close(pipe[1]) };
         let deadline = Instant::now() + guard;
-        // R14-008: birth watch, armed once (the subreaper probe's
-        // rendezvous is process-stable; a per-slice env read
-        // would chase ambient windows).
-        let birth_watch = std::env::var(SUBREAPER_PROBE_ENV).is_ok()
-            && std::env::var(GRANDCHILD_PIDFILE_ENV).is_ok();
+        // R14-008: birth watch, armed once (a probe's rendezvous
+        // is process-stable; a per-slice env read would chase
+        // ambient windows). R14-009: the guard probe arms it too
+        // (same middleman ops, same birth-to-report window, same
+        // rendezvous read by its parent).
+        let birth_watch = std::env::var(GRANDCHILD_PIDFILE_ENV).is_ok()
+            && (std::env::var(SUBREAPER_PROBE_ENV).is_ok()
+                || std::env::var(GUARD_PROBE_ENV).is_ok());
         let mut birth_published: Option<(libc::pid_t, u64)> = None;
         // Bounded newline-framed report read: the probe writes one
         // line (even on setup refusal) and a parked grandchild
@@ -6982,15 +7023,9 @@ mod tests {
                 None => {}
             }
             if Instant::now() >= end {
-                // SAFETY: signal-only to the probe's own group,
-                // then the probe itself; errors ignored.
-                let id = child.id() as libc::pid_t;
-                unsafe {
-                    libc::killpg(id, libc::SIGKILL);
-                    libc::kill(id, libc::SIGKILL);
-                }
-                let _ = child.wait();
-                panic!("subreaper probe hung past 150s");
+                // R14-009: the shared timeout body (kills the
+                // group + probe, retires published strays).
+                timeout_retire_hung_probe(&mut child, &pidfile, "subreaper probe hung past 150s");
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -7220,7 +7255,15 @@ mod tests {
             if let Some(status) = child.try_wait().expect("probe wait") {
                 break status;
             }
-            assert!(Instant::now() < end, "abandoning probe hung past 60s");
+            if Instant::now() >= end {
+                // R14-009: the shared timeout body (kills the
+                // group + probe, retires published strays).
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "abandoning probe hung past 60s",
+                );
+            }
             std::thread::sleep(Duration::from_millis(20));
         };
         // Skip path first: without seccomp the probe refuses
@@ -7378,7 +7421,11 @@ mod tests {
                 }
                 panic!("probe exited {status} before grandchild birth (fixture broken)");
             }
-            assert!(Instant::now() < end, "grandchild never born (60s)");
+            if Instant::now() >= end {
+                // R14-009: the shared timeout body (kills the
+                // group + probe, retires published strays).
+                timeout_retire_hung_probe(&mut child, &pidfile, "grandchild never born (60s)");
+            }
             if let Some(mid) = middleman_first_child(id) {
                 if let Some(born) = middleman_first_child(mid) {
                     if let Ok(Some(tick)) = proc_starttime(born) {
@@ -7422,7 +7469,11 @@ mod tests {
             if let Some(status) = child.try_wait().expect("probe reap") {
                 break status;
             }
-            assert!(Instant::now() < end, "killed probe never reaped");
+            if Instant::now() >= end {
+                // R14-009: the shared timeout body (kills the
+                // group + probe, retires published strays).
+                timeout_retire_hung_probe(&mut child, &pidfile, "killed probe never reaped");
+            }
             std::thread::sleep(Duration::from_millis(20));
         };
         use std::os::unix::process::ExitStatusExt as _;
@@ -7506,6 +7557,250 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// R14-009: drive one parent's timeout branch against a probe
+    /// HELD after publication, then prove the published writer
+    /// retired. The probe is SIGSTOPed once the rendezvous fills
+    /// (a stopped probe is held exactly as a hung one is — the
+    /// branch cannot distinguish them), and the parent's real
+    /// timeout body ([`timeout_retire_hung_probe`], with the
+    /// parent's real message) runs under `catch_unwind` — the
+    /// suite survives the intended panic and verifies the
+    /// retirement the branch owes. Birth is observed
+    /// independently via /proc; the publication wait afterwards
+    /// proves the record exists BEFORE the hold (a hold without
+    /// publication would test nothing).
+    #[cfg(target_arch = "x86_64")]
+    #[allow(clippy::too_many_arguments)]
+    fn held_probe_timeout_retires_writer(
+        probe_path: &str,
+        probe_env: &str,
+        abandon: bool,
+        tag: &str,
+        what: &str,
+    ) {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-held-{tag}-{}.pid",
+            std::process::id()
+        ));
+        // R14-003: claim before spawning (a preplant refuses
+        // loud here, where no writer exists yet).
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut command = std::process::Command::new(exe);
+        command
+            .arg(probe_path)
+            .arg("--exact")
+            .env(probe_env, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if abandon {
+            command.env(SUBREAPER_ABANDON_ENV, "1");
+        }
+        let mut child = command.spawn().expect("spawn held probe");
+        // R12-005: pin before any wait (expiry identity gate).
+        let id = child.id() as libc::pid_t;
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Birth, observed independently (mirrors the mid-flight
+        // regression): middleman, then its firstborn, via /proc
+        // task-children — never via the pidfile.
+        let end = Instant::now() + Duration::from_secs(60);
+        let (mid, mid_tick, writer, writer_tick) = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                if status.success() {
+                    match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                        Some((_, err)) => {
+                            let err = String::from_utf8_lossy(&err);
+                            assert!(
+                                err.contains("skip: seccomp unavailable"),
+                                "unexpected probe success must explain itself, got: {err}"
+                            );
+                            eprintln!("skip: seccomp unavailable for the held {tag} probe");
+                            let _ = std::fs::remove_file(&pidfile);
+                            return;
+                        }
+                        None => panic!("skip-path probe must EOF its output, got expiry"),
+                    }
+                }
+                panic!("probe exited {status} before grandchild birth (fixture broken)");
+            }
+            assert!(Instant::now() < end, "grandchild never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                if let (Ok(Some(mtick)), Some(born)) =
+                    (proc_starttime(mid), middleman_first_child(mid))
+                {
+                    if let Ok(Some(tick)) = proc_starttime(born) {
+                        break (mid, mtick, born, tick);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        // The birth record must land BEFORE the hold (a hold
+        // without publication tests nothing): the runner's poll
+        // slices publish within ~50ms of birth; 5s is generous.
+        let published = Instant::now() + Duration::from_secs(5);
+        loop {
+            let filled = std::fs::read_to_string(&pidfile)
+                .map(|text| !text.trim().is_empty())
+                .unwrap_or(false);
+            if filled {
+                break;
+            }
+            assert!(
+                Instant::now() < published,
+                "birth never published before the hold (fixture broken)"
+            );
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before the hold (fixture broken)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let strays = read_published_grandchild_strays(&pidfile);
+        assert_eq!(
+            strays,
+            vec![(writer, writer_tick)],
+            "published birth must name the observed grandchild"
+        );
+        // Hold the probe after publication: SIGSTOP, then prove
+        // the stop landed (state T) — a running probe would race
+        // the timeout instead of holding through it.
+        // SAFETY: SIGSTOP to our own pinned probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
+        let stopped = Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{id}/stat"))
+                .ok()
+                .and_then(|row| {
+                    row.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("T") {
+                break;
+            }
+            assert!(
+                Instant::now() < stopped,
+                "probe never stopped after SIGSTOP (fixture broken)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The parent's real timeout body, under catch_unwind: the
+        // intended panic must name the parent's timeout (proving
+        // the branch ran), and the suite survives to verify the
+        // retirement below.
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            timeout_retire_hung_probe(&mut child, &pidfile, what)
+        }));
+        match fired {
+            Err(payload) => {
+                let text = payload
+                    .downcast::<String>()
+                    .map(|boxed| *boxed)
+                    .unwrap_or_else(|_| String::from("<non-string panic>"));
+                assert!(
+                    text.contains(what),
+                    "timeout branch must panic the parent message, got: {text}"
+                );
+            }
+            Ok(never) => {
+                let _ = never;
+                panic!("timeout branch must diverge (it returned)");
+            }
+        }
+        // The probe itself is reaped by the branch (SIGKILL lands
+        // on a stopped task): prove it before the writer asserts.
+        use std::os::unix::process::ExitStatusExt as _;
+        let status = child.try_wait().expect("probe reap").expect("probe reaped");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "held probe must die by the timeout SIGKILL, got {status}"
+        );
+        // The published writer — independently grouped, beyond the
+        // killpg — must retire anyway (the requirement). Observe
+        // before cleanup (R12-014): capture the evidence first,
+        // retire any remainder so even RED runs stay clean, then
+        // assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        if !writer_gone {
+            retire_known_stray_best_effort(writer, writer_tick);
+        }
+        assert!(
+            writer_gone,
+            "parent timeout must retire the published writer ({tag})"
+        );
+        // Hygiene (not the requirement): the orphaned middleman is
+        // mid-preflight when the probe dies and self-terminates on
+        // its report to the dead reader — but a lingerer must not
+        // escape the suite. Poll it gone (tick-pinned, never a
+        // numeric kill), retire a straggler best-effort, then
+        // require it gone. No group-ESRCH assert here: the
+        // middleman legitimately outlives the timeout branch.
+        let mid_end = Instant::now() + Duration::from_secs(15);
+        loop {
+            if proc_starttime(mid) != Ok(Some(mid_tick)) {
+                break;
+            }
+            if Instant::now() >= mid_end {
+                retire_known_stray_best_effort(mid, mid_tick);
+                assert!(
+                    proc_starttime(mid) != Ok(Some(mid_tick)),
+                    "orphaned middleman {mid} lingered past the hold test ({tag})"
+                );
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R14-009: the subreaper parent's timeout retires the
+    /// published writer (held-probe driver, normal probe).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_subreaper_probe_timeout_retires_published_writer() {
+        held_probe_timeout_retires_writer(
+            SUBREAPER_PROBE_PATH,
+            SUBREAPER_PROBE_ENV,
+            false,
+            "subreaper",
+            "subreaper probe hung past 150s",
+        );
+    }
+
+    /// R14-009: the abandon parent's timeout retires the published
+    /// writer (held-probe driver, abandon probe).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_abandon_probe_timeout_retires_published_writer() {
+        held_probe_timeout_retires_writer(
+            SUBREAPER_PROBE_PATH,
+            SUBREAPER_PROBE_ENV,
+            true,
+            "abandon",
+            "abandoning probe hung past 60s",
+        );
+    }
+
+    /// R14-009: the guard parent's timeout retires the published
+    /// writer (held-probe driver, guard probe — birth-armed by
+    /// the R14-009 gate extension).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_guard_probe_timeout_retires_published_writer() {
+        held_probe_timeout_retires_writer(
+            GUARD_PROBE_PATH,
+            GUARD_PROBE_ENV,
+            false,
+            "guard",
+            "adopting-guard probe hung past 60s",
+        );
     }
 
     /// R11-005: starttime of the CURRENT holder of `pid`
@@ -8143,15 +8438,13 @@ mod tests {
                 None => {}
             }
             if Instant::now() >= end {
-                // SAFETY: signal-only to the probe's own group,
-                // then the probe itself; errors ignored.
-                let id = child.id() as libc::pid_t;
-                unsafe {
-                    libc::killpg(id, libc::SIGKILL);
-                    libc::kill(id, libc::SIGKILL);
-                }
-                let _ = child.wait();
-                panic!("adopting-guard probe hung past 60s");
+                // R14-009: the shared timeout body (kills the
+                // group + probe, retires published strays).
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "adopting-guard probe hung past 60s",
+                );
             }
             std::thread::sleep(Duration::from_millis(20));
         }
