@@ -2326,35 +2326,24 @@ mod tests {
                     }
                 }
                 // S119-round8: no pin, NO numeric signal — the
-                // number is unprovable without one. Proven gone
-                // (reaped above or ECHILD) falls through to the
-                // trailing reap, which then returns at once.
-                // Anything else — live, EPERM, ENOSYS,
-                // interrupted — stays unresolved: the drop
-                // reports and returns WITHOUT signaling and
-                // WITHOUT waiting (a blocking wait on a live
-                // child would hang). A leaked child is loud
-                // (stderr), never a stranger's death.
+                // number is unprovable without one.
+                // R12-015: no pin, NO numeric WAIT either — not
+                // even a WNOHANG recheck. A recheck after the
+                // R11-018 helper already discharged the number
+                // consumes a recycled number's status (another
+                // test thread's zombie) — an ungated
+                // post-discharge wait. R11-018 callers disarm
+                // after proven retirement, so an armed pin-less
+                // drop is always unproven: loud (stderr), never
+                // a wait, never a stranger's death. (R10-007's
+                // no-second-wait holds trivially — there is no
+                // first wait.)
                 None => {
-                    let mut status = 0;
-                    // SAFETY: valid status out-pointer.
-                    let recheck = unsafe {
-                        libc::waitpid(self.pid, &mut status, libc::WNOHANG)
-                    };
-                    let gone = (recheck == self.pid
-                        && wait_status_terminal(status))
-                        || (recheck < 0 && last_errno_is(libc::ECHILD));
-                    if !gone {
-                        eprintln!(
-                            "ChildGuard: pin-less drop over unproven pid {}; \
-                             NOT signaling, NOT waiting",
-                            self.pid
-                        );
-                        return;
-                    }
-                    // R10-007: reaped above or ECHILD means
-                    // custody is discharged — a trailing wait
-                    // could only catch a recycled number.
+                    eprintln!(
+                        "ChildGuard: pin-less drop over unproven pid {}; \
+                         NOT signaling, NOT waiting",
+                        self.pid
+                    );
                     return;
                 }
             }
@@ -2891,9 +2880,12 @@ mod tests {
         );
     }
 
-    /// R10-007: pin-less drop where the recheck itself reaps the
-    /// child must not issue a second numeric wait — the freed
+    /// R10-007: pin-less drop after the owned child was
+    /// reaped must not issue a second numeric wait — the freed
     /// number may already name another test thread's child.
+    /// R12-015: the drop no longer rechecks pin-less at all
+    /// (any recheck could consume a recycled number's
+    /// status), so every arm retires explicitly and disarms.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r10_pinless_drop_after_reap_issues_no_second_wait() {
@@ -2906,8 +2898,8 @@ mod tests {
         }
         // R11-018: custody from birth (the failure arms below
         // retire explicitly; the guard backstops unforeseen
-        // panics and no-ops over the retired child).
-        let guard = ChildGuard {
+        // panics and is disarmed over the retired child).
+        let mut guard = ChildGuard {
             pid,
             pidfd: None,
             armed: true,
@@ -2916,26 +2908,38 @@ mod tests {
         // R11-018: the failure arms return AFTER retiring the
         // owned child (live-safe) — the skip return and the
         // expiry panic below can no longer leak a zombie.
+        // R12-015: disarm after proven retirement (an armed
+        // pin-less drop is always loud now, never a wait).
         match observe_zombie_or_retire(pid, deadline, proc_state) {
-            ZombieWatch::Zombie => {}
+            ZombieWatch::Zombie => {
+                // R12-015: retire explicitly while the child is
+                // provably ours (owned-unreaped) — the drop no
+                // longer reaps pin-less.
+                retire_owned_unreaped(pid);
+                guard.disarm();
+            }
             ZombieWatch::DeniedRetired => {
+                guard.disarm();
                 eprintln!("skip: /proc unavailable for zombie observation");
                 return;
             }
-            ZombieWatch::ExpiredRetired => panic!("child never reached zombie state"),
+            ZombieWatch::ExpiredRetired => {
+                guard.disarm();
+                panic!("child never reached zombie state")
+            }
         }
         drop(guard);
         assert!(
             !take_trailing_waits().contains(&pid),
-            "pin-less drop after an in-drop reap must not wait again"
+            "pin-less drop after an explicit reap must not wait again"
         );
         // SAFETY: valid status out-pointer; ECHILD proves the
-        // recheck reaped (not the trailing wait).
+        // explicit retire reaped (not any drop wait).
         let mut status = 0;
         let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         assert!(
             again < 0 && last_errno_is(libc::ECHILD),
-            "the recheck must have reaped the zombie"
+            "the explicit retire must have reaped the zombie"
         );
     }
 
@@ -2955,6 +2959,51 @@ mod tests {
         assert!(
             !take_trailing_waits().contains(&me),
             "pin-less drop on ECHILD must not wait again"
+        );
+    }
+
+    /// R12-015: the denied arm retires via the helper, then
+    /// drops its pin-less guard: the drop must issue NO
+    /// numeric wait (the discharged number may already name
+    /// another test thread's zombie — consuming its status is
+    /// the bug). The guard stays ARMED here on purpose: the
+    /// backstop itself must be wait-free, not just the
+    /// disarming callers. Preservation follows by
+    /// construction (zero waits consume nothing); a
+    /// forced-recycle preservation test needs ns_last_pid
+    /// steering, which lib tests cannot do (machine-global).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r12_denied_retire_drop_issues_no_wait() {
+        let _serial = R10_SERIAL.lock().unwrap();
+        // SAFETY: child pauses forever (async-signal-safe).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        // Deliberately pin-less AND armed at drop (backstop
+        // shape — a caller that forgot to disarm).
+        let guard = ChildGuard {
+            pid,
+            pidfd: None,
+            armed: true,
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Denied observation (stubbed): the helper retires
+        // the LIVE child before returning.
+        match observe_zombie_or_retire(pid, deadline, |_| None) {
+            ZombieWatch::DeniedRetired => {}
+            _ => panic!("stubbed denial must take the DeniedRetired arm"),
+        }
+        drop(guard);
+        assert!(
+            !take_trailing_waits().contains(&pid),
+            "pin-less drop after helper retirement must not wait"
         );
     }
 
