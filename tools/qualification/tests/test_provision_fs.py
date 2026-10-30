@@ -10204,14 +10204,51 @@ class MountNsTests(unittest.TestCase):
     # — nonblocking open plus same-descriptor owner/type
     # validation (mirroring _read_keeper_record) refuses it.
     def test_preserve_keeper_evidence_refuses_fifo(self):
+        import threading
         with tempfile.TemporaryDirectory() as tmp:
             pidfile = os.path.join(tmp, "ns.pid")
-            os.mkfifo(f"{pidfile}.unresolved")
-            self.assertIs(
-                provision._preserve_keeper_evidence(
-                    pidfile, 7777, 55, "ef" * 16,
-                    "test-reason"),
-                False)
+            fifo = f"{pidfile}.unresolved"
+            os.mkfifo(fifo)
+            # R10-015: the writer runs in a worker under an
+            # enforced independent deadline — a regressed
+            # blocking open would stall the suite forever in a
+            # direct call; the deadline turns the hang into a
+            # bounded diagnostic failure instead.
+            outcome = {}
+            def attempt():
+                try:
+                    outcome["result"] = \
+                        provision._preserve_keeper_evidence(
+                            pidfile, 7777, 55, "ef" * 16,
+                            "test-reason")
+                except BaseException as exc:
+                    outcome["error"] = exc
+            worker = threading.Thread(target=attempt)
+            worker.daemon = True
+            worker.start()
+            worker.join(timeout=30)
+            if worker.is_alive():
+                # The writer blocked: release its WRONLY open
+                # (an O_RDWR open counts as the reader, so the
+                # open completes and the small write fits the
+                # pipe buffer), prove the worker retires, then
+                # fail with the bounded diagnostic — nothing
+                # lingers even on the RED path.
+                release = os.open(fifo, os.O_RDWR)
+                os.close(release)
+                worker.join(timeout=10)
+                self.assertFalse(
+                    worker.is_alive(),
+                    "released writer still blocked after 10s")
+                self.fail(
+                    "evidence writer blocked on a readerless "
+                    "FIFO past 30s (O_NONBLOCK regressed?); "
+                    f"worker retired, eventual outcome: "
+                    f"{outcome!r}")
+            self.assertNotIn("error", outcome)
+            # The specific failure result: refusal, never a hang
+            # and never a landed record.
+            self.assertIs(outcome.get("result"), False)
 
     # S134-round9: the ns-link read is tri-state — a link on
     # success, None ONLY for a proven-dead pid (readlink
