@@ -2496,6 +2496,35 @@ mod tests {
         assert!(pid >= 0, "unit fork failed");
         if pid == 0 {
             unsafe {
+                // R12-008: shed inherited fds — this child never
+                // execs (cloexec cannot help) and lives up to 5s
+                // (the pin-less retirement burn), so any inherited
+                // sibling pipe write end would hold EOF past 2s
+                // guards. Keep only `w` (errno report) and stdio
+                // (0,1,2 — shared, EOF-safe). close_range is a
+                // single syscall (async-signal-safe, MT-fork
+                // sound). Any failure exits WITHOUT reporting: the
+                // parent's read then sees EOF (got == 0) and fails
+                // loud — never a silent hole.
+                if w > 3
+                    && libc::syscall(
+                        libc::SYS_close_range,
+                        3 as libc::c_long,
+                        (w - 1) as libc::c_long,
+                        0 as libc::c_long,
+                    ) != 0
+                {
+                    libc::_exit(127);
+                }
+                if libc::syscall(
+                    libc::SYS_close_range,
+                    (w + 1) as libc::c_long,
+                    u32::MAX as libc::c_long,
+                    0 as libc::c_long,
+                ) != 0
+                {
+                    libc::_exit(127);
+                }
                 let traced = libc::ptrace(libc::PTRACE_TRACEME, 0, 0, 0);
                 let code: u8 = if traced == 0 {
                     0
@@ -2635,6 +2664,86 @@ mod tests {
         );
         // The pin-held guard retires the child through its own
         // authority (not the unreserved number).
+        drop(guard);
+        let mut status = 0;
+        // SAFETY: valid status out-pointer for an owned child.
+        let again = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert!(
+            again < 0 && last_errno_is(libc::ECHILD),
+            "guard must reap through its pin"
+        );
+    }
+
+    /// R12-008: a multi-second fork-only child must shed inherited
+    /// pipe write ends. The stopped child never execs (cloexec
+    /// cannot help) and the pin-less retirement burns its full 5s
+    /// bound on every passing run (the stop persists by design, so
+    /// the reap loop always times out) — any sibling report pipe
+    /// inherited at fork would hold EOF past 2s guards and flip
+    /// classifications to genuine-timeout (the IR1 residual's
+    /// milliseconds assumption, violated). Regression (direct and
+    /// deterministic — barrier-coordination into the runner's µs
+    /// pipe window would be flaky by construction): hold a victim
+    /// pipe open across the fork, close our write end, and require
+    /// EOF within the same 2s guard the bogus runner uses.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_child_sheds_inherited_pipe_write_end() {
+        // Victim pipe (stands in for a sibling runner's
+        // in-process report pipe — cloexec'd like it, which a
+        // fork-only child defeats by never exec'ing): OUR write
+        // end stays open across the fork below.
+        let mut victim = [0; 2];
+        // SAFETY: valid out-pointer for the pipe ends.
+        assert_eq!(
+            unsafe { libc::pipe2(victim.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        let mut pipe = [0; 2];
+        // SAFETY: valid out-pointer for the pipe ends.
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let pid = fork_stop_child(pipe[1]);
+        // SAFETY: write end owned by this scope.
+        unsafe { libc::close(pipe[1]) };
+        let guard = ChildGuard::new(pid);
+        let mut code = [1u8; 1];
+        // SAFETY: one byte from the inherited pipe.
+        let got = unsafe { libc::read(pipe[0], code.as_mut_ptr() as *mut _, 1) };
+        // SAFETY: read end owned by this scope.
+        unsafe { libc::close(pipe[0]) };
+        assert_eq!(got, 1, "child must report its TRACEME errno");
+        if code[0] != 0 {
+            // SAFETY: victim ends owned by this scope.
+            unsafe {
+                libc::close(victim[0]);
+                libc::close(victim[1]);
+            }
+            eprintln!("skip: TRACEME refused here; stop path untestable");
+            return;
+        }
+        // Close OUR victim write end: EOF arrives iff the stopped
+        // child shed its inherited copy (it is alive — stopped —
+        // either way, so a held copy blocks EOF for its 5s life).
+        // SAFETY: write end owned by this scope.
+        unsafe { libc::close(victim[1]) };
+        // The bogus runner's 2s guard: EOF (HUP, no data) must
+        // arrive, not time out.
+        let mut waiting = libc::pollfd {
+            fd: victim[0],
+            events: libc::POLLIN | libc::POLLHUP,
+            revents: 0,
+        };
+        // SAFETY: valid pollfd for an owned descriptor.
+        let ready = unsafe { libc::poll(&mut waiting, 1, 2000) };
+        // SAFETY: read end owned by this scope.
+        unsafe { libc::close(victim[0]) };
+        assert!(
+            ready > 0,
+            "stopped child holds an inherited write end past the 2s guard"
+        );
+        // Cleanup through the pin-held guard (kills the stopped
+        // child at once — no 5s retire burn needed here; the
+        // sibling test covers the retirement semantics).
         drop(guard);
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
@@ -3725,7 +3834,7 @@ mod tests {
         // stdout, then exiting at once.
         let mark = format!("{STAGED_PROBE_MARK}-R12007");
         let script = format!(
-            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    time.sleep(10)\n    os._exit(0)\n"
+            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    os.closerange(3, 4096)\n    time.sleep(10)\n    os._exit(0)\n"
         );
         let mut probe = std::process::Command::new("python3");
         probe
@@ -4073,6 +4182,13 @@ mod tests {
         // runner needs EOF held past its 2 s guard deadline;
         // a future 2 s+ fork-only child must close inherited
         // fds (close_range) or this race returns.
+        // R12-008: the violators are closed — the 5s stopped
+        // child sheds via close_range (keeps its report fd +
+        // stdio), and the 6/10/30s staged python sleepers shed
+        // via os.closerange(3, 4096) (keeps stdio pipes, mark,
+        // group). fork_pauser stays bare deliberately (its
+        // microsecond placement loop cannot afford 1-2µs per
+        // fork, and the toolchain binary has no 2s EOF guard).
         // SAFETY: valid out-pointer for the pipe ends.
         assert_eq!(
             unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
@@ -4955,7 +5071,7 @@ mod tests {
         // across the fork (no exec — cloexec would drop it).
         let mark = format!("{STAGED_PROBE_MARK}-T1");
         let script = format!(
-            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    os.setpgid(0, 0)\n    time.sleep(6)\n    os._exit(0)\nprint('OUT')\nprint('ERR', file=sys.stderr)\n"
+            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    os.closerange(3, 4096)\n    os.setpgid(0, 0)\n    time.sleep(6)\n    os._exit(0)\nprint('OUT')\nprint('ERR', file=sys.stderr)\n"
         );
         let mut probe = std::process::Command::new("python3");
         probe
@@ -5129,7 +5245,7 @@ mod tests {
         // drop it).
         let mark = format!("{STAGED_PROBE_MARK}-T2");
         let script = format!(
-            "# {mark}\nimport os, sys, time\ns = os.fork()\nif s == 0:\n    time.sleep(30)\n    os._exit(0)\nh = os.fork()\nif h == 0:\n    os.setpgid(0, {test_group})\n    time.sleep(10)\n    os._exit(0)\n"
+            "# {mark}\nimport os, sys, time\ns = os.fork()\nif s == 0:\n    os.closerange(3, 4096)\n    time.sleep(30)\n    os._exit(0)\nh = os.fork()\nif h == 0:\n    os.closerange(3, 4096)\n    os.setpgid(0, {test_group})\n    time.sleep(10)\n    os._exit(0)\n"
         );
         let mut probe = std::process::Command::new("python3");
         probe
