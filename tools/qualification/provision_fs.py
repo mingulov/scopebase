@@ -8275,7 +8275,7 @@ def mount_fs_via_helper(run_root, guard, target, target_dev,
         # requested target — reconcile may still adopt it, so
         # this stays a reconcilable (refused-class) report.
         return (None, f"mount {_escape_report_field(str(target))} report unparseable: "
-                      f"{tail(out or err)}")
+                      f"{_escape_report_field(tail(out or err))}")
     return (None, _normalize_mount_failure(target, rc, out, err))
 
 
@@ -8319,6 +8319,11 @@ def _normalize_mount_failure(target, rc, out, err):
     report) — a pathname containing classifier shapes
     ("moved during create (mnt=...)") must not forge
     recovery authority through the unanchored searches.
+    R13-001: the interpolated diagnostic tails are escaped
+    too — helper errors echo raw pathnames, and an evil
+    tail forges the same way (including a manual-only
+    bypass via a forged moved kind, and a forged
+    "(binding unverified)" marker in the other direction).
     """
     text = f"{out or ''}\n{err or ''}"
     moved = _parse_moved_report(text)
@@ -8330,11 +8335,11 @@ def _normalize_mount_failure(target, rc, out, err):
             # classification degrades to uncertain-with-ID.
             return (f"mount {_escape_report_field(str(target)[:100])} moved during "
                     f"create (mnt={mnt_id} observed-unknown): "
-                    f"{tail(text)[:200]}")
+                    f"{_escape_report_field(tail(text)[:200])}")
         seen = _escape_report_field(observed)[:150]
         return (f"mount {_escape_report_field(str(target)[:100])} moved during create "
                 f"(mnt={mnt_id} observed={seen}): "
-                f"{tail(text)[:200]}")
+                f"{_escape_report_field(tail(text)[:200])}")
     if ("FAILED-UNCERTAIN:" in text or rc in (0, 124)
             or (rc == 1 and "FAILED" not in text)
             or rc not in (0, 1, 124, 127)):
@@ -8349,12 +8354,13 @@ def _normalize_mount_failure(target, rc, out, err):
                 or "pin probe" in text):
             return (f"mount {_escape_report_field(str(target)[:100])} effect "
                     f"uncertain after create (binding "
-                    f"unverified): {tail(text)[:200]}")
+                    f"unverified): {_escape_report_field(tail(text)[:200])}")
         return (f"mount {_escape_report_field(str(target)[:100])} effect uncertain "
-                f"after create: {tail(text)[:200]}")
+                f"after create: {_escape_report_field(tail(text)[:200])}")
     # rc==127 (sudo never ran the helper), or rc==1 with a
     # plain pre-effect FAILED report: no effect is possible.
-    return (f"mount {_escape_report_field(str(target))} refused: rc={rc} {tail(out or err)}")
+    return (f"mount {_escape_report_field(str(target))} refused: rc={rc} "
+            f"{_escape_report_field(tail(out or err))}")
 
 
 def _classify_mount_failure(failure):

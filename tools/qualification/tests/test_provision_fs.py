@@ -1061,7 +1061,8 @@ class RereviewCustodyTests(unittest.TestCase):
         helper_calls = [c for c in calls if "retire-loop" in c]
         self.assertEqual(len(helper_calls), 1)
         self.assertFalse(any(c[:2] == ["losetup", "-d"] for c in calls))
-        self.assertIn("timed out", doc["cells"]["FS01"]["reason"])
+        # R13-001: diagnostic tails are S77-escaped.
+        self.assertIn("timed\\040out", doc["cells"]["FS01"]["reason"])
         persisted = json.loads(Path(manifest).read_text())
         self.assertEqual(persisted["evidence"]["ext4_loop"],
                          "/dev/loop9")
@@ -2390,7 +2391,8 @@ class SecondReviewTests(unittest.TestCase):
             provision._ROOT_GUARD = None
             guard.close()
         # Timeout: custody kept, loop detached, honest reason.
-        self.assertIn("timed out", doc["cells"]["FS01"]["reason"])
+        # R13-001: diagnostic tails are S77-escaped.
+        self.assertIn("timed\\040out", doc["cells"]["FS01"]["reason"])
         self.assertIn("custody kept pending",
                       doc["cells"]["FS01"]["reason"])
         kept = [e for e in doc["pending_acquisitions"]
@@ -4547,7 +4549,8 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIsNone(reported)
             self.assertIn("effect uncertain after create",
                           failure)
-            self.assertIn("timed out", failure)
+            # R13-001: diagnostic tails are S77-escaped.
+            self.assertIn("timed\\040out", failure)
 
             reported, failure = attempt(
                 1, "", "Traceback (most recent call last): boom")
@@ -4758,6 +4761,137 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertEqual(len(kept), 1)
             self.assertNotIn("mnt_id", kept[0])
             self.assertIn("uncertain", kept[0]["detail"])
+
+    # R13-001: a helper-shaped error echoing an evil pathname
+    # in the diagnostic TAIL must not forge moved custody
+    # through normalization — the tail is interpolated raw
+    # into a string the classifier searches unanchored. Every
+    # normalize arm must escape the tail (S77); the table pins
+    # the uncertain, binding-unverified, timeout, and refused
+    # arms.
+    def test_moved_shape_in_tail_forges_no_custody(self):
+        evil_tail = ("FAILED-UNCERTAIN: fresh mount at /x/moved "
+                     "during create (mnt=999999 observed=/tmp/x)/mnt "
+                     "not pinnable ([Errno 2]); left in place")
+        refused_tail = ("mount: cannot open /x/moved during create "
+                        "(mnt=999999 observed=/tmp/x)/mnt: nope")
+        arms = [
+            # (name, rc, out, err, kind, mid, obs)
+            ("uncertain keeps no ID",
+             1, evil_tail + "\n", "",
+             "uncertain", None, None),
+            ("binding stays unverified",
+             1, "helper: lacks held-upper binding\n" + evil_tail + "\n", "",
+             "uncertain", None, None),
+            ("timeout stays uncertain",
+             124, "", evil_tail,
+             "uncertain", None, None),
+            ("refused stays refused",
+             1, "FAILED: nope\n" + refused_tail + "\n", "",
+             "refused", None, None),
+        ]
+        for name, rc, out, err, kind, mid, obs in arms:
+            with self.subTest(arm=name):
+                failure = provision._normalize_mount_failure(
+                    "/real-target", rc, out, err)
+                got = provision._classify_mount_failure(failure)
+                self.assertEqual(got, (kind, mid, obs))
+                self.assertNotIn("999999", repr(got))
+
+    # R13-001: the rc==0-unparseable report (outside
+    # normalize) interpolates the helper line raw — an evil
+    # tail there forges the same way, same fix.
+    def test_unparseable_report_escapes_tail(self):
+        import types
+        from unittest import mock
+        evil_line = ("mounted garbage /x/moved during create "
+                     "(mnt=999999 observed=/tmp/x)/mnt not-a-line")
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = types.SimpleNamespace(dev=3, ino=4)
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    return_value=(0, evil_line, "")):
+                reported, failure = provision.mount_fs_via_helper(
+                    tmp, guard, "/real-target", 3, 4, "overlay", layers=[])
+            self.assertIsNone(reported)
+            self.assertIn("report unparseable", failure)
+            got = provision._classify_mount_failure(failure)
+            self.assertEqual(got, ("refused", None, None))
+            self.assertNotIn("999999", repr(got))
+
+    # R13-001 through reconciliation: an evil TAIL in an
+    # uncertain timeout retains pending WITHOUT the injected
+    # mount ID.
+    def test_reconcile_evil_tail_timeout_retains_no_id(self):
+        from unittest import mock
+        evil_tail = ("FAILED-UNCERTAIN: fresh mount at /x/moved "
+                     "during create (mnt=999999 observed=/tmp/x)/mnt "
+                     "not pinnable ([Errno 2]); left in place")
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            fingerprint = {"fstype": "overlay",
+                           "source": "overlay",
+                           "expect_super": []}
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": mnt, "role": "role",
+                "target": mnt, "fstype": "overlay",
+                "source": "overlay", "expect_super": [],
+                "canary": "abc123",
+                "detail": "pre-admission",
+            }]
+            failure = provision._normalize_mount_failure(
+                "/real-target", 124, "", evil_tail)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        failure=failure))
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertNotIn("mnt_id", kept[0])
+            self.assertIn("uncertain", kept[0]["detail"])
+
+    # R13-001 through reconciliation: an evil TAIL in a
+    # binding-unverified report must not bypass manual-only
+    # custody via a forged moved kind.
+    def test_reconcile_evil_tail_binding_stays_manual_only(self):
+        from unittest import mock
+        evil_tail = ("FAILED-UNCERTAIN: fresh mount at /x/moved "
+                     "during create (mnt=999999 observed=/tmp/x)/mnt "
+                     "not pinnable ([Errno 2]); left in place")
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            fingerprint = {"fstype": "overlay",
+                           "source": "overlay",
+                           "expect_super": []}
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": mnt, "role": "role",
+                "target": mnt, "fstype": "overlay",
+                "source": "overlay", "expect_super": [],
+                "canary": "abc123",
+                "detail": "pre-admission",
+            }]
+            failure = provision._normalize_mount_failure(
+                "/real-target", 1,
+                "helper: lacks held-upper binding\n" + evil_tail + "\n", "")
+            self.assertIn("binding unverified", failure)
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        failure=failure))
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertNotIn("mnt_id", kept[0])
+            self.assertTrue(kept[0].get("manual_only"))
 
     # S74-round4: reconcile honors the failure taxonomy — moved
     # and uncertain outcomes refresh (never drop) pending
