@@ -3100,6 +3100,16 @@ mod tests {
     /// R11-013: rendezvous — the probe runs only when set.
     #[cfg(target_arch = "x86_64")]
     const GUARD_PROBE_ENV: &str = "SCOPEBASE_TT04_ADOPTING_GUARD_PROBE";
+    /// R12-007: the collection-expiry subreaper probe path (exact —
+    /// the parent requires one passed test in the probe output,
+    /// so a renamed path fails loud instead of passing
+    /// vacuously on zero tests).
+    #[cfg(target_arch = "x86_64")]
+    const EXPIRY_PROBE_PATH: &str =
+        "fixture::linux::audit::tests::collection_expiry_adopting_probe";
+    /// R12-007: rendezvous — the probe runs only when set.
+    #[cfg(target_arch = "x86_64")]
+    const EXPIRY_PROBE_ENV: &str = "SCOPEBASE_COLLECTION_EXPIRY_SUBREAPER_PROBE";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -3671,6 +3681,143 @@ mod tests {
             break;
         }
         assert_eq!(stragglers, 0, "retirement must leave no child status");
+    }
+
+    /// R12-007: the collection-expiry subreaper probe (see
+    /// [`expiry_retires_adopted_group`]). Under a normal suite
+    /// run (no rendezvous variable) this passes silently; the
+    /// parent test spawns a FRESH test-binary process at this
+    /// exact path with the rendezvous set, and the probe marks
+    /// ITSELF a child subreaper (confined — the flag dies with
+    /// this process; the suite binary never sets it globally)
+    /// before staging a probe whose writer holds stdout past the
+    /// collection deadline. Pre-fix the single-pass adopted
+    /// drain runs µs after killpg while deaths land ~50µs later,
+    /// so the adopted writer zombie holds the group observable
+    /// and the group probe fails (RED); post-fix the bounded
+    /// drain reaps it and both probes are clean. The sweep reaps
+    /// stragglers before asserting zero, so even RED runs stay
+    /// clean (and the probe's exit reparents any remainder to
+    /// init).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn collection_expiry_adopting_probe() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        if std::env::var(EXPIRY_PROBE_ENV).is_err() {
+            return;
+        }
+        // Own process group first: a hung probe run lets the
+        // parent retire the whole tree by group.
+        // SAFETY: setpgid on self, no userspace state.
+        unsafe {
+            libc::setpgid(0, 0);
+        }
+        // SAFETY: prctl on self; marking a fresh probe process.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "probe must become a child subreaper"
+        );
+        // The probe: self-grouped python forking a SAME-group
+        // writer (no setpgid in the child — killpg must reach
+        // it) that sleeps past the collection deadline holding
+        // stdout, then exiting at once.
+        let mark = format!("{STAGED_PROBE_MARK}-R12007");
+        let script = format!(
+            "# {mark}\nimport os, sys, time\nkid = os.fork()\nif kid == 0:\n    time.sleep(10)\n    os._exit(0)\n"
+        );
+        let mut probe = std::process::Command::new("python3");
+        probe
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("expiry probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let expected = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Staging proof: the writer exists, is marked, and sits
+        // IN the probe group (a writer anywhere else would make
+        // the group-absence assert below vacuous).
+        let (_writer, _writer_tick, writer_group) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut marked = audit_marked_tasks(&mark, expected, id);
+                if marked.len() == 1 {
+                    break marked.pop().unwrap();
+                }
+                assert!(
+                    Instant::now() < end,
+                    "writer never appeared, got {marked:?}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        assert_eq!(writer_group, id, "writer must stay in the probe group");
+        // Reap the probe (the caller-side wait the R12-005
+        // contract names): the writer reparents to us (we are a
+        // subreaper) and holds stdout past the deadline.
+        let status = probe.wait().expect("probe exit");
+        assert!(status.success());
+        // Expire the collection: the writer's 10s sleep holds
+        // EOF past the 2s deadline.
+        let end = Instant::now() + Duration::from_secs(2);
+        let got = collect_probe_output_bounded(&mut probe, end, expected, &[]);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        // Empty group first: a zombie still holds it observable.
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(id, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "group probe must fail ESRCH-only, got {errno}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "process group {id} survived the collection expiry"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // ...then no adopted child status anywhere: reap
+        // stragglers (RED runs stay clean) then require zero.
+        let mut stragglers = 0;
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid(-1) reaps any owned child.
+            let got = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if got > 0 {
+                stragglers += 1;
+                continue;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+            }
+            break;
+        }
+        assert_eq!(stragglers, 0, "expiry must leave no child status");
     }
 
     /// R10-012: await /proc disappearance, reaping an adopted
@@ -4396,26 +4543,58 @@ mod tests {
                 await_proc_gone_reaping(id, expected, Duration::from_secs(5));
             }
         }
-        // Drain adopted group zombies (R11-013 pattern): under
-        // a subreaper/PID-1 runner the dead strays became OUR
-        // zombies and still hold the group observable — a
-        // plain killpg leaves them. waitpid(-pgid) reaps only
-        // OUR children in THIS group (never another test's).
-        loop {
-            let mut status = 0;
-            // SAFETY: -pgid filters to our children in our
-            // own group; WNOHANG never blocks.
-            let got = unsafe { libc::waitpid(-id, &mut status, libc::WNOHANG) };
-            if got > 0 {
-                continue;
-            }
-            if got < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
+        // Drain adopted group zombies (R11-013 pattern, bounded):
+        // under a subreaper/PID-1 runner the dead strays became
+        // OUR zombies and still hold the group observable — a
+        // plain killpg leaves them. A single pass races death
+        // (the pass runs µs after killpg; SIGKILL-to-zombie takes
+        // ~10-100µs), so retry until the group probes ESRCH-empty
+        // or the bound lapses. waitpid(-pgid) reaps only OUR
+        // children in THIS group (never another test's).
+        {
+            use std::time::Instant;
+            let drain_end = Instant::now() + Duration::from_secs(5);
+            loop {
+                // One reap pass over our children in this group.
+                loop {
+                    let mut status = 0;
+                    // SAFETY: -pgid filters to our children in our
+                    // own group; WNOHANG never blocks.
+                    let got = unsafe { libc::waitpid(-id, &mut status, libc::WNOHANG) };
+                    if got > 0 {
+                        continue;
+                    }
+                    if got < 0 {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                    }
+                    break;
                 }
+                // Group-empty proof: ESRCH means no task (live or
+                // zombie) still names the pgid. Any other outcome
+                // (live members, or a foreign same-number group —
+                // never touched, never claimed) retries to the
+                // bound, then reports loud (fail-closed: expiry
+                // never panics).
+                // SAFETY: killpg(id, 0) probes existence only.
+                if unsafe { libc::killpg(id, 0) } < 0 {
+                    // SAFETY: errno location for this thread.
+                    let errno = unsafe { libc::__errno_location().read() };
+                    if errno == libc::ESRCH {
+                        break;
+                    }
+                }
+                if Instant::now() >= drain_end {
+                    eprintln!(
+                        "expiry: group {id} still observable after drain bound \
+                         (member unkillable, unreaped, or foreign-recycled)"
+                    );
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            break;
         }
         for (pid, started) in strays {
             retire_known_stray_best_effort(*pid, *started);
@@ -6023,6 +6202,77 @@ mod tests {
                 }
                 let _ = child.wait();
                 panic!("adopting-guard probe hung past 60s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R12-007: collection expiry must REAP the adopted group,
+    /// not just kill it. When the runner adopts orphans
+    /// (subreaper or PID-1 runner) the dead writer is the
+    /// runner's own zombie: a single-pass drain runs µs after
+    /// killpg while deaths land ~50µs later, so kill-only
+    /// retirement leaves the group observable. The parent spawns
+    /// a fresh probe process (a confined subreaper — never the
+    /// suite binary) and requires exit success bounded AND one
+    /// passed test (a renamed probe path fails here instead of
+    /// passing vacuously on zero tests). On timeout the parent
+    /// retires the probe's whole process group before failing
+    /// loud.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expiry_retires_adopted_group() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut child = std::process::Command::new(exe)
+            .arg(EXPIRY_PROBE_PATH)
+            .arg("--exact")
+            .env(EXPIRY_PROBE_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn expiry-adopting probe");
+        // R12-005: pin before any wait (expiry identity gate).
+        let staged = proc_starttime(child.id() as libc::pid_t)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                // R11-014: bounded collection under the SAME
+                // deadline — wait_with_output would wait for
+                // EOF past it whenever a descendant outlives
+                // the probe holding the pipes.
+                match collect_probe_output_bounded(&mut child, end, staged, &[]) {
+                    Some((stdout, stderr)) => {
+                        assert!(
+                            status.success(),
+                            "expiry-adopting probe must exit success, got {status}: {}",
+                            String::from_utf8_lossy(&stderr)
+                        );
+                        assert!(
+                            String::from_utf8_lossy(&stdout).contains("1 passed"),
+                            "probe must run its one test (path exact)"
+                        );
+                    }
+                    None => panic!(
+                        "expiry-adopting probe output collection expired \
+                         (probe exited {status}; group retired)"
+                    ),
+                }
+                return;
+            }
+            if Instant::now() >= end {
+                // SAFETY: signal-only to the probe's own group,
+                // then the probe itself; errors ignored.
+                let id = child.id() as libc::pid_t;
+                unsafe {
+                    libc::killpg(id, libc::SIGKILL);
+                    libc::kill(id, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                panic!("expiry-adopting probe hung past 60s");
             }
             std::thread::sleep(Duration::from_millis(20));
         }
