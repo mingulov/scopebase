@@ -4339,6 +4339,307 @@ fn repeated_probe_retirement_spares_recycled_number() {
     assert!(!status.success(), "killed replacement reports signal death");
 }
 
+/// R13-003: the group signal needs the same identity gate as
+/// the direct kill. This test recycles the probe's number into
+/// a SELF-GROUPED replacement (pgid == id): repeated
+/// retirement must spare it (pre-fix the blind killpg murders
+/// it — RED). Survival is SETTLED (a zombie keeps its
+/// starttime — the instant tick read passes on a corpse; only
+/// the settle catches the kill). The probe number must differ
+/// from the test's own group or the test fails closed instead
+/// of suite-suiciding. The ungrouped-stray twin lives in
+/// `freed_probe_group_still_reaps_strays` (no steering: a live
+/// group-mate shifts steered allocation by a fixed +2 here,
+/// mechanism unknown, so placement beside one never lands).
+/// Durations 893/894 are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn repeated_group_retirement_spares_grouped_stranger() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    // Self-grouped stranger on the probe's number.
+    let mut probe = std::process::Command::new("/bin/sleep");
+    probe
+        .arg("893")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        probe.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut probe = probe.spawn().expect("probe spawns");
+    let id = probe.id() as i32;
+    // SAFETY: getpgid queries only.
+    assert_ne!(
+        unsafe { libc::getpgid(0) },
+        id,
+        "probe number must differ from the test group (fail closed)"
+    );
+    let probe_tick = task_starttime_checked(id)
+        .expect("probe stat readable")
+        .expect("probe visible");
+    // SAFETY: retiring our own probe.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = probe.try_wait().expect("probe wait") {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < end, "probe never reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Controlled reuse: a LIVE SELF-GROUPED replacement on
+    // the probe's number at a different birth tick.
+    let mut replacement = None;
+    {
+        // R12-005: cross-process placement lock.
+        let _nsflock = ns_last_pid_flock();
+        for _ in 0..100 {
+            if !steer_next_pid(id) {
+                break;
+            }
+            let mut cand = std::process::Command::new("/bin/sleep");
+            cand.arg("894")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid on self pre-exec, no userspace state.
+            unsafe {
+                cand.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            let mut cand = cand.spawn().expect("replacement spawns");
+            if cand.id() as i32 != id {
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            let placed_different = match task_starttime_checked(id) {
+                Ok(Some(tick)) => tick != probe_tick,
+                _ => false,
+            };
+            // SAFETY: getpgid queries only.
+            let placed_grouped = unsafe { libc::getpgid(id) } == id;
+            if !placed_different || !placed_grouped {
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            replacement = Some(cand);
+            break;
+        }
+    }
+    let mut replacement = replacement.expect("grouped replacement placed on probe's number");
+    let revived_tick = task_starttime_checked(id)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    // R13-003: repeated retirement must spare the grouped
+    // stranger (pre-fix the blind killpg murders it).
+    retire_probe_tree(&mut probe, probe_tick);
+    retire_probe_tree(&mut probe, probe_tick);
+    // Observe before cleanup (R12-014): identity now, then
+    // SETTLED aliveness, then retire.
+    let revived_now = task_starttime_checked(id);
+    let revived_spared = settle_spared(id);
+    // SAFETY: retiring our own replacement.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let owned = replacement.wait();
+    let _ = std::fs::write(last_path, &last_before);
+    assert_eq!(
+        revived_now,
+        Ok(Some(revived_tick)),
+        "recycled probe number keeps its holder"
+    );
+    assert!(
+        revived_spared,
+        "grouped stranger must survive repeated retirement (settled)"
+    );
+    let status = owned.expect("replacement owner keeps its status");
+    assert!(!status.success(), "killed replacement reports signal death");
+}
+
+/// R13-003 positive twin (no steering): a freed probe number
+/// with one of OUR strays in the group still fires the group
+/// signal — the stray dies by it. Durations 895/897 are unique
+/// to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn freed_probe_group_still_reaps_strays() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+    let mut probe = std::process::Command::new("/bin/sleep");
+    probe
+        .arg("895")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        probe.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut probe = probe.spawn().expect("probe spawns");
+    let id = probe.id() as i32;
+    let probe_tick = task_starttime_checked(id)
+        .expect("probe stat readable")
+        .expect("probe visible");
+    // Our stray joins the probe's group while it is alive.
+    let mut stray = std::process::Command::new("/bin/sleep");
+    stray
+        .arg("897")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid into our live probe group pre-exec, no
+    // userspace state (id copied — 'static satisfied).
+    unsafe {
+        stray.pre_exec(move || {
+            libc::setpgid(0, id);
+            Ok(())
+        });
+    }
+    let mut stray = stray.spawn().expect("stray spawns");
+    let stray_id = stray.id() as i32;
+    // SAFETY: getpgid queries only.
+    assert_eq!(
+        unsafe { libc::getpgid(stray_id) },
+        id,
+        "stray must sit in the probe's group"
+    );
+    // SAFETY: retiring our own probe.
+    unsafe {
+        libc::kill(id, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = probe.try_wait().expect("probe wait") {
+            assert!(!status.success());
+            break;
+        }
+        assert!(Instant::now() < end, "probe never reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The number is freed (no recycle): the group signal fires
+    // for the stray.
+    retire_probe_tree(&mut probe, probe_tick);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(stray_status) = stray.try_wait().expect("stray wait") {
+            assert!(
+                !stray_status.success(),
+                "stray must die by signal (the group signal got it)"
+            );
+            break;
+        }
+        assert!(Instant::now() < end, "stray never died");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R13-003: `probe_group_kill_allowed` over every plantable
+/// state — no steering (each state holds right now). Ours →
+/// true; freed → true; live foreign outside the group →
+/// true; live foreign self-grouped → false. Panic-safe:
+/// both fixtures die with the test. Durations 885/886 are
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn probe_group_kill_decision_states() {
+    use std::os::unix::process::CommandExt as _;
+    struct KillOnDrop(i32);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            kill_wait_child(self.0);
+        }
+    }
+    // Ours, live and self-grouped.
+    let mut ours = std::process::Command::new("/bin/sleep");
+    ours.arg("885")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        ours.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let ours_id = ours.spawn().expect("ours spawns").id() as i32;
+    let _ours_guard = KillOnDrop(ours_id);
+    let ours_tick = task_starttime_checked(ours_id)
+        .expect("ours stat readable")
+        .expect("ours visible");
+    assert!(
+        probe_group_kill_allowed(ours_id, ours_tick),
+        "ours must allow the group signal"
+    );
+    // Foreign live OUTSIDE the group: plain child (test group
+    // inherited) under a bogus tick.
+    let mut plain = std::process::Command::new("/bin/sleep");
+    plain
+        .arg("886")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let plain_id = plain.spawn().expect("plain spawns").id() as i32;
+    let _plain_guard = KillOnDrop(plain_id);
+    let plain_tick = task_starttime_checked(plain_id)
+        .expect("plain stat readable")
+        .expect("plain visible");
+    // SAFETY: getpgid queries only.
+    assert_ne!(
+        unsafe { libc::getpgid(plain_id) },
+        plain_id,
+        "plain child must not self-group"
+    );
+    assert!(
+        probe_group_kill_allowed(plain_id, plain_tick.wrapping_add(1)),
+        "ungrouped foreigner must allow the group signal"
+    );
+    // Foreign live SELF-GROUPED: ours under a bogus tick.
+    assert!(
+        !probe_group_kill_allowed(ours_id, ours_tick.wrapping_add(1)),
+        "grouped stranger must refuse the group signal"
+    );
+    // Freed: retire ours, then the number names nothing.
+    kill_wait_child(ours_id);
+    assert!(
+        probe_group_kill_allowed(ours_id, ours_tick),
+        "freed number must allow the group signal"
+    );
+    kill_wait_child(plain_id);
+}
+
 /// R10-013: drain an exited probe child's piped output WITHOUT
 /// waiting for EOF. A RED-run live grandchild (the leaked
 /// sleeper) holds the stdio pipes across fork, and
@@ -4476,15 +4777,43 @@ fn probe_tree_retirement_kills_stranded_group() {
 /// R12-005: `expected` is the probe's birth tick pinned at
 /// spawn — the direct kill and the wait run ONLY while the
 /// number still names it (reaped-and-freed is the normal
-/// post-call shape: signal nothing, wait nothing). killpg
-/// still fires blind: the group may hold our strays after the
-/// probe's reap (that is this function's job on failure
-/// paths), and a single call cannot sample continuity — the
-/// residual is a foreign regroup of the exact number within
-/// ms of our reap (exotic: our strays all dead plus a
-/// same-number self-grouper; foreign groups here form only by
-/// self-grouping, so it needs an exact-pid recycle in a ms
-/// window).
+/// post-call shape: signal nothing, wait nothing).
+/// R13-003: the group signal carries its own gate now — a
+/// blind killpg murders a recycled self-grouped replacement
+/// (pgid == id). killpg fires while the number names our
+/// probe, names nothing (our strays alone in the group), or
+/// names a live foreigner OUTSIDE the group (getpgid proves
+/// the signal cannot reach it while still retiring our
+/// strays). Only a live foreign SELF-GROUPED holder skips —
+/// loud (a mixed group then leaks our strays; a loud leak
+/// beats a silent stranger-kill). Residuals: a regroup in
+/// the µs read→signal window (no atomic check-and-killpg
+/// exists); a same-tick recycle reads as ours (S100-class).
+/// R13-003: group-signal decision for `retire_probe_tree`,
+/// extracted for direct unit coverage (a mid-call recycle is
+/// unplantable without steering, but every decision state is
+/// plantable as a current state). True while the number names
+/// our probe, names nothing (freed or unreadable — our
+/// strays alone in the group), or names a live foreigner
+/// OUTSIDE the group (getpgid proves the signal cannot reach
+/// it). False only for a live foreign SELF-GROUPED holder.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn probe_group_kill_allowed(id: i32, expected: u64) -> bool {
+    // None covers freed AND unreadable (unproven, never
+    // foreign — the group signal still retires our strays).
+    let holder_tick = task_starttime_checked(id).ok().flatten();
+    if holder_tick == Some(expected) {
+        return true;
+    }
+    if holder_tick.is_none() {
+        return true;
+    }
+    // SAFETY: getpgid queries only. ESRCH (died between the
+    // reads) is freed-equivalent: a dead task cannot be hit
+    // and the group signal only reaches live members.
+    (unsafe { libc::getpgid(id) }) != id
+}
+
 fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
     // SAFETY: signal-only to the probe's own group, then the
     // probe itself; errors ignored (house discipline).
@@ -4493,13 +4822,21 @@ fn retire_probe_tree(child: &mut std::process::Child, expected: u64) {
     // or the caller reaped it reporting failure) — the wait
     // below never addresses a recycled holder.
     let ours = task_starttime_checked(id) == Ok(Some(expected));
-    unsafe {
-        libc::killpg(id, libc::SIGKILL);
-        if ours {
-            libc::kill(id, libc::SIGKILL);
+    if !probe_group_kill_allowed(id, expected) {
+        eprintln!(
+            "retire_probe_tree: pid {id} names a live foreign self-grouped task; \
+             NOT signaling the group (strays, if any, leak loud)"
+        );
+    } else {
+        unsafe {
+            libc::killpg(id, libc::SIGKILL);
         }
     }
     if ours {
+        // SAFETY: the number still names our probe.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
         wait_child_unless_reaped(child, id, expected);
     }
 }

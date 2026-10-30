@@ -4706,18 +4706,23 @@ mod tests {
     /// probe BEFORE collecting, so the bare numbers may name
     /// recycled strangers. Three gates: (a) killpg fires only
     /// while the group never died (`group_died` from the drain's
-    /// continuity sampler — a group that died and reformed is
-    /// foreign); (b) kill + the wait run only while the number
-    /// still names `expected` (a zombie keeps its starttime, so
-    /// ours still reaps; anything else skips without waiting);
+    /// continuity sampler) AND the number's current holder is
+    /// not a live foreign self-grouper (R13-003 anchor check —
+    /// presence sampling cannot see a regroup with no
+    /// observable gap, so the anchor reads identity at fire
+    /// time; a latched death with live strays is impossible,
+    /// so a vetoed fire would have been pointless anyway);
+    /// (b) kill + the wait run only while the number still
+    /// names `expected` (a zombie keeps its starttime, so ours
+    /// still reaps; anything else skips without waiting);
     /// (c) each known stray (a pipe-holder OUTSIDE the probe
     /// group, where killpg cannot reach) is retired by (pin,
     /// starttime) identity.
-    /// Residuals: a group death+regroup fully inside the
-    /// caller's reap→entry gap or one 100ms sample gap still
-    /// fires (exotic — needs our strays all dead plus a
-    /// foreign regroup in the gap); a same-tick number
-    /// recycle still kills+reaps as ours (S100-class).
+    /// Residuals: a regroup in the µs anchor-read→signal window
+    /// (no atomic check-and-killpg exists); a same-tick number
+    /// recycle still kills+reaps as ours (S100-class); a mixed
+    /// group (foreign self-grouper plus our strays) skips the
+    /// signal and leaks the strays loud.
     #[cfg(target_arch = "x86_64")]
     fn expire_probe_collection(
         id: libc::pid_t,
@@ -4727,10 +4732,29 @@ mod tests {
     ) {
         use std::time::Duration;
         if !group_died {
-            // SAFETY: signal-only to our continuously-live
-            // group; errors ignored (house discipline).
-            unsafe {
-                libc::killpg(id, libc::SIGKILL);
+            // R13-003 anchor check: fire while the number names
+            // our probe, names nothing (freed or unreadable —
+            // our strays alone), or names a live foreigner
+            // OUTSIDE the group (getpgid proves the signal
+            // cannot reach it). Only a live foreign
+            // SELF-GROUPED holder skips — loud.
+            let holder_tick = proc_starttime(id).ok().flatten();
+            // SAFETY: getpgid queries only. ESRCH (died between
+            // the reads) is freed-equivalent.
+            let grouped_stranger = holder_tick != Some(expected)
+                && holder_tick.is_some()
+                && (unsafe { libc::getpgid(id) }) == id;
+            if grouped_stranger {
+                eprintln!(
+                    "expiry skips group signal: pid {id} names a live foreign \
+                     self-grouped task (strays, if any, leak loud)"
+                );
+            } else {
+                // SAFETY: signal-only to the group; errors
+                // ignored (house discipline).
+                unsafe {
+                    libc::killpg(id, libc::SIGKILL);
+                }
             }
         }
         // The probe itself: only while the number still names
@@ -5497,6 +5521,209 @@ mod tests {
         let status = owned.expect("foreigner owner keeps its status");
         assert!(!status.success(), "killed foreigner reports signal death");
         assert!(holder_gone, "staged holder retires in cleanup");
+    }
+
+    /// R13-003: recycle-before-entry through the real collection
+    /// entry — no staged probes, no threads. Spawn a null-stdio
+    /// self-grouped probe, pin, reap; steer a SELF-GROUPED
+    /// foreigner onto its number (the group never dies — the
+    /// entry sample sees continuous life, exactly the sampler
+    /// hole). Null stdio fails the nonblocking gate
+    /// deterministically, routing straight to expiry with
+    /// group_died=false. Only the anchor check can spare the
+    /// foreigner (pre-fix killpg murders it — RED). Repeated
+    /// expiry, then settled survival + owner status.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_expiry_spares_before_entry_recycled_group() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let mut probe = std::process::Command::new("/bin/sleep");
+        probe
+            .arg("61")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let probe_tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // SAFETY: retiring our own probe.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let status = probe.wait().expect("probe reaped");
+        assert!(!status.success());
+        // Controlled reuse BEFORE collection entry: a LIVE
+        // SELF-GROUPED foreigner on the probe's number.
+        let mut foreigner = None;
+        {
+            let _flock = ns_last_pid_flock();
+            for _ in 0..100 {
+                if !audit_steer_next_pid(id) {
+                    break;
+                }
+                let mut cmd = std::process::Command::new("/bin/sleep");
+                cmd.arg("61")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec — this IS
+                // the group-number recycle (pgid becomes id).
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                let mut cand = cmd.spawn().expect("foreigner spawns");
+                if cand.id() as libc::pid_t != id {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                let placed_different = match proc_starttime(id) {
+                    Ok(Some(tick)) => tick != probe_tick,
+                    _ => false,
+                };
+                // SAFETY: getpgid queries only.
+                let placed_grouped = unsafe { libc::getpgid(id) } == id;
+                if !placed_different || !placed_grouped {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                foreigner = Some(cand);
+                break;
+            }
+        }
+        let mut foreigner = foreigner.expect("grouped foreigner placed on probe number");
+        let foreign_tick = proc_starttime(id)
+            .expect("foreigner stat readable")
+            .expect("foreigner visible");
+        // Repeated expiry through the real entry (null stdio
+        // routes straight to expire with group_died=false).
+        let end = Instant::now() + Duration::from_secs(5);
+        let first = collect_probe_output_bounded(&mut probe, end, probe_tick, &[]);
+        let end = Instant::now() + Duration::from_secs(5);
+        let second = collect_probe_output_bounded(&mut probe, end, probe_tick, &[]);
+        // Observe before cleanup (R12-014): identity, then a
+        // 200ms settle (SIGKILL-to-zombie is µs-ms; a live
+        // sleeper never exits on its own), then retire.
+        let foreign_now = proc_starttime(id);
+        std::thread::sleep(Duration::from_millis(200));
+        let mut status = 0;
+        // SAFETY: waitpid on our own child, first and only.
+        let survived = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } == 0;
+        // SAFETY: retiring our own foreigner (kill ignored —
+        // a RED zombie is already reaped above).
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let owned = foreigner.wait();
+        let _ = std::fs::write(last_path, &last_before);
+        assert!(first.is_none(), "null stdio must route to expiry");
+        assert!(second.is_none(), "repeated expiry must route again");
+        assert_eq!(
+            foreign_now,
+            Ok(Some(foreign_tick)),
+            "recycled probe number keeps its holder"
+        );
+        assert!(
+            survived,
+            "before-entry regroup must survive expiry (settled)"
+        );
+        let status = owned.expect("foreigner owner keeps its status");
+        assert!(!status.success(), "killed foreigner reports signal death");
+    }
+
+    /// R13-003: `expire_probe_collection` with a
+    /// sampler-invisible regroup — foreign self-grouped
+    /// holder, bogus tick, group_died=false. These inputs are
+    /// identical to the before-entry and in-gap sampler holes
+    /// (the function cannot distinguish a true recycle), so no
+    /// steering or threads are needed. Survival through
+    /// repeated expiry + owner status. (A literally mid-drain
+    /// recycle test would be timing-flaky by construction —
+    /// the anchor reads at fire time, so entry and mid-drain
+    /// are the same case.)
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expire_collection_spares_sampler_invisible_regroup() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::Duration;
+        let mut foreigner = std::process::Command::new("/bin/sleep");
+        foreigner
+            .arg("62")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            foreigner.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut foreigner = foreigner.spawn().expect("foreigner spawns");
+        let id = foreigner.id() as libc::pid_t;
+        let foreign_tick = proc_starttime(id)
+            .expect("foreigner stat readable")
+            .expect("foreigner visible");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(id) },
+            id,
+            "foreigner must self-group"
+        );
+        // Bogus tick: always mismatched (wrapping +1).
+        let bogus = foreign_tick.wrapping_add(1);
+        expire_probe_collection(id, bogus, &[], false);
+        expire_probe_collection(id, bogus, &[], false);
+        // Observe before cleanup (R12-014): identity, 200ms
+        // settle, then retire.
+        let foreign_now = proc_starttime(id);
+        std::thread::sleep(Duration::from_millis(200));
+        let mut status = 0;
+        // SAFETY: waitpid on our own child, first and only.
+        let survived = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) } == 0;
+        // SAFETY: retiring our own foreigner (kill ignored —
+        // a RED zombie is already reaped above).
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let owned = foreigner.wait();
+        assert_eq!(
+            foreign_now,
+            Ok(Some(foreign_tick)),
+            "foreigner keeps its identity"
+        );
+        assert!(survived, "invisible regroup must survive expiry (settled)");
+        let status = owned.expect("foreigner owner keeps its status");
+        assert!(!status.success(), "killed foreigner reports signal death");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
