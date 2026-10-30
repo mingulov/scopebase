@@ -2928,6 +2928,81 @@ def hostile_cover_argv(fake, pidfile):
             f"echo $$ > {shlex.quote(pidfile)} && exec sleep 120"]
 
 
+def retire_hostile_victim(victim, victim_start):
+    """SIGKILL the hostile-cover victim through PIDFD authority. (R11-012)
+
+    kill_bound_keeper against the starttime retained at
+    observation: exit or PID reuse before finalization refuses
+    (never redirects a root-authorized signal at whoever holds
+    the number now). Gone/refused/unknown all swallow — the
+    victim is a 120 s sleeper, so a missed kill is transient
+    and the finally must not mask test errors — but refusals
+    warn loudly (S131 spirit). Never raises.
+    """
+    if victim is None or victim_start is None:
+        return
+    try:
+        kill_bound_keeper(victim, victim_start)
+    except (provision.ProcAbsent, provision.AdmissionError,
+            provision.ProcUnknown) as exc:
+        sys.stderr.write(
+            "WARNING: hostile victim %d not signaled: %r\n"
+            % (victim, exc))
+
+
+class RetireHostileVictimTests(unittest.TestCase):
+    # R11-012, ungated: own-uid sleepers never hit the EPERM
+    # escalation, so no sudo is needed. The kill path only sees
+    # (number, expected_start) — a live process under a
+    # mismatched starttime IS the reuse shape, deterministically.
+    def _sleeper(self):
+        proc = subprocess.Popen(
+            ["sleep", "120"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        return proc
+
+    def test_bound_life_is_signaled(self):
+        proc = self._sleeper()
+        _, start = provision.stat_state_start(proc.pid)
+        retire_hostile_victim(proc.pid, start)
+        # Reap, don't poll: the signal is sent synchronously
+        # but death lands asynchronously.
+        self.assertEqual(proc.wait(timeout=10), -9)
+
+    def test_exited_victim_swallowed(self):
+        from unittest import mock
+        proc = self._sleeper()
+        _, start = provision.stat_state_start(proc.pid)
+        proc.kill()
+        proc.wait()
+        with mock.patch("sys.stderr") as err:
+            retire_hostile_victim(proc.pid, start)
+        self.assertIn("not signaled", err.write.call_args[0][0])
+
+    def test_reused_number_not_signaled(self):
+        # The finding's regression: finalization after the
+        # original life is gone and its number means another
+        # life must refuse — no signal to the replacement.
+        from unittest import mock
+        proc = self._sleeper()
+        _, real = provision.stat_state_start(proc.pid)
+        with mock.patch("sys.stderr") as err:
+            retire_hostile_victim(proc.pid, real + 1)
+        # No-signal first, under a grace: death lands
+        # asynchronously, so a bare poll lets a numeric kill
+        # slip through. A SIGKILLed process is reaped well
+        # inside a second; a refused one is still alive.
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            self.fail("replacement was signaled")
+        self.assertIn("not signaled", err.write.call_args[0][0])
+
+
 class HostileCoverArgvTests(unittest.TestCase):
     # R11-011, ungated by design: the cover body is a pure
     # string function of its paths, so stub mount/sleep on PATH
@@ -3006,14 +3081,22 @@ class HostileNsCanaryTests(unittest.TestCase):
             try:
                 deadline = time.time() + 15
                 victim = None
+                victim_start = None
                 while time.time() < deadline:
                     try:
                         with open(pidfile) as handle:
                             victim = int(handle.read().strip())
+                        # R11-012: retain the birth identity for
+                        # the bound final kill — same /proc
+                        # readability domain as the mountinfo
+                        # open that already gates readiness.
+                        _, victim_start = \
+                            provision.stat_state_start(victim)
                         with open(f"/proc/{victim}/mountinfo") as handle:
                             if "/usr/bin/grep" in handle.read():
                                 break
-                    except (OSError, ValueError):
+                    except (OSError, ValueError, provision.ProcAbsent,
+                            provision.ProcUnknown):
                         pass
                     time.sleep(0.1)
                 self.assertIsNotNone(
@@ -3040,9 +3123,11 @@ class HostileNsCanaryTests(unittest.TestCase):
                     provision._ns_has_canary_pinned(
                         victim, nsid, canary))
             finally:
-                subprocess.run(["sudo", "-n", "kill", "-9", str(victim)]
-                               if victim is not None else ["true"],
-                               capture_output=True, timeout=30)
+                # R11-012: PIDFD-authority kill against the
+                # retained starttime — exit or reuse before
+                # finalization refuses (loudly) instead of
+                # redirecting root SIGKILL by number.
+                retire_hostile_victim(victim, victim_start)
                 try:
                     runner.wait(timeout=15)
                 except subprocess.TimeoutExpired:
