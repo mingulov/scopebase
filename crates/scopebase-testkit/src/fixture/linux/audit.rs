@@ -2665,6 +2665,15 @@ mod tests {
     /// R10-012: rendezvous — the probe runs only when set.
     #[cfg(target_arch = "x86_64")]
     const SUBREAPER_PROBE_ENV: &str = "SCOPEBASE_TT04_SUBREAPER_PROBE";
+    /// R11-013: the confined-subreaper GUARD probe path (exact —
+    /// the parent requires one passed test in the probe output,
+    /// so a renamed path fails loud instead of passing
+    /// vacuously on zero tests).
+    #[cfg(target_arch = "x86_64")]
+    const GUARD_PROBE_PATH: &str = "fixture::linux::audit::tests::tt04_adopting_guard_probe";
+    /// R11-013: rendezvous — the probe runs only when set.
+    #[cfg(target_arch = "x86_64")]
+    const GUARD_PROBE_ENV: &str = "SCOPEBASE_TT04_ADOPTING_GUARD_PROBE";
 
     /// S132-round9: the exact expected-timeout shape — the
     /// barrier-denied report timeout WITH proven retirement.
@@ -3111,6 +3120,138 @@ mod tests {
         assert_eq!(stragglers, 0, "retirement must leave no child status");
     }
 
+    /// R11-013: the confined-subreaper GUARD probe (see
+    /// [`guard_retires_adopted_grandchild`]). Under a normal
+    /// suite run (no rendezvous variable) this passes silently;
+    /// the parent test spawns a FRESH test-binary process at
+    /// this exact path with the rendezvous set, and the probe
+    /// marks ITSELF a child subreaper (confined — the flag dies
+    /// with this process; the suite binary never sets it
+    /// globally) before firing the pre-report guard with the
+    /// grandchild born and barrier-parked. Pre-fix the adopted
+    /// grandchild zombie holds the group observable and the
+    /// group probe expires (RED); post-fix the group
+    /// retirement drains it and both probes are clean. The
+    /// sweep reaps stragglers before asserting zero, so even
+    /// RED runs stay clean (and the probe's exit reparents any
+    /// remainder to init).
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn tt04_adopting_guard_probe() {
+        use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+        use std::time::{Duration, Instant};
+        if std::env::var(GUARD_PROBE_ENV).is_err() {
+            return;
+        }
+        // Own process group first: a hung probe run lets the
+        // parent retire the whole tree by group.
+        // SAFETY: setpgid on self, no userspace state.
+        unsafe {
+            libc::setpgid(0, 0);
+        }
+        // SAFETY: prctl on self; marking a fresh probe process.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "probe must become a child subreaper"
+        );
+        let pgid = AtomicI32::new(-1);
+        let born = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                // Birth watcher: the 2s guard spins with the
+                // grandchild born and barrier-parked — stable
+                // for observation, not a fleeting window. The
+                // `children` file is PER-THREAD and the preflight
+                // fork runs on a libtest thread, so every task's
+                // file is scanned, not just the leader's.
+                while !done.load(Ordering::SeqCst) {
+                    let mid = pgid.load(Ordering::SeqCst);
+                    if mid > 1 {
+                        let tasks = format!("/proc/{mid}/task");
+                        if let Ok(entries) = std::fs::read_dir(&tasks) {
+                            for entry in entries.flatten() {
+                                let path = entry.path().join("children");
+                                if let Ok(list) = std::fs::read_to_string(&path) {
+                                    if list.split_whitespace().next().is_some() {
+                                        born.store(true, Ordering::SeqCst);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            // The runner holds only raw descriptors and locals
+            // across this boundary (no locks, no aliasing
+            // invariants) — catching its guard panic is sound.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_preflight_middleman_observed("write-eintr", Duration::from_secs(2), &pgid)
+            }));
+            done.store(true, Ordering::SeqCst);
+            match outcome {
+                Err(_) => {}
+                Ok(reported) => panic!(
+                    "2s guard must fire mid-EINTR-spin, got exit {}",
+                    reported.code
+                ),
+            }
+        });
+        assert!(
+            born.load(Ordering::SeqCst),
+            "grandchild birth never observed before the guard fired"
+        );
+        let group = pgid.load(Ordering::SeqCst);
+        assert!(
+            group > 1,
+            "runner must publish the middleman pgid, got {group}"
+        );
+        // Empty group first: a zombie still holds it observable.
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(group, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "group probe must fail ESRCH-only, got {errno}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "process group {group} survived the guard retirement"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // ...then no adopted child status anywhere: reap
+        // stragglers (RED runs stay clean) then require zero.
+        let mut stragglers = 0;
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid(-1) reaps any owned child.
+            let got = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if got > 0 {
+                stragglers += 1;
+                continue;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+            }
+            break;
+        }
+        assert_eq!(stragglers, 0, "retirement must leave no child status");
+    }
+
     /// R10-012: await /proc disappearance, reaping an adopted
     /// zombie along the way. Under a subreaper (or PID-1) runner
     /// the signaled grandchild reparents to US — its /proc entry
@@ -3237,8 +3378,20 @@ mod tests {
     /// group AGAIN (catching anything forked between the first
     /// signal's queueing and its delivery). Errors ignored: a
     /// dead or never-grouped target answers ESRCH.
+    /// R11-013: then drain adopted group zombies and PROVE the
+    /// group empty, returning the verdict. When the suite runs
+    /// as PID 1 or under a subreaper, the dead grandchild
+    /// becomes OUR zombie (otherwise init adopts and reaps it
+    /// and the drain is a no-op) — and a zombie still holds
+    /// the group observable. waitpid(-pgid) reaps only OUR
+    /// children in THIS group, so a multithreaded suite never
+    /// steals another test's children. Bounded: a
+    /// doomed-but-undelivered member lands on a later pass; an
+    /// unkillable one reports survival instead of hanging the
+    /// guard. True when the group probes ESRCH-empty.
     #[cfg(target_arch = "x86_64")]
-    fn retire_hung_middleman_group(pid: libc::pid_t) {
+    fn retire_hung_middleman_group(pid: libc::pid_t) -> bool {
+        use std::time::{Duration, Instant};
         // SAFETY: signal-only; the pgid names our own group.
         unsafe {
             libc::killpg(pid, libc::SIGKILL);
@@ -3246,6 +3399,36 @@ mod tests {
             let mut status = 0;
             libc::waitpid(pid, &mut status, 0);
             libc::killpg(pid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            loop {
+                let mut status = 0;
+                // SAFETY: -pgid filters to our children in our
+                // own group; WNOHANG never blocks.
+                let got = unsafe { libc::waitpid(-pid, &mut status, libc::WNOHANG) };
+                if got > 0 {
+                    continue;
+                }
+                if got < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                }
+                break;
+            }
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(pid, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                return errno == libc::ESRCH;
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -3385,15 +3568,17 @@ mod tests {
                 // no EOF→TRACEME→SIGSTOP orphan escapes), then
                 // fail loud. No report arrived, so the pgid
                 // (published post-fork) is the independent
-                // retirement handle.
-                retire_hung_middleman_group(pid);
+                // retirement handle. R11-013: the retirement
+                // verdict folds into the panic text (a surviving
+                // group must never read as retired).
+                let retired = retire_hung_middleman_group(pid);
                 // SAFETY: read end owned by this scope.
                 unsafe {
                     libc::close(pipe[0]);
                 }
                 panic!(
                     "middleman hung past {guard:?} (deadlock under denial; \
-                     group {pid} retired, no report received)"
+                     group {pid} retired: {retired}, no report received)"
                 );
             }
             let mut waiting = libc::pollfd {
@@ -3460,7 +3645,8 @@ mod tests {
                 // group signal; its disappearance is polled and
                 // FOLDED into the panic text, never asserted —
                 // a second panic must not mask the guard).
-                retire_hung_middleman_group(pid);
+                // R11-013: the group verdict folds in likewise.
+                let retired = retire_hung_middleman_group(pid);
                 let note = match &outcome.grandchild {
                     GrandchildState::Live(gpid, started) => {
                         let gone = await_proc_gone_reaping(*gpid, *started, Duration::from_secs(5));
@@ -3468,7 +3654,7 @@ mod tests {
                     }
                     GrandchildState::None => String::new(),
                 };
-                panic!("middleman hung past {guard:?} (deadlock under denial){note}");
+                panic!("middleman hung past {guard:?} (deadlock under denial; group retired: {retired}){note}");
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -3987,6 +4173,101 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// R11-013: pre-report guard retirement must REAP the
+    /// adopted grandchild, not just kill it. When the runner
+    /// adopts orphans (subreaper or PID-1 runner) the dead
+    /// grandchild is the runner's own zombie: kill-only
+    /// retirement leaves the group observable and the R10-011
+    /// regression expires. The parent spawns a fresh probe
+    /// process (a confined subreaper — never the suite binary)
+    /// and requires exit success bounded AND one passed test
+    /// (a renamed probe path fails here instead of passing
+    /// vacuously on zero tests). On timeout the parent retires
+    /// the probe's whole process group before failing loud.
+    /// NOTE: output collection mirrors the R10-012 parent
+    /// exactly — its boundedness is R11-014's call, adjudicated
+    /// next; both parents share whatever verdict lands there.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn guard_retires_adopted_grandchild() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut child = std::process::Command::new(exe)
+            .arg(GUARD_PROBE_PATH)
+            .arg("--exact")
+            .env(GUARD_PROBE_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn adopting-guard probe");
+        // The probe's worst case is ~17s (2s guard + 5s
+        // retirement + 10s group probe); 60s is the same
+        // proportionate bound as the R10-012 parent's 150s.
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            match child.try_wait().expect("probe wait") {
+                Some(status) => {
+                    let out = child.wait_with_output().expect("probe output");
+                    assert!(
+                        status.success(),
+                        "adopting-guard probe must exit success, got {status}: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    assert!(
+                        String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+                        "probe must run its one test (path exact)"
+                    );
+                    return;
+                }
+                None => {}
+            }
+            if Instant::now() >= end {
+                // SAFETY: signal-only to the probe's own group,
+                // then the probe itself; errors ignored.
+                let id = child.id() as libc::pid_t;
+                unsafe {
+                    libc::killpg(id, libc::SIGKILL);
+                    libc::kill(id, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                panic!("adopting-guard probe hung past 60s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// R11-013: the group drain must touch nothing outside the
+    /// retired group. A child in the suite's own group survives
+    /// a retirement pass over a dead foreign pgid: still ours
+    /// to reap (a stealing drain would ECHILD here) and still
+    /// exited-normally (a group-wide signal would show
+    /// signaled). Pins the waitpid(-pgid) filter.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn group_drain_steals_no_foreign_child() {
+        // SAFETY: the child exits at once; the parent below
+        // reaps it.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "unit fork failed");
+        if pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        assert!(
+            retire_hung_middleman_group(libc::pid_t::MAX),
+            "empty foreign pgid must probe retired"
+        );
+        let mut status = 0;
+        // SAFETY: our own unwaited-for child; it exits at once
+        // so the blocking reap cannot hang.
+        let got = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(got, pid, "drain must not reap outside the group");
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "drain must not signal outside the group, got {status}"
+        );
     }
 
     /// S119-round8: a pin-less guard drop under wait-denial must
