@@ -30,7 +30,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -293,6 +292,73 @@ def snapshot_entry_record(pidfile):
         return None
     except OSError:
         return _ENTRY_SNAPSHOT_UNREADABLE
+
+
+def run_bounded_reader_case(reader, timeout=10):
+    """Run a record reader in a reaped child process. (R12-013)
+
+    Returns (finished, payload, exitcode): ``finished`` True
+    carries the reader's return as ``payload`` with a clean
+    (0) exit; anything else — bound lapse, child crash, a
+    raised reader, a missing payload — returns
+    (False, None, exitcode) with the child SIGKILL-
+    terminated (escalated from SIGTERM) and reaped.
+    Independently enforceable termination: threads cannot
+    be killed, so a restored unbounded read (FIFO block,
+    /dev/zero alloc) in a daemon thread would wedge or OOM
+    the shared interpreter past the assertion; a child
+    process is killed and its address space freed.
+    Fork context (closures need no pickling; spawn would
+    refuse them) with pre-fork stdio flush (no double
+    flush into redirected suite logs). Payloads must be
+    picklable across the result pipe.
+    """
+    import multiprocessing as _mp
+    import sys as _sys
+    _sys.stdout.flush()
+    _sys.stderr.flush()
+    ctx = _mp.get_context("fork")
+    recv_conn, send_conn = ctx.Pipe(duplex=False)
+
+    def _target(conn, func):
+        try:
+            conn.send(("ok", func()))
+        except BaseException as exc:
+            conn.send(("raised", repr(exc)))
+        finally:
+            conn.close()
+
+    proc = ctx.Process(
+        target=_target, args=(send_conn, reader))
+    proc.start()
+    send_conn.close()
+    proc.join(timeout)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(5)
+        recv_conn.close()
+        proc.join()
+        return (False, None, proc.exitcode)
+    exitcode = proc.exitcode
+    try:
+        if not recv_conn.poll(10):
+            kind, payload = ("missing", None)
+        else:
+            kind, payload = recv_conn.recv()
+    except EOFError:
+        kind, payload = ("missing", None)
+    finally:
+        recv_conn.close()
+    if exitcode != 0 or kind != "ok":
+        if kind == "raised":
+            _sys.stderr.write(
+                "bounded reader raised in child: %s\n"
+                % (payload,))
+        return (False, None, exitcode)
+    return (True, payload, exitcode)
 
 
 def userns_unshare_available():
@@ -3925,48 +3991,110 @@ class AdoptReplacementTests(unittest.TestCase):
         # deadline — a blocking open would hang the finalizer
         # before quiescence or retention. Retention flags
         # (True); the original lives are untouched so
-        # finalization continues over them.
+        # finalization continues over them. R12-013: runs in
+        # a reaped child process (independently enforceable
+        # termination — a restored unbounded read is
+        # SIGKILLed at the bound, never wedging the shared
+        # interpreter past the assertion).
         with tempfile.TemporaryDirectory() as tmp:
             pidfile = os.path.join(tmp, "ns.pid")
             os.mkfifo(pidfile)
             lives = [(4242, 1234)]
-            result = []
-            worker = threading.Thread(
-                target=lambda: result.append(
-                    adopt_recorded_replacement(
-                        pidfile, b"stale", lives)),
-                daemon=True)
-            worker.start()
-            worker.join(timeout=10)
-            self.assertFalse(
-                worker.is_alive(),
-                "adopter blocked on a FIFO record")
-            self.assertEqual(result, [True])
-            self.assertEqual(lives, [(4242, 1234)])
+
+            def read_record():
+                return (adopt_recorded_replacement(
+                    pidfile, b"stale", lives), list(lives))
+
+            finished, payload, exitcode = run_bounded_reader_case(
+                read_record, timeout=10)
+            self.assertTrue(
+                finished, "adopter blocked on a FIFO record")
+            self.assertEqual(exitcode, 0)
+            result, child_lives = payload
+            self.assertEqual(result, True)
+            self.assertEqual(child_lives, [(4242, 1234)])
 
     @unittest.skipUnless(os.path.exists("/dev/zero"),
                          "needs /dev/zero")
     def test_device_record_refuses_bounded(self):
         # R11-009: a symlink to /dev/zero must refuse without
         # reading — an unbounded read never returns. Same
-        # retention contract as the FIFO arm.
+        # retention contract as the FIFO arm. R12-013: reaped
+        # child process (a restored unbounded read is
+        # SIGKILLed with its address space freed, never
+        # allocating inside the shared interpreter).
         with tempfile.TemporaryDirectory() as tmp:
             pidfile = os.path.join(tmp, "ns.pid")
             os.symlink("/dev/zero", pidfile)
             lives = [(4242, 1234)]
-            result = []
-            worker = threading.Thread(
-                target=lambda: result.append(
-                    adopt_recorded_replacement(
-                        pidfile, b"stale", lives)),
-                daemon=True)
-            worker.start()
-            worker.join(timeout=10)
-            self.assertFalse(
-                worker.is_alive(),
+
+            def read_record():
+                return (adopt_recorded_replacement(
+                    pidfile, b"stale", lives), list(lives))
+
+            finished, payload, exitcode = run_bounded_reader_case(
+                read_record, timeout=10)
+            self.assertTrue(
+                finished,
                 "adopter read a device record unbounded")
-            self.assertEqual(result, [True])
-            self.assertEqual(lives, [(4242, 1234)])
+            self.assertEqual(exitcode, 0)
+            result, child_lives = payload
+            self.assertEqual(result, True)
+            self.assertEqual(child_lives, [(4242, 1234)])
+
+    def test_blocked_reader_terminated_and_reaped(self):
+        # R12-013: the known-bad FIFO shape (a blocking open
+        # that never returns) run through the bounded runner
+        # must FAIL bounded — the worker is SIGKILL-
+        # terminated and reaped (independently enforceable
+        # termination: threads cannot be killed, processes
+        # can), never wedging the shared interpreter.
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            os.mkfifo(pidfile)
+
+            def hang_forever():
+                with open(pidfile, "rb") as handle:
+                    handle.read()
+
+            finished, _, exitcode = run_bounded_reader_case(
+                hang_forever, timeout=3)
+            self.assertFalse(finished)
+            self.assertIsNotNone(exitcode, "worker reaped")
+            self.assertNotEqual(exitcode, 0)
+
+    def test_allocating_reader_contained_outside_interpreter(self):
+        # R12-013: the known-bad device shape (an unbounded
+        # /dev/zero read) run through the bounded runner must
+        # not grow the SUITE interpreter: allocation stays in
+        # the child (killed+reaped at the bound) while the
+        # parent's RSS barely moves. Threshold: megabytes of
+        # real growth vs gigabytes an in-process read adds.
+        import re as _re
+
+        def parent_rss_mb():
+            with open("/proc/self/status") as handle:
+                for line in handle:
+                    match = _re.match(r"VmRSS:\s+(\d+) kB",
+                                      line)
+                    if match:
+                        return int(match.group(1)) // 1024
+            raise AssertionError("VmRSS row missing")
+
+        def allocate_forever():
+            with open("/dev/zero", "rb") as handle:
+                handle.read()
+
+        before = parent_rss_mb()
+        finished, _, exitcode = run_bounded_reader_case(
+            allocate_forever, timeout=3)
+        growth = parent_rss_mb() - before
+        self.assertFalse(finished)
+        self.assertIsNotNone(exitcode, "worker reaped")
+        self.assertNotEqual(exitcode, 0)
+        self.assertLess(
+            growth, 1024,
+            f"unbounded read leaked into suite RSS (+{growth}MB)")
 
     def test_symlink_to_regular_reads_through(self):
         # R11-009: the S28 reader resolves symlinks at open —
