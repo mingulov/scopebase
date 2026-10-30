@@ -2843,7 +2843,8 @@ fn steer_next_pid(want: i32) -> bool {
 /// Deterministic: the hook pauses the walk mid-traversal (no
 /// timing luck); pid-steals retry bounded and loud. Skipped
 /// where ns_last_pid is unwritable. Duration 96 is unique to
-/// this test.
+/// this test. Cleanup precedes every assert (R12-014-proof);
+/// verdict, aliveness, and placement are recorded first.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn descendant_walk_survives_intermediate_replacement() {
@@ -2925,21 +2926,82 @@ fn descendant_walk_survives_intermediate_replacement() {
         }
     };
     let verdict = is_test_descendant_with_hook(a, me, Some(&hook), None);
-    // Cleanup first (every path leak-free): P's handle (hook
+    // Record before cleanup (R12-014): aliveness proves the
+    // verdict is about the replacement, not a dead fixture
+    // (the walk never signals — survival is anti-vacuity).
+    // SAFETY: kill-0 probes existence only.
+    let a_alive = unsafe { libc::kill(a, 0) } == 0;
+    // R12-014: pauser birth tick for the retirement proof
+    // (read while the kept pauser is provably live; None on
+    // placement failure or a sibling's number — only the
+    // fault driver consumes it).
+    let pauser_tick = match task_starttime_checked(p_pid) {
+        Ok(Some(tick)) => Some(tick),
+        _ => None,
+    };
+    // Full cleanup before every assert: P's handle (hook
     // reaped it — ECHILD expected) or kill+reap when the hook
-    // never ran.
+    // never ran; A (orphaned); the pauser (only when WE kept
+    // it — a squatted P belongs to a sibling!); allocator hint.
     if acted.load(Ordering::SeqCst) {
         let _ = p.try_wait();
     } else {
         let _ = p.kill();
         let _ = p.wait();
     }
+    retire_orphan(a, pinned_a);
+    if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) == p_pid {
+        kill_wait_child(p_pid);
+    }
+    // R12-014: restore via steer (sudo fallback), verified
+    // by read-back. A bare fs::write NEVER lands here
+    // (unprivileged ns_last_pid writes get EPERM). The retry
+    // is TIME-bounded (2s), not count-bounded: under a fork
+    // burst the test can deschedule between the write and
+    // the read, exhausting any fixed attempt count (observed
+    // once: 0.88s of placement sniping + restored=false).
+    // Past the deadline restored stays false (loud, honest).
+    let mut restored = false;
+    if let Ok(num) = last_before.parse::<i32>() {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !restored && std::time::Instant::now() < end {
+            let _ = steer_next_pid(num + 1);
+            restored = std::fs::read_to_string(last_path)
+                .map(|text| text.trim() == last_before)
+                .unwrap_or(false);
+        }
+    }
+    // R12-014 fault injection (env-gated; inert otherwise):
+    // force the bad verdict / hook failure AFTER cleanup so
+    // the driver can require retirement+restoration before
+    // either failure is reported. Unknown values ignore (the
+    // driver requires the R12014 line, so a typo fails loud
+    // there, not silent here).
+    let forced = std::env::var("SCOPEBASE_R12014_FORCE_FAILURE").ok();
+    if forced.is_some() {
+        // restored was verified microseconds after the write
+        // above (a sibling interleaving in that window is
+        // absurd); a driver-side file check would race in
+        // milliseconds.
+        eprintln!(
+            "R12014 p_pid={p_pid} pauser_tick={} a={a} pinned_a={pinned_a} restored={restored}",
+            pauser_tick
+                .map(|tick| tick.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+    }
+    let verdict = if forced.as_deref() == Some("bad-verdict") {
+        true
+    } else {
+        verdict
+    };
+    if forced.as_deref() == Some("hook-failure") {
+        acted.store(false, Ordering::SeqCst);
+    }
     // R12-002: placement failed — a squatter holding P skips
     // (contended environment, honestly reported), a free P
     // means steering itself broke (loud).
     if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) != p_pid {
-        retire_orphan(a, pinned_a);
-        let _ = std::fs::write(last_path, &last_before);
         match task_starttime_checked(p_pid) {
             Ok(Some(_)) => {
                 eprintln!("skip: P={p_pid} squatted by a sibling (contended)");
@@ -2957,12 +3019,119 @@ fn descendant_walk_survives_intermediate_replacement() {
         p_pid,
         "P's number not retaken by our child"
     );
+    assert!(
+        a_alive,
+        "target must survive the walk (died fixture, not detection)"
+    );
     assert!(!verdict, "replaced intermediate must not forge descent");
-    // A orphaned onto init when P died; the adoptee is ours.
-    retire_orphan(a, pinned_a);
-    kill_wait_child(p_pid);
-    // Polite restore (advisory hint; harmless either way).
-    let _ = std::fs::write(last_path, &last_before);
+}
+
+/// R12-014: a forced RED run of the intermediate test must
+/// retire its fixtures and restore the allocator hint BEFORE
+/// reporting failure. Drives the test binary twice
+/// (bad-verdict, hook-failure) and requires on each: a
+/// failure exit with the right assert message (the report),
+/// the R12014 line (cleanup ran first), restored=true
+/// (restoration verified pre-report), and tick-gated absence
+/// of both fixtures (a recycled number with a different tick
+/// is NOT our fixture — same-tick recycle is the accepted
+/// R12-005-class residual). Holds STEER_SERIAL across each
+/// child run (in-process steering siblings block on the
+/// mutex while the child process steers alone).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn intermediate_forced_failure_cleans_before_reporting() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+    for (forced, message) in [
+        (
+            "bad-verdict",
+            "replaced intermediate must not forge descent",
+        ),
+        ("hook-failure", "bind hook never fired"),
+    ] {
+        // R12-002: serialize steerers (whole-child hold).
+        let _steer = STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("descendant_walk_survives_intermediate_replacement")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R12014_FORCE_FAILURE", forced)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().expect("spawn forced probe");
+        // R12-005: pin before any wait (retirement identity gate).
+        let staged = task_starttime_checked(child.id() as i32)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        let end = Instant::now() + Duration::from_secs(90);
+        let (status, stdout, stderr) = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                let (out, err) = drain_exited_child_output(&child);
+                break (status, out, err);
+            }
+            if Instant::now() >= end {
+                retire_probe_tree(&mut child, staged);
+                panic!("forced probe ({forced}) hung past 90s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let _ = stdout;
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        assert!(
+            !status.success(),
+            "forced probe ({forced}) must fail loud, got {status}: {stderr_text}"
+        );
+        assert!(
+            stderr_text.contains(message),
+            "forced probe ({forced}) must report '{message}': {stderr_text}"
+        );
+        let line = stderr_text
+            .lines()
+            .find(|l| l.starts_with("R12014 "))
+            .unwrap_or_else(|| {
+                panic!("forced probe ({forced}) missing R12014 line: {stderr_text}")
+            });
+        assert!(
+            line.contains("restored=true"),
+            "forced probe ({forced}) must restore before reporting: {line}"
+        );
+        let field = |name: &str| -> &str {
+            line.split_whitespace()
+                .filter_map(|f| f.split_once('='))
+                .find(|(key, _)| *key == name)
+                .unwrap_or_else(|| panic!("R12014 missing {name}=: {line}"))
+                .1
+        };
+        // A is always ours (pinned-or-panic in the probe): its
+        // number must be free or recycled (different tick).
+        let a: i32 = field("a").parse().expect("a numeric");
+        let pinned_a: u64 = field("pinned_a").parse().expect("pinned_a numeric");
+        if let Ok(Some(now)) = task_starttime_checked(a) {
+            assert_ne!(now, pinned_a, "fixture A={a} survives (tick {now})");
+        }
+        // P's holder may be a sibling's (placement can fail
+        // while hook-failure still reports): check only when
+        // the probe pinned a tick.
+        if field("pauser_tick") != "none" {
+            let p_pid: i32 = field("p_pid").parse().expect("p_pid numeric");
+            let pauser_tick: u64 = field("pauser_tick").parse().expect("pauser_tick numeric");
+            if let Ok(Some(now)) = task_starttime_checked(p_pid) {
+                assert_ne!(now, pauser_tick, "fixture P={p_pid} survives (tick {now})");
+            }
+        }
+    }
 }
 
 /// R12-002: replacing the checked intermediate between the
