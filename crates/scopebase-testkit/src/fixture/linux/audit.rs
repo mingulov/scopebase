@@ -3092,7 +3092,51 @@ mod tests {
     /// `read-nopidfd`, `read-nosignal`, `write-eintr`.
     #[cfg(target_arch = "x86_64")]
     fn run_preflight_middleman(spec: &'static str, guard: Duration) -> MiddlemanOutcome {
+        let observed = std::sync::atomic::AtomicI32::new(-1);
+        run_preflight_middleman_observed(spec, guard, &observed)
+    }
+
+    /// R10-011: guard-fire retirement of a hung middleman AND its
+    /// process group. The middleman leads its own group
+    /// (pgid == its pid — set both pre-exec in the child and
+    /// post-fork in the parent, so the group exists from
+    /// microseconds after the fork regardless of child
+    /// scheduling); the grandchild inherits it. Order matters:
+    /// kill the group first (middleman and grandchild alike —
+    /// SIGKILL reaches even a SIGSTOP-stranded orphan), then
+    /// the middleman directly (belt-and-braces), reap it
+    /// (proving no further fork is possible), then kill the
+    /// group AGAIN (catching anything forked between the first
+    /// signal's queueing and its delivery). Errors ignored: a
+    /// dead or never-grouped target answers ESRCH.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_hung_middleman_group(pid: libc::pid_t) {
+        // SAFETY: signal-only; the pgid names our own group.
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+            libc::kill(pid, libc::SIGKILL);
+            let mut status = 0;
+            libc::waitpid(pid, &mut status, 0);
+            libc::killpg(pid, libc::SIGKILL);
+        }
+    }
+
+    /// S110/S111-round8 runner with R10-011 group retirement and
+    /// pgid observation: `observed_pgid` receives the middleman
+    /// pid (== its process-group id) microseconds post-fork, so
+    /// a test can independently prove BOTH generations retired
+    /// even when the guard panics (the outcome never returns on
+    /// that path). Every guard-fire path retires the whole
+    /// group through [`retire_hung_middleman_group`] before
+    /// panicking — the failure stays loud, never a leak.
+    #[cfg(target_arch = "x86_64")]
+    fn run_preflight_middleman_observed(
+        spec: &'static str,
+        guard: Duration,
+        observed_pgid: &std::sync::atomic::AtomicI32,
+    ) -> MiddlemanOutcome {
         use std::os::unix::ffi::OsStringExt as _;
+        use std::sync::atomic::Ordering;
         use std::time::{Duration, Instant};
         // Report pipe: the probe's single line. The write end must
         // stay non-CLOEXEC (it crosses the exec); the read end is
@@ -3163,11 +3207,30 @@ mod tests {
                 var.as_ptr() as *const libc::c_char,
                 std::ptr::null(),
             ];
+            // R10-011: own process group (async-signal-safe,
+            // pre-exec — our grandchild inherits it, so the
+            // guard can retire BOTH generations by group).
+            // SAFETY: setpgid on self, no userspace state.
+            unsafe {
+                libc::setpgid(0, 0);
+            }
             unsafe {
                 libc::execve(exe.as_ptr(), argv.as_ptr(), envp.as_ptr());
                 libc::_exit(127);
             }
         }
+        // R10-011: group the middleman from the parent side too
+        // (EACCES: it already exec'd, so the child-side call
+        // above won; ESRCH: it already died — nothing to
+        // group). At least one side wins before any grandchild
+        // fork, and the group exists from here regardless of
+        // child scheduling — a later killpg can never address
+        // a foreign group id.
+        // SAFETY: setpgid on our own unwaited-for child.
+        unsafe {
+            libc::setpgid(pid, pid);
+        }
+        observed_pgid.store(pid, Ordering::SeqCst);
         // SAFETY: write end owned by the middleman now.
         unsafe { libc::close(pipe[1]) };
         let deadline = Instant::now() + guard;
@@ -3189,14 +3252,21 @@ mod tests {
                 .as_millis()
                 .min(i32::MAX as u128) as i32;
             if remaining <= 0 {
-                // SAFETY: retiring our own hung middleman.
+                // R10-011: retire the whole group (the unborn or
+                // unnamed grandchild dies with its middleman —
+                // no EOF→TRACEME→SIGSTOP orphan escapes), then
+                // fail loud. No report arrived, so the pgid
+                // (published post-fork) is the independent
+                // retirement handle.
+                retire_hung_middleman_group(pid);
+                // SAFETY: read end owned by this scope.
                 unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                    let mut status = 0;
-                    libc::waitpid(pid, &mut status, 0);
                     libc::close(pipe[0]);
                 }
-                panic!("middleman hung past {guard:?} (deadlock under denial)");
+                panic!(
+                    "middleman hung past {guard:?} (deadlock under denial; \
+                     group {pid} retired, no report received)"
+                );
             }
             let mut waiting = libc::pollfd {
                 fd: pipe[0],
@@ -3256,13 +3326,29 @@ mod tests {
                 panic!("middleman wait failed: {error}");
             }
             if Instant::now() >= deadline {
-                // SAFETY: retiring our own hung middleman.
-                unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                    let mut status = 0;
-                    libc::waitpid(pid, &mut status, 0);
-                }
-                panic!("middleman hung past {guard:?} (deadlock under denial)");
+                // R10-011: the report arrived but the middleman
+                // never exited — retire the whole group before
+                // failing loud (the reported grandchild dies by
+                // group signal; its disappearance is polled and
+                // FOLDED into the panic text, never asserted —
+                // a second panic must not mask the guard).
+                retire_hung_middleman_group(pid);
+                let note = match &outcome.grandchild {
+                    GrandchildState::Live(gpid, _) => {
+                        let end = Instant::now() + Duration::from_secs(5);
+                        let mut gone = false;
+                        while Instant::now() < end {
+                            if !std::path::Path::new(&format!("/proc/{gpid}")).exists() {
+                                gone = true;
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        format!("; reported grandchild {gpid} gone: {gone}")
+                    }
+                    GrandchildState::None => String::new(),
+                };
+                panic!("middleman hung past {guard:?} (deadlock under denial){note}");
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -3513,6 +3599,73 @@ mod tests {
             "expired release must retire its own child, got: {:?}",
             outcome.grandchild
         );
+    }
+
+    /// R10-011: the infinite-retry SHAPE must die bounded with
+    /// BOTH generations provably retired. A 2s guard (far below
+    /// production's 5s EINTR deadline) fires while the
+    /// middleman still spins its release write with the
+    /// grandchild born and barrier-blocked. The guard retires
+    /// the whole process group before panicking (the failure
+    /// stays loud, never a leak); the test then proves
+    /// retirement INDEPENDENTLY (killpg probe to ESRCH — a
+    /// zombie still holds the group, so emptiness also proves
+    /// init reaped the orphan). Portability note: on kernel
+    /// 7.2.13/Yama-0 the orphan exits by itself within 0.4s
+    /// even under a middleman-only kill (no T state ever
+    /// observed), so this pins the guarantee rather than a
+    /// manifesting leak — the group kill makes both-generation
+    /// retirement unconditional instead of kernel-dependent.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn eintr_spin_guard_retires_both_generations() {
+        use std::sync::atomic::{AtomicI32, Ordering};
+        use std::time::{Duration, Instant};
+        let pgid = AtomicI32::new(-1);
+        let started = Instant::now();
+        // The runner holds only raw descriptors and locals
+        // across this boundary (no locks, no aliasing
+        // invariants) — catching its guard panic is sound.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_preflight_middleman_observed("write-eintr", Duration::from_secs(2), &pgid)
+        }));
+        let elapsed = started.elapsed();
+        match outcome {
+            Err(_) => {}
+            Ok(reported) => panic!(
+                "2s guard must fire mid-EINTR-spin, got exit {}",
+                reported.code
+            ),
+        }
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "guard failure must stay bounded, took {elapsed:?}"
+        );
+        let group = pgid.load(Ordering::SeqCst);
+        assert!(
+            group > 1,
+            "runner must publish the middleman pgid, got {group}"
+        );
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(group, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "group probe must fail ESRCH-only, got {errno}"
+                );
+                return;
+            }
+            assert!(
+                Instant::now() < end,
+                "process group {group} survived the guard retirement"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// S119-round8: a pin-less guard drop under wait-denial must
