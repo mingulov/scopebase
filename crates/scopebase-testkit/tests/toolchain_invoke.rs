@@ -2816,6 +2816,28 @@ fn kill_wait_child(pid: i32) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// R13-006: settle P's Child handle after the ancestry run. When
+/// the hook acted it raw-reaped P already — NEVER poll the stale
+/// handle: on failed placement P's number names a SIBLING's task
+/// (possibly an exited zombie), and try_wait would reap the
+/// sibling's status into P's handle (ownership theft; the
+/// sibling's owner then reaps ECHILD). The pausers-never-exit
+/// argument does not cover failed placement — there the holder
+/// is not our pauser. When the hook never ran, P is still ours:
+/// kill+reap normally.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn settle_probe_after_hook(p: &mut std::process::Child, hook_acted: bool) {
+    if hook_acted {
+        // The hook raw-reaped P: the handle is stale and P's
+        // number may name a sibling — no poll, ever (a stale
+        // try_wait would steal a sibling zombie's status into
+        // this handle). Dropping the handle reaps nothing.
+        return;
+    }
+    let _ = p.kill();
+    let _ = p.wait();
+}
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn steer_next_pid(want: i32) -> bool {
     use std::process::Stdio;
@@ -2942,16 +2964,11 @@ fn descendant_walk_survives_intermediate_replacement() {
         Ok(Some(tick)) => Some(tick),
         _ => None,
     };
-    // Full cleanup before every assert: P's handle (hook
-    // reaped it — ECHILD expected) or kill+reap when the hook
-    // never ran; A (orphaned); the pauser (only when WE kept
-    // it — a squatted P belongs to a sibling!); allocator hint.
-    if acted.load(Ordering::SeqCst) {
-        let _ = p.try_wait();
-    } else {
-        let _ = p.kill();
-        let _ = p.wait();
-    }
+    // Full cleanup before every assert: P's handle via the
+    // R13-006 settler (never polled stale — a squatted P belongs
+    // to a sibling!); A (orphaned); the pauser (only when WE kept
+    // it); allocator hint.
+    settle_probe_after_hook(&mut p, acted.load(Ordering::SeqCst));
     retire_orphan(a, pinned_a);
     if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) == p_pid {
         kill_wait_child(p_pid);
@@ -3255,15 +3272,10 @@ fn descendant_walk_survives_check_sample_replacement() {
     // (the walk never signals — survival is anti-vacuity).
     // SAFETY: kill-0 probes existence only.
     let a_alive = unsafe { libc::kill(a, 0) } == 0;
-    // Full cleanup before every assert: P's handle (hook
-    // reaped it — ECHILD expected) or kill+reap when the hook
-    // never ran; A (orphaned); the pauser; allocator hint.
-    if acted.load(Ordering::SeqCst) {
-        let _ = p.try_wait();
-    } else {
-        let _ = p.kill();
-        let _ = p.wait();
-    }
+    // Full cleanup before every assert: P's handle via the
+    // R13-006 settler (never polled stale); A (orphaned); the
+    // pauser; allocator hint.
+    settle_probe_after_hook(&mut p, acted.load(Ordering::SeqCst));
     retire_orphan(a, pinned_a);
     if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) == p_pid {
         kill_wait_child(p_pid);
@@ -3300,6 +3312,149 @@ fn descendant_walk_survives_check_sample_replacement() {
         "target must survive the walk (died fixture, not detection)"
     );
     assert!(!verdict, "check-sample replacement must not forge descent");
+}
+
+/// R13-006: ancestry cleanup must never poll a raw-reaped
+/// handle. Arrange the failed-placement consequence directly: P
+/// raw-reaped (as the hook does), then a DIFFERENT-birth,
+/// independently-owned zombie steered onto P's number (the
+/// squatter the placement loop lost to — NOT our pauser, so the
+/// pausers-never-exit argument does not apply). Settling P's
+/// handle must leave the sibling's owner able to reap it.
+/// Pre-fix the stale try_wait steals the sibling's status (RED:
+/// the owner reaps ECHILD); post-fix the owner reaps exit 3.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn ancestry_cleanup_spares_sibling_zombie() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    // No-op write-back proves writability without changing
+    // allocator state (skips before any fixture exists).
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let mut p = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("P spawns");
+    let p_pid = p.id() as i32;
+    let pinned_p = match task_starttime_checked(p_pid) {
+        Ok(Some(started)) => started,
+        other => panic!("P starttime unreadable: {other:?}"),
+    };
+    // Raw-reap P exactly as the ancestry hook does (kill, then
+    // bounded WNOHANG waitpid): from here P's handle is stale
+    // and P's number is free.
+    // SAFETY: P is our own child.
+    unsafe {
+        libc::kill(p_pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid on our own child.
+        let got = unsafe { libc::waitpid(p_pid, &mut status, libc::WNOHANG) };
+        if got == p_pid {
+            break;
+        }
+        if got < 0 {
+            panic!("P wait failed mid-reap (status stolen?)");
+        }
+        assert!(Instant::now() < end, "P unreaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The failed-placement squatter: an independently-owned
+    // child steered onto P's freed number (mirror the hook's
+    // placement loop; misses are reaped at once via their own
+    // handles so no zombie lingers). R12-005 cross-process
+    // placement lock; nobody else targets OUR freed number, so
+    // 100 consecutive misses prove steering broken (loud), not
+    // contention.
+    let _nsflock = ns_last_pid_flock();
+    let mut owner = None;
+    for _ in 0..100 {
+        if !steer_next_pid(p_pid) {
+            break;
+        }
+        let cand = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 3")
+            .spawn()
+            .expect("squatter spawns");
+        if cand.id() as i32 != p_pid {
+            let _ = cand.wait_with_output();
+            continue;
+        }
+        owner = Some(cand);
+        break;
+    }
+    let mut owner = match owner {
+        Some(owner) => owner,
+        None => panic!("steering broken: P={p_pid} free but unretaken"),
+    };
+    // Different birth (else the zombie could be a P remnant —
+    // vacuous), then zombie-state proof with the owner UNTOUCHED
+    // (a reap here would be ours, not the settler's).
+    let sib_tick = match task_starttime_checked(p_pid) {
+        Ok(Some(started)) => started,
+        other => panic!("squatter starttime unreadable: {other:?}"),
+    };
+    assert_ne!(
+        sib_tick, pinned_p,
+        "squatter must differ in birth tick (else vacuous)"
+    );
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = std::fs::read_to_string(format!("/proc/{p_pid}/stat"))
+            .expect("squatter stat readable while awaited");
+        let state = row
+            .rsplit_once(") ")
+            .and_then(|(_, after)| after.split_whitespace().next());
+        if state == Some("Z") {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "squatter never reached zombie state (state {state:?})"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // The ancestry cleanup under test: settle P's stale handle
+    // as if the hook had acted. The sibling's owner must still
+    // reap exit 3 — a stale poll would have stolen it (ECHILD).
+    settle_probe_after_hook(&mut p, true);
+    let status = owner
+        .wait()
+        .expect("sibling owner must reap its zombie (status stolen?)");
+    assert_eq!(
+        status.code(),
+        Some(3),
+        "owner must reap the sibling's exit, got {status:?}"
+    );
+    // Restore the allocator hint via steer (sudo fallback),
+    // verified by read-back (R12-014: time-bounded, loud).
+    let mut restored = false;
+    if let Ok(num) = last_before.parse::<i32>() {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !restored && std::time::Instant::now() < end {
+            let _ = steer_next_pid(num + 1);
+            restored = std::fs::read_to_string(last_path)
+                .map(|text| text.trim() == last_before)
+                .unwrap_or(false);
+        }
+    }
+    assert!(restored, "allocator hint must restore after steering");
 }
 
 /// S128-round9: the pin must be acquired BEFORE custody evidence is
