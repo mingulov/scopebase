@@ -2693,6 +2693,12 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
 fn predicate_forced_exits_retire_fixtures() {
     use std::os::unix::process::CommandExt as _;
     use std::time::{Duration, Instant};
+    // R13-010: capability absence skips (same shape as the R12-014
+    // driver — the children would skip before injection).
+    if let Some(reason) = driver_steering_skip_reason() {
+        eprintln!("{reason}");
+        return;
+    }
     for (forced, success, message) in [
         (
             "placement-failure",
@@ -2783,6 +2789,65 @@ fn predicate_forced_exits_retire_fixtures() {
                 assert_ne!(now, tick, "fixture {name}={pid} survives (tick {now})");
             }
         }
+    }
+}
+
+/// R13-010: the forced-failure drivers must SKIP (not fail) when
+/// steering is unavailable. Drives each driver test with forced
+/// absence and requires exit success plus the forced-skip report.
+/// On steering-capable machines only the injection can produce
+/// that report (a natural skip is impossible), so it proves the
+/// skip path ran; capability absence stays explicitly
+/// unexecuted. The executable paths stay covered by the drivers
+/// themselves (run unforced in-suite). No steering happens here
+/// (the drivers skip before spawning), so no lock is needed.
+/// Bounded hang guard with tree retirement (house driver shape).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn forced_failure_drivers_skip_without_steering() {
+    use std::time::{Duration, Instant};
+    for test in [
+        "intermediate_forced_failure_cleans_before_reporting",
+        "predicate_forced_exits_retire_fixtures",
+    ] {
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let mut child = std::process::Command::new(exe)
+            .arg(test)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R13010_FORCE_NOSTEER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn driver probe");
+        // R12-005: pin before any wait (retirement identity gate).
+        let staged = task_starttime_checked(child.id() as i32)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // The driver skips before spawning — instant. Bound the
+        // wait anyway (a hang here means the skip never ran).
+        let end = Instant::now() + Duration::from_secs(30);
+        let (status, stderr) = loop {
+            if let Some(status) = child.try_wait().expect("probe wait") {
+                let (_, err) = drain_exited_child_output(&child);
+                break (status, err);
+            }
+            if Instant::now() >= end {
+                retire_probe_tree(&mut child, staged);
+                panic!("driver probe ({test}) hung past 30s");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        assert!(
+            status.success(),
+            "driver ({test}) must skip on forced absence, got {status}: {stderr_text}"
+        );
+        assert!(
+            stderr_text.contains("skip: FORCED unavailable steering (inject)"),
+            "driver ({test}) must report its forced skip: {stderr_text}"
+        );
     }
 }
 
@@ -3164,6 +3229,30 @@ fn locked_restore_hint(last_before: &str) {
     let _ = std::fs::write("/proc/sys/kernel/ns_last_pid", last_before);
 }
 
+/// R13-010: capability pre-check shared by the forced-failure
+/// drivers (R12-014, R13-008): steering must be usable or the
+/// driver skips (capability absence is explicitly unexecuted —
+/// never a failure). Mirrors the children's own gates (readable
+/// hint + locked no-op write-back; the locked call is safe here
+/// — no guard is ever held at driver top). Returns the skip line
+/// when unavailable (forced or natural), None when executable.
+/// SCOPEBASE_R13010_FORCE_NOSTEER forces the absent outcome (the
+/// meta-driver requires the forced report).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn driver_steering_skip_reason() -> Option<&'static str> {
+    if std::env::var("SCOPEBASE_R13010_FORCE_NOSTEER").is_ok() {
+        return Some("skip: FORCED unavailable steering (inject)");
+    }
+    let last_before = match std::fs::read_to_string("/proc/sys/kernel/ns_last_pid") {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => return Some("skip: ns_last_pid unreadable (no reuse control)"),
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        return Some("skip: ns_last_pid unwritable (no reuse control)");
+    }
+    None
+}
+
 /// R11-004: replacing an intermediate parent DURING the
 /// ancestry walk must not forge descent. P (our child) parents
 /// A (our grandchild); the walk binds P, then the hook
@@ -3370,6 +3459,13 @@ fn descendant_walk_survives_intermediate_replacement() {
 fn intermediate_forced_failure_cleans_before_reporting() {
     use std::os::unix::process::CommandExt as _;
     use std::time::{Duration, Instant};
+    // R13-010: capability absence skips (the children would skip
+    // before injection — requiring their failure then would fail
+    // on setup, not on cleanup-before-reporting).
+    if let Some(reason) = driver_steering_skip_reason() {
+        eprintln!("{reason}");
+        return;
+    }
     for (forced, message) in [
         (
             "bad-verdict",
