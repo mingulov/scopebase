@@ -1464,10 +1464,9 @@ fn hang_sweep_retires_window_matched_stray() {
         .spawn()
         .expect("stray spawns");
     let pid = stray.id();
-    assert!(
-        matches!(task_starttime_checked(pid as i32), Ok(Some(_))),
-        "stray visible"
-    );
+    let stray_tick = task_starttime_checked(pid as i32)
+        .expect("stray stat readable")
+        .expect("stray visible");
     let swept = hang_sweep(&[("/bin/sleep", &["997"])], Some(start_tick));
     assert_eq!(swept, vec![pid], "window-matched stray is swept");
     assert_eq!(
@@ -1475,7 +1474,9 @@ fn hang_sweep_retires_window_matched_stray() {
         Ok(true),
         "swept stray is retired"
     );
-    let _ = stray.wait();
+    // R12-003: the sweep reaped the stray — reap only while the
+    // number still names it (never a recycled holder's status).
+    wait_child_unless_reaped(&mut stray, pid as i32, stray_tick);
     // An older-than-window floor spares even an exact-argv task.
     let mut keeper = std::process::Command::new("/bin/sleep")
         .arg("998")
@@ -1527,7 +1528,193 @@ fn survivor_cleanup_retires_verified_identity() {
         Ok(true),
         "verified survivor must be retired"
     );
-    let _ = sleeper.wait();
+    // R12-003: cleanup reaped the sleeper — reap only while the
+    // number still names it (never a recycled holder's status).
+    wait_child_unless_reaped(&mut sleeper, pid, live);
+}
+
+/// R12-003 (steal direction): `hang_sweep` reaps the stray
+/// through `poll_pin_retired`'s P_PIDFD waitid; a stale numeric
+/// wait would reap whoever holds the number now — here a killed
+/// replacement at a DIFFERENT birth tick — stealing the
+/// replacement owner's status. The gated wait skips (the number
+/// no longer names the stray) and the owner reaps its own
+/// zombie. Pre-fix the owner's wait fails ECHILD (RED).
+/// Duration 887 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn stale_child_wait_after_sweep_steals_nothing() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let start_tick = boot_ticks_now().expect("tick reads");
+    let mut stray = std::process::Command::new("/bin/sleep")
+        .arg("887")
+        .spawn()
+        .expect("stray spawns");
+    let stray_pid = stray.id() as i32;
+    let stray_tick = task_starttime_checked(stray_pid)
+        .expect("stray stat readable")
+        .expect("stray visible");
+    let swept = hang_sweep(&[("/bin/sleep", &["887"])], Some(start_tick));
+    assert_eq!(swept, vec![stray_pid as u32], "stray swept");
+    assert_eq!(task_retired_checked(stray_pid), Ok(true), "stray retired");
+    // Controlled reuse: land a replacement on the stray's
+    // number at a DIFFERENT birth tick (same-tick is the
+    // exotic accepted residual, not this finding).
+    let mut replacement = None;
+    for _ in 0..100 {
+        if !steer_next_pid(stray_pid) {
+            break;
+        }
+        let mut cand = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .expect("replacement spawns");
+        if cand.id() as i32 != stray_pid {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        let placed_different = match task_starttime_checked(stray_pid) {
+            Ok(Some(tick)) => tick != stray_tick,
+            _ => false,
+        };
+        if !placed_different {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        replacement = Some(cand);
+        break;
+    }
+    let mut replacement = replacement.expect("replacement placed on stray's number");
+    // Kill the replacement: it becomes a zombie holding the
+    // number (nothing reaps it before the stale wait — the
+    // owner handle below is its only waiter).
+    // SAFETY: retiring our own replacement.
+    unsafe {
+        libc::kill(stray_pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_retired_checked(stray_pid) == Ok(true) {
+            break;
+        }
+        assert!(Instant::now() < end, "replacement never zombied");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // R12-003: the gated wait skips (the number holds a
+    // replacement, not the stray) instead of stealing status.
+    wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
+    // The replacement owner's status must survive the stale wait.
+    let status = replacement
+        .wait()
+        .expect("replacement owner reaps its own zombie");
+    assert!(!status.success(), "killed replacement reports signal death");
+    let _ = std::fs::write(last_path, &last_before);
+}
+
+/// R12-003 (block direction): a stale numeric wait after a
+/// sweep would block on a LIVE replacement's whole lifetime.
+/// The gated wait skips at once (starttime mismatch) and the
+/// replacement survives for its owner to retire. Pre-fix a
+/// detached waiter never returns promptly (RED). Duration 888
+/// is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn stale_child_wait_after_sweep_blocks_on_nothing() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let start_tick = boot_ticks_now().expect("tick reads");
+    let mut stray = std::process::Command::new("/bin/sleep")
+        .arg("888")
+        .spawn()
+        .expect("stray spawns");
+    let stray_pid = stray.id() as i32;
+    let stray_tick = task_starttime_checked(stray_pid)
+        .expect("stray stat readable")
+        .expect("stray visible");
+    let swept = hang_sweep(&[("/bin/sleep", &["888"])], Some(start_tick));
+    assert_eq!(swept, vec![stray_pid as u32], "stray swept");
+    assert_eq!(task_retired_checked(stray_pid), Ok(true), "stray retired");
+    // Controlled reuse: a LIVE replacement on the stray's
+    // number at a DIFFERENT birth tick.
+    let mut replacement = None;
+    for _ in 0..100 {
+        if !steer_next_pid(stray_pid) {
+            break;
+        }
+        let mut cand = std::process::Command::new("/bin/sleep")
+            .arg("6")
+            .spawn()
+            .expect("replacement spawns");
+        if cand.id() as i32 != stray_pid {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        let placed_different = match task_starttime_checked(stray_pid) {
+            Ok(Some(tick)) => tick != stray_tick,
+            _ => false,
+        };
+        if !placed_different {
+            let _ = cand.kill();
+            let _ = cand.wait();
+            continue;
+        }
+        replacement = Some(cand);
+        break;
+    }
+    let mut replacement = replacement.expect("replacement placed on stray's number");
+    // R12-003: the gated wait skips at once (the live holder is
+    // a replacement, not the stray) instead of blocking on its
+    // lifetime.
+    let start = Instant::now();
+    wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "gated wait must skip at once, not block on the replacement"
+    );
+    assert_eq!(
+        task_retired_checked(stray_pid),
+        Ok(false),
+        "live replacement survives the stale wait"
+    );
+    // Owner retires its live replacement.
+    // SAFETY: retiring our own replacement.
+    unsafe {
+        libc::kill(stray_pid, libc::SIGKILL);
+    }
+    let _ = replacement.wait();
+    let _ = std::fs::write(last_path, &last_before);
 }
 
 /// S112/S115-round8: pin any live same-UID task (child or not).
@@ -1577,6 +1764,45 @@ fn poll_pin_retired(pin: i32) -> bool {
         }
         if Instant::now() >= end {
             return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R12-003: reap a `Child` ONLY while its number still names the
+/// expected task. A sweep or hook may have reaped our task
+/// already (`poll_pin_retired`'s P_PIDFD waitid, hook waitpids);
+/// a blind numeric wait then steals a recycled number-holder's
+/// status or blocks on its lifetime. A zombie keeps its
+/// starttime, so a match means ours (live or zombie): bounded
+/// try_wait poll (a zombie reaps at once; a signaled task dies
+/// in ms — never block past the bound on an impostor). A
+/// mismatch, a freed number, or an unresolvable stat all skip
+/// WITHOUT waiting (spare, don't hazard — an unresolvable stat
+/// may strand our zombie to process exit; loud, bounded).
+/// Residual: a same-tick recycled zombie at poll time is still
+/// reaped as ours (exotic: reap + same-tick recycle +
+/// zombie-at-poll; S100-class).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn wait_child_unless_reaped(child: &mut std::process::Child, pid: i32, expected: u64) {
+    match task_starttime_checked(pid) {
+        Ok(Some(now)) if now == expected => {}
+        Ok(_) => return,
+        Err(error) => {
+            eprintln!("wait skips unresolved task {pid}: {error}");
+            return;
+        }
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => return, // reaped between the check and the poll
+        }
+        if Instant::now() >= end {
+            eprintln!("wait gives up on live task {pid} past 5s (impostor?)");
+            return;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -2697,10 +2923,9 @@ fn hang_sweep_opens_before_evidence() {
         .spawn()
         .expect("stand-in spawns");
     let standin_pid = standin.id() as i32;
-    assert!(
-        matches!(task_starttime_checked(stray_pid), Ok(Some(_))),
-        "stray visible"
-    );
+    let stray_tick = task_starttime_checked(stray_pid)
+        .expect("stray stat readable")
+        .expect("stray visible");
     let standin_live = task_starttime_checked(standin_pid)
         .expect("stand-in stat readable")
         .expect("stand-in visible");
@@ -2751,7 +2976,9 @@ fn hang_sweep_opens_before_evidence() {
         libc::kill(standin_pid, libc::SIGKILL);
     }
     let _ = standin.wait();
-    let _ = stray.wait();
+    // R12-003: the opener reaped the stray — reap only while the
+    // number still names it (never a recycled holder's status).
+    wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
 }
 
 /// S128-round9: a candidate that exits between re-verification and
@@ -2770,6 +2997,9 @@ fn hang_sweep_window_exit_retires_quietly() {
         .spawn()
         .expect("stray spawns");
     let stray_pid = stray.id() as i32;
+    let stray_tick = task_starttime_checked(stray_pid)
+        .expect("stray stat readable")
+        .expect("stray visible");
     let mut canary = std::process::Command::new("/bin/sleep")
         .arg("884")
         .spawn()
@@ -2814,7 +3044,9 @@ fn hang_sweep_window_exit_retires_quietly() {
         libc::kill(canary_pid, libc::SIGKILL);
     }
     let _ = canary.wait();
-    let _ = stray.wait();
+    // R12-003: the hook reaped the stray — reap only while the
+    // number still names it (never a recycled holder's status).
+    wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
 }
 
 /// S138-round9: the fixture pipe hides from exec'd children: a
@@ -3498,11 +3730,22 @@ fn retire_probe_tree(child: &mut std::process::Child) {
     // SAFETY: signal-only to the probe's own group, then the
     // probe itself; errors ignored (house discipline).
     let id = child.id() as libc::pid_t;
+    // R12-003: the probe may be reaped already (a second call,
+    // or the caller reaped it reporting failure) — read who the
+    // number names BEFORE signaling so the wait below never
+    // addresses a recycled holder. (The numeric signals are
+    // R12-005's finding, not this one.)
+    let expected = match task_starttime_checked(id) {
+        Ok(Some(started)) => Some(started),
+        _ => None,
+    };
     unsafe {
         libc::killpg(id, libc::SIGKILL);
         libc::kill(id, libc::SIGKILL);
     }
-    let _ = child.wait();
+    if let Some(expected) = expected {
+        wait_child_unless_reaped(child, id, expected);
+    }
 }
 
 /// R10-013: run the framing bad control confined in a fresh
@@ -3784,8 +4027,12 @@ fn poll_pin_retired_issues_no_numeric_wait() {
 /// this polls to the bound and fails.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
+// R12-003: the child IS reaped — through the pin's P_PIDFD
+// waitid, proven by the ECHILD assert below — so no numeric
+// `Child::wait` follows (any would risk a recycled holder).
+#[allow(clippy::zombie_processes)]
 fn poll_pin_retired_reaps_owned_zombie() {
-    let mut child = std::process::Command::new("/bin/true")
+    let child = std::process::Command::new("/bin/true")
         .spawn()
         .expect("probe child spawns");
     let pid = child.id() as i32;
@@ -3814,7 +4061,10 @@ fn poll_pin_retired_reaps_owned_zombie() {
         again < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
         "the poll must have reaped the zombie (no status left)"
     );
-    let _ = child.wait();
+    // R12-003: no wait follows — ECHILD above proves the status
+    // is gone, so any numeric wait could only steal a recycled
+    // holder's status or block on its lifetime. The handle drops
+    // unwaited (already reaped: nothing leaks).
 }
 
 /// S115-round8: survivor cleanup of a NON-child (the real
@@ -3936,7 +4186,9 @@ fn survivor_cleanup_window_exit_retires_quietly() {
         libc::kill(canary_pid, libc::SIGKILL);
     }
     let _ = canary.wait();
-    let _ = victim.wait();
+    // R12-003: the hook reaped the victim — reap only while the
+    // number still names it (never a recycled holder's status).
+    wait_child_unless_reaped(&mut victim, pid, pinned);
 }
 
 /// S123-round8: descriptor exhaustion must NOT read as retirement.
