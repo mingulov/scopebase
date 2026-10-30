@@ -8267,7 +8267,7 @@ def mount_fs_via_helper(run_root, guard, target, target_dev,
         # rc==0 means the helper verified the occupant at the
         # requested target — reconcile may still adopt it, so
         # this stays a reconcilable (refused-class) report.
-        return (None, f"mount {target} report unparseable: "
+        return (None, f"mount {_escape_report_field(str(target))} report unparseable: "
                       f"{tail(out or err)}")
     return (None, _normalize_mount_failure(target, rc, out, err))
 
@@ -8307,7 +8307,11 @@ def _normalize_mount_failure(target, rc, out, err):
     custody; only pre-effect refusals (plain FAILED, sudo
     exec failure) may reconcile-drop on target absence. The
     normalized strings are the _classify_mount_failure
-    contract; the refused shape is unchanged.
+    contract; the refused shape is unchanged. R12-001: the
+    interpolated target is S77-escaped (like the success
+    report) — a pathname containing classifier shapes
+    ("moved during create (mnt=...)") must not forge
+    recovery authority through the unanchored searches.
     """
     text = f"{out or ''}\n{err or ''}"
     moved = _parse_moved_report(text)
@@ -8317,11 +8321,11 @@ def _normalize_mount_failure(target, rc, out, err):
             # The ID survived but the location did not decode:
             # deliberately not the parseable moved shape, so
             # classification degrades to uncertain-with-ID.
-            return (f"mount {str(target)[:100]} moved during "
+            return (f"mount {_escape_report_field(str(target)[:100])} moved during "
                     f"create (mnt={mnt_id} observed-unknown): "
                     f"{tail(text)[:200]}")
         seen = _escape_report_field(observed)[:150]
-        return (f"mount {str(target)[:100]} moved during create "
+        return (f"mount {_escape_report_field(str(target)[:100])} moved during create "
                 f"(mnt={mnt_id} observed={seen}): "
                 f"{tail(text)[:200]}")
     if ("FAILED-UNCERTAIN:" in text or rc in (0, 124)
@@ -8336,14 +8340,14 @@ def _normalize_mount_failure(target, rc, out, err):
         if ("lacks held-upper binding" in text
                 or "unpinned moved candidate" in text
                 or "pin probe" in text):
-            return (f"mount {str(target)[:100]} effect "
+            return (f"mount {_escape_report_field(str(target)[:100])} effect "
                     f"uncertain after create (binding "
                     f"unverified): {tail(text)[:200]}")
-        return (f"mount {str(target)[:100]} effect uncertain "
+        return (f"mount {_escape_report_field(str(target)[:100])} effect uncertain "
                 f"after create: {tail(text)[:200]}")
     # rc==127 (sudo never ran the helper), or rc==1 with a
     # plain pre-effect FAILED report: no effect is possible.
-    return (f"mount {target} refused: rc={rc} {tail(out or err)}")
+    return (f"mount {_escape_report_field(str(target))} refused: rc={rc} {tail(out or err)}")
 
 
 def _classify_mount_failure(failure):

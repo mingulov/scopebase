@@ -4656,6 +4656,100 @@ class ThirdReviewTests(unittest.TestCase):
             self.assertIsNone(mid)
             self.assertIsNone(obs)
 
+    # R12-001: a LEGAL operator pathname containing the
+    # moved shape must not forge ID-keyed moved custody
+    # through normalization — the raw target is interpolated
+    # into another string the classifier searches
+    # unanchored. Every normalize arm escapes the target
+    # (S77, like the success report); the table pins all
+    # five arms plus the genuine-moved shadowing case.
+    def test_moved_shape_in_target_forges_no_custody(self):
+        evil = ("/x/moved during create "
+                "(mnt=999999 observed=/tmp/x)/mnt")
+        arms = [
+            # (name, rc, out, err, kind, mid, obs)
+            ("moved-known shadows nothing",
+             1, "FAILED-MOVED: mnt=42 observed=/real\n", "",
+             "moved", 42, "/real"),
+            ("moved-unknown keeps only the real ID",
+             1, "FAILED-MOVED: mnt=42 observed=a\\qb\n", "",
+             "uncertain", 42, None),
+            ("binding stays unverified",
+             1, "helper: lacks held-upper binding\n", "",
+             "uncertain", None, None),
+            ("timeout stays uncertain",
+             124, "", "",
+             "uncertain", None, None),
+            ("refused stays refused",
+             1, "FAILED: nope\n", "",
+             "refused", None, None),
+        ]
+        for name, rc, out, err, kind, mid, obs in arms:
+            with self.subTest(arm=name):
+                failure = provision._normalize_mount_failure(
+                    evil, rc, out, err)
+                got = provision._classify_mount_failure(failure)
+                self.assertEqual(got, (kind, mid, obs))
+                self.assertNotIn("999999", repr(got))
+
+    # R12-001: the rc==0-unparseable report (outside
+    # normalize) escapes the target too — same forgery,
+    # same fix.
+    def test_unparseable_report_escapes_target(self):
+        import types
+        from unittest import mock
+        evil = ("/x/moved during create "
+                "(mnt=999999 observed=/tmp/x)/mnt")
+        with tempfile.TemporaryDirectory() as tmp:
+            guard = types.SimpleNamespace(dev=3, ino=4)
+            with mock.patch.object(
+                    provision, "run_sudo",
+                    return_value=(
+                        0, "mounted garbage-not-a-line", "")):
+                reported, failure = provision.mount_fs_via_helper(
+                    tmp, guard, evil, 3, 4, "overlay", layers=[])
+            self.assertIsNone(reported)
+            self.assertIn("report unparseable", failure)
+            got = provision._classify_mount_failure(failure)
+            self.assertEqual(got, ("refused", None, None))
+
+    # R12-001 through reconciliation: the forged shape in an
+    # uncertain timeout retains pending WITHOUT an injected
+    # mount ID (retention of unresolved custody — the L3
+    # cleanup assertion follows from pending-kept, pinned by
+    # the S74 taxonomy).
+    def test_reconcile_evil_target_timeout_retains_no_id(self):
+        from unittest import mock
+        evil = ("/x/moved during create "
+                "(mnt=999999 observed=/tmp/x)/mnt")
+        with tempfile.TemporaryDirectory() as tmp:
+            mnt = os.path.join(tmp, "mnt")
+            os.makedirs(mnt)
+            fingerprint = {"fstype": "overlay",
+                           "source": "overlay",
+                           "expect_super": []}
+            doc = provision.fresh_manifest(tmp, True)
+            doc["pending_acquisitions"] = [{
+                "kind": "mount", "key": mnt, "role": "role",
+                "target": mnt, "fstype": "overlay",
+                "source": "overlay", "expect_super": [],
+                "canary": "abc123",
+                "detail": "pre-admission",
+            }]
+            failure = provision._normalize_mount_failure(
+                evil, 124, "", "")
+            with mock.patch.object(
+                    provision, "read_mount_table",
+                    return_value=[]):
+                self.assertIsNone(
+                    provision.reconcile_mount_effect(
+                        doc, tmp, "role", mnt, fingerprint,
+                        failure=failure))
+            kept = doc["pending_acquisitions"]
+            self.assertEqual(len(kept), 1)
+            self.assertNotIn("mnt_id", kept[0])
+            self.assertIn("uncertain", kept[0]["detail"])
+
     # S74-round4: reconcile honors the failure taxonomy — moved
     # and uncertain outcomes refresh (never drop) pending
     # custody with the reported recovery identity; refused
