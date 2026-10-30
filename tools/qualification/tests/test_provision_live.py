@@ -227,12 +227,16 @@ def poll_proc_gone(pid, timeout=15):
     cannot be stated (EACCES: alive but unobservable, e.g.
     hidepid) answers present, routing to the survivor /
     unproven branch instead of counting as retirement.
+    R12-009: hidepid=2 returns ENOENT for hidden LIVE tasks,
+    so ENOENT alone proves nothing — only kill-ESRCH (the
+    R11-001 primitive: kill bypasses /proc visibility)
+    proves death; anything else answers present.
     """
     def missing():
         try:
             os.stat(f"/proc/{pid}")
         except FileNotFoundError:
-            return True
+            return provision._pid_proven_dead(pid)
         except OSError:
             return False
         return False
@@ -2957,6 +2961,35 @@ class KeeperSignalTests(unittest.TestCase):
                 kill_bound_keeper(4242, 1234)
         close_mock.assert_not_called()
 
+    # R12-009: stat_state_start must answer ProcUnknown (not
+    # ProcAbsent) for a hidepid-hidden live task — invisible
+    # ENOENT is unobservable, never proven gone (else
+    # signal_owned returns False and the finalizer silently
+    # discharges a live keeper). Real live pid (self); only
+    # the /proc read is hidden, kill stays the proof channel.
+    def test_hidden_live_stat_answers_unknown_not_absent(self):
+        from unittest import mock
+        me = os.getpid()
+        real_open = open
+
+        def hide_proc(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise FileNotFoundError(
+                    2, "hidepid-style invisible-ENOENT")
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=hide_proc):
+            self.assertIsNone(os.kill(me, 0))
+            with self.assertRaises(provision.ProcUnknown):
+                provision.stat_state_start(me)
+
+    # R12-009 twin: a truly gone number still answers ProcAbsent
+    # (kill-ESRCH proves death) — the hidepid guard must not
+    # swallow genuine absence into unknown.
+    def test_gone_stat_still_absent(self):
+        with self.assertRaises(provision.ProcAbsent):
+            provision.stat_state_start(2 ** 30 - 1)
+
 
 def hostile_cover_argv(fake, pidfile):
     """sudo unshare argv that bind-covers grep in a private ns. (R10-001)
@@ -3250,6 +3283,27 @@ class PollGoneTests(unittest.TestCase):
         with mock.patch("os.stat", side_effect=deny_proc):
             self.assertFalse(poll_proc_gone(4242, timeout=0))
 
+    # R12-009: hidepid=2 returns ENOENT for hidden LIVE tasks —
+    # the gone-poll must require kill-proven death (R11-001),
+    # never ENOENT alone. Real live pid (self); only /proc is
+    # hidden, kill stays the independent existence proof.
+    def test_invisible_enoent_answers_present(self):
+        from unittest import mock
+        me = os.getpid()
+        real_stat = os.stat
+
+        def hide_proc(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise FileNotFoundError(
+                    2, "hidepid-style invisible-ENOENT")
+            return real_stat(path, *args, **kwargs)
+
+        with mock.patch("os.stat", side_effect=hide_proc):
+            # Independent proof through the hide: kill bypasses
+            # /proc visibility (unpatched) — we are alive.
+            self.assertIsNone(os.kill(me, 0))
+            self.assertFalse(poll_proc_gone(me, timeout=0))
+
 
 class QuiesceLivesTests(unittest.TestCase):
     # S117: mid-test-failure retirement of exclusively owned
@@ -3467,6 +3521,57 @@ class QuiesceLivesTests(unittest.TestCase):
                 quiesce_private_lives([(4242, 1234)]), [])
         gone_mock.assert_called_once_with(4242, timeout=0)
         kill_mock.assert_not_called()
+
+    def test_hidden_live_keeper_is_unproven_and_unsignaled(self):
+        # R12-009: the life is LIVE but hidepid=2 hides it with
+        # invisible-ENOENT (not denial) at BOTH layers — the
+        # REAL starttime reader returns None and the REAL poll
+        # stats ENOENT. Quiesce must report unproven (unresolved
+        # custody), never signal, and the non-empty return
+        # retains records via the caller's S131 wiring. kill
+        # stays unpatched as the independent existence proof
+        # (hidepid affects only /proc visibility).
+        import io
+        from unittest import mock
+        sleeper = subprocess.Popen(
+            ["sleep", "30"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        start = provision._keeper_starttime(sleeper.pid)
+        self.assertIsNotNone(
+            start, "precondition: sleeper live and readable")
+        real_open = open
+        real_stat = os.stat
+
+        def hide_proc_open(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise FileNotFoundError(
+                    2, "hidepid-style invisible-ENOENT")
+            return real_open(path, *args, **kwargs)
+
+        def hide_proc_stat(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise FileNotFoundError(
+                    2, "hidepid-style invisible-ENOENT")
+            return real_stat(path, *args, **kwargs)
+
+        captured = io.StringIO()
+        with mock.patch("builtins.open",
+                        side_effect=hide_proc_open), \
+             mock.patch("os.stat",
+                        side_effect=hide_proc_stat), \
+             mock.patch("sys.stderr", captured):
+            # Independent existence proof through the hide.
+            self.assertIsNone(os.kill(sleeper.pid, 0))
+            unproven = quiesce_private_lives(
+                [(sleeper.pid, start)])
+        self.assertIsNone(
+            sleeper.poll(), "quiesce must not signal the life")
+        self.assertEqual(len(unproven), 1)
+        self.assertEqual(unproven[0][:2], (sleeper.pid, start))
+        self.assertIn("unreadable but present", unproven[0][2])
+        self.assertIn(str(sleeper.pid), captured.getvalue())
 
 
 class AdoptReplacementTests(unittest.TestCase):

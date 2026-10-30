@@ -3888,14 +3888,21 @@ def stat_state_start(pid):
     """(state, starttime) for `pid`; never returns None. (S21)
 
     Raises ProcAbsent on proven absence, ProcUnknown on denial,
-    I/O failure, or malformed content.
+    I/O failure, or malformed content. R12-009: hidepid=2
+    ENOENT hides LIVE tasks, so ENOENT needs the kill proof
+    (R11-001) — a signalable-or-EPERM number is unobservable,
+    never gone.
     """
     try:
         with open(f"/proc/{pid}/stat", "r") as handle:
             after = handle.read().rsplit(")", 1)[1].split()
         return (after[0], int(after[19]))
     except FileNotFoundError:
-        raise ProcAbsent(f"proc {pid} absent")
+        if _pid_proven_dead(pid):
+            raise ProcAbsent(f"proc {pid} absent")
+        raise ProcUnknown(
+            f"proc {pid} stat unreadable: invisible-ENOENT, "
+            f"kill did not prove death")
     except (OSError, ValueError, IndexError) as exc:
         raise ProcUnknown(f"proc {pid} stat unreadable: {exc}")
 

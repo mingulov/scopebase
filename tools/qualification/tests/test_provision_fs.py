@@ -2807,7 +2807,16 @@ class SecondReviewTests(unittest.TestCase):
             _, start = provision.stat_state_start(child.pid)
             pin = provision.pin_proc(child.pid)
             try:
+                real_kill = os.kill
+
                 def no_numeric(pid, signum):
+                    if signum == 0:
+                        # R12-009: signum-0 is existence
+                        # observation (S134/R11-001), not signal
+                        # delivery — the pidfd discipline bans
+                        # numeric DELIVERY only. Emulate honestly
+                        # through the real call.
+                        return real_kill(pid, signum)
                     raise AssertionError(
                         "numeric kill attempted")
 
