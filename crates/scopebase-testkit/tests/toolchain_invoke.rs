@@ -2395,11 +2395,6 @@ fn spawn_orphan_sleeper_with_hook(
     (pid, pinned)
 }
 
-/// S112/S115-round8: retire a test orphan (non-child) through
-/// pinned authority: pin first, verify the pinned number still
-/// names the reported starttime, signal through the pin, poll for
-/// disappearance. Never a numeric signal on a non-child.
-#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 /// R12-005-stress: disappearance predicate for `retire_orphan`'s
 /// poll — presence-aware PLUS a foreign-tick escape. Gone or
 /// zombie retires as before (zombie counts: reaping is the live
@@ -2427,6 +2422,14 @@ fn orphan_retired_checked(pid: i32, pinned: u64) -> Result<bool, String> {
     }
 }
 
+/// S112/S115-round8: retire a test orphan (non-child) through
+/// pinned authority: pin first, verify the pinned number still
+/// names the reported starttime, signal through the pin, poll for
+/// disappearance. Never a numeric signal on a non-child.
+/// R13-002: this gate keeps the toolchain-only build green
+/// (verify: cargo test -p scopebase-testkit --features toolchain
+/// --test toolchain_invoke --no-run).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn retire_orphan(pid: i32, pinned: u64) {
     let fd = pidfd_open_task(pid).expect("orphan pinnable while live");
     assert_eq!(
