@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -283,12 +284,17 @@ def adopt_recorded_replacement(pidfile, stale, lives):
     after a record existed at entry (R11-008) flags retained
     (True): silent False would let teardown erase the
     recovery state of a replacement the finalizer never saw.
-    Never raises.
+    The read itself is production's S28 bounded reader
+    (R11-009): O_NONBLOCK open, same-descriptor regular-file
+    check, 1 MiB cap — a FIFO or device at the pidfile
+    refuses instead of hanging the finalizer before
+    quiescence or retention. Symlinks resolve at open (S28
+    semantics): a link to a regular record reads the same
+    bounded bytes. Never raises.
     """
     try:
-        with open(pidfile, "rb") as handle:
-            current = handle.read()
-    except OSError:
+        current, _ = provision.read_regular_capped(pidfile)
+    except (OSError, provision.AdmissionError):
         return stale is not None
     if current == stale:
         return False
@@ -3254,6 +3260,72 @@ class AdoptReplacementTests(unittest.TestCase):
                 adopt_recorded_replacement(
                     pidfile, None, lives))
             self.assertEqual(lives, [])
+
+    def test_fifo_record_refuses_bounded(self):
+        # R11-009: a FIFO at the pidfile must refuse under a
+        # deadline — a blocking open would hang the finalizer
+        # before quiescence or retention. Retention flags
+        # (True); the original lives are untouched so
+        # finalization continues over them.
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            os.mkfifo(pidfile)
+            lives = [(4242, 1234)]
+            result = []
+            worker = threading.Thread(
+                target=lambda: result.append(
+                    adopt_recorded_replacement(
+                        pidfile, b"stale", lives)),
+                daemon=True)
+            worker.start()
+            worker.join(timeout=10)
+            self.assertFalse(
+                worker.is_alive(),
+                "adopter blocked on a FIFO record")
+            self.assertEqual(result, [True])
+            self.assertEqual(lives, [(4242, 1234)])
+
+    @unittest.skipUnless(os.path.exists("/dev/zero"),
+                         "needs /dev/zero")
+    def test_device_record_refuses_bounded(self):
+        # R11-009: a symlink to /dev/zero must refuse without
+        # reading — an unbounded read never returns. Same
+        # retention contract as the FIFO arm.
+        with tempfile.TemporaryDirectory() as tmp:
+            pidfile = os.path.join(tmp, "ns.pid")
+            os.symlink("/dev/zero", pidfile)
+            lives = [(4242, 1234)]
+            result = []
+            worker = threading.Thread(
+                target=lambda: result.append(
+                    adopt_recorded_replacement(
+                        pidfile, b"stale", lives)),
+                daemon=True)
+            worker.start()
+            worker.join(timeout=10)
+            self.assertFalse(
+                worker.is_alive(),
+                "adopter read a device record unbounded")
+            self.assertEqual(result, [True])
+            self.assertEqual(lives, [(4242, 1234)])
+
+    def test_symlink_to_regular_reads_through(self):
+        # R11-009: the S28 reader resolves symlinks at open —
+        # a link to a regular record reads the same bytes
+        # (bounded, non-blocking); unchanged content stays a
+        # noop. Pins the follow decision deliberately.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "real.pid")
+            with open(target, "wb") as handle:
+                handle.write(b"4321 77 %s\n" % (b"cd" * 16))
+            with open(target, "rb") as handle:
+                stale = handle.read()
+            pidfile = os.path.join(tmp, "ns.pid")
+            os.symlink(target, pidfile)
+            lives = [(4242, 1234)]
+            self.assertFalse(
+                adopt_recorded_replacement(pidfile, stale, lives))
+            self.assertEqual(lives, [(4242, 1234)])
 
     def test_unreadable_record_after_stale_retains(self):
         # R11-008: publish a replacement, deny the finalizer
