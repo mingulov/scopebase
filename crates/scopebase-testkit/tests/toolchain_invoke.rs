@@ -917,7 +917,7 @@ fn proc_ppid(pid: i32) -> Option<i32> {
 /// replacement into a forged descent.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn is_test_descendant(pid: i32, ancestor: u32) -> bool {
-    is_test_descendant_with_hook(pid, ancestor, None)
+    is_test_descendant_with_hook(pid, ancestor, None, None)
 }
 
 /// R11-004: seam for the intermediate-replacement regression:
@@ -926,8 +926,18 @@ fn is_test_descendant(pid: i32, ancestor: u32) -> bool {
 /// receiving that number — the regression kills+reaps+replaces
 /// the bound parent there. Production callers use
 /// [`is_test_descendant`].
+/// R12-002: `check_hook`, when set, runs after the binding
+/// decision with the cursor sample fixed — the regression
+/// replaces the checked intermediate there (between the old
+/// check-read and sample-read; the single sample closes the
+/// gap, and the sandwich refuses the replacement).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn is_test_descendant_with_hook(pid: i32, ancestor: u32, bind_hook: Option<&dyn Fn(i32)>) -> bool {
+fn is_test_descendant_with_hook(
+    pid: i32,
+    ancestor: u32,
+    bind_hook: Option<&dyn Fn(i32)>,
+    check_hook: Option<&dyn Fn(i32)>,
+) -> bool {
     let ancestor = ancestor as i32;
     let mut cursor = pid;
     // Starttime bound by the previous hop for the CURRENT
@@ -942,13 +952,31 @@ fn is_test_descendant_with_hook(pid: i32, ancestor: u32, bind_hook: Option<&dyn 
         if cursor <= 1 {
             return false;
         }
-        // The current holder must still be the task the
-        // previous hop bound: a changed holder means the
-        // number recycled between hops — unproven, spare.
+        // R12-002: ONE sample serves both the previous-hop
+        // binding check and the sandwich's cursor_before — a
+        // replacement between a check-read and a separate
+        // sample-read validated the replacement's stable life
+        // without ever comparing it to the bound (false
+        // descent authorizing destruction). No gap remains by
+        // construction: a changed holder (number recycled
+        // between hops) is unproven, spared.
+        let cursor_before = match task_starttime_checked(cursor) {
+            Ok(Some(started)) => started,
+            _ => return false,
+        };
         if let Some(want) = bound {
-            match task_starttime_checked(cursor) {
-                Ok(Some(now)) if now == want => {}
-                _ => return false,
+            if cursor_before != want {
+                return false;
+            }
+        }
+        // R12-002 seam: fires after the binding decision with
+        // the sampled starttime already fixed — a replacement
+        // here meets the sandwich (cursor_after mismatch),
+        // never a second uncompared sample. Fires only where
+        // a check ran (bound is Some).
+        if bound.is_some() {
+            if let Some(hook) = check_hook {
+                hook(cursor);
             }
         }
         // Bind this hop: cursor starttime, ppid, parent
@@ -959,10 +987,6 @@ fn is_test_descendant_with_hook(pid: i32, ancestor: u32, bind_hook: Option<&dyn 
         // mid-pair parent starttime is the parent's own, and a
         // recycle anywhere in the pair spares instead of
         // following a replacement.
-        let cursor_before = match task_starttime_checked(cursor) {
-            Ok(Some(started)) => started,
-            _ => return false,
-        };
         let ppid_first = match proc_ppid(cursor) {
             Some(ppid) if ppid > 0 => ppid,
             _ => return false,
@@ -2268,9 +2292,71 @@ fn sole_child_pid(pid: i32) -> i32 {
 /// tests (which assert freshness/inequality, never pid
 /// magnitude or ordering) are unaffected; pid-steals of OUR
 /// steered number retry bounded and loud (100 tries), and
-/// the test restores the prior hint politely after. No
-/// in-process fork serialization: the only shared invariant
-/// is live-pid uniqueness, which the kernel guarantees.
+/// the test restores the prior hint politely after.
+/// R12-002: steering tests serialize AMONG THEMSELVES
+/// ([`STEER_SERIAL`], whole-test hold) — two concurrent
+/// steerers overwrite each other's hint and livelock the
+/// bounded steal loops, and the combined fork churn
+/// recycles numbers under number-based retire polls.
+/// Ordinary (non-steering) forks need no coordination:
+/// the only shared invariant is live-pid uniqueness, which
+/// the kernel guarantees.
+///
+/// R12-002: only one pid-steering walk regression runs at a
+/// time (see above). Poison is ignored (a panicked sibling
+/// already failed; each test still reports its own fate).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// R12-002: fork a pausing child WITHOUT exec (microsecond
+/// placement for pid-stealing loops — Command::spawn's
+/// millisecond fork+exec window loses the steered number to
+/// siblings too often, and a squatter holding P defeats all
+/// 100 retries deterministically). The child pauses until
+/// SIGKILLed; the parent MUST kill+reap it (see
+/// [`kill_wait_child`]). Fork-only children inherit fds:
+/// safe in this binary (no test holds pipe write ends
+/// in-process — stdin is always null — so no EOF can be
+/// held hostage). Returns the child's pid.
+/// SAFETY: the child touches nothing but pause().
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn fork_pauser() -> i32 {
+    // SAFETY: fork; the child pauses (async-signal-safe
+    // only — no Rust runtime, no locks), the parent returns
+    // the pid.
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "pauser fork failed");
+    if pid == 0 {
+        loop {
+            unsafe {
+                libc::pause();
+            }
+        }
+    }
+    pid
+}
+
+/// R12-002: SIGKILL + bounded reap of an owned fork-pauser
+/// (discarded steal attempts and final adoptees). Panics
+/// loud on failure — our own child must die and reap.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn kill_wait_child(pid: i32) {
+    // SAFETY: our own fork-pauser child.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid on our own child.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid || got < 0 {
+            return;
+        }
+        assert!(Instant::now() < end, "pauser {pid} unreaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn steer_next_pid(want: i32) -> bool {
     use std::process::Stdio;
@@ -2306,7 +2392,10 @@ fn steer_next_pid(want: i32) -> bool {
 #[test]
 fn descendant_walk_survives_intermediate_replacement() {
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-    use std::sync::Mutex;
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let last_path = "/proc/sys/kernel/ns_last_pid";
     let last_before = match std::fs::read_to_string(last_path) {
         Ok(text) => text.trim().to_string(),
@@ -2338,7 +2427,6 @@ fn descendant_walk_survives_intermediate_replacement() {
     assert!(is_test_descendant(a, me), "stable chain must prove descent");
     let acted = AtomicBool::new(false);
     let reused = AtomicI32::new(-1);
-    let adoptee = Mutex::new(None);
     let hook = |bound: i32| {
         if acted.swap(true, Ordering::SeqCst) {
             return;
@@ -2360,29 +2448,25 @@ fn descendant_walk_survives_intermediate_replacement() {
             assert!(Instant::now() < end, "P unreaped");
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Force P's number onto a new child of ours (steals
-        // retry bounded and loud).
-        let mut placed = false;
+        // Force P's number onto a fork-pauser of ours
+        // (microsecond placement — Command::spawn's
+        // millisecond window loses steered races; a squatter
+        // holding P defeats every retry deterministically,
+        // so the test infers skip-vs-broken below instead of
+        // asserting here).
         for _ in 0..100 {
             if !steer_next_pid(p_pid) {
                 break;
             }
-            let mut kid = std::process::Command::new("sleep")
-                .arg("60")
-                .spawn()
-                .expect("adoptee spawns");
-            if kid.id() as i32 == p_pid {
+            let kid = fork_pauser();
+            if kid == p_pid {
                 reused.store(p_pid, Ordering::SeqCst);
-                adoptee.lock().unwrap().replace(kid);
-                placed = true;
                 break;
             }
-            let _ = kid.kill();
-            let _ = kid.wait();
+            kill_wait_child(kid);
         }
-        assert!(placed, "pid allocator too contested to retake P={p_pid}");
     };
-    let verdict = is_test_descendant_with_hook(a, me, Some(&hook));
+    let verdict = is_test_descendant_with_hook(a, me, Some(&hook), None);
     // Cleanup first (every path leak-free): P's handle (hook
     // reaped it — ECHILD expected) or kill+reap when the hook
     // never ran.
@@ -2391,6 +2475,20 @@ fn descendant_walk_survives_intermediate_replacement() {
     } else {
         let _ = p.kill();
         let _ = p.wait();
+    }
+    // R12-002: placement failed — a squatter holding P skips
+    // (contended environment, honestly reported), a free P
+    // means steering itself broke (loud).
+    if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) != p_pid {
+        retire_orphan(a, pinned_a);
+        let _ = std::fs::write(last_path, &last_before);
+        match task_starttime_checked(p_pid) {
+            Ok(Some(_)) => {
+                eprintln!("skip: P={p_pid} squatted by a sibling (contended)");
+                return;
+            }
+            _ => panic!("steering broken: P={p_pid} free but unretaken"),
+        }
     }
     assert!(
         acted.load(Ordering::SeqCst),
@@ -2404,12 +2502,172 @@ fn descendant_walk_survives_intermediate_replacement() {
     assert!(!verdict, "replaced intermediate must not forge descent");
     // A orphaned onto init when P died; the adoptee is ours.
     retire_orphan(a, pinned_a);
-    if let Some(mut kid) = adoptee.lock().unwrap().take() {
-        let _ = kid.kill();
-        let _ = kid.wait();
-    }
+    kill_wait_child(p_pid);
     // Polite restore (advisory hint; harmless either way).
     let _ = std::fs::write(last_path, &last_before);
+}
+
+/// R12-002: replacing the checked intermediate between the
+/// previous-hop binding check and the sandwich sample must
+/// not forge descent. Same P/A shape as R11-004, but the
+/// replacement lands AFTER the binding check passes (P's
+/// number retaken by our child at a DIFFERENT birth tick)
+/// and before cursor_before is sampled: the two-read walk
+/// validates the replacement's stable life without ever
+/// comparing it to the bound (TRUE = RED — false descent
+/// that would authorize the target's destruction); the
+/// single-sample walk refuses (FALSE = GREEN) while the
+/// live target survives. Cleanup precedes every assert
+/// (R12-014-proof); verdict, aliveness, and placement are
+/// recorded first. Duration 90 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn descendant_walk_survives_check_sample_replacement() {
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    // No-op write-back proves writability without changing
+    // allocator state (skips before any fixture exists).
+    if !steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let me = std::process::id();
+    let mut p = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 90 & wait")
+        .spawn()
+        .expect("P spawns");
+    let p_pid = p.id() as i32;
+    let a = sole_child_pid(p_pid);
+    let pinned_a = match task_starttime_checked(a) {
+        Ok(Some(started)) => started,
+        other => panic!("A starttime unreadable: {other:?}"),
+    };
+    let pinned_p = match task_starttime_checked(p_pid) {
+        Ok(Some(started)) => started,
+        other => panic!("P starttime unreadable: {other:?}"),
+    };
+    // Anti-vacuity: the stable chain genuinely proves descent
+    // (so FALSE-after means detection, not a broken fixture).
+    assert!(is_test_descendant(a, me), "stable chain must prove descent");
+    let acted = AtomicBool::new(false);
+    let reused = AtomicI32::new(-1);
+    let reborn_tick = AtomicU64::new(u64::MAX);
+    let check_hook = |checked: i32| {
+        if acted.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        assert_eq!(checked, p_pid, "first checked bind must be P");
+        // SAFETY: P is our own child.
+        unsafe {
+            libc::kill(p_pid, libc::SIGKILL);
+        }
+        // Reap P (ours): bounded WNOHANG poll.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid on our own child.
+            let got = unsafe { libc::waitpid(p_pid, &mut status, libc::WNOHANG) };
+            if got == p_pid || got < 0 {
+                break;
+            }
+            assert!(Instant::now() < end, "P unreaped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Force P's number onto a fork-pauser of ours at a
+        // DIFFERENT birth tick (a same-tick retake would be
+        // indistinguishable from no replacement — S100 —
+        // making the verdict vacuous, not wrong). A squatter
+        // holding P defeats every retry deterministically, so
+        // the test infers skip-vs-broken below instead of
+        // asserting here.
+        for _ in 0..100 {
+            if !steer_next_pid(p_pid) {
+                break;
+            }
+            let kid = fork_pauser();
+            if kid != p_pid {
+                kill_wait_child(kid);
+                continue;
+            }
+            let tick = match task_starttime_checked(p_pid) {
+                Ok(Some(started)) => started,
+                _ => {
+                    kill_wait_child(kid);
+                    continue;
+                }
+            };
+            if tick == pinned_p {
+                kill_wait_child(kid);
+                continue;
+            }
+            reused.store(p_pid, Ordering::SeqCst);
+            reborn_tick.store(tick, Ordering::SeqCst);
+            break;
+        }
+    };
+    let verdict = is_test_descendant_with_hook(a, me, None, Some(&check_hook));
+    // Record before cleanup (R12-014): aliveness proves the
+    // verdict is about the replacement, not a dead fixture
+    // (the walk never signals — survival is anti-vacuity).
+    // SAFETY: kill-0 probes existence only.
+    let a_alive = unsafe { libc::kill(a, 0) } == 0;
+    // Full cleanup before every assert: P's handle (hook
+    // reaped it — ECHILD expected) or kill+reap when the hook
+    // never ran; A (orphaned); the pauser; allocator hint.
+    if acted.load(Ordering::SeqCst) {
+        let _ = p.try_wait();
+    } else {
+        let _ = p.kill();
+        let _ = p.wait();
+    }
+    retire_orphan(a, pinned_a);
+    if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) == p_pid {
+        kill_wait_child(p_pid);
+    }
+    let _ = std::fs::write(last_path, &last_before);
+    // R12-002: placement failed — a squatter holding P skips
+    // (contended environment, honestly reported), a free P
+    // means steering itself broke (loud).
+    if acted.load(Ordering::SeqCst) && reused.load(Ordering::SeqCst) != p_pid {
+        match task_starttime_checked(p_pid) {
+            Ok(Some(_)) => {
+                eprintln!("skip: P={p_pid} squatted by a sibling (contended)");
+                return;
+            }
+            _ => panic!("steering broken: P={p_pid} free but unretaken"),
+        }
+    }
+    assert!(
+        acted.load(Ordering::SeqCst),
+        "check hook never fired — fixture broken"
+    );
+    assert_eq!(
+        reused.load(Ordering::SeqCst),
+        p_pid,
+        "P's number not retaken by our child"
+    );
+    assert_ne!(
+        reborn_tick.load(Ordering::SeqCst),
+        pinned_p,
+        "replacement must differ in birth tick (else vacuous)"
+    );
+    assert!(
+        a_alive,
+        "target must survive the walk (died fixture, not detection)"
+    );
+    assert!(!verdict, "check-sample replacement must not forge descent");
 }
 
 /// S128-round9: the pin must be acquired BEFORE custody evidence is
