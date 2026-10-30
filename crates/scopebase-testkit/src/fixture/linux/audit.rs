@@ -4041,6 +4041,10 @@ mod tests {
         if std::env::var(EXPIRY_PROBE_ENV).is_err() {
             return;
         }
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
         // Own process group first: a hung probe run lets the
         // parent retire the whole tree by group.
         // SAFETY: setpgid on self, no userspace state.
@@ -6006,6 +6010,10 @@ mod tests {
     fn probe_collection_expiry_survives_saturated_stdout() {
         use std::os::unix::process::CommandExt as _;
         use std::sync::atomic::{AtomicBool, Ordering};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
         // No steering here (no PID reuse) — no placement locks.
         // The probe: self-grouped python forking a same-group
         // writer that execs `yes` (stdout forever, stderr
@@ -6142,6 +6150,78 @@ mod tests {
             assert!(Instant::now() < end, "saturated writer survived expiry");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// R13-012: staged-probe tests must SKIP (not fail setup)
+    /// when python3 is unavailable. Drives each newly-gated
+    /// regression with an emptied PATH and requires exit
+    /// success plus the explicit skip report (on machines WITH
+    /// python only the emptied PATH can produce it, so the
+    /// report proves the gate ran). The substantive assertions
+    /// stay covered by the tests themselves (run unforced
+    /// in-suite where python exists). The children exit
+    /// descendant-free on every path (skip pre-spawn, or a
+    /// failed spawn that panics), so the post-exit drain cannot
+    /// hang on an inherited pipe.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn staged_probe_tests_skip_without_python() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let empty =
+            std::env::temp_dir().join(format!("scopebase-r13012-emptypath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir(&empty).expect("empty PATH dir");
+        for (path, env) in [
+            (
+                "fixture::linux::audit::tests::probe_collection_expiry_survives_saturated_stdout",
+                None,
+            ),
+            (
+                "fixture::linux::audit::tests::collection_expiry_adopting_probe",
+                Some(EXPIRY_PROBE_ENV),
+            ),
+        ] {
+            let mut cmd = std::process::Command::new(&exe);
+            cmd.arg(path)
+                .arg("--exact")
+                .arg("--nocapture")
+                .env("PATH", &empty)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if let Some(env) = env {
+                cmd.env(env, "1");
+            }
+            let mut child = cmd.spawn().expect("spawn gated probe");
+            let end = Instant::now() + Duration::from_secs(30);
+            let status = loop {
+                if let Some(status) = child.try_wait().expect("probe wait") {
+                    break status;
+                }
+                if Instant::now() >= end {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("gated probe ({path}) hung past 30s");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            let mut stderr = Vec::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                use std::io::Read as _;
+                let _ = pipe.read_to_end(&mut stderr);
+            }
+            assert!(
+                status.success(),
+                "gated probe ({path}) must skip on missing python, got {status}"
+            );
+            let stderr_text = String::from_utf8_lossy(&stderr);
+            assert!(
+                stderr_text.contains("skip: python3 unavailable"),
+                "gated probe ({path}) must report its skip: {stderr_text}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&empty);
     }
 
     /// R11-014: the bounded helper must not break the normal
