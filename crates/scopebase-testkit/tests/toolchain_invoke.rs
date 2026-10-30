@@ -1941,16 +1941,21 @@ fn orphan_hook_fires_and_spares_unrelated() {
 /// legacy EOF-waiting read (false: the framing bad control —
 /// a held write end stalls to the 10s bound, and the expiry
 /// path must retire everything owned before failing loud).
+/// R11-016: the hook RETURNS the pid of any long-lived holder
+/// it forked (-1 if none) so the expiry path can retire a
+/// holder the helper would otherwise never receive.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn spawn_orphan_sleeper_with_hook(
     duration: &str,
-    hook: Option<&dyn Fn(i32, i32)>,
+    hook: Option<&dyn Fn(i32, i32) -> i32>,
     framed: bool,
 ) -> (i32, u64) {
     let pipe = cloexec_pipe();
-    if let Some(hook) = hook {
-        hook(pipe[0], pipe[1]);
-    }
+    let holder = if let Some(hook) = hook {
+        hook(pipe[0], pipe[1])
+    } else {
+        -1
+    };
     // SAFETY: the middle child forks the sleeper, reports its pid,
     // and exits; the sleeper execs sleep. Stack buffers only — no
     // allocation in either forked child.
@@ -2052,6 +2057,21 @@ fn spawn_orphan_sleeper_with_hook(
                 libc::kill(middle, libc::SIGKILL);
                 let mut status = 0;
                 libc::waitpid(middle, &mut status, 0);
+            }
+            // R11-016(a1): the hook's holder is ours too (its
+            // pid arrived through the hook's return) — retire
+            // it with the same owned-child exactness. The
+            // caller only learns the pid through its own
+            // channel, which it must not reap before us, so
+            // the blocking reap cannot hang; a raced exit
+            // surfaces as ESRCH/ECHILD, never a hang.
+            if holder > 0 {
+                // SAFETY: holder is our own unreaped child.
+                unsafe {
+                    libc::kill(holder, libc::SIGKILL);
+                    let mut status = 0;
+                    libc::waitpid(holder, &mut status, 0);
+                }
             }
             let orphan_note = retire_reported_orphan(&text[..len], duration);
             panic!(
@@ -2619,6 +2639,7 @@ fn orphan_fixture_survives_concurrent_inheritor() {
                 }
             }
             holder_pid.store(holder, Ordering::SeqCst);
+            holder
         }),
         true,
     );
@@ -2712,6 +2733,33 @@ fn no_sleep_duration(duration: &str) -> bool {
     true
 }
 
+/// R11-016(b1): retire-before-assert for the unframed probe's
+/// unexpected-Ok path: an Ok identity must be retired (not
+/// dropped) and the holder killed — only then may the caller
+/// fail loud on the unexpected success. The holder kill runs
+/// FIRST and cannot panic (unchecked kill + blocking reap of
+/// our own child — already-retired surfaces as ESRCH/ECHILD),
+/// so it holds on every path including a panicking sleeper
+/// retirement. On Err (the expected expiry) the helper already
+/// retired its owned; the holder kill is belt-and-braces.
+/// Contract: `holder` is our own (possibly already reaped)
+/// child — never a foreign pid.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_unexpected_orphan(outcome: &std::thread::Result<(i32, u64)>, holder: i32) {
+    if holder > 0 {
+        // SAFETY: our own child (or already reaped by the
+        // expiry path — ESRCH/ECHILD then, never a hang).
+        unsafe {
+            libc::kill(holder, libc::SIGKILL);
+            let mut status = 0;
+            libc::waitpid(holder, &mut status, 0);
+        }
+    }
+    if let Ok((pid, pinned)) = outcome {
+        retire_orphan(*pid, *pinned);
+    }
+}
+
 /// R10-013: the framing bad control, confined in a fresh probe
 /// process (single-threaded — exact fd accounting is sound
 /// here, unlike in the parallel suite binary). WITHOUT the
@@ -2756,22 +2804,52 @@ fn tt04_orphan_unframed_expiry_probe() {
                     }
                 }
                 holder_pid.store(holder, Ordering::SeqCst);
+                holder
             }),
             false,
         )
     }));
     let elapsed = start.elapsed();
-    assert!(outcome.is_err(), "unframed held read must expire");
-    // The holder is OURS (the helper never learns it): kill +
-    // reap before any further assertion.
+    // The holder is OURS (and, since R11-016, the helper's
+    // too — it retires it on expiry): the hook must have
+    // reported it (fork failure would otherwise pass
+    // vacuously below).
     let holder = holder_pid.load(Ordering::SeqCst);
     assert!(holder > 0, "hook must report its holder");
-    // SAFETY: retiring our own holder.
-    unsafe {
-        libc::kill(holder, libc::SIGKILL);
+    if outcome.is_err() {
+        // R11-016(a1): the expiry path received the holder
+        // through the hook's return and retired it BEFORE
+        // failing loud — prove it before our own (belt-and-
+        // braces) kill: signal-0 must ESRCH and no zombie may
+        // remain for us to reap. (Skipped on Ok: no expiry ran,
+        // so the holder is legitimately alive there.) Pre-fix
+        // the holder still sleeps here (RED) and our kill
+        // below doubles as RED-run hygiene.
+        // SAFETY: signal 0 probes existence only.
+        assert_eq!(
+            unsafe { libc::kill(holder, 0) },
+            -1,
+            "expiry must have retired the holder"
+        );
+        // SAFETY: errno location for this thread.
+        assert_eq!(
+            unsafe { libc::__errno_location().read() },
+            libc::ESRCH,
+            "holder probe must fail ESRCH-only"
+        );
         let mut status = 0;
-        libc::waitpid(holder, &mut status, 0);
+        // SAFETY: WNOHANG reap probe of our own child.
+        assert!(
+            unsafe { libc::waitpid(holder, &mut status, libc::WNOHANG) } < 0,
+            "expiry must have reaped the holder"
+        );
     }
+    // R11-016(b1): retire-before-assert — an unexpected Ok
+    // identity is retired here (not dropped below) and the
+    // holder killed on every path; only then may the success
+    // assertion fail loud.
+    retire_unexpected_orphan(&outcome, holder);
+    assert!(outcome.is_err(), "unframed held read must expire");
     assert!(
         elapsed < Duration::from_secs(60),
         "expiry must stay bounded, took {elapsed:?}"
@@ -2809,6 +2887,100 @@ fn tt04_orphan_unframed_expiry_probe() {
         own_fd_count(),
         fds_before,
         "fd count must return to baseline"
+    );
+}
+
+/// R11-016(b1): an unexpected Ok identity is retired (not
+/// dropped) and the holder killed.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn unexpected_ok_retires_orphan_and_holder() {
+    let holder = std::process::Command::new("sleep")
+        .arg("98")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn holder")
+        .id() as i32;
+    let sleeper = std::process::Command::new("sleep")
+        .arg("99")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn sleeper")
+        .id() as i32;
+    let pinned = task_starttime_checked(sleeper)
+        .expect("sleeper stat readable")
+        .expect("sleeper alive");
+    retire_unexpected_orphan(&Ok((sleeper, pinned)), holder);
+    // The holder is reaped by the helper (ECHILD now).
+    let mut status = 0;
+    // SAFETY: WNOHANG probe of our own child.
+    assert!(
+        unsafe { libc::waitpid(holder, &mut status, libc::WNOHANG) } < 0,
+        "holder must be reaped"
+    );
+    // The sleeper is retired (zombie-or-gone proves it).
+    assert_eq!(
+        task_retired_checked(sleeper),
+        Ok(true),
+        "orphan must be retired"
+    );
+    // Reap our sleeper zombie (retirement proves
+    // disappearance, not the reap).
+    // SAFETY: our own dead child.
+    assert_eq!(
+        unsafe { libc::waitpid(sleeper, &mut status, 0) },
+        sleeper,
+        "test must reap the sleeper"
+    );
+}
+
+/// R11-016(b1): on Err the holder is still killed and no
+/// sleeper is touched.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn unexpected_ok_skips_sleeper_on_err() {
+    let holder = std::process::Command::new("sleep")
+        .arg("98")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn holder")
+        .id() as i32;
+    let other = std::process::Command::new("sleep")
+        .arg("99")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn unrelated")
+        .id() as i32;
+    let err: std::thread::Result<(i32, u64)> =
+        Err(Box::new("synthetic expiry") as Box<dyn std::any::Any + Send>);
+    retire_unexpected_orphan(&err, holder);
+    // Holder reaped; the unrelated sleeper never addressed.
+    let mut status = 0;
+    // SAFETY: WNOHANG probe of our own child.
+    assert!(
+        unsafe { libc::waitpid(holder, &mut status, libc::WNOHANG) } < 0,
+        "holder must be reaped"
+    );
+    let cmdline =
+        std::fs::read(format!("/proc/{other}/cmdline")).expect("unrelated cmdline readable");
+    assert_eq!(cmdline, b"sleep\x0099\x00");
+    let other_start = task_starttime_checked(other)
+        .expect("unrelated stat readable")
+        .expect("unrelated alive");
+    retire_orphan(other, other_start);
+    // SAFETY: our own dead child.
+    assert_eq!(
+        unsafe { libc::waitpid(other, &mut status, 0) },
+        other,
+        "test must reap the unrelated"
     );
 }
 
@@ -2857,6 +3029,79 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
     (out, err)
 }
 
+/// R11-016(b2): retiring a failed probe's tree kills the
+/// stranded group (not just the exited probe): a child in its
+/// own group forks a 31s sleeper and exits 3 at once — the
+/// helper must leave the group ESRCH-dead (far ahead of the
+/// sleeper's own clock) and preserve the observed status.
+/// Idempotent: a second call over the empty group is a silent
+/// no-op (ESRCH/ECHILD, never a hang).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn probe_tree_retirement_kills_stranded_group() {
+    use std::os::unix::process::CommandExt as _;
+    let mut child = std::process::Command::new("/bin/sh");
+    child
+        .arg("-c")
+        .arg("sleep 31 & exit 3")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // SAFETY: setpgid on self pre-exec, no userspace state
+    // (the probes group themselves the same way on entry).
+    unsafe {
+        child.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut child = child.spawn().expect("spawn failing stage");
+    let status = child.wait().expect("stage exit");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(3));
+    let group = child.id() as libc::pid_t;
+    retire_probe_tree(&mut child);
+    retire_probe_tree(&mut child);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            // SAFETY: errno location for this thread.
+            let errno = unsafe { libc::__errno_location().read() };
+            assert_eq!(
+                errno,
+                libc::ESRCH,
+                "group probe must fail ESRCH-only, got {errno}"
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "stranded group {group} survived retirement"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// R11-016(b2): retire a probe's whole process group plus
+/// the probe itself, then reap. The probe's pgid is its pid
+/// (every probe groups itself on entry), so stranded
+/// group-mates (a live holder) die with it. Best-effort and
+/// idempotent: ESRCH/ECHILD mean already gone, never a hang.
+/// Used on timeout AND on failure exit (a failed probe may
+/// strand its group) — always before reporting failure.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_probe_tree(child: &mut std::process::Child) {
+    // SAFETY: signal-only to the probe's own group, then the
+    // probe itself; errors ignored (house discipline).
+    let id = child.id() as libc::pid_t;
+    unsafe {
+        libc::killpg(id, libc::SIGKILL);
+        libc::kill(id, libc::SIGKILL);
+    }
+    let _ = child.wait();
+}
+
 /// R10-013: run the framing bad control confined in a fresh
 /// probe process and require bounded failure with no remaining
 /// holder, sleeper, zombie middleman, or report descriptor (all
@@ -2864,6 +3109,9 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
 /// probe's whole process group before failing loud. The probe
 /// output must name one passed test — a renamed probe path
 /// fails here instead of passing vacuously on zero tests.
+/// R11-016(b2): the group is retired on failure exit too (not
+/// just on timeout) — all fixture processes are dead before
+/// the parent reports failure.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn unframed_report_expiry_retires_everything() {
@@ -2884,6 +3132,11 @@ fn unframed_report_expiry_retires_everything() {
                 // Drained, never EOF-waited: a RED-run sleeper
                 // holds the pipes (see drain_exited_child_output).
                 let (stdout, stderr) = drain_exited_child_output(&child);
+                if !status.success() {
+                    // R11-016(b2): a failed probe may strand
+                    // its group — retire before reporting.
+                    retire_probe_tree(&mut child);
+                }
                 assert!(
                     status.success(),
                     "unframed-expiry probe must exit success, got {status}: {}",
@@ -2899,14 +3152,7 @@ fn unframed_report_expiry_retires_everything() {
             None => {}
         }
         if Instant::now() >= end {
-            // SAFETY: signal-only to the probe's own group,
-            // then the probe itself; errors ignored.
-            let id = child.id() as libc::pid_t;
-            unsafe {
-                libc::killpg(id, libc::SIGKILL);
-                libc::kill(id, libc::SIGKILL);
-            }
-            let _ = child.wait();
+            retire_probe_tree(&mut child);
             panic!("unframed-expiry probe hung past 90s");
         }
         std::thread::sleep(Duration::from_millis(20));
