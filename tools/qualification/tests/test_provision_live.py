@@ -317,6 +317,11 @@ def run_bounded_reader_case(reader, timeout=10):
     MemoryError in-child and reports it instead of
     exhausting shared runner memory toward an OOM kill
     (whose signal exit previously passed as "contained").
+    R14-013: the effective budget is min(computed, inherited
+    soft, inherited hard) — the child never raises an
+    inherited limit (an unprivileged hard-raise fails, and a
+    soft-raise would defeat the environment's tighter
+    budget).
     Fork context (closures need no pickling; spawn would
     refuse them) with pre-fork stdio flush (no double
     flush into redirected suite logs). Payloads must be
@@ -345,6 +350,18 @@ def run_bounded_reader_case(reader, timeout=10):
     def _target(conn, func, cap):
         if cap is not None:
             try:
+                # R14-013: respect inherited limits — an
+                # unprivileged child cannot raise the hard limit
+                # (a forbidden increase reports budget-unset and
+                # the reader never runs), and a tighter inherited
+                # soft limit is the environment's budget (raising
+                # it would weaken containment). Infinite bounds
+                # (RLIM_INFINITY) do not constrain.
+                soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+                if hard >= 0:
+                    cap = min(cap, hard)
+                if soft >= 0:
+                    cap = min(cap, soft)
                 resource.setrlimit(
                     resource.RLIMIT_AS, (cap, cap))
             except Exception as exc:
@@ -4096,6 +4113,123 @@ class AdoptReplacementTests(unittest.TestCase):
             self.assertFalse(finished)
             self.assertIsNotNone(exitcode, "worker reaped")
             self.assertNotEqual(exitcode, 0)
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
+                         "needs RLIMIT_AS worker budgets")
+    def test_worker_budget_respects_inherited_limits(self):
+        # R14-013: finite inherited soft AND hard limits — the
+        # worker budget must never exceed them. Pre-fix the
+        # worker sets (cap, cap) unconditionally: a finite hard
+        # limit below the computed cap makes setrlimit fail
+        # (unprivileged hard-raise forbidden) so the child
+        # reports budget-unset and the reader never runs; a
+        # finite soft limit is silently RAISED to the cap,
+        # defeating the environment's tighter budget. Post-fix
+        # the effective budget is min(computed, soft, hard):
+        # ordinary readers execute under both, and allocation
+        # hits the inherited budget (not the computed one).
+        # Staging is a forked middleman (contained): hard limits
+        # cannot be raised back in-process, so the suite process
+        # itself must never lower them. The finite limit sits
+        # 64MiB above the middleman's VmSize (ordinary readers
+        # have headroom; the allocator's reached band excludes
+        # both stillborn (0) and unbounded (~512)).
+        import multiprocessing as _mp
+
+        def ordinary_reader():
+            return ("ordinary-ok", 42)
+
+        def allocator():
+            chunks = []
+            reached = 0
+            try:
+                while True:
+                    chunks.append(bytearray(8 * 1024 * 1024))
+                    reached += 8
+            except MemoryError:
+                return ("alloc-capped", reached)
+
+        def middleman(queue, soft, hard, kind):
+            resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
+            if kind == "ordinary":
+                outcome = run_bounded_reader_case(
+                    ordinary_reader, timeout=10)
+            else:
+                outcome = run_bounded_reader_case(
+                    allocator, timeout=30)
+            queue.put(outcome)
+
+        with open("/proc/self/status") as handle:
+            vm_kb = None
+            for line in handle:
+                if line.startswith("VmSize:"):
+                    vm_kb = int(line.split()[1])
+                    break
+        self.assertIsNotNone(vm_kb, "parent VmSize readable")
+        finite = (vm_kb // 1024 + 64) * 1024 * 1024
+        inf = resource.RLIM_INFINITY
+        ctx = _mp.get_context("fork")
+        cases = [
+            ("hard-ordinary", finite, finite, "ordinary"),
+            ("hard-allocator", finite, finite, "allocator"),
+            ("soft-ordinary", finite, inf, "ordinary"),
+            ("soft-allocator", finite, inf, "allocator"),
+        ]
+        for tag, soft, hard, kind in cases:
+            with self.subTest(tag=tag):
+                queue = ctx.Queue()
+                middle = ctx.Process(
+                    target=middleman,
+                    args=(queue, soft, hard, kind))
+                middle.start()
+                middle.join(90)
+                if middle.is_alive():
+                    middle.terminate()
+                    middle.join(5)
+                    if middle.is_alive():
+                        middle.kill()
+                        middle.join(5)
+                self.assertEqual(
+                    middle.exitcode, 0,
+                    "%s: middleman must exit cleanly" % (tag,))
+                import queue as _queue
+                try:
+                    finished, outcome, exitcode = queue.get(timeout=10)
+                except _queue.Empty:
+                    self.fail("%s: middleman must report" % (tag,))
+                # Workers reaped on every path (the helper joins;
+                # a reaped worker has a collected exitcode).
+                self.assertIsNotNone(
+                    exitcode, "%s: worker reaped" % (tag,))
+                if kind == "ordinary":
+                    self.assertTrue(
+                        finished,
+                        "%s: ordinary reader must execute, got %r"
+                        % (tag, outcome))
+                    self.assertEqual(exitcode, 0)
+                    self.assertEqual(outcome, ("ordinary-ok", 42))
+                else:
+                    # The allocator catches its own MemoryError and
+                    # reports the reached size: finished carries the
+                    # ("alloc-capped", MiB) payload, and the band
+                    # below proves it hit the INHERITED budget.
+                    self.assertTrue(
+                        finished,
+                        "%s: allocator must report, got %r"
+                        % (tag, outcome))
+                    self.assertIsNotNone(
+                        outcome, "%s: allocator must report" % (tag,))
+                    kind_out, reached = outcome
+                    self.assertEqual(kind_out, "alloc-capped")
+                    self.assertGreaterEqual(
+                        reached, 32,
+                        "%s: allocation stillborn (reached %sMiB)"
+                        % (tag, reached))
+                    self.assertLessEqual(
+                        reached, 160,
+                        "%s: allocation missed the inherited budget "
+                        "(reached %sMiB)" % (tag, reached))
+                    self.assertEqual(exitcode, 0)
 
     @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
                          "needs RLIMIT_AS worker budgets")
