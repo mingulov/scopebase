@@ -24392,18 +24392,73 @@ time.sleep(30)
         Some((g, ltick, cpid, ctick))
     }
 
+    /// R21-001: C's reaped-state at a skip-path retire
+    /// site. KnownUnreaped (C live-or-zombie, never
+    /// reaped — its number cannot host a sibling, so the
+    /// retire-first body is sound) vs Unknown (reaped or
+    /// not — the helper tick-checks first when reads work,
+    /// fails loud under outage). Known-drained sites skip
+    /// this helper and call [`prove_drained_for_skip`]
+    /// (proof-only — no waitpid/kill over a released
+    /// number, where a sibling's zombie would be stolen
+    /// and a sibling's live child murdered).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SkipCRetireState {
+        KnownUnreaped,
+        Unknown,
+    }
+
+    /// R21-001: proof-only tail — requires `Ok(None)` or a
+    /// foreign birth; still-ours or `Err` fails loud. Pure
+    /// reads: safe over any state (never steals, never
+    /// signals).
+    #[cfg(target_arch = "x86_64")]
+    fn prove_drained_for_skip(cpid: libc::pid_t, ctick: u64, context: &str) {
+        // Explicit drained-proof (never vacuous on Err).
+        match proc_starttime(cpid) {
+            Ok(None) => {}
+            Ok(Some(t)) if t != ctick => {}
+            Ok(Some(_)) => panic!("C survived skip-path retire ({context})"),
+            Err(error) => panic!("C drain unprovable under outage ({context}): {error:?}"),
+        }
+    }
+
     /// R20-010(3): skip-path C custody for the drain-mandate
     /// skips — retire C, then prove drained. `context`
     /// carries the site's drained-expectation rationale.
-    /// Retire-first is a no-op when pass 1 already reaped
-    /// (the gated kill skips non-ours, the waitpid ECHILDs);
-    /// the explicit drained-proof then requires `Ok(None)`
-    /// or a foreign birth — `Err` or still-ours fails loud
-    /// (the old vacuous `assert_ne!` passed on `Err`, and an
-    /// outage skipped with a known-zombie C undrained).
+    /// R21-001: the retire-first body runs only when C is
+    /// known-unreaped (sound — no sibling can occupy the
+    /// number) or unknown-but-tick-verified-ours; unknown +
+    /// outage fails loud (an ours-vs-sibling zombie is
+    /// indistinguishable without birth reads).
     #[cfg(target_arch = "x86_64")]
-    fn retire_and_prove_drained_for_skip(cpid: libc::pid_t, ctick: u64, context: &str) {
+    fn retire_and_prove_drained_for_skip(
+        cpid: libc::pid_t,
+        ctick: u64,
+        state: SkipCRetireState,
+        context: &str,
+    ) {
         use std::time::{Duration, Instant};
+        // R21-001: unknown reaped-state tick-checks FIRST
+        // (reads-OK): ours ⟹ fall through to the retire;
+        // gone/foreign ⟹ proof-only (no waitpid/kill over
+        // a number that may host a sibling). Unknown +
+        // outage fails loud (an ours-vs-sibling zombie is
+        // indistinguishable without birth reads — neither
+        // stealing nor murdering blind).
+        if state == SkipCRetireState::Unknown {
+            match proc_starttime(cpid) {
+                Ok(Some(now)) if now == ctick => {}
+                Ok(_) => {
+                    prove_drained_for_skip(cpid, ctick, context);
+                    return;
+                }
+                Err(error) => panic!(
+                    "C state unknown under outage ({context}) — refusing blind retire: {error:?}"
+                ),
+            }
+        }
         // Retire first WITHOUT reads (the tick gate needs
         // /proc — dead under outage): discriminate by
         // kernel parenthood instead. waitpid == cpid ⟹ our
@@ -24411,7 +24466,8 @@ time.sleep(30)
         // off; 0 ⟹ OUR live child (a foreigner would
         // ECHILD), safe to signal — the µs waitpid→kill
         // window matches the accepted gate→signal residual.
-        // Silent no-op when pass 1 already drained.
+        // Sound: C is known-unreaped or tick-verified-ours
+        // above, so no sibling can occupy the number.
         let end = Instant::now() + Duration::from_secs(10);
         loop {
             let mut status = 0;
@@ -24442,13 +24498,7 @@ time.sleep(30)
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Explicit drained-proof (never vacuous on Err).
-        match proc_starttime(cpid) {
-            Ok(None) => {}
-            Ok(Some(t)) if t != ctick => {}
-            Ok(Some(_)) => panic!("C survived skip-path retire ({context})"),
-            Err(error) => panic!("C drain unprovable under outage ({context}): {error:?}"),
-        }
+        prove_drained_for_skip(cpid, ctick, context);
     }
 
     /// R20-010(3): an anchor/stat outage on the skip path
@@ -24485,7 +24535,12 @@ time.sleep(30)
         }
         assert!(!held.is_empty(), "exhaustion must consume fds");
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            retire_and_prove_drained_for_skip(cpid, ctick, "probe outage");
+            retire_and_prove_drained_for_skip(
+                cpid,
+                ctick,
+                SkipCRetireState::KnownUnreaped,
+                "probe outage",
+            );
         }));
         drop(held);
         let gone = proc_starttime(cpid) != Ok(Some(ctick));
@@ -24525,6 +24580,236 @@ time.sleep(30)
         );
         assert!(
             stderr.contains("R20010-SKIP-OUTAGE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R21-001: planted different-birth live/zombie children
+    /// ("siblings" — also our process's children) at C's
+    /// freed number must survive a skip-path retire with
+    /// status retained. Pre-fix the retire-first body
+    /// waitpid/killed before any birth check (pass 1 freed
+    /// the number): a sibling zombie's status was stolen
+    /// and a sibling live child murdered, with the trailing
+    /// absence check covering the damage (None after our
+    /// reap). Cells (all through the Unknown arm — the
+    /// drained states convert to proof-only with the fix):
+    /// live sibling + reads-OK survives (pre-fix:
+    /// murdered); zombie sibling + reads-OK keeps status
+    /// (pre-fix: stolen); live-ours C retires normally
+    /// (positive control — passes pre- and post-fix). No
+    /// timing: all plants are settled before the call.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn skip_path_retire_spares_sibling_occupants() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        // Positive control: live-ours C retires normally.
+        #[allow(clippy::zombie_processes)]
+        let probe = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("control spawns");
+        let cpid = probe.id() as libc::pid_t;
+        let ctick = proc_starttime(cpid)
+            .expect("control stat readable")
+            .expect("control visible");
+        retire_and_prove_drained_for_skip(cpid, ctick, SkipCRetireState::Unknown, "control");
+        assert_eq!(proc_starttime(cpid), Ok(None), "control C must drain");
+        drop(probe);
+        for live in [false, true] {
+            // Raw-reaped below (simulated pass-1 reap).
+            #[allow(clippy::zombie_processes)]
+            let probe = std::process::Command::new("/bin/sleep")
+                .arg("0.1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("C spawns");
+            let cpid = probe.id() as libc::pid_t;
+            let ctick = proc_starttime(cpid)
+                .expect("C stat readable")
+                .expect("C visible");
+            assert!(kill_tick_gated(cpid, ctick), "pass 1 kills");
+            let mut st = 0;
+            // SAFETY: pass 1's raw reap (simulated).
+            let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
+            assert_eq!(got, cpid, "pass 1 reaps");
+            drop(probe);
+            let (mut kid, mut guard) = match plant_replacement(cpid, ctick) {
+                Some(planted) => planted,
+                None => return,
+            };
+            let retick = proc_starttime(cpid)
+                .expect("sibling readable")
+                .expect("sibling visible");
+            assert_ne!(retick, ctick, "plant must be a different birth");
+            if !live {
+                assert!(
+                    settle_replacement_zombie(&mut kid, cpid),
+                    "sibling must settle zombie (stage broken otherwise)"
+                );
+            }
+            // The race shape: the helper acts over a freed
+            // number now hosting a foreign birth.
+            retire_and_prove_drained_for_skip(
+                cpid,
+                ctick,
+                SkipCRetireState::Unknown,
+                "sibling occupant",
+            );
+            if live {
+                assert!(
+                    matches!(proc_state(cpid), Some(state) if state != 'Z'),
+                    "live sibling must survive the skip-path retire"
+                );
+                assert!(kill_tick_gated(cpid, retick), "retire the survivor");
+                // SAFETY: blocking reap of our retired occupant.
+                let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
+                assert_eq!(got, cpid, "survivor reaped");
+            } else {
+                // SAFETY: WNOHANG retention probe — our own child.
+                let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
+                assert_eq!(
+                    got, cpid,
+                    "sibling zombie status must be retained (skip-path retire stole it)"
+                );
+            }
+            guard.disarm();
+            drop(kid);
+        }
+    }
+
+    /// R21-001 outage probe (fresh-image: exhausts the fd
+    /// table — the limit dies with the probe). C reaped,
+    /// sibling planted (live arm + zombie arm), reads dead:
+    /// the helper must fail LOUD without signaling or
+    /// reaping (post-restore survival + retained status
+    /// prove the no-touch). Pre-fix RED: the fd-less body
+    /// murders/steals first, then fails loud on the proof
+    /// (loud in both — the survival checks discriminate).
+    #[cfg(target_arch = "x86_64")]
+    fn skip_path_retire_outage_probe() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        for live in [false, true] {
+            #[allow(clippy::zombie_processes)]
+            let probe = std::process::Command::new("/bin/sleep")
+                .arg("0.1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("C spawns");
+            let cpid = probe.id() as libc::pid_t;
+            let ctick = proc_starttime(cpid)
+                .expect("C stat readable")
+                .expect("C visible");
+            assert!(kill_tick_gated(cpid, ctick), "pass 1 kills");
+            let mut st = 0;
+            // SAFETY: pass 1's raw reap (simulated).
+            let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
+            assert_eq!(got, cpid, "pass 1 reaps");
+            drop(probe);
+            let (mut kid, mut guard) = match plant_replacement(cpid, ctick) {
+                Some(planted) => planted,
+                None => {
+                    eprintln!("skip: plant contended (outage cell untestable this run)");
+                    return;
+                }
+            };
+            let retick = proc_starttime(cpid)
+                .expect("sibling readable")
+                .expect("sibling visible");
+            assert_ne!(retick, ctick, "plant must be a different birth");
+            if !live {
+                assert!(
+                    settle_replacement_zombie(&mut kid, cpid),
+                    "sibling must settle zombie (stage broken otherwise)"
+                );
+            }
+            // Exhaust AFTER staging (the helper runs
+            // unreadable).
+            let _confined = confine_fd_table_for_exhaustion();
+            let mut held = Vec::new();
+            while let Ok(file) = std::fs::File::open("/dev/null") {
+                held.push(file);
+            }
+            assert!(!held.is_empty(), "exhaustion must consume fds");
+            let failed_loud = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                retire_and_prove_drained_for_skip(
+                    cpid,
+                    ctick,
+                    SkipCRetireState::Unknown,
+                    "probe outage sibling",
+                )
+            }))
+            .is_err();
+            drop(held);
+            drop(_confined);
+            assert!(failed_loud, "outage must fail loud, never certify");
+            if live {
+                assert_eq!(
+                    proc_starttime(cpid),
+                    Ok(Some(retick)),
+                    "live sibling must survive the loud failure"
+                );
+                assert!(kill_tick_gated(cpid, retick), "retire the survivor");
+                // SAFETY: blocking reap of our retired occupant.
+                let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
+                assert_eq!(got, cpid, "survivor reaped");
+            } else {
+                // SAFETY: WNOHANG retention probe — our own child.
+                let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
+                assert_eq!(
+                    got, cpid,
+                    "sibling zombie status must be retained (loud failure stole it)"
+                );
+            }
+            guard.disarm();
+            drop(kid);
+        }
+        eprintln!("R21001-OUTAGE-DONE");
+    }
+
+    /// R21-001 outage wrapper: the probe runs fresh-image
+    /// (it exhausts the fd table). Contention skips
+    /// propagate as skips.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn skip_path_retire_outage_fails_loud_untouched() {
+        if std::env::var("SCOPEBASE_R21001_OUTAGE").is_ok() {
+            skip_path_retire_outage_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::skip_path_retire_outage_fails_loud_untouched")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R21001_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the outage case\n{stderr}"
+        );
+        if let Some(skipped) = stderr.lines().find(|line| line.contains("skip:")) {
+            eprintln!("skip (probe): {skipped}");
+            return;
+        }
+        assert!(
+            stderr.contains("R21001-OUTAGE-DONE"),
             "probe must cite completion\n{stderr}"
         );
     }
@@ -24725,7 +25010,10 @@ time.sleep(30)
             // zombie would keep its birth, so absence proves
             // discharge — a foreign birth means the suite
             // recycled the freed number under load).
-            retire_and_prove_drained_for_skip(
+            // R21-001: known-drained skips the retire —
+            // proof-only (no waitpid/kill over the released
+            // number).
+            prove_drained_for_skip(
                 cpid,
                 ctick,
                 "C was drained by pass 1 (stage broken otherwise)",
@@ -24980,7 +25268,10 @@ time.sleep(30)
             // stray is already discharged above, so only an
             // external same-tick retake could still collide —
             // negligible, and loud if it ever does).
-            retire_and_prove_drained_for_skip(cpid, ctick, "C status must already be drained");
+            // R21-001: known-drained skips the retire —
+            // proof-only (no waitpid/kill over the released
+            // number).
+            prove_drained_for_skip(cpid, ctick, "C status must already be drained");
             eprintln!("skip: reform steering missed");
             return;
         }
