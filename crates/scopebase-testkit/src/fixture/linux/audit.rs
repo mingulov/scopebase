@@ -6166,6 +6166,21 @@ mod tests {
             Ok(pin) => pin,
             Err(errno) if errno == libc::ESRCH => {
                 pid_gone = true;
+                // R18-002: bracket the pre-kill snapshot —
+                // ESRCH means free AT PIN TIME, but a recycle
+                // between the snapshot and the pin would leave
+                // replacement children unioned. Re-read: only
+                // a still-free number keeps the union (a live
+                // non-expected holder discards it — the listed
+                // children may be the replacement's).
+                match proc_starttime(pid) {
+                    Ok(Some(now)) if now != started => kids.clear(),
+                    Err(_) => {
+                        unresolved = true;
+                        kids.clear();
+                    }
+                    Ok(_) => {}
+                }
                 -1
             }
             Err(_) => {
@@ -6188,8 +6203,21 @@ mod tests {
                         );
                     }
                 }
-                Ok(_) => pid_gone = true,
-                Err(_) => unresolved = true,
+                // R18-002: gone keeps the pre-kill union
+                // (death reparented the listed children away
+                // as orphans — still ours); reuse and
+                // unreadable discard it (a replacement's
+                // children, or unverifiable either way — the
+                // recursion below must not inherit them).
+                Ok(None) => pid_gone = true,
+                Ok(Some(_)) => {
+                    pid_gone = true;
+                    kids.clear();
+                }
+                Err(_) => {
+                    unresolved = true;
+                    kids.clear();
+                }
             }
             // SAFETY: pin owned by this scope.
             unsafe { libc::close(pin) };
@@ -6206,9 +6234,20 @@ mod tests {
                 // gate already reads gone (a gate-first
                 // order skips the union on instant death
                 // — the flake that failed the blind-seam
-                // test under full-suite load).
+                // test under full-suite load). R18-002:
+                // each poll's fresh union is bracketed by
+                // the gate below — live and gone keep it
+                // (death reparented the listed children as
+                // orphans — still ours); reuse and
+                // unreadable discard JUST this poll's fresh
+                // additions (a replacement's children, or
+                // unverifiable — while genuine orphans are
+                // re-captured on later live/gone-bracketed
+                // polls, so discarding loses nothing
+                // verifiable).
                 let (fresh, fresh_unresolved) = snapshot(pid);
                 unresolved |= fresh_unresolved;
+                let kept = kids.len();
                 for pair in fresh {
                     if !kids.contains(&pair) {
                         kids.push(pair);
@@ -6221,6 +6260,7 @@ mod tests {
                     }
                     Ok(Some(now)) if now != started => {
                         pid_gone = true;
+                        kids.truncate(kept);
                         break;
                     }
                     Ok(Some(_)) => {
@@ -6233,7 +6273,9 @@ mod tests {
                             libc::waitpid(pid, &mut status, libc::WNOHANG);
                         }
                     }
-                    Err(_) => {}
+                    Err(_) => {
+                        kids.truncate(kept);
+                    }
                 }
                 if std::time::Instant::now() >= deadline {
                     break;
@@ -15168,6 +15210,183 @@ mod tests {
             mid_gone,
             "parent expiry must retire the unpublished middleman"
         );
+    }
+
+    /// R18-002: a stray number retaken between the
+    /// frame's entry gate and its re-gate must not authorize
+    /// killing the replacement parent's children. The
+    /// injected snapshot stalls its first call while the
+    /// main thread kills + reaps the stray and steers a
+    /// different-birth parent + child onto the freed number;
+    /// the resumed snapshot then reports the replacement's
+    /// child with agreed ticks. RED (the re-gate-reuse poll
+    /// keeps its fresh union): the recursion murders the
+    /// replacement's child. GREEN (reuse-bracketed unions
+    /// discarded): both replacements survive with statuses
+    /// retained. Durations 81 (stray) and 82 (replacement
+    /// child) are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reexpansion_spares_recycled_parents_children() {
+        use std::io::BufRead as _;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // Stage the stray: our own long sleep (its number is
+        // ours to free and retake).
+        let mut stray = std::process::Command::new("/bin/sleep")
+            .arg("81")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("stray spawns");
+        let pid = stray.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("stray stat readable")
+            .expect("stray visible");
+        // Coordination: the seam signals RECYCLE once (the
+        // stray is entry-gated, the first snapshot stalled);
+        // the main thread recycles the number, then signals
+        // DONE. Both waits bounded and loud.
+        let recycle = std::sync::Arc::new(AtomicBool::new(false));
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let armed = std::sync::Arc::new(AtomicBool::new(true));
+        let worker_recycle = recycle.clone();
+        let worker_done = done.clone();
+        let worker_armed = armed.clone();
+        let snapshot = move |observed: libc::pid_t| {
+            if worker_armed.swap(false, Ordering::SeqCst) {
+                worker_recycle.store(true, Ordering::SeqCst);
+                let end = Instant::now() + Duration::from_secs(10);
+                while !worker_done.load(Ordering::SeqCst) {
+                    assert!(
+                        Instant::now() < end,
+                        "seam stall must end (recycle deadlocked)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            snapshot_stray_children(observed)
+        };
+        let worker = std::thread::spawn(move || {
+            retire_stray_tree_frame_with(
+                pid,
+                tick,
+                Instant::now() + Duration::from_secs(5),
+                0,
+                &snapshot,
+            )
+        });
+        // Wait for the stall, then recycle the number under
+        // the frame: kill + reap the stray, steer a
+        // different-birth parent onto its number.
+        let end = Instant::now() + Duration::from_secs(10);
+        while !recycle.load(Ordering::SeqCst) {
+            assert!(Instant::now() < end, "frame must reach its first snapshot");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            kill_tick_gated(pid, tick),
+            "stray must be signaled for the retake"
+        );
+        let _ = stray.wait();
+        assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+        let _nsflock = ns_last_pid_flock();
+        if !audit_steer_next_pid_unlocked(pid) {
+            done.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            eprintln!("skip: steer unwritable mid-test (no reuse control)");
+            return;
+        }
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 82 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("replacement parent spawns");
+        if parent.id() as libc::pid_t != pid {
+            let _ = parent.kill();
+            let _ = parent.wait();
+            done.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            eprintln!("skip: retake contended");
+            return;
+        }
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("replacement child pid readable");
+        let rchild = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let rtick = proc_starttime(rchild)
+            .expect("replacement child stat readable")
+            .expect("replacement child visible");
+        let ptick = proc_starttime(pid)
+            .expect("replacement parent stat readable")
+            .expect("replacement parent visible");
+        if ptick == tick {
+            // Same-tick retake (S100): the frame cannot tell
+            // the generations apart — untestable this run.
+            let _ = kill_tick_gated(rchild, rtick);
+            let _ = parent.kill();
+            let _ = parent.wait();
+            done.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // Custody across the restore (R18-004: the child is a
+        // pipe pid — expected-identity over the transmitted
+        // birth read just above; the parent is our child).
+        let mut rchild_guard = FixtureGuard::new_expected(rchild, rtick);
+        assert!(
+            rchild_guard.tick.is_some(),
+            "replacement child custody must pin"
+        );
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        done.store(true, Ordering::SeqCst);
+        let _ = worker.join();
+        // Both replacements spared with statuses retained
+        // (RED: the recursion murdered the child).
+        assert_proc_settled_live(
+            rchild,
+            rtick,
+            2,
+            "replacement child must survive the re-gated frame",
+        );
+        assert!(
+            matches!(parent.try_wait(), Ok(None)),
+            "replacement parent must survive the re-gated frame"
+        );
+        // Cleanup: retire the child (its status drains to its
+        // waiting parent), reap the parent ourselves.
+        let _ = kill_tick_gated(rchild, rtick);
+        rchild_guard.disarm();
+        let status = parent.wait().expect("replacement parent reaps");
+        assert!(status.success(), "replacement parent must exit clean");
     }
 
     /// R17-001-RED-1: mid-only observed union. The
