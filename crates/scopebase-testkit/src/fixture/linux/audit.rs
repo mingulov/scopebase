@@ -2145,6 +2145,78 @@ mod tests {
         let _ = std::fs::write("/proc/sys/kernel/ns_last_pid", last_before);
     }
 
+    /// R16-003: steering prologue — whole-test in-process serial
+    /// hold plus ns_last_pid writability proof. Returns the held
+    /// guard (keeps serializing for the caller's whole test) or
+    /// None after printing the skip reason (caller returns).
+    #[cfg(target_arch = "x86_64")]
+    fn steer_hold() -> Option<std::sync::MutexGuard<'static, ()>> {
+        let serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_before = match std::fs::read_to_string("/proc/sys/kernel/ns_last_pid") {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return None;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return None;
+        }
+        audit_locked_restore_hint(&last_before);
+        Some(serial)
+    }
+
+    /// R16-003: steer a fresh `sleep 31` onto `want` (up to 100
+    /// tries under the cross-process flock; misses retired at
+    /// once). `self_grouped` self-groupids the child pre-exec
+    /// (killpg coverage). The allocator hint is restored before
+    /// returning either way. None when contended (caller skips).
+    /// Caller holds the [`steer_hold`] guard (in-process half).
+    #[cfg(target_arch = "x86_64")]
+    fn steer_sleep_onto(want: libc::pid_t, self_grouped: bool) -> Option<std::process::Child> {
+        use std::os::unix::process::CommandExt as _;
+        let last_before =
+            std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
+        let found = {
+            let _flock = ns_last_pid_flock();
+            let mut found = None;
+            for _ in 0..100 {
+                if !audit_steer_next_pid_unlocked(want) {
+                    break;
+                }
+                let mut command = std::process::Command::new("/bin/sleep");
+                command
+                    .arg("31")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                if self_grouped {
+                    // SAFETY: setpgid on self pre-exec, no userspace state.
+                    unsafe {
+                        command.pre_exec(|| {
+                            libc::setpgid(0, 0);
+                            Ok(())
+                        });
+                    }
+                }
+                let kid = command.spawn().expect("standin spawns");
+                if kid.id() as libc::pid_t == want {
+                    found = Some(kid);
+                    break;
+                }
+                let mut miss = kid;
+                let _ = miss.kill();
+                let _ = miss.wait();
+            }
+            found
+        };
+        audit_locked_restore_hint(last_before.trim());
+        found
+    }
+
     /// R12-005: python3 staged-probe marker — fork-only
     /// holders are staged probe-side (a probe-side fork
     /// inherits the piped stdio; an exec'd holder would lose
@@ -9560,7 +9632,12 @@ mod tests {
             .arg("-f")
             .arg(&pidfile)
             .status();
-        unsafe { libc::kill(vpid, libc::SIGKILL) };
+        // R16-003: the observation try_wait above may have reaped
+        // (abnormal early death) with a sudo fork window since —
+        // a blind kill would signal the freed number. Tick-gated
+        // retire (live: kills+reaps; reaped/recycled: stands
+        // down); the handle reap stays ECHILD-safe.
+        let _ = retire_tick_gated_audit_child(vpid, vtick);
         let _ = victim.wait();
         assert!(survived, "forged victim must survive the read");
         assert!(
@@ -10057,7 +10134,13 @@ mod tests {
         let after = std::fs::symlink_metadata(&tmp).ok();
         let content = std::fs::read_to_string(&tmp).unwrap_or_default();
         let retired = proc_starttime(wpid) != Ok(Some(wtick));
-        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        // R16-003: publish-failure already retired+reaped the
+        // writer in-test (owned child) — a blind kill would
+        // signal the freed number. Tick-gated retire covers both
+        // arms (already-retired: stands down; unexpected-success:
+        // retires the live writer); the handle reap stays
+        // ECHILD-safe.
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
         let _ = writer.wait();
         let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_dir_all(&dir);
@@ -10978,24 +11061,12 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn staging_cleanup_spares_recycled_probe_number() {
-        use std::os::unix::process::CommandExt as _;
-        // Serialize steerers in-process (whole-test hold); the
-        // placement loop below adds the cross-process lock.
-        let _serial = AUDIT_STEER_SERIAL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let last_path = "/proc/sys/kernel/ns_last_pid";
-        let last_before = match std::fs::read_to_string(last_path) {
-            Ok(text) => text.trim().to_string(),
-            Err(_) => {
-                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
-                return;
-            }
+        // R16-003: shared steering prologue + placement (whole-test
+        // hold; skips print inside).
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
         };
-        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
-            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
-            return;
-        }
         // The "probe": spawned, reaped, number released.
         let mut probe = std::process::Command::new("/bin/sleep")
             .arg("31")
@@ -11010,38 +11081,9 @@ mod tests {
             libc::kill(id, libc::SIGKILL);
         }
         let _ = probe.wait();
-        // Steer a SELF-GROUPED replacement onto the number (the
-        // killpg arm needs a group at the number to prove the skip).
-        let _flock = ns_last_pid_flock();
-        let mut standin = None;
-        for _ in 0..100 {
-            if !audit_steer_next_pid_unlocked(id) {
-                break;
-            }
-            let mut command = std::process::Command::new("/bin/sleep");
-            command
-                .arg("31")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            // SAFETY: setpgid on self pre-exec, no userspace state.
-            unsafe {
-                command.pre_exec(|| {
-                    libc::setpgid(0, 0);
-                    Ok(())
-                });
-            }
-            let kid = command.spawn().expect("standin spawns");
-            if kid.id() as libc::pid_t == id {
-                standin = Some(kid);
-                break;
-            }
-            let mut miss = kid;
-            let _ = miss.kill();
-            let _ = miss.wait();
-        }
-        drop(_flock);
-        let mut standin = match standin {
+        // A SELF-GROUPED replacement on the number (the killpg arm
+        // needs a group at the number to prove the skip).
+        let mut standin = match steer_sleep_onto(id, true) {
             Some(kid) => kid,
             None => {
                 eprintln!("skip: retake contended");
@@ -11086,6 +11128,185 @@ mod tests {
         assert!(!status.success(), "standin must die by our SIGKILL");
         standin_guard.disarm();
         let _ = std::fs::remove_file(&pidfile);
+    }
+
+    /// R16-003: post-reap cleanup must spare a recycled number.
+    /// Both sudo-gated regressions cleaned a possibly-reaped
+    /// number with a blind kill (the foreign-tmp writer after
+    /// publish-failure retired+reaped it in-test; the victim
+    /// after a reaping try_wait across a sudo fork window).
+    /// Discrimination over steered recycles: the OLD blind-kill
+    /// arm murders the replacement (pinned hole — always passes),
+    /// the tick-gated helper spares it with status retained, in
+    /// BOTH shapes (retire+reap like publish-failure; try_wait-
+    /// reap like the victim observation). Both sites now funnel
+    /// through the gated helper; their own tests stay green.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn post_reap_cleanup_spares_recycled_numbers() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::time::{Duration, Instant};
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        // OLD arm (publish-failure shape): blind kill after
+        // retire+reap murders the recycled replacement (THIS IS
+        // THE HOLE the sites had).
+        let mut first = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("first spawns");
+        let fid = first.id() as libc::pid_t;
+        // SAFETY: signal-only to our own staged sleeper.
+        unsafe {
+            libc::kill(fid, libc::SIGKILL);
+        }
+        let _ = first.wait();
+        let mut standin = match steer_sleep_onto(fid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut old_guard = FixtureGuard::new(fid);
+        // SAFETY: intentional blind kill of the STALE number (the hole).
+        unsafe {
+            libc::kill(fid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = standin.try_wait().expect("standin wait") {
+                break status;
+            }
+            assert!(
+                Instant::now() < end,
+                "blind kill failed to murder (stage broken)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "blind kill must murder the recycled replacement (hole documentation)"
+        );
+        old_guard.disarm();
+        // NEW arm (same shape): the tick-gated helper spares it.
+        let mut second = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("second spawns");
+        let sid = second.id() as libc::pid_t;
+        let stick = proc_starttime(sid)
+            .expect("second stat readable")
+            .expect("second visible");
+        // SAFETY: signal-only to our own staged sleeper.
+        unsafe {
+            libc::kill(sid, libc::SIGKILL);
+        }
+        let _ = second.wait();
+        let mut standin = match steer_sleep_onto(sid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut new_guard = FixtureGuard::new(sid);
+        let retick = proc_starttime(sid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == stick {
+            let _ = standin.kill();
+            let _ = standin.wait();
+            new_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        assert!(
+            retire_tick_gated_audit_child(sid, stick),
+            "gated retire must stand down on a recycled number"
+        );
+        assert!(
+            matches!(standin.try_wait(), Ok(None)),
+            "gated retire must spare the recycled replacement"
+        );
+        let _ = standin.kill();
+        let status = standin.wait().expect("standin reaped");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "replacement status retained (our SIGKILL collected)"
+        );
+        new_guard.disarm();
+        // NEW arm (victim-observation shape): try_wait reaps, the
+        // steered recycle is still spared with status retained.
+        let mut third = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("third spawns");
+        let tid = third.id() as libc::pid_t;
+        let ttick = proc_starttime(tid)
+            .expect("third stat readable")
+            .expect("third visible");
+        // SAFETY: signal-only to our own staged sleeper.
+        unsafe {
+            libc::kill(tid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match third.try_wait().expect("victim-shape observation") {
+                Some(_) => break,
+                None => {
+                    assert!(Instant::now() < end, "sleeper never died (stage broken)");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+        let mut standin = match steer_sleep_onto(tid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut obs_guard = FixtureGuard::new(tid);
+        let retick = proc_starttime(tid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == ttick {
+            let _ = standin.kill();
+            let _ = standin.wait();
+            obs_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        assert!(
+            retire_tick_gated_audit_child(tid, ttick),
+            "gated retire must stand down after a try_wait reap"
+        );
+        assert!(
+            matches!(standin.try_wait(), Ok(None)),
+            "gated retire must spare the post-observation recycle"
+        );
+        let _ = standin.kill();
+        let status = standin.wait().expect("standin reaped");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "replacement status retained (our SIGKILL collected)"
+        );
+        obs_guard.disarm();
     }
 
     /// R16-006: staging failure under EMFILE must report known
