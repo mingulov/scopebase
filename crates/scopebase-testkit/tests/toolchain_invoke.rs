@@ -3716,10 +3716,162 @@ impl Drop for MiddlemanPairGuard {
     }
 }
 
+/// R21-008 (toolchain twin): read /proc state +
+/// process-group in one parse (faithful port of the lib
+/// helper — state field 3, pgrp field 5).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn stat_state_pgrp(pid: i32) -> Option<(char, i32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after = stat.rsplit_once(") ")?.1;
+    let mut fields = after.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _ppid = fields.next()?;
+    let pgrp = fields.next()?.parse::<i32>().ok()?;
+    Some((state, pgrp))
+}
+
+/// R21-008 (toolchain twin): faithful port of the lib
+/// `retire_reportless_middleman` — STOP-freeze, pgrp
+/// verify (grouped ⟹ pinned killpg; ungrouped ⟹ m2
+/// unborn), kill, zombie-await, hammer, reap, post-reap
+/// group-empty probe. Same loudness, same bounds, same
+/// accepted wedged-box residual (see the lib doc for the
+/// full soundness argument).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_reportless_middleman(m1: i32) {
+    use std::time::{Duration, Instant};
+    // SAFETY: signals to our own unreaped child (or ESRCH
+    // nop when already dead — a dead m1 still needs the
+    // freeze-verify below).
+    unsafe {
+        libc::kill(m1, libc::SIGSTOP);
+    }
+    let frozen: Option<(char, i32)> = {
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut seen = None;
+        while Instant::now() < end {
+            match stat_state_pgrp(m1) {
+                Some((st, pgrp)) if matches!(st, 'T' | 't' | 'Z' | 'X' | 'x') => {
+                    seen = Some((st, pgrp));
+                    break;
+                }
+                _ => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        }
+        seen
+    };
+    let Some((fstate, pgrp)) = frozen else {
+        eprintln!("R21008-FALLBACK: middleman {m1} unfreezable for 5 s (wedged?) — loud best-effort retire");
+        // SAFETY: our own unreaped child (pinned).
+        unsafe {
+            libc::kill(m1, libc::SIGKILL);
+        }
+        if stat_state_pgrp(m1).is_some_and(|(_, g)| g == m1) {
+            // SAFETY: pinned group — ours by construction.
+            unsafe {
+                libc::killpg(m1, libc::SIGKILL);
+            }
+        }
+        reap_child_bounded(m1, "R21008-FALLBACK");
+        return;
+    };
+    let grouped = pgrp == m1;
+    if grouped {
+        eprintln!(
+            "R21008: middleman {m1} grouped at freeze ({fstate}) — group-killing (m2 may live)"
+        );
+        // SAFETY: pinned group — ours by construction.
+        unsafe {
+            libc::killpg(m1, libc::SIGKILL);
+        }
+    } else {
+        eprintln!(
+            "R21008: middleman {m1} ungrouped at freeze ({fstate}) — m2 unborn, numeric kill only"
+        );
+    }
+    // SAFETY: our own unreaped child (STOPPED m1 dies on
+    // SIGKILL without CONT; zombie m1 nop-accepts it).
+    unsafe {
+        libc::kill(m1, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    let mut zombied = false;
+    while Instant::now() < end {
+        match stat_state_pgrp(m1) {
+            Some(('Z' | 'X' | 'x', _)) => {
+                zombied = true;
+                break;
+            }
+            _ => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+    if !zombied {
+        eprintln!(
+            "R21008: middleman {m1} not zombie 5 s after KILL (wedged?) — loud best-effort retire"
+        );
+        reap_child_bounded(m1, "R21008");
+        return;
+    }
+    if grouped {
+        // SAFETY: still pinned (m1 zombie-unreaped).
+        unsafe {
+            libc::killpg(m1, libc::SIGKILL);
+        }
+    }
+    reap_child_bounded(m1, "R21008");
+    if grouped {
+        // Post-reap probe: signal-0 ONLY (the number is
+        // unpinned now — never killpg(KILL) here). ESRCH
+        // proves m2 dead; non-ESRCH is unactionable ⟹
+        // loud, never a blind kill.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            // SAFETY: signal-0 probe (no delivery).
+            let probed = unsafe { libc::killpg(m1, 0) };
+            if probed != 0 {
+                eprintln!("R21008: group {m1} empty post-reap — m2 proven dead");
+                break;
+            }
+            if Instant::now() >= end {
+                eprintln!("R21008: group {m1} NON-EMPTY 5 s post-reap (m2-live or foreign squatter — unactionable, loud)");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// R21-008 (toolchain twin): faithful port of the lib
+/// bounded child reap (WNOHANG loop, loud at the bound).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn reap_child_bounded(pid: i32, tag: &str) {
+    use std::time::{Duration, Instant};
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut st = 0;
+        // SAFETY: WNOHANG reap of our own child (specific
+        // pid — never steals).
+        let got = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
+        if got == pid || std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            break;
+        }
+        if Instant::now() >= end {
+            eprintln!("{tag}: child {pid} unreaped after 5 s (wedged?) — loud");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// Twin-port of the lib `fork_pausing_grandchild_sleep`
 /// (same contract: live-middleman parentage ⟹ non-child;
-/// shed + null stdio; empty-env exec; poll-bounded report;
-/// None retires the middleman and never strands).
+/// self-group + shed + null stdio; empty-env exec;
+/// poll-bounded report; None FULLY retires before
+/// returning — R21-008, same as lib).
 ///
 /// # Safety
 ///
@@ -3729,23 +3881,60 @@ impl Drop for MiddlemanPairGuard {
 /// children.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
+    // SAFETY: same contract as the inner helper.
+    unsafe { fork_pausing_grandchild_sleep_inner(dur, false).0 }
+}
+
+/// R21-008 (toolchain twin): faithful port of the lib
+/// jammed-report variant — drops the report read end,
+/// birth-gates m2 (panics loud when unborn — never
+/// vacuous), runs the production tail. Returns the helper
+/// result plus m1 for the independent reap proof.
+///
+/// # Safety
+///
+/// Same fork contract as the twin helper above.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+unsafe fn fork_pausing_grandchild_sleep_jam_report(dur: &str) -> (Option<(i32, i32)>, i32) {
+    // SAFETY: same contract as the inner helper.
+    unsafe { fork_pausing_grandchild_sleep_inner(dur, true) }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+unsafe fn fork_pausing_grandchild_sleep_inner(dur: &str, jam: bool) -> (Option<(i32, i32)>, i32) {
     use std::os::unix::io::FromRawFd as _;
     let mut pipe = [0; 2];
     // SAFETY: pipe2 fills both ends.
     if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return None;
+        return (None, -1);
     }
     let (read_fd, write_fd) = (pipe[0], pipe[1]);
     assert!(
         read_fd >= 3 && write_fd >= 3,
         "report pipe must clear stdio (else the middleman's stdio-nulling clobbers it)"
     );
-    let dur_c = std::ffi::CString::new(dur).ok()?;
+    let dur_c = match std::ffi::CString::new(dur) {
+        Ok(c) => c,
+        Err(_) => {
+            // SAFETY: ends owned by this scope.
+            unsafe {
+                libc::close(read_fd);
+                libc::close(write_fd);
+            }
+            return (None, -1);
+        }
+    };
     // SAFETY: fork itself is always safe; the middleman
     // upholds the syscall-only contract documented above.
     let m1 = unsafe { libc::fork() };
     if m1 == 0 {
         unsafe {
+            // R21-008 (toolchain twin): self-group FIRST
+            // (same as lib — the tail's only channel to
+            // the unknown-pid grandchild).
+            if libc::setpgid(0, 0) != 0 {
+                libc::_exit(127);
+            }
             shed_inherited_fds(&[write_fd]);
             // Null stdio BEFORE forking the grandchild.
             let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
@@ -3828,12 +4017,45 @@ unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
             libc::close(read_fd);
             libc::close(write_fd);
         }
-        return None;
+        return (None, -1);
     }
     // SAFETY: write end owned by this scope (the middleman
     // holds its own copy).
     unsafe {
         libc::close(write_fd);
+    }
+    if jam {
+        // R21-008 jam (toolchain twin, same as lib): drop
+        // the read end, birth-gate m2 (panics loud when
+        // unborn — never vacuous), run the production
+        // tail.
+        // SAFETY: end owned by this scope.
+        unsafe {
+            libc::close(read_fd);
+        }
+        let gate_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut born = false;
+        while std::time::Instant::now() < gate_end {
+            if let Ok(kids) = std::fs::read_to_string(format!("/proc/{m1}/task/{m1}/children")) {
+                if !kids.split_whitespace().next().is_none() {
+                    born = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if !born {
+            match stat_state_pgrp(m1) {
+                Some((st, _)) => {
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?)")
+                }
+                None => {
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} dead pre-report (self-exit? — regression vacuous, failing loud)")
+                }
+            }
+        }
+        retire_reportless_middleman(m1);
+        return (None, m1);
     }
     // Bounded report read (the middleman reports in µs).
     let mut poller = libc::pollfd {
@@ -3863,16 +4085,12 @@ unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
         None
     };
     match m2 {
-        Some(m2) if m2 > 0 => Some((m1, m2)),
+        Some(m2) if m2 > 0 => (Some((m1, m2)), m1),
         _ => {
-            // Report failure: retire the middleman (best
-            // effort) so None never strands.
-            unsafe {
-                libc::kill(m1, libc::SIGKILL);
-                let mut st = 0;
-                libc::waitpid(m1, &mut st, libc::WNOHANG);
-            }
-            None
+            // Report failure: FULL retirement before None
+            // (R21-008, same as lib).
+            retire_reportless_middleman(m1);
+            (None, m1)
         }
     }
 }
@@ -3954,6 +4172,77 @@ fn pausing_grandchild_sleep_reports_nonchild() {
     let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
     assert_eq!(mgot, m1, "middleman status drains to us");
     pair.disarm();
+}
+
+/// R21-008 (toolchain twin): faithful port of the lib
+/// live-sleeper scan — true when a LIVE (non-zombie)
+/// `sleep dur` exists anywhere in /proc.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn live_sleep_with_dur(dur: &str) -> bool {
+    let entries = std::fs::read_dir("/proc").expect("/proc readable");
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let mut args = cmdline.split(|b| *b == 0);
+        let argv0 = args.next().unwrap_or_default();
+        let argv1 = args.next().unwrap_or_default();
+        if argv0 != b"sleep" || argv1 != dur.as_bytes() {
+            continue;
+        }
+        match std::fs::read_to_string(format!("/proc/{name}/stat")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("/proc/{name}/stat unreadable mid-scan: {error}"),
+            Ok(text) => {
+                let state = text
+                    .rsplit_once(") ")
+                    .and_then(|(_, after)| after.split_whitespace().next());
+                if state != Some("Z") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// R21-008 (toolchain twin): mirror of the lib jammed
+/// regression — a jammed report post-second-fork fully
+/// retires before `None` (m1 reaped, unknown-pid m2 dead).
+/// Duration 958 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn jammed_report_retires_both_before_none() {
+    use std::time::{Duration, Instant};
+    let (result, m1) = unsafe { fork_pausing_grandchild_sleep_jam_report("958") };
+    assert!(result.is_none(), "jammed report must yield None (tail ran)");
+    assert!(m1 > 0, "jam exposes m1 for the reap proof");
+    let mut st = 0;
+    let got = unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) };
+    assert_eq!(got, -1, "m1 must be reaped already (no status left)");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD),
+        "reaped m1 must refuse ECHILD"
+    );
+    let end = Instant::now() + Duration::from_secs(10);
+    while live_sleep_with_dur("958") {
+        assert!(
+            Instant::now() < end,
+            "RED: unknown-pid m2 stranded live past the jammed report"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// R21-017 (toolchain twin): behavioral companion — bounded
