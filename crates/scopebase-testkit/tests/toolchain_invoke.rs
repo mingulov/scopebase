@@ -3952,6 +3952,12 @@ fn child_guard_drop_retires_verified_non_child() {
 /// every arm strands (RED, proven by mutant runs during
 /// development); post-fix all retire (GREEN). Duration 56 is
 /// unique to this test.
+/// R17-002: the stranger-arm hygiene must not touch the
+/// handle after the guards raw-reaped (a recycled number
+/// would be signaled or status-stolen). Arm 1 (live
+/// replacement): gated kill stands down, no wait, survival.
+/// Arm 2 (zombie replacement, same hygiene shape): status
+/// stays with its owner.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn probe_staging_failures_retire_before_report() {
@@ -3992,8 +3998,31 @@ fn probe_staging_failures_retire_before_report() {
     assert_eq!(pstate, Ok(None), "pinned failure must not leak the pauser");
     assert_pid_free(ppid, "pinned");
     assert!(pinned.is_err(), "pinned failure must report");
+    // R17-002: serialize steerers (scoped hold — the OBS and
+    // PINNED arms above run unconditionally; only the
+    // stranger arm needs reuse control).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    locked_restore_hint(&last_before);
     // Arm STRANGER: sh + grandchild, failure injected after
     // staging (the EMFILE stranger shape).
+    // R17-002: sh IS reaped — by the guards' raw waitpid,
+    // proven by the discharge asserts below — so no handle
+    // `wait` follows (any would risk a recycled holder).
+    #[allow(clippy::zombie_processes)]
     let mut parent = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg("sleep 56 & echo $!; wait")
@@ -4026,11 +4055,35 @@ fn probe_staging_failures_retire_before_report() {
     }));
     let sstate = task_starttime_checked(stranger);
     let hstate = task_starttime_checked(sh);
-    // Hygiene (mutant-clean): tick-gated stranger kill, sh
-    // kill+reap through the owned handle, poll both gone.
+    // R17-002 arm 1 (live): steer a live replacement onto
+    // sh's freed number, then run the hygiene — the sh kill
+    // must be tick-gated (stand down) with no handle wait
+    // (RED: the blind kill murders the replacement).
+    let mut live = match steer_sleep_onto(sh, false) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("skip: retake contended");
+            return;
+        }
+    };
+    let mut live_guard = SilentChildGuard::new(sh);
+    let retick = task_starttime_checked(sh)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    if retick == shtick {
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    let start = Instant::now();
+    // Hygiene (mutant-clean): tick-gated stranger kill,
+    // tick-gated sh kill (R17-002: the guards already
+    // raw-reaped — a handle kill/wait would murder or steal
+    // a recycled number's replacement), poll both gone.
     let _ = kill_tick_gated(stranger, stick);
-    let _ = parent.kill();
-    let _ = parent.wait();
+    let _ = kill_tick_gated(sh, shtick);
     let end = Instant::now() + Duration::from_secs(10);
     loop {
         let down = task_starttime_checked(stranger) != Ok(Some(stick))
@@ -4041,6 +4094,53 @@ fn probe_staging_failures_retire_before_report() {
         assert!(Instant::now() < end, "stranger pair must die in hygiene");
         std::thread::sleep(Duration::from_millis(20));
     }
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "hygiene must not block on a live replacement"
+    );
+    assert!(
+        matches!(live.try_wait(), Ok(None)),
+        "live replacement must survive hygiene"
+    );
+    let _ = live.kill();
+    let _ = live.wait();
+    live_guard.disarm();
+    // R17-002 arm 2 (zombie): same hygiene shape, zombie
+    // replacement — its status must stay with its owner
+    // (RED: stolen by the handle wait).
+    let mut zombie = match steer_sleep_onto(sh, false) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("skip: retake contended");
+            return;
+        }
+    };
+    let mut zombie_guard = SilentChildGuard::new(sh);
+    let retick = task_starttime_checked(sh)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    if retick == shtick {
+        let _ = zombie.kill();
+        let _ = zombie.wait();
+        zombie_guard.disarm();
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    let _ = zombie.kill();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_retired_checked(sh) == Ok(true) {
+            break;
+        }
+        assert!(Instant::now() < end, "replacement never zombied");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = kill_tick_gated(sh, shtick);
+    assert!(
+        matches!(zombie.try_wait(), Ok(Some(_))),
+        "zombie replacement status must stay with its owner"
+    );
+    zombie_guard.disarm();
     outer_sh.disarm();
     outer_stranger.disarm();
     assert_eq!(
@@ -7817,14 +7917,36 @@ fn caveat_cleanup_refuses_expired_lifetime() {
 /// R16-007: a pinned guard dropped with working reads must
 /// discharge the leader (not just killpg the group) — the shell
 /// zombie must not leak to process exit, and the group must be
-/// proven dead. RED: the drop killpgs but never reaps (leader
-/// try_wait stays Some); GREEN: the drop reaps and the owner
-/// observes ECHILD, with the group ESRCH-dead as retirement
-/// evidence.
+/// proven dead. RED: the drop killpgs but never reaps (the
+/// zombie leader keeps its tick and fails the gate); GREEN: the
+/// drop reaps (number gone or recycled past the pin), with the
+/// group ESRCH-dead as retirement evidence.
+/// R17-002: the discharge oracle must not touch the reaped
+/// handle (a recycled number would be status-stolen or
+/// misread). Arm 1 (zombie replacement): discharged reported,
+/// status retained. Arm 2 (live replacement, same oracle
+/// shape): discharged reported, no flake.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn pinned_group_drop_discharges_leader() {
     use std::os::unix::process::CommandExt as _;
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    locked_restore_hint(&last_before);
     // Parked stage: self-grouped sh (leader LIVE) + sleepers.
     let mut stage = std::process::Command::new("/bin/sh");
     stage
@@ -7840,8 +7962,16 @@ fn pinned_group_drop_discharges_leader() {
             Ok(())
         });
     }
-    let mut leader = stage.spawn().expect("spawn parked stage");
+    // R17-002: the leader IS reaped — by the pinned drop's
+    // raw waitpid, proven by the stat gate below — so no
+    // handle `try_wait` follows (any would risk a recycled
+    // holder's status).
+    #[allow(clippy::zombie_processes)]
+    let leader = stage.spawn().expect("spawn parked stage");
     let group = leader.id() as libc::pid_t;
+    let ltick = task_starttime_checked(group)
+        .expect("leader stat readable")
+        .expect("leader visible");
     // Injected staging failure AFTER successful pin: the guard
     // drops during unwinding with reads working (recovered arm).
     let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -7853,12 +7983,76 @@ fn pinned_group_drop_discharges_leader() {
         panic!("r16007 injected staging failure");
     }));
     assert!(fired.is_err(), "injection must unwind");
-    // Leader discharged: our handle observes ECHILD (reaped by
-    // the guard — RED: zombie, Some).
+    // R17-002 arm 1 (zombie): steer a zombie replacement onto
+    // the discharged number, then run the oracle — it must
+    // report discharged WITHOUT consuming the replacement's
+    // status (RED: try_wait steals it).
+    let mut zombie = match steer_sleep_onto(group, false) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("skip: retake contended");
+            return;
+        }
+    };
+    let mut zombie_guard = SilentChildGuard::new(group);
+    let retick = task_starttime_checked(group)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    if retick == ltick {
+        let _ = zombie.kill();
+        let _ = zombie.wait();
+        zombie_guard.disarm();
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    let _ = zombie.kill();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_retired_checked(group) == Ok(true) {
+            break;
+        }
+        assert!(Instant::now() < end, "replacement never zombied");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Leader discharged: the number no longer names the leader
+    // (R17-002: no handle touch — a try_wait here would steal a
+    // recycled number's status or misread it; a zombie leader
+    // keeps its tick and still fails this gate).
+    assert_child_gone(group, ltick, "leader");
     assert!(
-        leader.try_wait().is_err(),
-        "leader must be discharged by the pinned drop"
+        matches!(zombie.try_wait(), Ok(Some(_))),
+        "zombie replacement status must stay with its owner"
     );
+    zombie_guard.disarm();
+    // R17-002 arm 2 (live): same oracle shape, live
+    // replacement — it must report discharged (RED: try_wait
+    // Ok(None) misreads live as present).
+    let mut live = match steer_sleep_onto(group, false) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("skip: retake contended");
+            return;
+        }
+    };
+    let mut live_guard = SilentChildGuard::new(group);
+    let retick = task_starttime_checked(group)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    if retick == ltick {
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    assert_child_gone(group, ltick, "leader-under-live-replacement");
+    assert!(
+        matches!(live.try_wait(), Ok(None)),
+        "live replacement must survive the oracle"
+    );
+    let _ = live.kill();
+    let _ = live.wait();
+    live_guard.disarm();
     // Retirement evidence: group ESRCH-dead.
     // SAFETY: signal 0 probes existence only.
     let probed = unsafe { libc::killpg(group, 0) };

@@ -10286,15 +10286,26 @@ mod tests {
     /// ownership check fails loud (GREEN). sudo-gated: without
     /// passwordless root file ops the plant is unmakable.
     /// Duration 64 is unique to this test.
+    /// R17-002: the tail must not touch the handle after the
+    /// gated helper may have raw-reaped (a recycled number
+    /// would be waited indefinitely or status-stolen). Arm 1
+    /// (live replacement): bounded completion + survival.
+    /// Arm 2 (zombie replacement, same tail shape): status
+    /// stays with its owner.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn rendezvous_refuses_foreign_owned_record() {
+        use std::time::{Duration, Instant};
         // IR-007: as root the sudo plant is own-uid (no foreign
         // discriminator) — skip before staging anything.
         if running_as_root() {
             eprintln!("skip: root-owned plant is not foreign to root");
             return;
         }
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-grandchild-r14003a-{}.pid",
             std::process::id()
@@ -10345,9 +10356,81 @@ mod tests {
         // (abnormal early death) with a sudo fork window since —
         // a blind kill would signal the freed number. Tick-gated
         // retire (live: kills+reaps; reaped/recycled: stands
-        // down); the handle reap stays ECHILD-safe.
+        // down). R17-002: NO handle wait after it — the helper
+        // already raw-reaped, so a wait would block on or steal
+        // a recycled number's replacement.
         let _ = retire_tick_gated_audit_child(vpid, vtick);
-        let _ = victim.wait();
+        // R17-002 arm 1 (live): steer a live replacement onto
+        // the freed number, then run the tail — it must finish
+        // bounded with the replacement alive (RED: the handle
+        // wait blocks on the replacement's whole lifetime).
+        let mut live = match steer_sleep_onto(vpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut live_guard = FixtureGuard::new(vpid);
+        let retick = proc_starttime(vpid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == vtick {
+            let _ = live.kill();
+            let _ = live.wait();
+            live_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        let start = Instant::now();
+        let _ = retire_tick_gated_audit_child(vpid, vtick);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "tail must not block on a live replacement"
+        );
+        assert!(
+            matches!(live.try_wait(), Ok(None)),
+            "live replacement must survive the tail"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+        // R17-002 arm 2 (zombie): same tail shape, zombie
+        // replacement — its status must stay with its owner
+        // (RED: stolen by the handle wait).
+        let mut zombie = match steer_sleep_onto(vpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut zombie_guard = FixtureGuard::new(vpid);
+        let retick = proc_starttime(vpid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == vtick {
+            let _ = zombie.kill();
+            let _ = zombie.wait();
+            zombie_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        let _ = zombie.kill();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(vpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "replacement never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let _ = retire_tick_gated_audit_child(vpid, vtick);
+        assert!(
+            matches!(zombie.try_wait(), Ok(Some(_))),
+            "zombie replacement status must stay with its owner"
+        );
+        zombie_guard.disarm();
         assert!(survived, "forged victim must survive the read");
         assert!(
             refused.is_err(),
@@ -10782,10 +10865,17 @@ mod tests {
     /// Sudo-gated (the plant); skips as root (the plant would
     /// be own-uid, taking the reclaim path instead of refusal).
     /// Duration 56 is unique to this test.
+    /// R17-002: the tail must not touch the handle after the
+    /// gated helper may have raw-reaped (a recycled number
+    /// would be waited indefinitely or status-stolen). Arm 1
+    /// (live replacement): bounded completion + survival.
+    /// Arm 2 (zombie replacement, same tail shape): status
+    /// stays with its owner.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn publish_tmp_foreign_refusal_deletes_nothing() {
         use std::os::unix::fs::MetadataExt as _;
+        use std::time::{Duration, Instant};
         struct EnvGuard;
         impl Drop for EnvGuard {
             fn drop(&mut self) {
@@ -10798,6 +10888,10 @@ mod tests {
             eprintln!("skip: root-owned plant is not foreign to root");
             return;
         }
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
         let stem = format!("scopebase-grandchild-r15001a-{}", std::process::id());
         let dir = std::env::temp_dir().join(format!("{stem}.dir"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -10847,10 +10941,82 @@ mod tests {
         // writer in-test (owned child) — a blind kill would
         // signal the freed number. Tick-gated retire covers both
         // arms (already-retired: stands down; unexpected-success:
-        // retires the live writer); the handle reap stays
-        // ECHILD-safe.
+        // retires the live writer). R17-002: NO handle wait
+        // after it — the helper already raw-reaped, so a wait
+        // would block on or steal a recycled number's
+        // replacement.
         let _ = retire_tick_gated_audit_child(wpid, wtick);
-        let _ = writer.wait();
+        // R17-002 arm 1 (live): steer a live replacement onto
+        // the freed number, then run the tail — it must finish
+        // bounded with the replacement alive (RED: the handle
+        // wait blocks on the replacement's whole lifetime).
+        let mut live = match steer_sleep_onto(wpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut live_guard = FixtureGuard::new(wpid);
+        let retick = proc_starttime(wpid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == wtick {
+            let _ = live.kill();
+            let _ = live.wait();
+            live_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        let start = Instant::now();
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "tail must not block on a live replacement"
+        );
+        assert!(
+            matches!(live.try_wait(), Ok(None)),
+            "live replacement must survive the tail"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+        // R17-002 arm 2 (zombie): same tail shape, zombie
+        // replacement — its status must stay with its owner
+        // (RED: stolen by the handle wait).
+        let mut zombie = match steer_sleep_onto(wpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut zombie_guard = FixtureGuard::new(wpid);
+        let retick = proc_starttime(wpid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick == wtick {
+            let _ = zombie.kill();
+            let _ = zombie.wait();
+            zombie_guard.disarm();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        let _ = zombie.kill();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(wpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "replacement never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
+        assert!(
+            matches!(zombie.try_wait(), Ok(Some(_))),
+            "zombie replacement status must stay with its owner"
+        );
+        zombie_guard.disarm();
         let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(failed.is_err(), "foreign tmp plant must refuse loud");
