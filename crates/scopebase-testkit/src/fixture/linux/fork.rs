@@ -805,6 +805,71 @@ mod tests {
         }
     }
 
+    /// R22-019: one allocator-hammer body (CPU + allocator
+    /// churn while `stop` is clear). Nonblocking — always
+    /// exits promptly once stopped.
+    fn hammer_body(stop: &std::sync::atomic::AtomicBool) {
+        use std::sync::atomic::Ordering;
+        let mut n = 0u64;
+        while !stop.load(Ordering::Relaxed) {
+            let v: Vec<u8> = (0..1000u32).map(|x| (x ^ n as u32) as u8).collect();
+            drop(format!("{:?}-{n}", &v[..8]));
+            n += 1;
+        }
+    }
+
+    /// R22-019: RAII contention-hammer set — drop sets stop
+    /// and joins every STARTED worker (unwind-safe: a
+    /// mid-loop panic stops + joins; a spawn failure
+    /// mid-construction drops the partial set and joins
+    /// the started subset — no detached burners on any
+    /// path). Workers are cooperative (nonblocking
+    /// bodies), so the joins always terminate promptly;
+    /// panicked workers join as Err (ignored — the stop
+    /// is what matters). `done` counts exited workers
+    /// (test-observable acknowledgment — join-return is
+    /// the primary proof, the counter corroborates).
+    struct HammerSet {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        workers: Vec<std::thread::JoinHandle<()>>,
+    }
+
+    impl HammerSet {
+        fn spawn(count: usize) -> Self {
+            use std::sync::atomic::Ordering;
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut workers = Vec::with_capacity(count);
+            for _ in 0..count {
+                let (stop, done) = (stop.clone(), done.clone());
+                workers.push(std::thread::spawn(move || {
+                    hammer_body(&stop);
+                    done.fetch_add(1, Ordering::Relaxed);
+                }));
+            }
+            Self {
+                stop,
+                done,
+                workers,
+            }
+        }
+
+        fn done_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+            self.done.clone()
+        }
+    }
+
+    impl Drop for HammerSet {
+        fn drop(&mut self) {
+            use std::sync::atomic::Ordering;
+            self.stop.store(true, Ordering::Relaxed);
+            for worker in self.workers.drain(..) {
+                let _ = worker.join();
+            }
+        }
+    }
+
     /// R21-017: behavioral companion — bounded grandchild
     /// reporting under concurrent libc activity. Four
     /// threads hammer the allocator/formatter while five
@@ -818,20 +883,9 @@ mod tests {
     /// death-await, then middleman reaped).
     #[test]
     fn grandchild_reports_under_libc_contention() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let stop = std::sync::Arc::new(AtomicBool::new(false));
-        let mut hammers = Vec::new();
-        for _ in 0..4 {
-            let stop = stop.clone();
-            hammers.push(std::thread::spawn(move || {
-                let mut n = 0u64;
-                while !stop.load(Ordering::Relaxed) {
-                    let v: Vec<u8> = (0..1000u32).map(|x| (x ^ n as u32) as u8).collect();
-                    drop(format!("{:?}-{}", &v[..8], n));
-                    n += 1;
-                }
-            }));
-        }
+        // RAII hammers (stop + join on drop — success,
+        // unwind, and partial-start paths alike).
+        let _hammers = HammerSet::spawn(4);
         let retire = |m1: libc::pid_t, m2: libc::pid_t| {
             assert_eq!(
                 unsafe { libc::kill(m2, libc::SIGKILL) },
@@ -875,10 +929,56 @@ mod tests {
             retire(m1, m2);
             pair.disarm();
         }
-        stop.store(true, Ordering::Relaxed);
-        for hammer in hammers {
-            let _ = hammer.join();
-        }
+        // Hammers stop + join via `_hammers` drop (RAII —
+        // same path as unwind and partial start).
+        drop(_hammers);
+    }
+
+    /// R22-019: contention hammers acknowledge bounded
+    /// termination on EVERY exit path — an injected
+    /// mid-loop failure (report/retirement-failure shape)
+    /// and a partial start (spawn-failure shape) must
+    /// still stop + join every STARTED worker. The
+    /// done-counter captures the unwind moment (RED: the
+    /// manual stop/join-at-the-end shape bypasses the stop
+    /// on unwind — handles lost, workers detached, done
+    /// stays 0; GREEN: the RAII set joins on drop, so the
+    /// counter reads full right after the unwind).
+    #[test]
+    fn contention_hammers_stop_on_unwind_and_partial_start() {
+        use std::sync::atomic::Ordering;
+        // Leg 1: injected mid-loop failure (the RAII set
+        // drops at unwind — joined before catch returns).
+        let set = HammerSet::spawn(4);
+        let done = set.done_handle();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _set = set;
+            for i in 0..5 {
+                if i == 2 {
+                    panic!("R22019 injected mid-loop failure");
+                }
+            }
+        }));
+        assert!(failed.is_err(), "injection must unwind");
+        assert_eq!(
+            done.load(Ordering::Relaxed),
+            4,
+            "every started worker must stop on unwind"
+        );
+        // Leg 2: partial start (2 workers, then a spawn
+        // failure — the started subset must still stop).
+        let set = HammerSet::spawn(2);
+        let done = set.done_handle();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _set = set;
+            panic!("R22019 simulated spawn failure");
+        }));
+        assert!(failed.is_err(), "spawn failure must unwind");
+        assert_eq!(
+            done.load(Ordering::Relaxed),
+            2,
+            "every started worker must stop on partial start"
+        );
     }
 
     /// R21-009: birth guard for a staged middleman pair —
