@@ -4188,6 +4188,16 @@ class AdoptReplacementTests(unittest.TestCase):
         # 64MiB above the middleman's VmSize (ordinary readers
         # have headroom; the allocator's reached band excludes
         # both stillborn (0) and unbounded (~512)).
+        # R16-013: nearby-hard soft-clamp discrimination — with
+        # hard ≈ soft+32MiB the [32,160] band cannot resolve the
+        # clamp (unclamped reaches ≈96, still inside). The
+        # alloc-report case stages (finite, finite+32MiB) and
+        # the worker reports its APPLIED (soft,hard) pair
+        # in-child: clamped applies exactly (finite, finite);
+        # soft-clamp removal applies (finite+32MiB, finite+32MiB)
+        # (or (computed, computed) under a huge fallback hard) —
+        # any deviation fails. Vacuous only when the staged hard
+        # collapses onto soft (skip, loud).
         import multiprocessing as _mp
 
         def ordinary_reader():
@@ -4227,6 +4237,26 @@ class AdoptReplacementTests(unittest.TestCase):
             if kind == "ordinary":
                 outcome = run_bounded_reader_case(
                     ordinary_reader, timeout=10)
+            elif kind == "alloc-report":
+                # R16-013: report the worker's APPLIED rlimit
+                # in-child (direct contract evidence) plus the
+                # staged hard (vacuity gate lives with the
+                # parent). The allocator frees its chunks on
+                # return, so the report tuple allocates safely
+                # past the MemoryError edge.
+                staged_hard = payload[1]
+
+                def reporting_allocator():
+                    name, reached = allocator()
+                    assert name == "alloc-capped", \
+                        "R16013 reporting shape broken"
+                    applied = resource.getrlimit(
+                        resource.RLIMIT_AS)
+                    return ("alloc-report", reached, applied,
+                            staged_hard)
+
+                outcome = run_bounded_reader_case(
+                    reporting_allocator, timeout=30)
             else:
                 outcome = run_bounded_reader_case(
                     allocator, timeout=30)
@@ -4247,6 +4277,10 @@ class AdoptReplacementTests(unittest.TestCase):
             ("hard-allocator", finite, finite, "allocator"),
             ("soft-ordinary", finite, inf, "ordinary"),
             ("soft-allocator", finite, inf, "allocator"),
+            # R16-013: nearby finite hard (soft+32MiB) — the
+            # band alone cannot resolve the clamp here.
+            ("soft-nearby-hard", finite, finite + 32 * 1024 * 1024,
+             "alloc-report"),
         ]
         for tag, soft, hard, kind in cases:
             with self.subTest(tag=tag):
@@ -4306,8 +4340,26 @@ class AdoptReplacementTests(unittest.TestCase):
                         % (tag, outcome))
                     self.assertIsNotNone(
                         outcome, "%s: allocator must report" % (tag,))
-                    kind_out, reached = outcome
-                    self.assertEqual(kind_out, "alloc-capped")
+                    if kind == "alloc-report":
+                        kind_out, reached, applied, staged = outcome
+                        self.assertEqual(kind_out, "alloc-report")
+                        if staged <= finite:
+                            self.skipTest(
+                                "%s: vacuous (staged hard %r leaves "
+                                "no room above soft %r)"
+                                % (tag, staged, finite))
+                        # R16-013: direct contract evidence — the
+                        # worker must apply exactly (finite,
+                        # finite); soft-clamp removal applies
+                        # (staged-hard, staged-hard) (or
+                        # (computed, computed)) instead.
+                        self.assertEqual(
+                            applied, (finite, finite),
+                            "%s: worker applied %r, must clamp to "
+                            "(%r, %r)" % (tag, applied, finite, finite))
+                    else:
+                        kind_out, reached = outcome
+                        self.assertEqual(kind_out, "alloc-capped")
                     self.assertGreaterEqual(
                         reached, 32,
                         "%s: allocation stillborn (reached %sMiB)"
