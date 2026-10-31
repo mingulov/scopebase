@@ -3767,6 +3767,52 @@ mod tests {
         claim_excl_file(path, "pidfile").map(|_| ())
     }
 
+    /// R19-011: create + write the probe diagnostics file
+    /// through the IR-001 O_EXCL claim: a preplant of any
+    /// shape (symlink, fifo, dir, file) refuses or reclaims
+    /// before a byte is written — never follows a symlink
+    /// into a victim, never blocks on a fifo. (A half-
+    /// written leftover self-heals: the next claim reclaims
+    /// own-uid litter.)
+    #[cfg(target_arch = "x86_64")]
+    fn write_diag_excl(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        use std::io::Write as _;
+        let mut file = claim_excl_file(path, "diagnostics")?;
+        file.write_all(bytes)
+            .map_err(|error| format!("diagnostics {path:?} unwritten: {error}"))
+    }
+
+    /// R19-011: open the probe diagnostics for read —
+    /// O_NOFOLLOW + own-uid + regular-file (the
+    /// read_published_grandchild_strays shape): a
+    /// create→open re-plant refuses loud (ELOOP) instead of
+    /// following into a victim. Residual (S100-µs-class): a
+    /// fifo swapped in between create and open still blocks
+    /// the read-open (O_RDONLY on a fifo waits for a
+    /// writer) — the sequenced preplant is closed; a racing
+    /// plant is outside the modeled adversary (same as
+    /// IR-001).
+    #[cfg(target_arch = "x86_64")]
+    fn open_diag_read(path: &std::path::Path) -> Result<std::fs::File, String> {
+        use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|error| format!("diagnostics {path:?} unreadable: {error}"))?;
+        let meta = file
+            .metadata()
+            .map_err(|error| format!("diagnostics {path:?} unstattable: {error}"))?;
+        // SAFETY: getuid queries only.
+        if meta.uid() != unsafe { libc::getuid() } {
+            return Err(format!("diagnostics {path:?} not owned by us: refusing"));
+        }
+        if !meta.is_file() {
+            return Err(format!("diagnostics {path:?} not a regular file: refusing"));
+        }
+        Ok(file)
+    }
+
     /// R13-005: read the outer probe's published grandchild (if
     /// any) as expiry strays. The path is explicit: the parent
     /// sets the rendezvous on the CHILD's environment (its own
@@ -11412,14 +11458,18 @@ mod tests {
 
     /// R18-005: probe body (fresh image,
     /// SCOPEBASE_R18005) — exhaust construction, recover
-    /// the birth tick, then fail a diagnostic write
-    /// (read-only handle): the recovered tick must reach
-    /// the guard BEFORE the fallible check, so the pinned
-    /// unwind-drop retires + discharges the grandchild
-    /// before the failure reports. RED (pin after the
-    /// failure point): the unwind drops unpinned and
-    /// ECHILDs past the live grandchild. Duration 86 is
-    /// unique to this test. Fresh image: whole-table
+    /// the birth tick, pin BEFORE diag creation and every
+    /// fallible check, then fail a diagnostic write
+    /// (read-only handle): the pinned unwind-drop retires +
+    /// discharges the grandchild before the failure
+    /// reports. RED (pin after the failure point): the
+    /// unwind drops unpinned and ECHILDs past the live
+    /// grandchild. R19-010 steering (SCOPEBASE_R19010_DIR):
+    /// the probe pre-creates a directory at its own diag
+    /// path, so the creation itself fails — through the
+    /// same pinned unwind (retirement + discharge before
+    /// the creation failure reports). Duration 86 is
+    /// unique to this body. Fresh image: whole-table
     /// exhaustion is process-shared — in-process staging
     /// flaked under suite EMFILE pressure (drops verify
     /// reads that siblings starve).
@@ -11456,27 +11506,54 @@ mod tests {
             "construction must fail under EMFILE (stage broken otherwise)"
         );
         drop(held);
-        // Diagnostics file, opened read-only below (the
-        // write fails for real — no suite-wide interference,
-        // unlike closing stderr).
+        // R19-010: the recovered tick reaches the guard
+        // HERE — before diag creation and every fallible
+        // check below (a creation failure must unwind
+        // through a PINNED guard — the old order created
+        // first and stranded the grandchild past an ECHILD
+        // skip). Bare-new guard: pin is sound.
+        let mut pinned = pinned;
+        if pinned.tick.is_none() {
+            pinned.pin(tick);
+        }
+        // Diagnostics file, opened read-only below in the
+        // main mode (the write fails for real — no
+        // suite-wide interference, unlike closing stderr).
         let diag =
             std::env::temp_dir().join(format!("scopebase-r18005-{}.log", std::process::id()));
-        std::fs::write(&diag, "r18005 diagnostics\n").expect("diagnostics created");
-        // GREEN: the pin sits BEFORE the failure point —
-        // the unwind drops pinned and retires (RED was the
-        // pin after the write, which dropped unpinned).
+        // R19-010 steering: pre-create a directory at the
+        // OWN diag path (the probe knows its pid; the
+        // parent cannot pre-plant racelessly) — creation
+        // itself must fail, through the pinned unwind.
+        let steer_dir = std::env::var("SCOPEBASE_R19010_DIR").is_ok();
+        if steer_dir {
+            std::fs::create_dir(&diag).expect("steering plants a directory at the diag path");
+        }
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut fired = pinned;
-            if fired.tick.is_none() {
-                fired.pin(tick);
-            }
-            let mut log = std::fs::File::open(&diag).expect("diagnostics readable");
+            let _fired = pinned;
+            write_diag_excl(&diag, b"r18005 diagnostics\n").expect("diagnostics created");
+            let mut log = open_diag_read(&diag).expect("diagnostics readable");
             writeln!(log, "R18005 recovered tick={tick}").expect("diagnostic write");
         }));
-        assert!(
-            fired.is_err(),
-            "diagnostic write must fail (read-only handle)"
-        );
+        if steer_dir {
+            // The failure must BE the creation failure (not
+            // a later line): the expect payload says so.
+            let payload = fired.unwrap_err();
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            assert!(
+                message.contains("diagnostics created"),
+                "steered failure must be the creation failure, got {message:?}"
+            );
+        } else {
+            assert!(
+                fired.is_err(),
+                "diagnostic write must fail (read-only handle)"
+            );
+        }
         // Observe before cleanup: the grandchild must be
         // gone (retired + discharged by the unwind-drop).
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
@@ -11499,12 +11576,22 @@ mod tests {
             assert!(Instant::now() < end, "sh parent must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let _ = std::fs::remove_file(&diag);
+        // Cleanup runs on RED too (the steered plant is a
+        // directory — rmdir, not remove_file).
+        if steer_dir {
+            let _ = std::fs::remove_dir(&diag);
+        } else {
+            let _ = std::fs::remove_file(&diag);
+        }
         assert!(
             retired,
             "pinned unwind must retire before the failure reports"
         );
-        eprintln!("R18005-RECOVERED retired=1");
+        if steer_dir {
+            eprintln!("R19010-CREATION retired=1");
+        } else {
+            eprintln!("R18005-RECOVERED retired=1");
+        }
     }
 
     /// R18-005: the recovered tick must reach the guard
@@ -11537,6 +11624,163 @@ mod tests {
         assert!(
             stderr.contains("R18005-RECOVERED retired=1"),
             "probe must cite the retirement\n{stderr}"
+        );
+    }
+
+    /// R19-010: failing the diag creation itself (not a
+    /// later check) must still unwind through the pinned
+    /// guard — retirement + discharge before the creation
+    /// failure reports. Probe-side steering
+    /// (SCOPEBASE_R19010_DIR): the probe pre-creates a
+    /// directory at its own diag path, so the exclusive
+    /// create refuses. RED (pin after creation): the unwind
+    /// drops unpinned, ECHILD-skips past the live
+    /// grandchild, and the probe fails its retirement
+    /// assert. Fresh-image wrapper — the probe body is
+    /// shared with R18-005.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn diag_creation_failure_unwinds_pinned() {
+        if std::env::var("SCOPEBASE_R19010_DIR").is_ok() {
+            recovered_pin_precedes_fallible_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::diag_creation_failure_unwinds_pinned")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19010_DIR", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must retire through the preceding pin\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R19010-CREATION retired=1"),
+            "probe must cite the retirement\n{stderr}"
+        );
+    }
+
+    /// R19-011: a preplanted symlink at the diagnostics path
+    /// must not redirect the creation write into a victim.
+    /// Pre-fix (truncating create) the write follows the
+    /// link and clobbers the victim (RED: sentinel gone);
+    /// post-fix (O_EXCL claim) an own-uid plant is unlinked
+    /// and retried — no byte follows the link — while the
+    /// victim keeps its sentinel. In-process: the helper is
+    /// the probe's exact creation path (the R18-005 test
+    /// pins the probe→helper wiring). IR-001 shape.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn diag_symlink_plant_leaves_victim_intact() {
+        let stem = format!("scopebase-r19011-symlink-{}", std::process::id());
+        let diag = std::env::temp_dir().join(format!("{stem}.log"));
+        let victim = std::env::temp_dir().join(format!("{stem}.victim"));
+        let _ = std::fs::remove_file(&diag);
+        let _ = std::fs::remove_file(&victim);
+        std::fs::write(&victim, "r19011-sentinel").expect("victim staged");
+        std::os::unix::fs::symlink(&victim, &diag).expect("diag symlink planted");
+        let created = write_diag_excl(&diag, b"r18005 diagnostics\n");
+        let content = std::fs::read(&victim).expect("victim readable");
+        let _ = std::fs::remove_file(&diag);
+        let _ = std::fs::remove_file(&victim);
+        assert!(
+            created.is_ok(),
+            "creation must succeed past an own-uid plant"
+        );
+        assert_eq!(
+            content, b"r19011-sentinel",
+            "creation must write no byte through a planted diag symlink"
+        );
+    }
+
+    /// R19-011: a preplanted fifo at the diagnostics path
+    /// must not block creation. Pre-fix (truncating create)
+    /// the open blocks on the fifo with no reader (RED: the
+    /// worker never delivers — the timeout fires instead of
+    /// hanging the suite); post-fix (O_EXCL claim) an
+    /// own-uid plant is unlinked and retried without ever
+    /// opening the fifo. The worker converts a hang into a
+    /// bounded failure (a reintroduced blocking open fails
+    /// here in 10s, never stalls the suite); its
+    /// leaked-blocked thread on RED dies with the test
+    /// binary holding no fd.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn diag_fifo_plant_never_blocks_creation() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let stem = format!("scopebase-r19011-fifo-{}", std::process::id());
+        let diag = std::env::temp_dir().join(format!("{stem}.log"));
+        let _ = std::fs::remove_file(&diag);
+        let cpath =
+            std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
+        // SAFETY: mkfifo on our own temp path; mode 600.
+        assert_eq!(
+            unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+            0,
+            "fifo planted"
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_path = diag.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(write_diag_excl(&worker_path, b"r18005 diagnostics\n"));
+        });
+        let created = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let _ = std::fs::remove_file(&diag);
+        let created = created.expect("creation must complete past a fifo plant (never block)");
+        let _ = worker.join();
+        assert!(
+            created.is_ok(),
+            "creation must succeed past an own-uid fifo plant"
+        );
+    }
+
+    /// R19-011: the diagnostics read handle must not follow
+    /// a create→open re-plant into a victim (O_NOFOLLOW +
+    /// own-uid + regular-file). Sequenced deterministically:
+    /// create the real diag, swap in a symlink→victim, then
+    /// open for read. Pre-fix (plain open) the open follows
+    /// the link (RED: the sentinel reads through it);
+    /// post-fix the open refuses loud (ELOOP) and the victim
+    /// is never opened. The swap models the re-plant race
+    /// window, sequenced instead of racing.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn diag_read_handle_refuses_replant() {
+        use std::io::Read as _;
+        let stem = format!("scopebase-r19011-swap-{}", std::process::id());
+        let diag = std::env::temp_dir().join(format!("{stem}.log"));
+        let victim = std::env::temp_dir().join(format!("{stem}.victim"));
+        let _ = std::fs::remove_file(&diag);
+        let _ = std::fs::remove_file(&victim);
+        write_diag_excl(&diag, b"r18005 diagnostics\n").expect("diag created");
+        std::fs::write(&victim, "r19011-sentinel").expect("victim staged");
+        std::fs::remove_file(&diag).expect("swap unlinks own diag");
+        std::os::unix::fs::symlink(&victim, &diag).expect("swap plants symlink");
+        let opened = open_diag_read(&diag);
+        let mut followed_content = None;
+        if let Ok(mut file) = opened {
+            let mut probe = String::new();
+            if file.read_to_string(&mut probe).is_ok() {
+                followed_content = Some(probe);
+            }
+        }
+        let victim_content = std::fs::read(&victim).expect("victim readable");
+        let _ = std::fs::remove_file(&diag);
+        let _ = std::fs::remove_file(&victim);
+        assert!(
+            followed_content.is_none(),
+            "read handle must refuse a re-planted symlink, followed into {followed_content:?}"
+        );
+        assert_eq!(
+            victim_content, b"r19011-sentinel",
+            "victim must keep its sentinel"
         );
     }
 
