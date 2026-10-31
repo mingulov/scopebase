@@ -3453,7 +3453,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r12_setup_panic_leaves_no_owned_status() {
-        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
         use std::sync::atomic::{AtomicI32, Ordering};
         let slot = AtomicI32::new(-1);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -3924,7 +3924,9 @@ mod tests {
         // bytes so far (an I/O-torn record is untrusted — same
         // as unparseable below, never silent empty).
         if let Err(error) = file.read_to_string(&mut text) {
-            panic!("grandchild pidfile {path:?} unreadable mid-read ({error}): {text:?} (unresolved custody — no retirement attempted, writer fate unknown)");
+            panic!(
+                "grandchild pidfile {path:?} unreadable mid-read ({error}): {text:?} (unresolved custody — no retirement attempted, writer fate unknown)"
+            );
         }
         if text.trim().is_empty() {
             return Vec::new();
@@ -4339,7 +4341,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn tt04_r14011_retire_denial_probe() {
-        use super::super::seccomp::{install_deny_one, DenyAction};
+        use super::super::seccomp::{DenyAction, install_deny_one};
         let spec = match std::env::var(R14011_DENIAL_ENV) {
             Ok(spec) => spec,
             Err(_) => return,
@@ -4436,7 +4438,7 @@ mod tests {
     /// them past the probe's exit).
     #[cfg(target_arch = "x86_64")]
     fn r15008_probe_child(mode: &str) {
-        use super::super::seccomp::{install_deny_one, DenyAction};
+        use super::super::seccomp::{DenyAction, install_deny_one};
         use std::os::unix::process::CommandExt as _;
         use std::time::{Duration, Instant};
         let denied = mode != "publish-ok";
@@ -4786,7 +4788,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn tt04_preflight_denial_exec_probe() {
-        use super::super::seccomp::{install_deny_one, install_deny_ptrace_request, DenyAction};
+        use super::super::seccomp::{DenyAction, install_deny_one, install_deny_ptrace_request};
         let spec = match std::env::var(PROBE_DENIAL_ENV) {
             Ok(spec) => spec,
             Err(_) => return,
@@ -5867,7 +5869,9 @@ mod tests {
                     }
                     GrandchildState::None => String::new(),
                 };
-                panic!("middleman hung past {guard:?} (deadlock under denial; group retired: {retired}){note}");
+                panic!(
+                    "middleman hung past {guard:?} (deadlock under denial; group retired: {retired}){note}"
+                );
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -10405,13 +10409,13 @@ mod tests {
                 "acquisition must pin the transmitted birth (stage broken otherwise)"
             );
         } // Drop fires here.
-          // R17-009: DISCHARGE required (not merely death) — the
-          // live shell reaps promptly; a lingering zombie past
-          // the window is unresolved (the old Z-or-gone verdict
-          // masked undischarged kills). R17-010: strict
-          // retirement evidence — proven absence or holder reuse
-          // verifies; unreadable samples keep polling and fail
-          // loud past the bound (never certified as gone).
+        // R17-009: DISCHARGE required (not merely death) — the
+        // live shell reaps promptly; a lingering zombie past
+        // the window is unresolved (the old Z-or-gone verdict
+        // masked undischarged kills). R17-010: strict
+        // retirement evidence — proven absence or holder reuse
+        // verifies; unreadable samples keep polling and fail
+        // loud past the bound (never certified as gone).
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (R15-003 —
         // a blind kill would risk a recycled replacement), poll
@@ -10496,9 +10500,9 @@ mod tests {
                 "acquisition must pin the transmitted birth"
             );
         } // Drop fires here.
-          // Verdict: DISCHARGED (gone) — init reaps promptly.
-          // R17-010: strict evidence — unreadable samples keep
-          // polling and fail loud past the bound.
+        // Verdict: DISCHARGED (gone) — init reaps promptly.
+        // R17-010: strict evidence — unreadable samples keep
+        // polling and fail loud past the bound.
         let discharged = await_proc_gone_reaping(orphan, otick, Duration::from_secs(5));
         // Cleanup (mutant-clean): tick-gated kill,
         // waitpid-assisted poll gone (R18-006: under a
@@ -10795,11 +10799,11 @@ mod tests {
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _fired = pinned;
         })); // Drop fires here (scope end or unwind).
-             // R17-009: DISCHARGE required (not merely death) — the
-             // live shell reaps promptly; a lingering zombie past
-             // the window is unresolved. R17-010: strict evidence —
-             // unreadable samples keep polling and fail loud past
-             // the bound.
+        // R17-009: DISCHARGE required (not merely death) — the
+        // live shell reaps promptly; a lingering zombie past
+        // the window is unresolved. R17-010: strict evidence —
+        // unreadable samples keep polling and fail loud past
+        // the bound.
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
         // gone, reap the sh parent.
@@ -11603,8 +11607,8 @@ mod tests {
                 "mismatched expected birth must refuse"
             );
         } // Drop fires here: must stand down.
-          // Settle briefly — a dropped kill would land at once,
-          // but the live re-read below is the proof either way.
+        // Settle briefly — a dropped kill would land at once,
+        // but the live re-read below is the proof either way.
         let end = Instant::now() + Duration::from_millis(200);
         while Instant::now() < end {
             std::thread::sleep(Duration::from_millis(20));
@@ -14646,6 +14650,350 @@ mod tests {
         }
     }
 
+    /// R18-013: sentinel custody — stop+join on ALL paths
+    /// (explicit shutdown AND unwind). Dropping a bare
+    /// JoinHandle detaches the thread; a setup/verdict panic
+    /// used to strand the sentinel hammering the shared fd
+    /// table for the rest of the suite.
+    #[cfg(target_arch = "x86_64")]
+    struct SentinelGuard {
+        sentinel: std::sync::Arc<EmfileSentinel>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl SentinelGuard {
+        /// Stop the worker and join it (Ok = clean exit).
+        fn shutdown(mut self) -> std::thread::Result<()> {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.sentinel.stop.store(true, Relaxed);
+            match self.handle.take() {
+                Some(handle) => handle.join(),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for SentinelGuard {
+        fn drop(&mut self) {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.sentinel.stop.store(true, Relaxed);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    /// R18-012: held-window handshake state — the drain thread
+    /// samples sentinel (iterations, failures) as each marker
+    /// line ARRIVES (not at EOF: both would read final counts
+    /// and the overlap would be vacuous). First marker of each
+    /// kind wins.
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Clone, Default, Debug, PartialEq, Eq)]
+    struct EmfileWindow {
+        held: Option<(u64, u64)>,
+        released: Option<(u64, u64)>,
+    }
+
+    /// R18-012: fold one stderr line into the window state.
+    #[cfg(target_arch = "x86_64")]
+    fn note_emfile_marker(window: &mut EmfileWindow, line: &str, iters: u64, fails: u64) {
+        if line.starts_with("R17005-HELD") {
+            if window.held.is_none() {
+                window.held = Some((iters, fails));
+            }
+        } else if line == "R17005-RELEASED" {
+            if window.released.is_none() {
+                window.released = Some((iters, fails));
+            }
+        }
+    }
+
+    /// R18-012: the overlap verdict — at least ten sentinel
+    /// iterations strictly inside [HELD, RELEASED] with no new
+    /// failures there. Activity confined outside the window
+    /// (empty/unsnapped/misordered window) does NOT satisfy
+    /// this.
+    #[cfg(target_arch = "x86_64")]
+    fn emfile_overlap_ok(window: &EmfileWindow) -> bool {
+        match (window.held, window.released) {
+            (Some((held_iters, held_fails)), Some((rel_iters, rel_fails))) => {
+                rel_iters.saturating_sub(held_iters) >= 10 && rel_fails == held_fails
+            }
+            _ => false,
+        }
+    }
+
+    /// R18-009: concurrent stderr drain — reads line by line
+    /// (never read_to_string-to-EOF: the child can emit past
+    /// pipe capacity, e.g. panic + full backtrace, and must
+    /// never block on a parent that only drains after exit).
+    /// Folds marker lines into the window handshake as they
+    /// arrive; returns the full text (lossy — a non-UTF8
+    /// path in a panic must truncate nothing).
+    #[cfg(target_arch = "x86_64")]
+    fn drain_emfile_stderr(
+        pipe: std::process::ChildStderr,
+        sentinel: &EmfileSentinel,
+        window: &std::sync::Mutex<EmfileWindow>,
+    ) -> String {
+        use std::io::BufRead as _;
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut text = String::new();
+        let mut reader = std::io::BufReader::new(pipe);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break, // EOF.
+                Ok(_) => {
+                    let line = String::from_utf8_lossy(&buf);
+                    if let Ok(mut guard) = window.lock() {
+                        note_emfile_marker(
+                            &mut guard,
+                            line.trim_end(),
+                            sentinel.iterations.load(Relaxed),
+                            sentinel.failures.load(Relaxed),
+                        );
+                    }
+                    text.push_str(&line);
+                }
+                Err(_) => break,
+            }
+        }
+        text
+    }
+
+    /// R18-009: what the bounded launcher returns — exit
+    /// status, full stderr, the window handshake, and final
+    /// sentinel counters (read only after the worker joins).
+    #[cfg(target_arch = "x86_64")]
+    struct EmfileLaunched {
+        status: std::process::ExitStatus,
+        stderr: String,
+        window: EmfileWindow,
+        iterations: u64,
+        failures: u64,
+    }
+
+    /// R18-009: bounded probe launcher — spawns the named test
+    /// in a fresh image with `env=1`, drains stderr
+    /// CONCURRENTLY (past pipe capacity is fine), waits
+    /// bounded (`timeout`; expiry kills the child loud, never
+    /// hangs), and retires the sentinel worker on all paths
+    /// (SentinelGuard). All EMFILE probes share this (the
+    /// flood/hang regressions pin THE launcher, not a copy).
+    #[cfg(target_arch = "x86_64")]
+    fn launch_emfile_probe(
+        test_path: &str,
+        env: &str,
+        timeout: std::time::Duration,
+    ) -> EmfileLaunched {
+        use std::sync::atomic::Ordering::Relaxed;
+        // R18-013: fallible setup FIRST (exe discovery + spawn
+        // can panic) — the worker starts only after, so a
+        // setup panic strands nothing.
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test_path)
+            .arg("--nocapture")
+            .env(env, "1")
+            .stdin(std::process::Stdio::null())
+            // R18-009: stdout is never judged — null, not
+            // piped (a piped-but-unread stdout is the same
+            // deadlock class as the stderr one this fixes).
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let cpid = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(cpid);
+        // Worker + drain AFTER the fallible setup above.
+        let sentinel = std::sync::Arc::new(EmfileSentinel::default());
+        let worker_sentinel = sentinel.clone();
+        let worker = std::thread::spawn(move || run_emfile_sentinel(&worker_sentinel));
+        let worker_guard = SentinelGuard {
+            sentinel: sentinel.clone(),
+            handle: Some(worker),
+        };
+        let window = std::sync::Arc::new(std::sync::Mutex::new(EmfileWindow::default()));
+        let drain_window = window.clone();
+        let drain_sentinel = sentinel.clone();
+        let pipe = child.stderr.take().expect("stderr piped");
+        let drain =
+            std::thread::spawn(move || drain_emfile_stderr(pipe, &drain_sentinel, &drain_window));
+        // Bounded wait (the old loop was unbounded AND drained
+        // only after exit — a child blocked on a full pipe
+        // hung the suite forever).
+        let deadline = std::time::Instant::now() + timeout;
+        let mut status = None;
+        let timed_out = loop {
+            match child.try_wait() {
+                Ok(Some(exited)) => {
+                    status = Some(exited);
+                    break false;
+                }
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        break true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                // ECHILD without our reap is impossible here
+                // (only this poll waits) — loud either way.
+                Err(_) => break false,
+            }
+        };
+        if timed_out {
+            // Loud timeout: SIGKILL our unreaped child (identity
+            // certain — no tick read needed, unlike the guard
+            // drop which degrades under unreadable /proc), reap
+            // it, drain what it said, stop the worker, then fail
+            // with the partial text. (The guard stays for the
+            // unwind window between spawn and here.)
+            let _ = child.kill();
+            let _ = child.wait();
+            probe_guard.disarm();
+            let stderr = drain.join().unwrap_or_default();
+            drop(worker_guard);
+            panic!(
+                "probe {test_path} timed out after {}s\npartial stderr:\n{stderr}",
+                timeout.as_secs()
+            );
+        }
+        probe_guard.disarm();
+        let stderr = drain.join().expect("drain thread joins");
+        worker_guard.shutdown().expect("sentinel joins");
+        let window = window.lock().map(|guard| guard.clone()).unwrap_or_default();
+        EmfileLaunched {
+            status: status.expect("probe status observed"),
+            stderr,
+            window,
+            iterations: sentinel.iterations.load(Relaxed),
+            failures: sentinel.failures.load(Relaxed),
+        }
+    }
+
+    /// R18-012: the overlap verdict accepts work inside the
+    /// window and rejects everything else (empty window,
+    /// below-bar, failures inside, missing/misordered
+    /// markers).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn emfile_overlap_verdict_pins_window_semantics() {
+        // Positive: fifteen clean iterations inside.
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 115, 0);
+        assert!(emfile_overlap_ok(&window), "inside work must satisfy");
+        // Boundary: exactly ten satisfies, nine does not.
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 110, 0);
+        assert!(emfile_overlap_ok(&window), "exactly ten must satisfy");
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 109, 0);
+        assert!(!emfile_overlap_ok(&window), "nine inside must not satisfy");
+        // Negative: empty window (nothing between markers).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 100, 0);
+        assert!(!emfile_overlap_ok(&window), "empty window must not satisfy");
+        // Negative: a failure landed inside.
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 115, 1);
+        assert!(
+            !emfile_overlap_ok(&window),
+            "failure inside must not satisfy"
+        );
+        // Negative: missing markers.
+        assert!(
+            !emfile_overlap_ok(&EmfileWindow::default()),
+            "unsnapped window must not satisfy"
+        );
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        assert!(
+            !emfile_overlap_ok(&window),
+            "unreleased window must not satisfy"
+        );
+        // Negative: misordered markers (protocol violation).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-RELEASED", 100, 0);
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 150, 0);
+        assert!(
+            !emfile_overlap_ok(&window),
+            "misordered window must not satisfy"
+        );
+        // First marker wins (a duplicated HELD after work
+        // must not shift the window start forward).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-HELD count=999", 150, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED", 160, 0);
+        assert!(
+            emfile_overlap_ok(&window),
+            "first HELD must anchor the window"
+        );
+        // Non-marker lines (panic text, harness noise) fold
+        // to nothing.
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "thread 'main' panicked at foo.rs:1", 100, 0);
+        note_emfile_marker(&mut window, "R17005-REPORT something", 115, 0);
+        assert!(
+            !emfile_overlap_ok(&window),
+            "noise without markers must not satisfy"
+        );
+    }
+
+    /// R18-013: the sentinel guard stops + joins the worker
+    /// on explicit shutdown AND on unwind (a panic through
+    /// the launcher must not strand a detached hammer — the
+    /// frozen count below catches exactly that: detached +
+    /// unstopped keeps climbing).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn sentinel_guard_stops_worker_on_shutdown_and_unwind() {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Explicit shutdown joins cleanly.
+        let sentinel = std::sync::Arc::new(EmfileSentinel::default());
+        let worker_sentinel = sentinel.clone();
+        let worker = std::thread::spawn(move || run_emfile_sentinel(&worker_sentinel));
+        let guard = SentinelGuard {
+            sentinel: sentinel.clone(),
+            handle: Some(worker),
+        };
+        assert!(guard.shutdown().is_ok(), "worker must join cleanly");
+        assert!(sentinel.stop.load(Relaxed), "shutdown must set stop");
+        // Unwind through the guard still stops the worker.
+        let sentinel = std::sync::Arc::new(EmfileSentinel::default());
+        let worker_sentinel = sentinel.clone();
+        let worker = std::thread::spawn(move || run_emfile_sentinel(&worker_sentinel));
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = SentinelGuard {
+                sentinel: sentinel.clone(),
+                handle: Some(worker),
+            };
+            panic!("R18-013 unwind probe");
+        }));
+        assert!(fired.is_err(), "probe panic must propagate");
+        assert!(sentinel.stop.load(Relaxed), "unwind must set stop");
+        // The count freezes (a stranded hammer would climb by
+        // thousands in 50ms — the margin is three orders).
+        let before = sentinel.iterations.load(Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            sentinel.iterations.load(Relaxed),
+            before,
+            "unwound worker must be stopped (count frozen)"
+        );
+    }
+
     /// R16-006: staging failure under EMFILE must report known
     /// identities as UNVERIFIED, never claim retirement. The held
     /// driver knows mid/writer tuples the helper's rediscovery
@@ -14711,10 +15059,22 @@ mod tests {
         // unwind drops it first, restoring fds before the guards
         // retire.
         let mut held = Vec::new();
-        while let Ok(file) = std::fs::File::open("/dev/null") {
-            held.push(file);
-        }
+        // R18-012: keep the terminal error — the hold below is
+        // genuine exhaustion ONLY if the table filled at
+        // EMFILE (any other terminal error is a broken
+        // exhauster, and the window verdicts would be vacuous).
+        let terminal = loop {
+            match std::fs::File::open("/dev/null") {
+                Ok(file) => held.push(file),
+                Err(error) => break error,
+            }
+        };
         assert!(!held.is_empty(), "exhaustion must consume fds");
+        assert_eq!(
+            terminal.raw_os_error(),
+            Some(libc::EMFILE),
+            "exhaustion must end at EMFILE, got {terminal}"
+        );
         // Genuine-exhaustion evidence (never vacuous: a broken
         // exhauster holds ~0).
         eprintln!("R17005-HELD count={}", held.len());
@@ -14736,6 +15096,11 @@ mod tests {
             );
         }));
         drop(held);
+        // R18-012: window-end handshake — the drain thread
+        // snapshots sentinel counters at HELD and here; the
+        // parent's overlap verdict counts only iterations
+        // strictly inside this window.
+        eprintln!("R17005-RELEASED");
         let text = match fired {
             Err(payload) => payload
                 .downcast::<String>()
@@ -14803,8 +15168,6 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn staging_failure_under_emfile_reports_unverified_known() {
-        use std::io::Read as _;
-        use std::sync::atomic::Ordering::Relaxed;
         // Probe side (fresh image): run the body, report via
         // stderr; the harness judges the child.
         if std::env::var("SCOPEBASE_R17005_EMFILE").is_ok() {
@@ -14813,51 +15176,17 @@ mod tests {
         }
         // Parent side: the sentinel hammers the MAIN harness's
         // fd table while the probe exhausts its OWN table in
-        // the child (manual spawn + alive-poll, not `.output()`:
-        // every sentinel iteration before the stop below ran
-        // while the probe was alive — the concurrency the
-        // finding requires, not a spin around it).
-        let sentinel = std::sync::Arc::new(EmfileSentinel::default());
-        let worker = sentinel.clone();
-        let handle = std::thread::spawn(move || run_emfile_sentinel(&worker));
-        let exe = std::env::current_exe().expect("own test binary");
-        let mut child = std::process::Command::new(exe)
-            .arg("--exact")
-            .arg("fixture::linux::audit::tests::staging_failure_under_emfile_reports_unverified_known")
-            .arg("--nocapture")
-            .env("SCOPEBASE_R17005_EMFILE", "1")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("probe child spawns");
-        let cpid = child.id() as libc::pid_t;
-        let mut probe_guard = FixtureGuard::new(cpid);
-        let mut status = None;
-        loop {
-            match child.try_wait() {
-                Ok(Some(exited)) => {
-                    status = Some(exited);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(1)),
-                // ECHILD without our reap is impossible here
-                // (only this poll waits) — loud either way.
-                Err(_) => break,
-            }
-        }
-        probe_guard.disarm();
-        // The child exited: its pipes EOF at once (small
-        // output — no drain deadlock possible).
-        let mut stderr = String::new();
-        if let Some(pipe) = child.stderr.take() {
-            let mut pipe = pipe;
-            let _ = pipe.read_to_string(&mut stderr);
-        }
-        sentinel.stop.store(true, Relaxed);
-        handle.join().expect("sentinel joins");
-        let exited = status.expect("probe status observed");
-        assert!(exited.success(), "probe must exit 0\n{stderr}");
+        // the child (bounded launcher: concurrent drain +
+        // handshake snapshots — every sentinel iteration
+        // inside [HELD, RELEASED] ran against genuine
+        // exhaustion).
+        let launched = launch_emfile_probe(
+            "fixture::linux::audit::tests::staging_failure_under_emfile_reports_unverified_known",
+            "SCOPEBASE_R17005_EMFILE",
+            std::time::Duration::from_secs(30),
+        );
+        let stderr = &launched.stderr;
+        assert!(launched.status.success(), "probe must exit 0\n{stderr}");
         assert!(
             stderr.contains("R17005-PROBE-DONE"),
             "completion marker missing\n{stderr}"
@@ -14881,8 +15210,24 @@ mod tests {
             stderr.contains("known=["),
             "report must carry the known tuples\n{stderr}"
         );
-        let failures = sentinel.failures.load(Relaxed);
-        let iterations = sentinel.iterations.load(Relaxed);
+        // R18-012: the overlap handshake — iterations inside
+        // the held window (not merely around it) with no new
+        // failures there.
+        assert!(
+            launched.window.held.is_some(),
+            "HELD handshake missing\n{stderr}"
+        );
+        assert!(
+            launched.window.released.is_some(),
+            "RELEASED handshake missing\n{stderr}"
+        );
+        assert!(
+            emfile_overlap_ok(&launched.window),
+            "sentinel must work inside the held window, window={:?}\n{stderr}",
+            launched.window
+        );
+        let failures = launched.failures;
+        let iterations = launched.iterations;
         assert!(
             failures == 0,
             "sentinel must stay healthy during the probe, {failures} failures in {iterations} iterations"
@@ -14890,6 +15235,114 @@ mod tests {
         assert!(
             iterations >= 10,
             "sentinel must run during the probe, only {iterations} iterations"
+        );
+    }
+
+    /// R18-009: flood body — emits 1MiB past any plausible
+    /// pipe capacity (64KiB stock) on EACH of stdout+stderr
+    /// before exiting (the drain-after-exit launcher hangs on
+    /// stderr; a piped-but-unread stdout hangs the same way —
+    /// the launcher nulls stdout, so both must flow). The
+    /// shared launcher must complete bounded with the marker
+    /// intact.
+    #[cfg(target_arch = "x86_64")]
+    fn staging_emfile_flood_body() {
+        use std::io::Write as _;
+        let line = "F".repeat(63) + "\n"; // 64B x 16384 = 1MiB.
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        for _ in 0..16384 {
+            out.write_all(line.as_bytes()).expect("flood writes out");
+        }
+        out.flush().expect("flood flushes out");
+        drop(out);
+        let stderr = std::io::stderr();
+        let mut err = stderr.lock();
+        for _ in 0..16384 {
+            err.write_all(line.as_bytes()).expect("flood writes err");
+        }
+        err.flush().expect("flood flushes err");
+        drop(err);
+        eprintln!("R17005-FLOOD-DONE");
+    }
+
+    /// R18-009: hang body — sleeps 30s, then marks (the shared
+    /// launcher's 3s hang-test bound must kill it first: the
+    /// timeout is loud AND retires the stuck child, so the
+    /// marker must be absent from the partial text).
+    #[cfg(target_arch = "x86_64")]
+    fn staging_emfile_hang_body() {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        eprintln!("R17005-HANG-DONE");
+    }
+
+    /// R18-009: the shared launcher drains past pipe capacity
+    /// with bounded completion — the flood probe emits 1MiB
+    /// before exiting; the launcher must return (not hang,
+    /// not time out) with the marker, a retired child, and a
+    /// worker that ran during the probe and is now joined
+    /// (shutdown is synchronous — the launcher's return is
+    /// the join proof).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn emfile_launcher_drains_past_pipe_capacity() {
+        if std::env::var("SCOPEBASE_R17005_FLOOD").is_ok() {
+            staging_emfile_flood_body();
+            return;
+        }
+        let launched = launch_emfile_probe(
+            "fixture::linux::audit::tests::emfile_launcher_drains_past_pipe_capacity",
+            "SCOPEBASE_R17005_FLOOD",
+            std::time::Duration::from_secs(30),
+        );
+        let stderr = &launched.stderr;
+        assert!(launched.status.success(), "flood probe must exit 0");
+        assert!(
+            stderr.contains("R17005-FLOOD-DONE"),
+            "flood marker missing ({} bytes)",
+            stderr.len()
+        );
+        assert!(
+            stderr.len() > 65536,
+            "flood must exceed pipe capacity, got {} bytes",
+            stderr.len()
+        );
+        assert!(launched.iterations > 0, "worker must run during the flood");
+    }
+
+    /// R18-009: the shared launcher's bound kills loud — a
+    /// stuck probe (30s sleeper, 3s bound) must fail the
+    /// launch with a timeout (not hang the suite) AND the
+    /// stuck child must be retired (its completion marker,
+    /// emitted only after the sleep, is absent).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn emfile_launcher_timeout_kills_loud() {
+        if std::env::var("SCOPEBASE_R17005_HANG").is_ok() {
+            staging_emfile_hang_body();
+            return;
+        }
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            launch_emfile_probe(
+                "fixture::linux::audit::tests::emfile_launcher_timeout_kills_loud",
+                "SCOPEBASE_R17005_HANG",
+                std::time::Duration::from_secs(3),
+            );
+        }));
+        let payload = fired
+            .err()
+            .expect("launcher must time out on a stuck probe");
+        let text = payload
+            .downcast::<String>()
+            .map(|boxed| *boxed)
+            .unwrap_or_else(|_| String::from("<non-string panic>"));
+        assert!(
+            text.contains("timed out after 3s"),
+            "timeout must be loud, got: {text}"
+        );
+        assert!(
+            !text.contains("R17005-HANG-DONE"),
+            "stuck child must die before completing, got: {text}"
         );
     }
 
@@ -17927,7 +18380,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pinless_drop_under_wait_denial_signals_nothing() {
-        use super::super::seccomp::{install_deny_one, DenyAction};
+        use super::super::seccomp::{DenyAction, install_deny_one};
         use std::time::{Duration, Instant};
         // SAFETY: the child installs a wait-denying filter, drops
         // a pin-less self guard, and reports survival via _exit.
