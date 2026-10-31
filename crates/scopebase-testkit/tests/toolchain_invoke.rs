@@ -5244,6 +5244,20 @@ fn open_diag_read(path: &std::path::Path) -> Result<std::fs::File, String> {
     Ok(file)
 }
 
+/// R21-016 (toolchain twin): rescue write-open for the FIFO
+/// watchdog — nonblocking (a refused-and-closed worker
+/// leaves no reader; a blocking rescue would hang FOREVER).
+/// A genuinely read-blocked worker IS a waiting reader, so
+/// the nonblocking open still succeeds and unblocks.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn open_fifo_rescue_write(diag: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(diag)
+}
+
 /// unpinned and ECHILDs past the live grandchild. Duration
 /// 905 is unique to this test. Fresh image: whole-table
 /// exhaustion is process-shared — in-process staging flaked
@@ -5590,8 +5604,9 @@ fn diag_fifo_swap_never_blocks_read_open() {
             // Unblock the worker (a writer releases the
             // read open; the worker then refuses on the
             // type check and exits — even RED leaks no
-            // thread).
-            let _ = std::fs::OpenOptions::new().write(true).open(&diag);
+            // thread). R21-016: nonblocking rescue (a
+            // refused-and-closed worker leaves no reader).
+            let _ = open_fifo_rescue_write(&diag);
             rx.recv_timeout(std::time::Duration::from_secs(10))
                 .expect("worker must exit after unblock")
         }
@@ -5603,6 +5618,59 @@ fn diag_fifo_swap_never_blocks_read_open() {
         refused.is_err(),
         "read-open must refuse a fifo, got {refused:?}"
     );
+}
+
+/// R21-016 (toolchain twin): the watchdog's rescue open must
+/// never block — mirror of the audit regression (a
+/// refused-and-closed worker stalled pre-send leaves no
+/// reader; a blocking rescue hangs FOREVER). RED: 5s timeout
+/// → panic (the one RED run leaks its rescue thread).
+/// GREEN (O_NONBLOCK): ENXIO at once.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn diag_fifo_rescue_open_never_blocks() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let stem = format!("scopebase-r21016-rescue-{}", std::process::id());
+    let diag = std::env::temp_dir().join(format!("{stem}.log"));
+    let _ = std::fs::remove_file(&diag);
+    let cpath = std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
+    // SAFETY: mkfifo on our own temp path; mode 600.
+    assert_eq!(
+        unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+        0,
+        "fifo planted"
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker_path = diag.clone();
+    let worker = std::thread::spawn(move || {
+        let result = open_diag_read(&worker_path);
+        // Post-refusal pre-send stall (the deschedule
+        // the watchdog deadline can cross).
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        Err(_) => {}
+        Ok(_) => panic!("worker must still be stalled at the watchdog deadline"),
+    }
+    // Rescue in a thread: RED must fail, never hang.
+    let rescue_path = diag.clone();
+    let (rtx, rrx) = std::sync::mpsc::channel();
+    let _rescue = std::thread::spawn(move || {
+        let outcome = open_fifo_rescue_write(&rescue_path).is_ok();
+        let _ = rtx.send(outcome);
+    });
+    rrx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("rescue open must complete (a blocking rescue hangs with no reader)");
+    let refused = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("worker must still deliver");
+    assert!(
+        refused.is_err(),
+        "worker must have refused, got {refused:?}"
+    );
+    let _ = worker.join();
+    let _ = std::fs::remove_file(&diag);
 }
 
 /// R19-002 (toolchain twin): probe body (fresh image,
