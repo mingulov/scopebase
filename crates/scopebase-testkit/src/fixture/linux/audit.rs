@@ -2055,12 +2055,180 @@ mod tests {
     /// `expiry_beside_bigtable_stays_bounded_and_loud`):
     /// the default-budget `!truncated` asserts assume no
     /// concurrent giant table, and the big-table tests
-    /// assume no concurrent default-budget assert. No suite
-    /// test parks a giant table (EMFILE is injected, never
-    /// staged), so these five are the whole coupling set.
+    /// assume no concurrent default-budget assert.
+    /// R19003-FLAKE01: no suite test parks a giant table —
+    /// EMFILE exhausters (fresh-image probes AND the two
+    /// in-process frame tests) confine the soft NOFILE
+    /// ceiling first (see below), so every parked table
+    /// stays far under the scan budget; only the
+    /// serial-covered python holders stage big tables.
     /// Acquire FIRST (before any other audit lock — never
     /// while holding one).
     static DISCOVERY_POPULATION_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// R19003-FLAKE01: refcounted soft-NOFILE
+    /// confinement state (leaf mutex — the critical
+    /// sections take no other lock, so no ordering
+    /// discipline vs the audit locks is needed).
+    #[cfg(target_arch = "x86_64")]
+    static CONFINEMENT_STATE: std::sync::Mutex<Option<ConfinementState>> =
+        std::sync::Mutex::new(None);
+
+    #[cfg(target_arch = "x86_64")]
+    struct ConfinementState {
+        prev: libc::rlim_t,
+        count: usize,
+    }
+
+    /// R19003-FLAKE01: confine this process's soft NOFILE
+    /// ceiling ahead of deliberate exhaustion. An
+    /// exhauster that fills to the ambient ulimit (~524k)
+    /// breaks the suite two ways: in-process, siblings'
+    /// own fd ops EMFILE (M1); system-wide, discovery
+    /// scans (100k budget) truncate over the giant table
+    /// and miss their victims (M2 — observed as a
+    /// near-deterministic resonance). Confined to 4096
+    /// the exhaustion stays genuine-EMFILE (reads fail
+    /// identically) while the table stays small (even
+    /// eight concurrent exhausters fit the budget).
+    /// Fresh-image probes hold the guard for life (the
+    /// limit dies with the child); in-process callers
+    /// scope it tightly. Refcounted: the first guard
+    /// applies the cap, the last drop restores the saved
+    /// ceiling (thread-safe nesting; poison ignored — a
+    /// panicked sibling already failed).
+    #[cfg(target_arch = "x86_64")]
+    fn confine_fd_table_for_exhaustion() -> FdTableConfinement {
+        let mut slot = CONFINEMENT_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(state) = slot.as_mut() {
+            state.count += 1;
+            return FdTableConfinement;
+        }
+        // SAFETY: getrlimit/setrlimit on self only.
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+            0,
+            "own NOFILE limit must be readable"
+        );
+        let prev = rlim.rlim_cur;
+        // Below the cap already (constrained runner):
+        // exhaustion stays genuine, nothing to confine —
+        // still counted, so the balanced drop is a no-op.
+        let confined = prev.min(4096);
+        if confined != prev {
+            rlim.rlim_cur = confined;
+            assert_eq!(
+                unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) },
+                0,
+                "soft NOFILE confinement must apply"
+            );
+        }
+        *slot = Some(ConfinementState { prev, count: 1 });
+        FdTableConfinement
+    }
+
+    /// R19003-FLAKE01: releases one confinement hold; the
+    /// last drop restores the saved ceiling. Best-effort:
+    /// drops never panic (R15-005).
+    #[cfg(target_arch = "x86_64")]
+    struct FdTableConfinement;
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for FdTableConfinement {
+        fn drop(&mut self) {
+            let mut slot = CONFINEMENT_STATE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (count, prev) = match slot.as_mut() {
+                Some(state) => {
+                    state.count = state.count.saturating_sub(1);
+                    (state.count, state.prev)
+                }
+                None => return,
+            };
+            if count > 0 {
+                return;
+            }
+            *slot = None;
+            // Restore while still holding the mutex (leaf —
+            // no other lock inside): no interleaving
+            // confine can observe the unrestored window.
+            // SAFETY: getrlimit/setrlimit on self only.
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+                return;
+            }
+            if rlim.rlim_cur != prev {
+                rlim.rlim_cur = prev;
+                let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) };
+            }
+        }
+    }
+
+    /// R19003-FLAKE01: the confinement guard caps the soft
+    /// ceiling at 4096 and restores on the last drop — in
+    /// order and out of order (refcounted nesting). The
+    /// final value allows a sibling holder (in-process
+    /// confiners nest; the cap stays correct either way —
+    /// never garbage, never stuck).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fd_table_confinement_restores_ceiling() {
+        // SAFETY: getrlimit on self only.
+        let limits_now = || {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+                0,
+                "own NOFILE limit must be readable"
+            );
+            (rlim.rlim_cur, rlim.rlim_max)
+        };
+        let (before, hard) = limits_now();
+        let capped = before.min(4096);
+        let outer = confine_fd_table_for_exhaustion();
+        assert_eq!(limits_now().0, capped, "cap must apply (or already hold)");
+        let inner = confine_fd_table_for_exhaustion();
+        assert_eq!(limits_now().0, capped, "nested hold keeps the cap");
+        drop(inner);
+        assert_eq!(limits_now().0, capped, "inner drop must not restore early");
+        drop(outer);
+        let final_soft = limits_now().0;
+        assert!(
+            final_soft == before || final_soft == capped || final_soft == hard,
+            "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+        );
+        // Reverse order: dropping the outer hold first
+        // must not restore early either.
+        let (before2, _) = limits_now();
+        let capped2 = before2.min(4096);
+        let outer = confine_fd_table_for_exhaustion();
+        let inner = confine_fd_table_for_exhaustion();
+        drop(outer);
+        assert_eq!(
+            limits_now().0,
+            capped2,
+            "outer-first drop must not restore early"
+        );
+        drop(inner);
+        let final_soft = limits_now().0;
+        assert!(
+            final_soft == before2 || final_soft == capped2 || final_soft == hard,
+            "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+        );
+    }
 
     /// R12-005: cross-process ns_last_pid placement lock (twin
     /// of the toolchain file's guard — SAME lockfile path, kept
@@ -8970,6 +9138,10 @@ mod tests {
     fn audit_emfile_probe_child(mode: &str) {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         fn spawn_sleep(dur: &str) -> std::process::Child {
             std::process::Command::new("/bin/sleep")
                 .arg(dur)
@@ -11173,6 +11345,10 @@ mod tests {
     fn nonchild_pin_recovery_probe() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(pair_publisher_script("42", "wait"))
@@ -11314,6 +11490,10 @@ mod tests {
     fn frozen_pin_recovery_probe() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(pair_publisher_script("44", "wait"))
@@ -11578,6 +11758,10 @@ mod tests {
     fn recovered_pin_precedes_fallible_probe() {
         use std::io::{BufRead as _, Write as _};
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(pair_publisher_script("86", "wait"))
@@ -11898,6 +12082,10 @@ mod tests {
     fn refused_guard_heals_at_drop_probe() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(pair_publisher_script("909", "wait"))
@@ -15917,6 +16105,10 @@ mod tests {
     /// in-process exhaustion would break the shared harness.
     #[cfg(target_arch = "x86_64")]
     fn staging_emfile_probe_body() {
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         // Live probe + two known fixtures (recorded identities;
         // stand-in sleeps — the helper treats known tuples as
         // individual strays, no grouping assumed).
@@ -16263,6 +16455,10 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn audit_steer_restore_window_probe() {
         use std::time::{Duration, Instant};
+        // R19003-FLAKE01: confine the table before any
+        // exhaustion below (fresh image — the limit dies
+        // with the probe).
+        let _confined = confine_fd_table_for_exhaustion();
         let hint = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
         // R18-007: the handle goes stale at unwind retirement
         // (raw-reaped) and is never touched after — the
@@ -17866,10 +18062,14 @@ mod tests {
     /// the number unverifiable (still exhausted), discards,
     /// and reports unresolved with every replacement alive.
     /// Durations 912 (victim sleeper) / 913 (replacement
-    /// sleeper) are unique to this test.
-    #[test]
+    /// sleeper) are unique to this test. R19003-FLAKE01:
+    /// fresh-image probe body — the exhaustion hold must
+    /// not share the suite's fd table (M1: siblings EMFILE
+    /// during the hold); cross-process steering exclusion
+    /// rides the placement flock (the in-child mutex
+    /// excludes nothing).
     #[cfg(target_arch = "x86_64")]
-    fn frame_pin_failure_reverifies_before_keeping_union() {
+    fn frame_pin_failure_reverifies_probe() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
         let _serial = AUDIT_STEER_SERIAL
@@ -17930,6 +18130,12 @@ mod tests {
         // Placement exclusion across the frame (the recycle
         // lands inside the initial snapshot below).
         let _nsflock = ns_last_pid_flock();
+        // R19003-FLAKE01: confine across the frame (the
+        // snapshot seam exhausts in-process — without the
+        // cap the table fills to the ambient ulimit and
+        // siblings' fd ops EMFILE; drop restores past the
+        // frame).
+        let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
         let result = retire_stray_tree_frame_with(sh1pid, sh1tick, deadline, 0, &|_pid| -> (
             Vec<(libc::pid_t, u64)>,
@@ -18067,6 +18273,49 @@ mod tests {
             assert!(Instant::now() < end, "orphaned victim child must die");
             std::thread::sleep(Duration::from_millis(10));
         }
+        eprintln!("R19003-PINFAIL-DONE");
+    }
+
+    /// R19003-FLAKE01 wrapper: the pin-failure probe runs
+    /// fresh-image (its exhaustion hold must not share the
+    /// suite's fd table). In-probe skips (steering
+    /// contention, same-tick retake) propagate as skips,
+    /// never vacuous greens.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_pin_failure_reverifies_before_keeping_union() {
+        if std::env::var("SCOPEBASE_R19003_PINFAIL").is_ok() {
+            frame_pin_failure_reverifies_probe();
+            return;
+        }
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::frame_pin_failure_reverifies_before_keeping_union")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19003_PINFAIL", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the pin-failure case\n{stderr}"
+        );
+        if let Some(skipped) = stderr.lines().find(|line| line.contains("skip:")) {
+            eprintln!("skip (probe): {skipped}");
+            return;
+        }
+        assert!(
+            stderr.contains("R19003-PINFAIL-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
     }
 
     /// R19-004: an unreadable poll-gate must mark unresolved
@@ -18083,9 +18332,11 @@ mod tests {
     /// the live child. GREEN: unresolved, `false`, child
     /// parked-but-reported. Durations 914 (parent) / 915
     /// (fresh child) are unique to this test.
-    #[test]
+    /// R19003-FLAKE01: fresh-image probe body — the
+    /// exhaustion hold must not share the suite's fd table
+    /// (M1: siblings EMFILE during the hold).
     #[cfg(target_arch = "x86_64")]
-    fn frame_unreadable_gate_marks_unresolved() {
+    fn frame_unreadable_gate_probe() {
         use std::time::{Duration, Instant};
         // Parent P + fresh child C (both our children; the
         // frame treats the listed pair as P's child — the
@@ -18121,6 +18372,9 @@ mod tests {
             calls: 0,
             held: Vec::new(),
         });
+        // R19003-FLAKE01: confine across the frame (see the
+        // pin-failure twin — same in-process seam).
+        let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
         let result = retire_stray_tree_frame_with(pid, started, deadline, 0, &|_pid| -> (
             Vec<(libc::pid_t, u64)>,
@@ -18164,6 +18418,39 @@ mod tests {
         let _ = kill_tick_gated(cpid, ctick);
         let _ = child.wait();
         let _ = parent.wait();
+        eprintln!("R19003-UNREADABLE-DONE");
+    }
+
+    /// R19003-FLAKE01 wrapper: the unreadable-gate probe
+    /// runs fresh-image (its exhaustion hold must not
+    /// share the suite's fd table).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_unreadable_gate_marks_unresolved() {
+        if std::env::var("SCOPEBASE_R19003_UNREADABLE").is_ok() {
+            frame_unreadable_gate_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::frame_unreadable_gate_marks_unresolved")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19003_UNREADABLE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the unreadable-gate case\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R19003-UNREADABLE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
     }
 
     /// R19-005: pipe discovery must pin the birth BEFORE

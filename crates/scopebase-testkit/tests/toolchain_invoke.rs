@@ -3141,6 +3141,164 @@ fn sole_child_pid(pid: i32) -> i32 {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 static STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// R19003-FLAKE01: refcounted soft-NOFILE
+/// confinement state (leaf mutex — the critical
+/// sections take no other lock).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+static CONFINEMENT_STATE: std::sync::Mutex<Option<ConfinementState>> = std::sync::Mutex::new(None);
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct ConfinementState {
+    prev: libc::rlim_t,
+    count: usize,
+}
+
+/// R19003-FLAKE01: confine this process's soft NOFILE
+/// ceiling ahead of deliberate exhaustion (toolchain twin
+/// of the audit helper — same contract). An exhauster
+/// that fills to the ambient ulimit (~524k) breaks the
+/// suite: system-wide discovery scans (100k budget)
+/// truncate over the giant table and miss their victims
+/// (near-deterministic resonance). Confined to 4096 the
+/// exhaustion stays genuine-EMFILE (reads fail
+/// identically) while the table stays small. Fresh-image
+/// probes hold the guard for life (the limit dies with
+/// the child). Refcounted: the first guard applies the
+/// cap, the last drop restores the saved ceiling
+/// (thread-safe nesting; poison ignored).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn confine_fd_table_for_exhaustion() -> FdTableConfinement {
+    let mut slot = CONFINEMENT_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(state) = slot.as_mut() {
+        state.count += 1;
+        return FdTableConfinement;
+    }
+    // SAFETY: getrlimit/setrlimit on self only.
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+        0,
+        "own NOFILE limit must be readable"
+    );
+    let prev = rlim.rlim_cur;
+    // Below the cap already (constrained runner):
+    // exhaustion stays genuine, nothing to confine —
+    // still counted, so the balanced drop is a no-op.
+    let confined = prev.min(4096);
+    if confined != prev {
+        rlim.rlim_cur = confined;
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) },
+            0,
+            "soft NOFILE confinement must apply"
+        );
+    }
+    *slot = Some(ConfinementState { prev, count: 1 });
+    FdTableConfinement
+}
+
+/// R19003-FLAKE01: releases one confinement hold; the
+/// last drop restores the saved ceiling. Best-effort:
+/// drops never panic.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct FdTableConfinement;
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for FdTableConfinement {
+    fn drop(&mut self) {
+        let mut slot = CONFINEMENT_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (count, prev) = match slot.as_mut() {
+            Some(state) => {
+                state.count = state.count.saturating_sub(1);
+                (state.count, state.prev)
+            }
+            None => return,
+        };
+        if count > 0 {
+            return;
+        }
+        *slot = None;
+        // Restore while still holding the mutex (leaf —
+        // no other lock inside): no interleaving
+        // confine can observe the unrestored window.
+        // SAFETY: getrlimit/setrlimit on self only.
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+            return;
+        }
+        if rlim.rlim_cur != prev {
+            rlim.rlim_cur = prev;
+            let _ = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) };
+        }
+    }
+}
+
+/// R19003-FLAKE01: the confinement guard caps the soft
+/// ceiling at 4096 and restores on the last drop — in
+/// order and out of order (refcounted nesting). The final
+/// value allows a sibling holder (in-process confiners
+/// nest; the cap stays correct either way — never
+/// garbage, never stuck).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn fd_table_confinement_restores_ceiling() {
+    // SAFETY: getrlimit on self only.
+    let limits_now = || {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+            0,
+            "own NOFILE limit must be readable"
+        );
+        (rlim.rlim_cur, rlim.rlim_max)
+    };
+    let (before, hard) = limits_now();
+    let capped = before.min(4096);
+    let outer = confine_fd_table_for_exhaustion();
+    assert_eq!(limits_now().0, capped, "cap must apply (or already hold)");
+    let inner = confine_fd_table_for_exhaustion();
+    assert_eq!(limits_now().0, capped, "nested hold keeps the cap");
+    drop(inner);
+    assert_eq!(limits_now().0, capped, "inner drop must not restore early");
+    drop(outer);
+    let final_soft = limits_now().0;
+    assert!(
+        final_soft == before || final_soft == capped || final_soft == hard,
+        "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+    );
+    // Reverse order: dropping the outer hold first must
+    // not restore early either.
+    let (before2, _) = limits_now();
+    let capped2 = before2.min(4096);
+    let outer = confine_fd_table_for_exhaustion();
+    let inner = confine_fd_table_for_exhaustion();
+    drop(outer);
+    assert_eq!(
+        limits_now().0,
+        capped2,
+        "outer-first drop must not restore early"
+    );
+    drop(inner);
+    let final_soft = limits_now().0;
+    assert!(
+        final_soft == before2 || final_soft == capped2 || final_soft == hard,
+        "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+    );
+}
+
 /// R14-002: serialize placement-lock TAKERS within this
 /// process. POSIX locks merge per-process (a second take
 /// succeeds instantly instead of excluding, and its drop
@@ -4336,6 +4494,10 @@ fn adopted_kill_discharges_through_init() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn nonchild_pin_recovery_probe() {
     use std::io::BufRead as _;
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let mut parent = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(pair_publisher_script("43", "wait"))
@@ -4475,6 +4637,10 @@ fn nonchild_recovered_pin_retires_on_drop() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn recovered_pin_precedes_fallible_probe() {
     use std::io::{BufRead as _, Write as _};
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let mut parent = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(pair_publisher_script("905", "wait"))
@@ -4598,6 +4764,10 @@ fn recovered_pin_precedes_fallible_checks() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn refused_guard_heals_at_drop_probe() {
     use std::io::BufRead as _;
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let mut parent = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(pair_publisher_script("911", "wait"))
@@ -5750,6 +5920,10 @@ fn emfile_probe_tagged(stderr: &str, prefix: &str, mode: &str) -> (i32, u64) {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn emfile_probe_child(mode: &str) {
     use std::io::BufRead as _;
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     // Stage the fixture (all fds available here). The stranger
     // mode keeps its sh parent for loud cleanup below.
     // R16-011: staging guards (declared here, armed at each
@@ -6306,6 +6480,10 @@ fn steer_sleep_onto(want: i32, self_grouped: bool) -> Option<std::process::Child
 /// on unwind. No steering (placement mechanics orthogonal).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn steer_restore_window_probe() {
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let hint = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
     let pauser = fork_pauser();
     let tick = task_starttime_checked(pauser)
@@ -9398,8 +9576,18 @@ fn probe_tree_retirement_kills_stranded_group() {
     // body in a fresh image and requires retirement-before-
     // report). Declared BEFORE the guard: unwind drops the guard
     // first (still exhausted), restoring fds only after.
+    // R19003-FLAKE01: the confinement guard is declared BEFORE
+    // the held files (drops AFTER them — the ceiling restores
+    // only once the files are closed, so unwind-time guard
+    // drops still see a full table; a block-scoped guard would
+    // restore the ceiling before the staging reads and lose
+    // the exhaustion entirely).
+    let mut _confined = None;
     let mut _emfile_held = Vec::new();
     if std::env::var("SCOPEBASE_R15006_EMFILE").is_ok() {
+        // Probe branch — fresh image, the limit dies with
+        // the child.
+        _confined = Some(confine_fd_table_for_exhaustion());
         while let Ok(file) = std::fs::File::open("/dev/null") {
             _emfile_held.push(file);
         }
@@ -10012,6 +10200,10 @@ fn omitted_leader_reap_fails_not_skips() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn group_guard_persistent_probe() {
     use std::os::unix::process::CommandExt as _;
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let mut stage = std::process::Command::new("/bin/sh");
     stage
         .arg("-c")
@@ -10456,6 +10648,10 @@ fn group_guard_reaped_leader_silent_when_group_gone() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn group_guard_reform_probe() {
     use std::os::unix::process::CommandExt as _;
+    // R19003-FLAKE01: confine the table before any
+    // exhaustion below (fresh image — the limit dies
+    // with the probe).
+    let _confined = confine_fd_table_for_exhaustion();
     let mut stage = std::process::Command::new("/bin/sh");
     stage
         .arg("-c")
