@@ -2047,6 +2047,20 @@ mod tests {
     /// is the cross-process half).
     #[cfg(target_arch = "x86_64")]
     static AUDIT_STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// R19-009: serializes the discovery-population tests
+    /// (`discovery_pins_birth_across_pipe_evidence`,
+    /// `discovery_verifies_slot_across_mode_read`,
+    /// `discovery_mode_reread_excludes_same_pipe_end_swap`,
+    /// `discovery_scan_budget_truncates_loud`,
+    /// `expiry_beside_bigtable_stays_bounded_and_loud`):
+    /// the default-budget `!truncated` asserts assume no
+    /// concurrent giant table, and the big-table tests
+    /// assume no concurrent default-budget assert. No suite
+    /// test parks a giant table (EMFILE is injected, never
+    /// staged), so these five are the whole coupling set.
+    /// Acquire FIRST (before any other audit lock — never
+    /// while holding one).
+    static DISCOVERY_POPULATION_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// R12-005: cross-process ns_last_pid placement lock (twin
     /// of the toolchain file's guard — SAME lockfile path, kept
@@ -6577,6 +6591,38 @@ mod tests {
         Some((stat.st_dev as u64, stat.st_ino as u64))
     }
 
+    /// R19-009: scan budget for pipe-holder discovery —
+    /// the walk covers every readable process's whole fd
+    /// table, so cost scales with unrelated host populations
+    /// (an EMFILE fixture's tables are one). `max_visited_fds`
+    /// caps examined fd entries (deterministic — the count
+    /// does not depend on timing); `deadline` caps wall time
+    /// (defense against pathological per-entry stalls).
+    /// Exhausting either reports truncated (never a silent
+    /// partial success): the visited-cap breaks immediately
+    /// (per-entry — a mid-process stop drops that process's
+    /// partial evidence, so truncation removes but never
+    /// invents); the deadline gates each process (a
+    /// between-processes stop — the cap bounds the
+    /// per-process overshoot). Defaults: 100k entries + 1 s —
+    /// ~1000x headroom over fixture populations, bounded
+    /// under pathology.
+    #[cfg(target_arch = "x86_64")]
+    struct PipeScanBudget {
+        max_visited_fds: usize,
+        deadline: std::time::Instant,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl Default for PipeScanBudget {
+        fn default() -> Self {
+            Self {
+                max_visited_fds: 100_000,
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
+            }
+        }
+    }
+
     /// R18-001: every live task holding WRITE access to one
     /// of `want` ((dev, ino) of our collection pipes) as
     /// (pid, starttime) pairs — discovered holders join the
@@ -6590,22 +6636,27 @@ mod tests {
     /// the frame re-gates every pair by identity before
     /// acting). A total listing failure returns empty (the
     /// caller logs loud and retires the union alone).
+    /// R19-009: returns the truncation flag alongside the
+    /// pairs (the budget stops the walk between processes).
     #[cfg(target_arch = "x86_64")]
     fn discover_pipe_writers(
         want: &[(u64, u64)],
         verify_hook: Option<&dyn Fn(libc::pid_t)>,
-    ) -> Vec<(libc::pid_t, u64)> {
+        budget: &PipeScanBudget,
+    ) -> (Vec<(libc::pid_t, u64)>, bool) {
         use std::os::unix::fs::OpenOptionsExt as _;
         let mut found = Vec::new();
         if want.is_empty() {
-            return found;
+            return (found, false);
         }
         let me = std::process::id() as libc::pid_t;
         let entries = match std::fs::read_dir("/proc") {
             Ok(entries) => entries,
-            Err(_) => return found,
+            Err(_) => return (found, false),
         };
-        for entry in entries.flatten() {
+        let mut visited: usize = 0;
+        let mut truncated = false;
+        'walk: for entry in entries.flatten() {
             let pid: libc::pid_t = match entry
                 .file_name()
                 .to_str()
@@ -6616,6 +6667,12 @@ mod tests {
             };
             if pid == me || pid <= 1 {
                 continue;
+            }
+            // R19-009: the deadline gates each process (a
+            // between-processes stop).
+            if std::time::Instant::now() >= budget.deadline {
+                truncated = true;
+                break;
             }
             let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
                 Ok(fds) => fds,
@@ -6639,6 +6696,14 @@ mod tests {
             };
             let mut holds = false;
             for fd in fds.flatten() {
+                // R19-009: the visited-cap breaks immediately
+                // (this process's partial evidence drops —
+                // truncation removes, never invents).
+                if visited >= budget.max_visited_fds {
+                    truncated = true;
+                    break 'walk;
+                }
+                visited += 1;
                 let text = match std::fs::read_link(fd.path()) {
                     Ok(target) => match target.into_os_string().into_string() {
                         Ok(text) => text,
@@ -6733,7 +6798,7 @@ mod tests {
                 _ => {}
             }
         }
-        found
+        (found, truncated)
     }
 
     /// R18-001: the union plus any unobserved pipe-holders
@@ -6747,20 +6812,30 @@ mod tests {
         strays: &[(libc::pid_t, u64)],
         out_fd: Option<i32>,
         err_fd: Option<i32>,
-    ) -> Vec<(libc::pid_t, u64)> {
-        extend_strays_with_pipe_writers_with(strays, out_fd, err_fd, None)
+    ) -> (Vec<(libc::pid_t, u64)>, bool) {
+        extend_strays_with_pipe_writers_with(
+            strays,
+            out_fd,
+            err_fd,
+            None,
+            &PipeScanBudget::default(),
+        )
     }
 
     /// R19-005/R19-006: `verify_hook` fires after each
     /// candidate's identity match, before mode + birth
     /// verification (regression steering only).
+    /// R19-009: returns the truncation flag alongside the
+    /// union (a budgeted scan reports, never silently
+    /// certifies a partial set).
     #[cfg(target_arch = "x86_64")]
     fn extend_strays_with_pipe_writers_with(
         strays: &[(libc::pid_t, u64)],
         out_fd: Option<i32>,
         err_fd: Option<i32>,
         verify_hook: Option<&dyn Fn(libc::pid_t)>,
-    ) -> Vec<(libc::pid_t, u64)> {
+        budget: &PipeScanBudget,
+    ) -> (Vec<(libc::pid_t, u64)>, bool) {
         let mut want = Vec::new();
         for fd in [out_fd, err_fd].into_iter().flatten() {
             if let Some(id) = pipe_dev_ino(fd) {
@@ -6769,16 +6844,17 @@ mod tests {
         }
         if want.is_empty() {
             eprintln!("expiry skips pipe-holder discovery (pipes unreadable)");
-            return strays.to_vec();
+            return (strays.to_vec(), false);
         }
         let mut all = strays.to_vec();
-        for pair in discover_pipe_writers(&want, verify_hook) {
+        let (pairs, truncated) = discover_pipe_writers(&want, verify_hook, budget);
+        for pair in pairs {
             if !all.contains(&pair) {
                 eprintln!("expiry discovered pipe-holder stray {}", pair.0);
                 all.push(pair);
             }
         }
-        all
+        (all, truncated)
     }
 
     /// R11-014: fail-closed retirement for an expired (or
@@ -6818,8 +6894,17 @@ mod tests {
         expected: u64,
         strays: &[(libc::pid_t, u64)],
         group_died: bool,
+        discovery_truncated: bool,
     ) {
-        expire_probe_collection_with_hook(id, expected, strays, group_died, None, None);
+        expire_probe_collection_with_hook(
+            id,
+            expected,
+            strays,
+            group_died,
+            None,
+            None,
+            discovery_truncated,
+        );
     }
 
     /// R13-003 anchor check, shared by the up-front decision
@@ -6863,6 +6948,7 @@ mod tests {
         group_died: bool,
         pass_hook: Option<&dyn Fn()>,
         reap_hook: Option<&dyn Fn()>,
+        discovery_truncated: bool,
     ) {
         use std::time::Duration;
         // Known strays below still retire individually (their
@@ -7007,6 +7093,15 @@ mod tests {
         // writer's retirement lands in the log with its
         // disappearance proof (an expiry that leaves a stray
         // alive must say so, never claim a clean group).
+        // R19-009: a truncated discovery reports here (the
+        // known set retires; unknown writers may survive —
+        // never a silent partial success).
+        if discovery_truncated {
+            eprintln!(
+                "expiry: pipe-holder discovery TRUNCATED (scan budget) — retiring {} known strays, unknown writers may survive",
+                strays.len()
+            );
+        }
         for (pid, started) in strays {
             let gone = retire_stray_tree_best_effort(*pid, *started);
             eprintln!("expiry retired stray {pid} (gone: {gone})");
@@ -7157,8 +7252,8 @@ mod tests {
                 use std::os::unix::io::AsRawFd as _;
                 let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
                 let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
-                let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
-                expire_probe_collection(id, expected, &all, group_died);
+                let (all, truncated) = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                expire_probe_collection(id, expected, &all, group_died, truncated);
             }
             return None;
         }
@@ -7192,8 +7287,8 @@ mod tests {
                     use std::os::unix::io::AsRawFd as _;
                     let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
                     let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
-                    let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
-                    expire_probe_collection(id, expected, &all, group_died);
+                    let (all, truncated) = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                    expire_probe_collection(id, expected, &all, group_died, truncated);
                 }
                 return None;
             }
@@ -7244,8 +7339,8 @@ mod tests {
                     use std::os::unix::io::AsRawFd as _;
                     let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
                     let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
-                    let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
-                    expire_probe_collection(id, expected, &all, group_died);
+                    let (all, truncated) = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                    expire_probe_collection(id, expected, &all, group_died, truncated);
                 }
                 return None;
             }
@@ -7893,8 +7988,8 @@ mod tests {
         );
         // Bogus tick: always mismatched (wrapping +1).
         let bogus = foreign_tick.wrapping_add(1);
-        expire_probe_collection(id, bogus, &[], false);
-        expire_probe_collection(id, bogus, &[], false);
+        expire_probe_collection(id, bogus, &[], false, false);
+        expire_probe_collection(id, bogus, &[], false, false);
         // Observe before cleanup (R12-014): identity, 200ms
         // settle, then retire.
         let foreign_now = proc_starttime(id);
@@ -7974,7 +8069,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         let bogus = 0xDEAD_BEEF_DEAD_BEEFu64;
-        expire_probe_collection(id, bogus, &[], false);
+        expire_probe_collection(id, bogus, &[], false, false);
         // Settle, then aliveness WITHOUT stat (unreadable by
         // construction): kill-0 plus no reapable zombie.
         std::thread::sleep(Duration::from_millis(200));
@@ -9332,7 +9427,7 @@ mod tests {
                 break;
             }
         };
-        expire_probe_collection_with_hook(id, own_tick, &[], false, Some(&barrier), None);
+        expire_probe_collection_with_hook(id, own_tick, &[], false, Some(&barrier), None, false);
         audit_locked_restore_hint(&last_before);
         // Loud owner cleanup of our fixtures either way, then
         // skips, then the verdict.
@@ -9529,7 +9624,7 @@ mod tests {
                 break;
             }
         };
-        expire_probe_collection_with_hook(id, own_tick, &[], false, None, Some(&reap_hook));
+        expire_probe_collection_with_hook(id, own_tick, &[], false, None, Some(&reap_hook), false);
         audit_locked_restore_hint(&last_before);
         // Loud owner cleanup of our fixtures either way (the
         // drain reaped Z1 already — the wait tolerates ECHILD),
@@ -9650,8 +9745,8 @@ mod tests {
         }
         // Bogus tick: always mismatched (wrapping +1).
         let bogus = holder_tick.wrapping_add(1);
-        expire_probe_collection(id, bogus, &[], true);
-        expire_probe_collection(id, bogus, &[], false);
+        expire_probe_collection(id, bogus, &[], true, false);
+        expire_probe_collection(id, bogus, &[], false, false);
         // Observe before cleanup (R12-014): the owner's wait
         // must still find V's status (a stealing drain would
         // ECHILD here), and the holder must live.
@@ -17730,6 +17825,12 @@ mod tests {
             eprintln!("skip: python3 unavailable");
             return;
         }
+        // Population lock FIRST (the default-budget
+        // !truncated assert below assumes no concurrent
+        // giant table; STEER nests inside — never reverse).
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _serial = AUDIT_STEER_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -17844,7 +17945,7 @@ else:
             missed: false,
         });
         let _nsflock = ns_last_pid_flock();
-        let found = extend_strays_with_pipe_writers_with(
+        let (found, truncated) = extend_strays_with_pipe_writers_with(
             &[],
             Some(read_fd),
             None,
@@ -17902,7 +18003,9 @@ else:
                     .expect("replacement visible");
                 state.rtick = Some(rtick);
             }),
+            &PipeScanBudget::default(),
         );
+        assert!(!truncated, "small fixture population must scan fully");
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
         // Park-a-stray helper (orphaned forks: kill gated,
@@ -18038,6 +18141,9 @@ else:
             eprintln!("skip: python3 unavailable");
             return;
         }
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Collection pipe: we keep the READ end; the victim
         // inherits the WRITE end at slot 1.
         let (read, write) = std::io::pipe().expect("collection pipe");
@@ -18099,7 +18205,7 @@ time.sleep(30)
             fired: bool,
         }
         let state = std::cell::RefCell::new(Steer { fired: false });
-        let found = extend_strays_with_pipe_writers_with(
+        let (found, truncated) = extend_strays_with_pipe_writers_with(
             &[],
             Some(read_fd),
             None,
@@ -18125,11 +18231,13 @@ time.sleep(30)
                     std::thread::sleep(Duration::from_millis(1));
                 }
             }),
+            &PipeScanBudget::default(),
         );
         assert!(
             state.borrow().fired,
             "hook must fire (victim must match identity)"
         );
+        assert!(!truncated, "small fixture population must scan fully");
         // End-to-end: run the discovered pairs through the
         // production stray retire (RED: the stale identity +
         // fresh flags attribute and the victim dies here —
@@ -18167,10 +18275,7 @@ time.sleep(30)
             std::thread::sleep(Duration::from_millis(10));
         }
         let st = reaped.expect("victim status must drain to us (retained, never stolen)");
-        assert!(
-            libc::WIFSIGNALED(st),
-            "victim must die by our signal"
-        );
+        assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
         let _ = std::fs::remove_file(&flag_done);
         let _ = std::fs::remove_file(&unrelated);
@@ -18205,6 +18310,9 @@ time.sleep(30)
             eprintln!("skip: python3 unavailable");
             return;
         }
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Collection pipe: we keep the READ end; the victim
         // inherits the WRITE end at slot 1 and the READ end
         // at slot 3 (for the same-pipe end swap).
@@ -18283,7 +18391,7 @@ time.sleep(30)
             fired: bool,
         }
         let state = std::cell::RefCell::new(Steer { fired: false });
-        let found = extend_strays_with_pipe_writers_with(
+        let (found, truncated) = extend_strays_with_pipe_writers_with(
             &[],
             Some(read_fd),
             None,
@@ -18326,11 +18434,13 @@ time.sleep(30)
                     "swapped slot must be read-only now"
                 );
             }),
+            &PipeScanBudget::default(),
         );
         assert!(
             state.borrow().fired,
             "hook must fire (victim must match identity)"
         );
+        assert!(!truncated, "small fixture population must scan fully");
         // End-to-end: run the discovered pairs through the
         // production stray retire (NOFDINFO2: the stale write
         // identity + same-pipe slot equality attribute and
@@ -18369,12 +18479,388 @@ time.sleep(30)
             std::thread::sleep(Duration::from_millis(10));
         }
         let st = reaped.expect("victim status must drain to us (retained, never stolen)");
-        assert!(
-            libc::WIFSIGNALED(st),
-            "victim must die by our signal"
-        );
+        assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
         let _ = std::fs::remove_file(&flag_done);
+    }
+
+    /// R19-009: pipe-holder discovery is budgeted — the walk
+    /// covers every readable process's whole fd table, so an
+    /// unrelated process with a large table must truncate the
+    /// scan (never silently certify a partial set, never hang
+    /// the expiry prefix). An fd-holder parks with N open
+    /// /dev/null fds (best-effort rlimit raise, count-checked —
+    /// skip loud below 2000); a tight visited-budget reports
+    /// truncated with a found-subset of the ample-budget scan
+    /// (truncation removes, never invents — order-independent);
+    /// an ample budget scans fully with exact pairs; the
+    /// shipped default fits the 20k population; an expired
+    /// deadline truncates at once with nothing found; a zero
+    /// cap scans nothing. STUB-RED (this shape): detection
+    /// unimplemented (always false) and the tight case
+    /// fails. GREEN: all five cells hold.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn discovery_scan_budget_truncates_loud() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Collection pipe: we keep the READ end; one KNOWN
+        // writer holds the write end (the ample scan must
+        // attribute exactly it).
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("918")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        // Fd-holder: best-effort rlimit raise, then N
+        // /dev/null fds, report the count, park.
+        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nopen(sys.argv[2], 'w').write(str(len(fds)))\ntime.sleep(30)\n";
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let flag_count = dir.join(format!("scopebase-r19009-count-{me}"));
+        let _ = std::fs::remove_file(&flag_count);
+        let holder = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg("20000")
+            .arg(&flag_count)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("fd-holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        // Bounded count report; below 2000 the table cannot
+        // isolate the tight budget (skip loud after cleanup).
+        let end = Instant::now() + Duration::from_secs(30);
+        let opened: usize = loop {
+            if let Ok(text) = std::fs::read_to_string(&flag_count) {
+                if let Ok(parsed) = text.trim().parse() {
+                    break parsed;
+                }
+            }
+            assert!(
+                Instant::now() < end,
+                "holder must report its fd count (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        // Owned-child cleanup (kill gated, status drains to
+        // us — the R19-005/006 self-reap discipline).
+        let kill_and_reap = |pid: libc::pid_t, tick: u64, what: &str| {
+            let _ = kill_tick_gated(pid, tick);
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut reaped = None;
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only — our child.
+                if unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) } == pid {
+                    reaped = Some(st);
+                }
+                if proc_starttime(pid) != Ok(Some(tick)) {
+                    break;
+                }
+                assert!(Instant::now() < end, "{what} must die");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let st = reaped.expect("status must drain to us (retained, never stolen)");
+            assert!(libc::WIFSIGNALED(st), "{what} must die by our signal");
+        };
+        if opened < 2000 {
+            kill_and_reap(hpid, htick, "fd-holder");
+            kill_and_reap(wpid, wtick, "writer");
+            drop(holder);
+            drop(writer);
+            let _ = std::fs::remove_file(&flag_count);
+            eprintln!("skip: fd table too small ({opened} < 2000 — no budget isolation)");
+            return;
+        }
+        // Non-vacuity: the table is really there (counted
+        // our way — readdir, not trust).
+        let table = std::fs::read_dir(format!("/proc/{hpid}/fd"))
+            .expect("holder table readable")
+            .count();
+        assert!(
+            table >= opened,
+            "holder table must show the reported fds ({table} >= {opened})"
+        );
+        // Cell 1 (ample): full scan, exact pairs, bounded
+        // wall (generous anti-hang bound, not a benchmark).
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let start = Instant::now();
+        let (full, full_trunc) =
+            extend_strays_with_pipe_writers_with(&[], Some(read_fd), None, None, &ample);
+        let full_elapsed = start.elapsed();
+        assert!(!full_trunc, "ample budget must scan fully");
+        assert_eq!(
+            full,
+            vec![(wpid, wtick)],
+            "ample scan attributes exactly the known writer"
+        );
+        assert!(
+            full_elapsed < Duration::from_secs(30),
+            "ample scan must stay bounded ({full_elapsed:?})"
+        );
+        // Cell 2 (default): the shipped budget fits this
+        // population (20k < 100k cap — pins the default
+        // against shrinking below fixture reality; the
+        // population lock excludes the 150k neighbor).
+        let (defaulted, default_trunc) = extend_strays_with_pipe_writers_with(
+            &[],
+            Some(read_fd),
+            None,
+            None,
+            &PipeScanBudget::default(),
+        );
+        assert!(!default_trunc, "default budget must fit a 20k table");
+        assert_eq!(
+            defaulted, full,
+            "default scan must agree with the ample scan"
+        );
+        // Cell 3 (tight): truncation + subset property
+        // (truncation removes, never invents). The trip is
+        // guaranteed: the holder's table alone exceeds
+        // quadruple the budget, whatever the walk order.
+        let tight = PipeScanBudget {
+            max_visited_fds: opened / 4,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let (partial, partial_trunc) =
+            extend_strays_with_pipe_writers_with(&[], Some(read_fd), None, None, &tight);
+        assert!(
+            partial_trunc,
+            "tight budget must report truncation (never silent)"
+        );
+        for pair in &partial {
+            assert!(
+                full.contains(pair),
+                "truncated scan must only remove, never invent: {pair:?}"
+            );
+        }
+        // Cell 4 (expired deadline): immediate truncation,
+        // nothing scanned.
+        let spent = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() - Duration::from_secs(1),
+        };
+        let (none, none_trunc) =
+            extend_strays_with_pipe_writers_with(&[], Some(read_fd), None, None, &spent);
+        assert!(none_trunc, "expired deadline must truncate at once");
+        assert!(none.is_empty(), "expired deadline must scan nothing");
+        // Cell 5 (zero cap): likewise scans nothing.
+        let zero = PipeScanBudget {
+            max_visited_fds: 0,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let (nil, nil_trunc) =
+            extend_strays_with_pipe_writers_with(&[], Some(read_fd), None, None, &zero);
+        assert!(nil_trunc, "zero cap must truncate at once");
+        assert!(nil.is_empty(), "zero cap must scan nothing");
+        // Cleanup: both owned children reaped by us.
+        kill_and_reap(hpid, htick, "fd-holder");
+        kill_and_reap(wpid, wtick, "writer");
+        drop(holder);
+        drop(writer);
+        let _ = std::fs::remove_file(&flag_count);
+    }
+
+    /// R19-009 (end-to-end): a collection expiry beside a
+    /// pathological fd table stays bounded and reports —
+    /// the default scan budget truncates the walk (unit cell
+    /// asserts the flag directly — deterministic, since the
+    /// table alone exceeds the 100k cap whatever the walk
+    /// order; STUB-RED fails it) instead of prefixing the 5 s
+    /// tree budget with an unbounded scan, and the expiry
+    /// still retires the probe group (characterization cell:
+    /// pre-fix code also completes here, only slower —
+    /// wall-bounded, group-gone, status reaped by the
+    /// expiry). A 150k-fd holder parks (skip loud below
+    /// 120k); a self-grouped piped probe expires on a short
+    /// deadline. Serialized with the other
+    /// discovery-population tests (a concurrent
+    /// default-budget `!truncated` assert would see this
+    /// table).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expiry_beside_bigtable_stays_bounded_and_loud() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Fd-holder: 150k /dev/null fds (same staging as
+        // the budget cells).
+        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nopen(sys.argv[2], 'w').write(str(len(fds)))\ntime.sleep(30)\n";
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let flag_count = dir.join(format!("scopebase-r19009e-count-{me}"));
+        let _ = std::fs::remove_file(&flag_count);
+        let holder = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg("150000")
+            .arg(&flag_count)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("fd-holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let end = Instant::now() + Duration::from_secs(60);
+        let opened: usize = loop {
+            if let Ok(text) = std::fs::read_to_string(&flag_count) {
+                if let Ok(parsed) = text.trim().parse() {
+                    break parsed;
+                }
+            }
+            assert!(
+                Instant::now() < end,
+                "holder must report its fd count (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        // Owned-child cleanup (kill gated, status drains to
+        // us — the R19-005/006 self-reap discipline).
+        let kill_and_reap = |pid: libc::pid_t, tick: u64, what: &str| {
+            let _ = kill_tick_gated(pid, tick);
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut reaped = None;
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only — our child.
+                if unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) } == pid {
+                    reaped = Some(st);
+                }
+                if proc_starttime(pid) != Ok(Some(tick)) {
+                    break;
+                }
+                assert!(Instant::now() < end, "{what} must die");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let st = reaped.expect("status must drain to us (retained, never stolen)");
+            assert!(libc::WIFSIGNALED(st), "{what} must die by our signal");
+        };
+        if opened < 120_000 {
+            kill_and_reap(hpid, htick, "fd-holder");
+            drop(holder);
+            let _ = std::fs::remove_file(&flag_count);
+            eprintln!("skip: fd table too small ({opened} < 120000 — no default-cap isolation)");
+            return;
+        }
+        // Self-grouped piped probe (holds EOF open by
+        // sleeping — the collection must expire it).
+        let mut probe_cmd = std::process::Command::new("python3");
+        probe_cmd
+            .arg("-c")
+            .arg("import time\ntime.sleep(30)\n")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe_cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe_cmd.spawn().expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let probe_tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(id) },
+            id,
+            "probe must self-group (stage broken otherwise)"
+        );
+        // Unit cell: the default budget truncates on this
+        // table (neighbors only add entries — the trip is
+        // guaranteed).
+        {
+            use std::os::unix::io::AsRawFd as _;
+            let out_fd = probe.stdout.as_ref().map(|pipe| pipe.as_raw_fd());
+            let err_fd = probe.stderr.as_ref().map(|pipe| pipe.as_raw_fd());
+            let (_pairs, truncated) = extend_strays_with_pipe_writers_with(
+                &[],
+                out_fd,
+                err_fd,
+                None,
+                &PipeScanBudget::default(),
+            );
+            assert!(truncated, "default budget must truncate on the 150k table");
+        }
+        // E2E cell: the collection expires (short deadline —
+        // the probe holds EOF open), bounded wall, probe
+        // group gone, probe status reaped by the expiry.
+        let start = Instant::now();
+        let end = start + Duration::from_secs(1);
+        let got = collect_probe_output_bounded(&mut probe, end, probe_tick, &[]);
+        let elapsed = start.elapsed();
+        assert!(got.is_none(), "live probe must expire, not collect");
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "expiry beside the big table must stay bounded ({elapsed:?})"
+        );
+        let gend = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: killpg(id, 0) probes existence only.
+            if unsafe { libc::killpg(id, 0) } < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                assert_eq!(
+                    errno,
+                    libc::ESRCH,
+                    "group probe must fail ESRCH-only, got {errno}"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < gend,
+                "probe group {id} survived the expiry"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The expiry reaped the probe numerically (our
+        // handle finds ECHILD — the run-proof that expiry,
+        // not us, retired it; the number was pinned by our
+        // unreaped ownership throughout, so no recycle).
+        match probe.wait() {
+            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {}
+            other => panic!("probe handle must see ECHILD after expiry reap, got {other:?}"),
+        }
+        // Cleanup: the fd-holder (owned, gated, self-reaped).
+        kill_and_reap(hpid, htick, "fd-holder");
+        drop(holder);
+        let _ = std::fs::remove_file(&flag_count);
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
