@@ -10398,6 +10398,135 @@ mod tests {
         );
     }
 
+    /// R16-005: reap-pump for the denial writer — reaps through
+    /// the Child handle (NOT raw waitpid). The handle caches the
+    /// status, so the later liveness oracle (`try_wait`) reads the
+    /// cache instead of issuing a numeric wait past the reap (a
+    /// live recycled replacement would read None/false-live; a
+    /// zombie replacement would be status-stolen).
+    #[cfg(target_arch = "x86_64")]
+    fn pump_reap_writer(writer: &mut std::process::Child) {
+        // Through the handle: fills the status cache (errors and
+        // no-zombie-yet ignored — the pump is best-effort).
+        let _ = writer.try_wait();
+    }
+
+    /// R16-005: the reap pump and the liveness oracle must share
+    /// Child status — a raw pump reap leaves the handle stale, so
+    /// the oracle's numeric wait observes a recycled number. Live
+    /// replacement arm: after the pump's reap, a live recycle
+    /// must NOT read live (RED: None/false-live); zombie arm: a
+    /// zombie recycle must keep its status for its owner (RED:
+    /// stolen). No S100 skip: try_wait is tick-blind.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reap_pump_and_oracle_share_child_status() {
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        // Live arm: pump-reap, steer a LIVE replacement, the
+        // oracle must report not-live (the original is dead).
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        // SAFETY: signal-only to our own staged writer.
+        unsafe {
+            libc::kill(wpid, libc::SIGKILL);
+        }
+        // Settle into Z BEFORE the pump (bounded poll on /proc
+        // state — never a reaping wait — so the pump reaps).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(wpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "writer never zombied");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        pump_reap_writer(&mut writer);
+        let mut live = match steer_sleep_onto(wpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut live_guard = FixtureGuard::new(wpid);
+        assert!(
+            !matches!(writer.try_wait(), Ok(None)),
+            "oracle must report not-live after the pump's reap (live recycle)"
+        );
+        assert!(
+            matches!(live.try_wait(), Ok(None)),
+            "live replacement must stay live (nothing may reap it)"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+        // Zombie arm: pump-reap, steer a ZOMBIE replacement, the
+        // oracle must report not-live AND leave its status for us.
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        // SAFETY: signal-only to our own staged writer.
+        unsafe {
+            libc::kill(wpid, libc::SIGKILL);
+        }
+        // Settle into Z BEFORE the pump (bounded poll on /proc
+        // state — never a reaping wait — so the pump reaps).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(wpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "writer never zombied");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        pump_reap_writer(&mut writer);
+        let mut zombie = match steer_sleep_onto(wpid, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        let mut zombie_guard = FixtureGuard::new(wpid);
+        // SAFETY: signal-only to our own staged replacement.
+        unsafe {
+            libc::kill(wpid, libc::SIGKILL);
+        }
+        // Settle into Z BEFORE the oracle (bounded poll on /proc
+        // state — never a reaping wait).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(wpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "replacement never zombied");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            !matches!(writer.try_wait(), Ok(None)),
+            "oracle must report not-live after the pump's reap (zombie recycle)"
+        );
+        assert!(
+            matches!(zombie.try_wait(), Ok(Some(_))),
+            "zombie replacement status must be retained for its owner"
+        );
+        zombie_guard.disarm();
+    }
+
     /// R14-011: pin and stat failures against a live writer stay
     /// UNRESOLVED (false) — never certified disappearance. Each
     /// case stages a fresh live writer and retires it under a
@@ -10454,10 +10583,10 @@ mod tests {
                 // WE can reap our zombie (the probe's waitpid
                 // ECHILDs) — without this pump the control's
                 // await would time out on our unreaped zombie.
-                // SAFETY: WNOHANG reap of our own child; errors
-                // (no zombie yet) ignored.
-                let mut straggler = 0;
-                unsafe { libc::waitpid(wpid, &mut straggler, libc::WNOHANG) };
+                // R16-005: through the handle (fills the status
+                // cache — the oracle below reads it instead of
+                // issuing a numeric wait past the reap).
+                pump_reap_writer(&mut writer);
                 if Instant::now() >= end {
                     let _ = probe.kill();
                     let _ = probe.wait();
