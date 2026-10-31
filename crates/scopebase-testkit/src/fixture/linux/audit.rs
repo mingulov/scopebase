@@ -9429,7 +9429,9 @@ mod tests {
         let refused = std::panic::catch_unwind(|| read_published_grandchild_strays(&pidfile));
         // The victim must survive regardless of the verdict;
         // then root-file cleanup plus loud victim retirement.
-        let survived = proc_starttime(vpid) == Ok(Some(vtick));
+        // R15-010: try_wait-None (the victim is OUR child;
+        // tick-match cannot distinguish live from unreaped-zombie).
+        let survived = matches!(victim.try_wait(), Ok(None));
         let _ = std::process::Command::new("sudo")
             .arg("-n")
             .arg("rm")
@@ -10193,7 +10195,15 @@ mod tests {
             // Observe before cleanup (R12-014): capture liveness
             // first, retire the writer either way (RED runs stay
             // clean), then assert.
-            let live = proc_starttime(wpid) == Ok(Some(wtick));
+            // R15-010: try_wait-None is the liveness oracle for
+            // our OWNED writer. Tick-match cannot distinguish a
+            // live writer from the kill-mutant's unreaped zombie
+            // (see liveness_oracle_discriminates_zombie_from_live
+            // for the pinned hole). Total and definitive:
+            // Ok(None) = running; Ok(Some) = just exited (we reap
+            // here); Err(ECHILD) = our reap pump already collected
+            // it — every non-None arm means not-live.
+            let live = matches!(writer.try_wait(), Ok(None));
             // R15-003: tick-gated (the pump may have reaped the
             // writer; a blind kill would murder a recycled
             // replacement, and a stale Child::wait would steal
@@ -10210,6 +10220,62 @@ mod tests {
                 "{spec}: writer liveness after retire wrong (live={live})"
             );
         }
+    }
+
+    /// R15-010: liveness-oracle discrimination — a tick-keeping
+    /// zombie satisfies tick-match ("still live") but not
+    /// try_wait-None. Stages an owned writer, kills it, settles
+    /// it to Z WITHOUT reaping (the kill-plus-false mutant's
+    /// artifact: kill, report false, exit fast beating the reap
+    /// pump), then pins the distinction: the OLD oracle reports
+    /// live (documents the hole — the R14-011 test must NOT use
+    /// it), the NEW oracle reports not-live (definitive for
+    /// owned children: ECHILD/Some = not live). Duration 73 is
+    /// unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn liveness_oracle_discriminates_zombie_from_live() {
+        use std::time::{Duration, Instant};
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("73")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        // The mutant's artifact: dead but unreaped (settle to Z
+        // via /proc state — never a reaping wait).
+        // SAFETY: signal-only to our own staged writer.
+        unsafe {
+            libc::kill(wpid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(wpid), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "writer never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // OLD oracle: tick-match — true on the zombie (THIS IS
+        // THE HOLE: it cannot distinguish live from dead).
+        let old_live = proc_starttime(wpid) == Ok(Some(wtick));
+        assert!(
+            old_live,
+            "old oracle must report live on a zombie (hole documentation)"
+        );
+        // NEW oracle: try_wait-None — definitive for owned
+        // children (reaps the just-found zombie as a side
+        // effect: already-not-live either way).
+        let new_live = matches!(writer.try_wait(), Ok(None));
+        assert!(!new_live, "new oracle must report not-live on a zombie");
+        // Hygiene (the try_wait above already reaped).
+        let _ = writer.wait();
+        assert_eq!(proc_starttime(wpid), Ok(None), "zombie retired loud");
     }
 
     /// R13-005: an outer probe that exits after grandchild birth
