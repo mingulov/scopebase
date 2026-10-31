@@ -9300,17 +9300,24 @@ mod tests {
         /// assumes). Pins ONLY while the live birth matches
         /// `expected`; mismatch, gone, or
         /// unreadable-after-budget refuses (None — the drop
-        /// will not signal). Never panics. Caller obligation:
+        /// will not signal). R18-003: refusal DISARMS (a
+        /// refused drop used to fall into child cleanup,
+        /// murdering an owned-child replacement the pin had
+        /// positively distinguished — the drop must stand
+        /// down instead). Refusal is terminal: a late `pin`
+        /// does not undisarm (recover by re-constructing once
+        /// reads work). Never panics. Caller obligation:
         /// `expected` must name the intended birth (a
         /// transmitted pair, or a tick sighted while the
         /// target was known-live — never a post-retire
         /// re-read, which could name a squatter).
         fn new_expected(pid: libc::pid_t, expected: u64) -> Self {
             let tick = pin_expected_tick(pid, expected);
+            let refused = tick.is_none();
             FixtureGuard {
                 pid,
                 tick,
-                disarmed: false,
+                disarmed: refused,
             }
         }
         /// Stand down after an explicit loud retire — without
@@ -10453,6 +10460,94 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let _ = sh2.wait();
+    }
+
+    /// R18-003: an expected-identity REFUSAL must stand down —
+    /// the drop must not run child cleanup over a number
+    /// positively known to host another birth. Live owned
+    /// child + mismatched expected tick: construct (refuses),
+    /// drop, require the child still live. RED (refusal falls
+    /// into the child-cleanup arm): the drop murders the
+    /// child. Duration 78 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expected_pin_refusal_spares_live_owned_child() {
+        use std::time::{Duration, Instant};
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("78")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        {
+            let refused = FixtureGuard::new_expected(pid, tick.wrapping_add(7));
+            assert!(
+                refused.tick.is_none(),
+                "mismatched expected birth must refuse"
+            );
+        } // Drop fires here: must stand down.
+          // Settle briefly — a dropped kill would land at once,
+          // but the live re-read below is the proof either way.
+        let end = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            matches!(child.try_wait(), Ok(None)),
+            "refused drop must spare the live owned child"
+        );
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(Some(tick)),
+            "refused drop must not disturb the live birth"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// R18-003: refusal over a ZOMBIE owned child must preserve
+    /// its status for the owner (no reap by the refused drop).
+    /// RED (refusal falls into child cleanup): the drop reaps
+    /// and our wait finds ECHILD. Exit 78 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expected_pin_refusal_preserves_zombie_owned_child() {
+        use std::time::{Duration, Instant};
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 78")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let pid = child.id() as libc::pid_t;
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(pid), Some('Z')) {
+                break;
+            }
+            assert!(Instant::now() < end, "setup child never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let tick = proc_starttime(pid)
+            .expect("zombie stat readable")
+            .expect("zombie visible");
+        {
+            let refused = FixtureGuard::new_expected(pid, tick.wrapping_add(7));
+            assert!(
+                refused.tick.is_none(),
+                "mismatched expected birth must refuse"
+            );
+        } // Drop fires here: must not reap.
+        let status = child.wait().expect("zombie status stays with us");
+        assert_eq!(status.code(), Some(78), "exit code must survive");
     }
 
     /// R16-011: probe-staging failure custody (audit twin of the
