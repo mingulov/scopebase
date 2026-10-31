@@ -3344,16 +3344,20 @@ impl SilentChildGuard {
 }
 
 /// R15-005: drop-time fallback when the pinned tick re-read
-/// FAILS (Err only — Ok arms are decided by the caller). Probes
-/// with waitpid + kill-0, which need NO fds (EMFILE-safe): a
-/// reaped child or a kill-0 ESRCH discharges silently (correct);
-/// anything else — live-0, or ECHILD-but-present (a live
-/// non-child the waitpid cannot see) — emits an explicit
-/// identity-preserving unresolved-custody line (pid + pinned
-/// tick + read error) via a fallible stderr write — never
-/// eprintln! in Drop (panicking during unwind aborts). Never
-/// signals: unresolved identity must not kill (R15-003), and a
-/// live-0 could be our own fork's recycle (R14-001 residual).
+/// FAILS (Err only — Ok arms are decided by the caller).
+/// R16-004: kill-0 ONLY — never waitpid. Without the tick read
+/// the number's holder is unproven: a same-process sibling test
+/// may own a zombie there (threads share the child table) and a
+/// numeric wait would steal its status while falsely discharging
+/// our custody. ESRCH discharges silently (proven gone);
+/// anything else emits the explicit identity-preserving
+/// unresolved-custody line (pid + pinned tick + read error) via
+/// a fallible stderr write — never eprintln! in Drop (panicking
+/// during unwind aborts). Our own unreaped zombie goes loud and
+/// reaps at process exit (the R15-005 silent zombie arm is gone
+/// with its theft). Never signals: unresolved identity must not
+/// kill (R15-003), and a present number could be our own fork's
+/// recycle (R14-001 residual).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn drop_unresolved_custody(pid: i32, tick: u64, read_err: &str) {
     use std::io::Write as _;
@@ -3363,18 +3367,6 @@ fn drop_unresolved_custody(pid: i32, tick: u64, read_err: &str) {
             "scopebase unresolved-custody pid={pid} tick={tick} read_err={read_err}"
         );
     };
-    let mut status = 0;
-    // SAFETY: WNOHANG probe; never blocks.
-    let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-    if got == pid {
-        return; // Reaped: discharged, silent.
-    }
-    if got == 0 {
-        loud(); // Live owned child — loud, no kill (see doc).
-        return;
-    }
-    // ECHILD-shaped (reaped already, or never our child):
-    // kill-0 decides without fds.
     // SAFETY: signal 0 queries only.
     if unsafe { libc::kill(pid, 0) } != 0
         && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
@@ -3382,7 +3374,9 @@ fn drop_unresolved_custody(pid: i32, tick: u64, read_err: &str) {
         return; // Gone: discharged, silent.
     }
     // Present (kill-0 ok, EPERM, or anything else):
-    // unobservable-but-there — loud.
+    // unobservable-but-there — loud. No waitpid: the holder may
+    // be a sibling's zombie (status theft) or a live task
+    // (nothing to reap) — neither is ours to take.
     loud();
 }
 
@@ -4014,7 +4008,7 @@ fn emfile_probe_child(mode: &str) {
     // mode keeps its sh parent for loud cleanup below.
     let mut sh_parent: Option<std::process::Child> = None;
     let pid = match mode {
-        "live" | "gone" => fork_pauser(),
+        "live" | "gone" | "stolen" => fork_pauser(),
         "zombie" => {
             // SAFETY: fork; the child only _exits (no runtime,
             // no locks).
@@ -4075,6 +4069,47 @@ fn emfile_probe_child(mode: &str) {
         .expect("fixture present");
     assert_eq!(guard.tick, Some(tick), "constructor must pin the live tick");
     eprintln!("R15005-PINNED pid={pid} tick={tick}");
+    // R16-004: retire+reap A (guard stale-armed), steer B onto
+    // the number, zombify B unreaped (the sibling-owned zombie
+    // the fallback must not reap). BEFORE exhaustion (fork
+    // needs fds). Single-threaded probe: no in-process
+    // contention, flock-only steering is sound.
+    if mode == "stolen" {
+        kill_wait_child(pid);
+        let last_before =
+            std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
+        let sibling = match steer_pauser_onto(pid, last_before.trim()) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("R16004-SKIP stolen (retake contended)");
+                eprintln!("R15005-CHILD-DONE mode={mode}");
+                return;
+            }
+        };
+        let btick = task_starttime_checked(sibling)
+            .expect("sibling stat readable")
+            .expect("sibling visible");
+        if btick == tick {
+            kill_wait_child(sibling);
+            eprintln!("R16004-SKIP stolen (same-tick retake S100)");
+            eprintln!("R15005-CHILD-DONE mode={mode}");
+            return;
+        }
+        // SAFETY: signal-only to our own staged sibling.
+        unsafe {
+            libc::kill(sibling, libc::SIGKILL);
+        }
+        // Settle into Z BEFORE the drop (bounded poll on task
+        // state — never a reaping wait).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(task_state(sibling), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "sibling never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     // Exhaust fds (held, so the loud asserts and cleanup below
     // can restore them).
     let mut held = Vec::new();
@@ -4118,15 +4153,17 @@ fn emfile_probe_child(mode: &str) {
             assert_eq!(task_starttime_checked(pid), Ok(None), "live retired loud");
         }
         "zombie" => {
-            // The fd-less waitpid-probe must have discharged it:
-            // ECHILD now (a reap HERE would prove the fallback
-            // did not reap — RED).
+            // R16-004: the fallback must NOT reap (a sibling's
+            // zombie is indistinguishable without the tick
+            // read) — it reports loud and the OWNER reaps. Our
+            // reap here proves the fallback left the status
+            // alone (a theft would show ECHILD).
             let mut status = 0;
-            // SAFETY: WNOHANG probe only.
+            // SAFETY: WNOHANG reap of our own staged zombie.
             let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-            assert!(
-                got < 0,
-                "fallback must discharge the zombie (reaped here: {got})"
+            assert_eq!(
+                got, pid,
+                "fallback must not reap the zombie (stolen: {got})"
             );
         }
         "gone" => {
@@ -4138,6 +4175,16 @@ fn emfile_probe_child(mode: &str) {
             if matches!(task_starttime_checked(pid), Ok(Some(_))) {
                 eprintln!("R15005-GONE-RECYCLED pid={pid}");
             }
+        }
+        "stolen" => {
+            // R16-004: the sibling's status must be retained
+            // (we reap it — a fallback theft would show ECHILD
+            // here instead of discharging silently).
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own staged zombie.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            assert_eq!(got, pid, "sibling zombie status stolen by the fallback");
+            eprintln!("R16004-STATUS retained pid={pid}");
         }
         "stranger" => {
             assert_eq!(
@@ -4182,22 +4229,49 @@ fn emfile_live_drop_reports_unresolved_custody() {
     assert_eq!(cited, pinned, "custody line must cite the pinned identity");
 }
 
-/// R15-005: a pinned guard dropped under EMFILE over a ZOMBIE
-/// child discharges it via the fd-less waitpid-probe — silent
-/// (nothing unresolved) but reaped. Pre-fix the drop skips and
-/// the child-side assert reaps instead (RED: got == pid).
+/// R16-004 (contract change from R15-005's silent zombie
+/// arm): a pinned guard dropped under EMFILE over a ZOMBIE child
+/// reports unresolved custody. The fallback must not reap (a
+/// sibling's zombie is indistinguishable without the tick read),
+/// so it reports loud and the owner reaps — the probe body
+/// proves the status survived for the owner.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
-fn emfile_zombie_drop_discharges_silently() {
+fn emfile_zombie_drop_reports_unresolved_custody() {
     if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
         emfile_probe_child(&mode);
         return;
     }
-    let stderr = emfile_probe_spawn("zombie", "emfile_zombie_drop_discharges_silently");
+    let stderr = emfile_probe_spawn("zombie", "emfile_zombie_drop_reports_unresolved_custody");
+    let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "zombie");
+    let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "zombie");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R16-004: a sibling-owned zombie at the stale number keeps its
+/// status (the fallback must not reap it) and the drop reports
+/// loud with the pinned identity. Pre-fix the fallback reaps it
+/// silently (RED: the probe panics on the stolen status);
+/// post-fix the owner reaps (GREEN).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_stale_drop_spares_sibling_zombie() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn("stolen", "emfile_stale_drop_spares_sibling_zombie");
+    if stderr.contains("R16004-SKIP") {
+        eprintln!("skip: stolen stage contended (see probe stderr)");
+        return;
+    }
     assert!(
-        !stderr.contains("unresolved-custody"),
-        "zombie discharge must stay silent\n{stderr}"
+        stderr.contains("R16004-STATUS retained"),
+        "sibling zombie status must be retained\n{stderr}"
     );
+    let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "stolen");
+    let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "stolen");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
 }
 
 /// R15-005: a pinned guard dropped under EMFILE over a GONE

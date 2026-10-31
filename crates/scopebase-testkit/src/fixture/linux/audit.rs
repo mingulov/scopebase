@@ -7863,7 +7863,7 @@ mod tests {
         let mut owned: Option<std::process::Child> = None;
         let mut sh_parent: Option<std::process::Child> = None;
         let pid = match mode {
-            "live" | "gone" => {
+            "live" | "gone" | "stolen" => {
                 let child = spawn_sleep("51");
                 let pid = child.id() as libc::pid_t;
                 owned = Some(child);
@@ -7925,6 +7925,46 @@ mod tests {
             .expect("fixture present");
         assert_eq!(guard.tick, Some(tick), "constructor must pin the live tick");
         eprintln!("R15005-PINNED pid={pid} tick={tick}");
+        // R16-004: retire+reap A (guard stale-armed), steer B onto
+        // the number, zombify B unreaped (the sibling-owned zombie
+        // the fallback must not reap). BEFORE exhaustion (spawn
+        // needs fds). Single-threaded probe: no in-process
+        // contention, flock-only steering is sound.
+        if mode == "stolen" {
+            let mut child = owned.take().expect("owned staged");
+            let _ = child.kill();
+            let _ = child.wait();
+            let mut sibling = match steer_sleep_onto(pid, false) {
+                Some(kid) => kid,
+                None => {
+                    eprintln!("R16004-SKIP stolen (retake contended)");
+                    eprintln!("R15005-CHILD-DONE mode={mode}");
+                    return;
+                }
+            };
+            let btick = proc_starttime(pid)
+                .expect("sibling stat readable")
+                .expect("sibling visible");
+            if btick == tick {
+                let _ = sibling.kill();
+                let _ = sibling.wait();
+                eprintln!("R16004-SKIP stolen (same-tick retake S100)");
+                eprintln!("R15005-CHILD-DONE mode={mode}");
+                return;
+            }
+            let _ = sibling.kill();
+            // Settle into Z BEFORE the drop (bounded poll on /proc
+            // state — never a reaping wait).
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if matches!(proc_state(pid), Some(state) if state == 'Z') {
+                    break;
+                }
+                assert!(Instant::now() < end, "sibling never zombied");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            owned = Some(sibling);
+        }
         let mut held = Vec::new();
         while let Ok(file) = std::fs::File::open("/dev/null") {
             held.push(file);
@@ -7963,16 +8003,18 @@ mod tests {
                 assert_eq!(proc_starttime(pid), Ok(None), "live retired loud");
             }
             "zombie" => {
+                // R16-004: the fallback must NOT reap (a sibling's
+                // zombie is indistinguishable without the tick
+                // read) — it reports loud and the OWNER reaps. Our
+                // reap here proves the fallback left the status
+                // alone (a theft would show ECHILD).
                 let mut status = 0;
-                // SAFETY: WNOHANG probe only.
+                // SAFETY: WNOHANG reap of our own staged zombie.
                 let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-                assert!(
-                    got < 0,
-                    "fallback must discharge the zombie (reaped here: {got})"
+                assert_eq!(
+                    got, pid,
+                    "fallback must not reap the zombie (stolen: {got})"
                 );
-                // Belt-and-braces: the handle must agree (ECHILD).
-                let mut child = owned.take().expect("owned staged");
-                let _ = child.wait();
             }
             "gone" => {
                 // A recycled number (suite activity retaking it
@@ -7983,6 +8025,16 @@ mod tests {
                 if matches!(proc_starttime(pid), Ok(Some(_))) {
                     eprintln!("R15005-GONE-RECYCLED pid={pid}");
                 }
+            }
+            "stolen" => {
+                // R16-004: the sibling's status must be retained
+                // (we reap it — a fallback theft would show ECHILD
+                // here instead of discharging silently).
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of our own staged zombie.
+                let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                assert_eq!(got, pid, "sibling zombie status stolen by the fallback");
+                eprintln!("R16004-STATUS retained pid={pid}");
             }
             "stranger" => {
                 assert_eq!(
@@ -8026,23 +8078,56 @@ mod tests {
         assert_eq!(cited, pinned, "custody line must cite the pinned identity");
     }
 
-    /// R15-005: audit twin — zombie drop under EMFILE discharges
-    /// silently.
+    /// R16-004 (contract change from R15-005's silent zombie
+    /// arm): audit twin — zombie drop under EMFILE reports
+    /// unresolved custody. The fallback must not reap (a
+    /// sibling's zombie is indistinguishable without the tick
+    /// read), so it reports loud and the owner reaps — the probe
+    /// body proves the status survived for the owner.
     #[test]
     #[cfg(target_arch = "x86_64")]
-    fn audit_emfile_zombie_drop_discharges_silently() {
+    fn audit_emfile_zombie_drop_reports_unresolved_custody() {
         if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
             audit_emfile_probe_child(&mode);
             return;
         }
         let stderr = audit_emfile_probe_spawn(
             "zombie",
-            "fixture::linux::audit::tests::audit_emfile_zombie_drop_discharges_silently",
+            "fixture::linux::audit::tests::audit_emfile_zombie_drop_reports_unresolved_custody",
         );
+        let pinned = audit_emfile_probe_tagged(&stderr, "R15005-PINNED ", "zombie");
+        let cited = audit_emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "zombie");
+        assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+    }
+
+    /// R16-004: audit twin — a sibling-owned zombie at the stale
+    /// number keeps its status (the fallback must not reap it)
+    /// and the drop reports loud with the pinned identity.
+    /// Pre-fix the fallback reaps it silently (RED: the probe
+    /// panics on the stolen status); post-fix the owner reaps
+    /// (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_stale_drop_spares_sibling_zombie() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+            audit_emfile_probe_child(&mode);
+            return;
+        }
+        let stderr = audit_emfile_probe_spawn(
+            "stolen",
+            "fixture::linux::audit::tests::audit_emfile_stale_drop_spares_sibling_zombie",
+        );
+        if stderr.contains("R16004-SKIP") {
+            eprintln!("skip: stolen stage contended (see probe stderr)");
+            return;
+        }
         assert!(
-            !stderr.contains("unresolved-custody"),
-            "zombie discharge must stay silent\n{stderr}"
+            stderr.contains("R16004-STATUS retained"),
+            "sibling zombie status must be retained\n{stderr}"
         );
+        let pinned = audit_emfile_probe_tagged(&stderr, "R15005-PINNED ", "stolen");
+        let cited = audit_emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "stolen");
+        assert_eq!(cited, pinned, "custody line must cite the pinned identity");
     }
 
     /// R15-005: audit twin — gone-number drop under EMFILE stays
@@ -8653,10 +8738,17 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     /// R15-005: drop-time fallback when the pinned tick
     /// re-read FAILS (audit twin of the toolchain
-    /// `drop_unresolved_custody` — same contract: fd-less
-    /// waitpid + kill-0 probe, silent on reaped/ESRCH, loud
-    /// identity-preserving line otherwise, never signals, never
-    /// panics).
+    /// `drop_unresolved_custody` — same contract).
+    /// R16-004: kill-0 ONLY — never waitpid. Without the tick
+    /// read the number's holder is unproven: a same-process
+    /// sibling test may own a zombie there (threads share the
+    /// child table) and a numeric wait would steal its status
+    /// while falsely discharging our custody. ESRCH discharges
+    /// silently (proven gone); anything else is loud unresolved
+    /// (a live task we must not signal, or our own unreaped
+    /// zombie — which process exit reaps; the R15-005 silent
+    /// zombie arm is gone with its theft). Never signals, never
+    /// panics.
     #[cfg(target_arch = "x86_64")]
     fn drop_unresolved_custody(pid: libc::pid_t, tick: u64, read_err: &str) {
         use std::io::Write as _;
@@ -8666,18 +8758,6 @@ mod tests {
                 "scopebase unresolved-custody pid={pid} tick={tick} read_err={read_err}"
             );
         };
-        let mut status = 0;
-        // SAFETY: WNOHANG probe; never blocks.
-        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-        if got == pid {
-            return; // Reaped: discharged, silent.
-        }
-        if got == 0 {
-            loud(); // Live owned child — loud, no kill.
-            return;
-        }
-        // ECHILD-shaped (reaped already, or never our child):
-        // kill-0 decides without fds.
         // SAFETY: signal 0 queries only.
         if unsafe { libc::kill(pid, 0) } != 0
             && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
@@ -8685,7 +8765,9 @@ mod tests {
             return; // Gone: discharged, silent.
         }
         // Present (kill-0 ok, EPERM, or anything else):
-        // unobservable-but-there — loud.
+        // unobservable-but-there — loud. No waitpid: the holder
+        // may be a sibling's zombie (status theft) or a live
+        // task (nothing to reap) — neither is ours to take.
         loud();
     }
 
