@@ -5759,8 +5759,21 @@ fn emfile_probe_child(mode: &str) {
     let mut _zguard: Option<SilentChildGuard> = None;
     let mut _sh_guard: Option<SilentChildGuard> = None;
     let mut _stranger_guard: Option<SilentChildGuard> = None;
+    // R19-012: birth guard for the owned live/gone/stolen
+    // arm (armed at birth below — the transmit read must
+    // never run unguarded; an unguarded failure orphans an
+    // infinite pauser with no owner at all).
+    let mut _owned_guard: Option<SilentChildGuard> = None;
     let pid = match mode {
-        "live" | "gone" | "stolen" => fork_pauser(),
+        "live" | "gone" | "stolen" | "observe-fail" => {
+            let pid = fork_pauser();
+            // R19-012: custody AT birth (own unreaped child —
+            // the reservation makes the bare pin sound; a
+            // failed transmit read below unwinds through
+            // retirement, never an orphaned pauser).
+            _owned_guard = Some(SilentChildGuard::new(pid));
+            pid
+        }
         "zombie" => {
             // SAFETY: fork; the child only _exits (no runtime,
             // no locks).
@@ -5822,11 +5835,76 @@ fn emfile_probe_child(mode: &str) {
         }
         _ => panic!("unknown probe mode {mode}"),
     };
+    // R19-012: steered first-observation failure — the
+    // fresh image inherits exhaustion, modeled by
+    // exhausting AFTER the birth guard is armed (unwind
+    // drops the exhaustion first, restoring fds before
+    // the guard retires verified — never the unresolved
+    // fallback). The transmit read must fail, and the
+    // birth guard must retire + discharge the live pauser
+    // before the failure reports. RED (no birth guard):
+    // the infinite pauser survives with no owner and the
+    // retirement assert fails.
+    if mode == "observe-fail" {
+        // R18-012 bar: genuine exhaustion ONLY (any other
+        // terminal error is a broken exhauster — the
+        // verdicts below would be vacuous).
+        let terminal_is_emfile = std::cell::Cell::new(false);
+        // Shared by reference (the closure below moves
+        // the guard, so it cannot also move the cell).
+        let term_flag = &terminal_is_emfile;
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _birth = _owned_guard;
+            let mut steered = Vec::new();
+            let terminal = loop {
+                match std::fs::File::open("/dev/null") {
+                    Ok(file) => steered.push(file),
+                    Err(error) => break error,
+                }
+            };
+            term_flag.set(terminal.raw_os_error() == Some(libc::EMFILE));
+            assert!(!steered.is_empty(), "steered exhaustion must consume fds");
+            let _tick = task_starttime_checked(pid)
+                .expect("fixture stat readable")
+                .expect("fixture present");
+        }));
+        assert!(
+            terminal_is_emfile.get(),
+            "steered exhaustion must end at EMFILE (broken exhauster otherwise)"
+        );
+        // Observe before cleanup: gone + discharged by the
+        // unwind-drop (the tick is unknown — the read
+        // failed — so absence + ECHILD, not tick-gated).
+        let gone = task_starttime_checked(pid) == Ok(None);
+        let mut status = 0;
+        // SAFETY: WNOHANG discharge probe of our own child.
+        let discharged = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD);
+        // Cleanup (runs on RED too): waitpid-probe-first
+        // retire (IR-002 — sound without the tick: ECHILD
+        // skips the kill, a live owned child takes it).
+        retire_child_silent(pid);
+        assert!(
+            fired.is_err(),
+            "injection must take (transmit read must fail)"
+        );
+        assert!(
+            gone && discharged,
+            "birth guard must retire + discharge before the failure reports"
+        );
+        eprintln!("R19012-OBSERVE retired=1 discharged=1");
+        eprintln!("R15005-CHILD-DONE mode={mode}");
+        return;
+    }
     // R18-004: TRANSMIT before custody — the tick read
     // here is bound (staging runs pre-exhaustion with
     // working reads; owned modes hold the reservation
     // and the stranger mode's publisher holds its child
-    // in `wait`). Expected-identity custody (a reap +
+    // in `wait`). R19-012: the transmit still precedes
+    // EXPECTED-identity custody below — but the bare birth
+    // guard above already holds the owned modes, so this
+    // read is guarded, never first. Expected-identity
+    // custody (a reap +
     // recycle between publication and acquisition refuses
     // instead of authenticating the replacement; the
     // R17-007 late-pin below is replaced by refusal, which
@@ -6015,6 +6093,27 @@ fn emfile_live_drop_reports_unresolved_custody() {
     let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "live");
     let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "live");
     assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R19-012: a failed FIRST observation (the transmit tick
+/// read, failed here by steered exhaustion modeling an
+/// inherited-full table) must retire + discharge the live
+/// owned pauser through the birth guard before the failure
+/// reports. RED (no birth guard): the infinite pauser
+/// survives with no owner and the probe fails its
+/// retirement assert.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_observe_fail_retires_before_report() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn("observe-fail", "emfile_observe_fail_retires_before_report");
+    assert!(
+        stderr.contains("R19012-OBSERVE retired=1 discharged=1"),
+        "observe-fail: retirement marker missing\n{stderr}"
+    );
 }
 
 /// R16-004 (contract change from R15-005's silent zombie
