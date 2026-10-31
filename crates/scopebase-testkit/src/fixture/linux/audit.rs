@@ -8803,7 +8803,9 @@ mod tests {
                     parse_published_pair(line.trim(), "stranger publication");
                 // R16-011: custody AT parse (the asserts below
                 // unwind through retirement, never an orphan) —
-                // expected-identity (refusal stands down).
+                // expected-identity (mismatch/gone refuse
+                // silent per R18-003; unreadable defers to
+                // drop-time re-evaluation per R19-002).
                 _stranger_guard = Some(FixtureGuard::new_expected(stranger, stranger_tick));
                 assert!(
                     matches!(proc_state(stranger), Some(state) if state != 'Z'),
@@ -8826,10 +8828,10 @@ mod tests {
         // and the stranger mode's publisher holds its child
         // in `wait`). Expected-identity custody (a reap +
         // recycle between publication and acquisition refuses
-        // instead of authenticating the replacement; the
-        // R17-007 late-pin below is replaced by refusal, which
-        // stands down per R18-003 — the dedicated recovery
-        // probes keep pin() covered).
+        // instead of authenticating the replacement; mismatch
+        // stays silent per R18-003, unreadable defers to
+        // drop-time re-evaluation per R19-002 — the dedicated
+        // recovery probes keep pin() covered).
         let tick = proc_starttime(pid)
             .expect("fixture stat readable")
             .expect("fixture present");
@@ -9671,6 +9673,14 @@ mod tests {
         pid: libc::pid_t,
         tick: Option<u64>,
         disarmed: bool,
+        // R19-002: the expected birth (expected-identity
+        // guards only — None for bare construction). A
+        // refused guard (tick None, expected Some) is NOT
+        // disarmed: the drop re-evaluates, so a transient
+        // that healed after construction still retires
+        // through unwind (mismatch/gone stay silent —
+        // R18-003 safety preserved).
+        expected: Option<u64>,
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -9695,6 +9705,7 @@ mod tests {
                 pid,
                 tick,
                 disarmed: false,
+                expected: None,
             }
         }
         /// R17-008: expected-identity construction for
@@ -9702,25 +9713,30 @@ mod tests {
         /// the unreaped-child reservation the bare constructor
         /// assumes). Pins ONLY while the live birth matches
         /// `expected`; mismatch, gone, or
-        /// unreadable-after-budget refuses (None — the drop
-        /// will not signal). R18-003: refusal DISARMS (a
-        /// refused drop used to fall into child cleanup,
-        /// murdering an owned-child replacement the pin had
-        /// positively distinguished — the drop must stand
-        /// down instead). Refusal is terminal: a late `pin`
-        /// does not undisarm (recover by re-constructing once
-        /// reads work). Never panics. Caller obligation:
+        /// unreadable-after-budget refuses (None). R18-003: a
+        /// refused drop never falls into child cleanup (that
+        /// murdered an owned-child replacement the pin had
+        /// positively distinguished). R19-002: refusal DEFERS
+        /// (it is not terminal, and it does not disarm): the
+        /// drop re-evaluates — a transient that healed after
+        /// construction retires the verified birth through
+        /// unwind, while mismatch/gone stay silent and
+        /// unreadable-at-drop takes the fd-less fallback.
+        /// (Recover early by re-constructing once reads work;
+        /// a late `pin` after refusal is redundant — sound
+        /// but unnecessary, since the drop re-verifies
+        /// either way.) Never panics. Caller obligation:
         /// `expected` must name the intended birth (a
         /// transmitted pair, or a tick sighted while the
         /// target was known-live — never a post-retire
         /// re-read, which could name a squatter).
         fn new_expected(pid: libc::pid_t, expected: u64) -> Self {
             let tick = pin_expected_tick(pid, expected);
-            let refused = tick.is_none();
             FixtureGuard {
                 pid,
                 tick,
-                disarmed: refused,
+                disarmed: false,
+                expected: Some(expected),
             }
         }
         /// Stand down after an explicit loud retire — without
@@ -9779,6 +9795,27 @@ mod tests {
         fn drop(&mut self) {
             if self.disarmed {
                 return;
+            }
+            // R19-002: a refused guard (expected-identity that
+            // found mismatch/gone/unreadable) re-evaluates at
+            // drop — a transient that healed after construction
+            // must not abandon a known writer. A match pins
+            // through the verified path below; gone/mismatch
+            // stay silent (R18-003 safety); unreadable takes
+            // the fd-less fallback (loud unless ESRCH-gone).
+            if self.tick.is_none() {
+                if let Some(expected) = self.expected {
+                    match proc_starttime(self.pid) {
+                        Ok(Some(now)) if now == expected => {
+                            self.tick = Some(expected);
+                        }
+                        Ok(_) => return,
+                        Err(error) => {
+                            drop_unresolved_custody(self.pid, expected, &error);
+                            return;
+                        }
+                    }
+                }
             }
             match self.tick {
                 None => retire_audit_child_silent(self.pid),
@@ -10448,12 +10485,12 @@ mod tests {
             let got = unsafe { libc::waitpid(grand, &mut status, libc::WNOHANG) };
             assert!(got < 0, "staged grandchild must not be our child");
         }
-        // R18-005: no late-pin — expected-identity
-        // refusal is terminal (a late pin cannot undisarm a
-        // refusal, and must not resurrect a mismatch): a
-        // refusal here means the transmitted birth is gone
-        // or unreadable (stage broken), and proceeding
-        // disarmed would vacate the retirement under test.
+        // R18-005: no late-pin — a refusal here means the
+        // transmitted birth is gone or unreadable (stage
+        // broken), and the retirement under test needs a
+        // pinned guard now (R19-002: the drop would
+        // re-evaluate at unwind, but this test asserts the
+        // pin lands at acquisition, not later).
         {
             let fired = pinned;
             assert!(
@@ -11304,6 +11341,130 @@ mod tests {
         );
         assert!(
             stderr.contains("R18005-RECOVERED retired=1"),
+            "probe must cite the retirement\n{stderr}"
+        );
+    }
+
+    /// R19-002: probe body (fresh image, SCOPEBASE_R19002) —
+    /// exhaust construction (refusal), restore readable
+    /// identity, then inject a later caller failure: the
+    /// refused guard must re-evaluate at drop and retire the
+    /// known writer (healed transient), while a genuine
+    /// mismatch stays silent. RED (refusal terminally
+    /// disarms): the drop stands down and the writer parks.
+    /// Duration 909 is unique to this test. Fresh image:
+    /// whole-table exhaustion is process-shared.
+    #[cfg(target_arch = "x86_64")]
+    fn refused_guard_heals_at_drop_probe() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(pair_publisher_script("909", "wait"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pair readable");
+        let (grand, transmitted) = parse_published_pair(line.trim(), "grandchild publication");
+        // Mismatch control first (genuine mismatch stays
+        // silent — the R18-003 safety, pinned inside this
+        // regression too).
+        {
+            let refused = FixtureGuard::new_expected(grand, transmitted.wrapping_add(7));
+            assert!(
+                refused.tick.is_none(),
+                "mismatched expected birth must refuse"
+            );
+        } // Drop fires here: must stand down.
+        assert_proc_settled_live(
+            grand,
+            transmitted,
+            2,
+            "mismatched refusal must spare the live grandchild",
+        );
+        // Heal arm: exhaust through construction (the retry
+        // budget expires to None).
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let guard = FixtureGuard::new_expected(grand, transmitted);
+        assert!(
+            guard.tick.is_none(),
+            "construction must refuse under EMFILE (stage broken otherwise)"
+        );
+        drop(held);
+        // Later caller failure (reads healed): the unwind
+        // must retire through the re-evaluated drop.
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _fired = guard;
+            panic!("R19002 injected post-restore failure");
+        }));
+        assert!(fired.is_err(), "injection must unwind");
+        // Observe before cleanup: retired + discharged by
+        // the drop (RED: parked — the drop stood down).
+        let retired = await_proc_gone_reaping(grand, transmitted, Duration::from_secs(5));
+        // Cleanup (runs on RED too): tick-gated kill, poll
+        // gone, reap the sh parent.
+        let _ = kill_tick_gated(grand, transmitted);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(grand) != Ok(Some(transmitted)) {
+                break;
+            }
+            assert!(Instant::now() < end, "staged grandchild must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if parent.try_wait().expect("parent wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "sh parent must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            retired,
+            "re-evaluated drop must retire after the failure reports"
+        );
+        eprintln!("R19002-HEALED retired=1");
+    }
+
+    /// R19-002: a refused guard re-evaluates at drop — a
+    /// transient that healed after construction must retire
+    /// through unwind (fresh-image wrapper — the probe body
+    /// above runs in a child with its own fd table).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn refused_guard_heals_at_drop() {
+        if std::env::var("SCOPEBASE_R19002").is_ok() {
+            refused_guard_heals_at_drop_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::refused_guard_heals_at_drop")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19002", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must retire through the re-evaluated drop\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R19002-HEALED retired=1"),
             "probe must cite the retirement\n{stderr}"
         );
     }
@@ -16232,16 +16393,15 @@ mod tests {
         }
         // R17-007: pin-before-return — the explicit reads
         // recovered identities the constructors may have
-        // missed; late-pin so callers unwind through pinned
-        // guards (unpinned unwind ECHILDs past live
-        // non-children).
+        // missed; late-pin the bare-constructed mid guard so
+        // callers unwind through a pinned guard (unpinned
+        // unwind ECHILDs past live non-children). The
+        // expected-constructed writer guard takes NO pin
+        // (R19-002: pin-after-refusal was ineffective; the
+        // refused drop re-evaluates instead).
         let mut mid_guard = mid_guard;
         if mid_guard.tick.is_none() {
             mid_guard.pin(mid_tick);
-        }
-        let mut writer_guard = writer_guard;
-        if writer_guard.tick.is_none() {
-            writer_guard.pin(writer_tick);
         }
         StoppedProbeStage {
             mid,
@@ -16888,12 +17048,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         };
         // R17-008: expected-identity — the birth tick was read
-        // just above (refuse a recycled number; the R17-007
-        // late-pin still covers unreadable reads).
+        // just above (refuse a recycled number; unreadable
+        // reads defer to drop-time re-evaluation per R19-002 —
+        // no pin-after-refusal, which was ineffective: it
+        // filled tick without clearing the refusal disarm).
         let mut writer_guard = FixtureGuard::new_expected(writer, writer_tick);
-        if writer_guard.tick.is_none() {
-            writer_guard.pin(writer_tick);
-        }
         let mid_tick = proc_starttime(mid)
             .expect("middleman stat readable")
             .expect("middleman visible");
@@ -17502,12 +17661,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         };
         // R17-008: expected-identity — the birth tick was read
-        // just above (refuse a recycled number; the R17-007
-        // late-pin still covers unreadable reads).
+        // just above (refuse a recycled number; unreadable
+        // reads defer to drop-time re-evaluation per R19-002 —
+        // no pin-after-refusal, which was ineffective: it
+        // filled tick without clearing the refusal disarm).
         let mut writer_guard = FixtureGuard::new_expected(writer, writer_tick);
-        if writer_guard.tick.is_none() {
-            writer_guard.pin(writer_tick);
-        }
         let mid_tick = proc_starttime(mid)
             .expect("middleman stat readable")
             .expect("middleman visible");
@@ -17637,12 +17795,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         };
         // R17-008: expected-identity — the birth tick was read
-        // just above (refuse a recycled number; the R17-007
-        // late-pin still covers unreadable reads).
+        // just above (refuse a recycled number; unreadable
+        // reads defer to drop-time re-evaluation per R19-002 —
+        // no pin-after-refusal, which was ineffective: it
+        // filled tick without clearing the refusal disarm).
         let mut writer_guard = FixtureGuard::new_expected(writer, writer_tick);
-        if writer_guard.tick.is_none() {
-            writer_guard.pin(writer_tick);
-        }
         let mid_tick = proc_starttime(mid)
             .expect("middleman stat readable")
             .expect("middleman visible");
