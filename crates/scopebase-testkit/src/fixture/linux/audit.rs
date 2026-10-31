@@ -7175,6 +7175,303 @@ mod tests {
         let _ = second.wait();
     }
 
+    /// R15-005: run one probe mode in a FRESH process image
+    /// (audit twin of the toolchain spawner — same contract:
+    /// contained exhaustion, completion marker, fail loud).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_probe_spawn(mode: &str, test: &str) -> String {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test)
+            .arg("--nocapture")
+            .env("SCOPEBASE_R15005_MODE", mode)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "{mode}: probe child must exit 0\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("R15005-CHILD-DONE mode={mode}")),
+            "{mode}: completion marker missing\n{stderr}"
+        );
+        stderr
+    }
+
+    /// R15-005: parse a `PREFIX ... pid=N tick=M ...` line from
+    /// the probe child's stderr (audit twin of the toolchain
+    /// parser).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_probe_tagged(stderr: &str, prefix: &str, mode: &str) -> (libc::pid_t, u64) {
+        for line in stderr.lines() {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                let mut pid = None;
+                let mut tick = None;
+                for word in rest.split_whitespace() {
+                    if let Some(value) = word.strip_prefix("pid=") {
+                        pid = value.parse::<libc::pid_t>().ok();
+                    }
+                    if let Some(value) = word.strip_prefix("tick=") {
+                        tick = value.parse::<u64>().ok();
+                    }
+                }
+                if let (Some(pid), Some(tick)) = (pid, tick) {
+                    return (pid, tick);
+                }
+            }
+        }
+        panic!("{mode}: no parsable `{prefix}` line\n{stderr}");
+    }
+
+    /// R15-005: the probe-child body (audit twin of the
+    /// toolchain child — Command-spawned fixtures, same
+    /// pin/exhaust/panic-drop/verify flow).
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_probe_child(mode: &str) {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        fn spawn_sleep(dur: &str) -> std::process::Child {
+            std::process::Command::new("/bin/sleep")
+                .arg(dur)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sleep spawns")
+        }
+        // Stage the fixture; owned handles stay alive for loud
+        // cleanup below (the guard never waits on the live
+        // modes, so no reap races the handles).
+        let mut owned: Option<std::process::Child> = None;
+        let mut sh_parent: Option<std::process::Child> = None;
+        let pid = match mode {
+            "live" | "gone" => {
+                let child = spawn_sleep("51");
+                let pid = child.id() as libc::pid_t;
+                owned = Some(child);
+                pid
+            }
+            "zombie" => {
+                let child = std::process::Command::new("true")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("true spawns");
+                let pid = child.id() as libc::pid_t;
+                owned = Some(child);
+                // Settle into Z BEFORE the guard (bounded poll
+                // on /proc state — never a reaping wait).
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if matches!(proc_state(pid), Some(state) if state == 'Z') {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "child never zombied");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                pid
+            }
+            "stranger" => {
+                let mut parent = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg("sleep 52 & echo $!; wait")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("sh parent spawns");
+                let mut line = String::new();
+                std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+                    .read_line(&mut line)
+                    .expect("grandchild pid readable");
+                let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+                assert!(
+                    matches!(proc_state(stranger), Some(state) if state != 'Z'),
+                    "staged stranger must be live"
+                );
+                {
+                    let mut status = 0;
+                    // SAFETY: WNOHANG probe only.
+                    let got = unsafe { libc::waitpid(stranger, &mut status, libc::WNOHANG) };
+                    assert!(got < 0, "staged stranger must not be our child");
+                }
+                sh_parent = Some(parent);
+                stranger
+            }
+            _ => panic!("unknown probe mode {mode}"),
+        };
+        let guard = FixtureGuard::new(pid);
+        let tick = proc_starttime(pid)
+            .expect("fixture stat readable")
+            .expect("fixture present");
+        assert_eq!(guard.tick, Some(tick), "constructor must pin the live tick");
+        eprintln!("R15005-PINNED pid={pid} tick={tick}");
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        assert!(
+            proc_starttime(pid).is_err(),
+            "tick read must fail under exhaustion"
+        );
+        // Reap UNDER exhaustion (handle kill+wait are fd-less
+        // syscalls): the gone number frees µs before the drop,
+        // so suite activity almost never recycles it
+        // mid-window (any hit is an honest loud skip below,
+        // never a flake).
+        if mode == "gone" {
+            let mut child = owned.take().expect("owned staged");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard_held = guard;
+            panic!("R15005 injected observation failure");
+        }));
+        assert!(outcome.is_err(), "injection must take");
+        drop(held);
+        match mode {
+            "live" => {
+                assert_eq!(
+                    proc_starttime(pid),
+                    Ok(Some(tick)),
+                    "live fixture must survive the unresolved drop"
+                );
+                let mut child = owned.take().expect("owned staged");
+                let _ = child.kill();
+                let _ = child.wait();
+                assert_eq!(proc_starttime(pid), Ok(None), "live retired loud");
+            }
+            "zombie" => {
+                let mut status = 0;
+                // SAFETY: WNOHANG probe only.
+                let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                assert!(
+                    got < 0,
+                    "fallback must discharge the zombie (reaped here: {got})"
+                );
+                // Belt-and-braces: the handle must agree (ECHILD).
+                let mut child = owned.take().expect("owned staged");
+                let _ = child.wait();
+            }
+            "gone" => {
+                // A recycled number (suite activity retaking it
+                // in the reap→drop window) makes the loud line
+                // CORRECT — report the contention so the parent
+                // skips loud instead of failing; the occupant is
+                // foreign and is never touched.
+                if matches!(proc_starttime(pid), Ok(Some(_))) {
+                    eprintln!("R15005-GONE-RECYCLED pid={pid}");
+                }
+            }
+            "stranger" => {
+                assert_eq!(
+                    proc_starttime(pid),
+                    Ok(Some(tick)),
+                    "stranger must survive the unresolved drop"
+                );
+                // SAFETY: signal-only to the staged stranger.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let mut parent = sh_parent.expect("sh parent staged");
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if parent.try_wait().expect("parent wait").is_some() {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "sh parent must exit");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            _ => unreachable!("mode checked above"),
+        }
+        eprintln!("R15005-CHILD-DONE mode={mode}");
+    }
+
+    /// R15-005: audit twin — live drop under EMFILE reports.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_live_drop_reports_unresolved_custody() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+            audit_emfile_probe_child(&mode);
+            return;
+        }
+        let stderr = audit_emfile_probe_spawn(
+            "live",
+            "fixture::linux::audit::tests::audit_emfile_live_drop_reports_unresolved_custody",
+        );
+        let pinned = audit_emfile_probe_tagged(&stderr, "R15005-PINNED ", "live");
+        let cited = audit_emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "live");
+        assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+    }
+
+    /// R15-005: audit twin — zombie drop under EMFILE discharges
+    /// silently.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_zombie_drop_discharges_silently() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+            audit_emfile_probe_child(&mode);
+            return;
+        }
+        let stderr = audit_emfile_probe_spawn(
+            "zombie",
+            "fixture::linux::audit::tests::audit_emfile_zombie_drop_discharges_silently",
+        );
+        assert!(
+            !stderr.contains("unresolved-custody"),
+            "zombie discharge must stay silent\n{stderr}"
+        );
+    }
+
+    /// R15-005: audit twin — gone-number drop under EMFILE stays
+    /// silent (guard role, mutant-checked like the toolchain).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_gone_drop_stays_silent() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+            audit_emfile_probe_child(&mode);
+            return;
+        }
+        let stderr = audit_emfile_probe_spawn(
+            "gone",
+            "fixture::linux::audit::tests::audit_emfile_gone_drop_stays_silent",
+        );
+        if stderr.contains("R15005-GONE-RECYCLED") {
+            eprintln!("skip: gone number recycled mid-window (contended)");
+            return;
+        }
+        assert!(
+            !stderr.contains("unresolved-custody"),
+            "gone-number drop must stay silent\n{stderr}"
+        );
+    }
+
+    /// R15-005: audit twin — stranger drop under EMFILE reports.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_emfile_stranger_drop_reports_unresolved_custody() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+            audit_emfile_probe_child(&mode);
+            return;
+        }
+        let stderr = audit_emfile_probe_spawn(
+            "stranger",
+            "fixture::linux::audit::tests::audit_emfile_stranger_drop_reports_unresolved_custody",
+        );
+        let pinned = audit_emfile_probe_tagged(&stderr, "R15005-PINNED ", "stranger");
+        let cited = audit_emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "stranger");
+        assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+    }
+
     /// R14-007: the adopted-zombie drain must re-decide
     /// foreignness EVERY pass, not once. Own group G with a
     /// zombie (reaped legitimately on pass 1); a barrier hook
@@ -7546,6 +7843,44 @@ mod tests {
     }
 
     #[cfg(target_arch = "x86_64")]
+    /// R15-005: drop-time fallback when the pinned tick
+    /// re-read FAILS (audit twin of the toolchain
+    /// `drop_unresolved_custody` — same contract: fd-less
+    /// waitpid + kill-0 probe, silent on reaped/ESRCH, loud
+    /// identity-preserving line otherwise, never signals, never
+    /// panics).
+    #[cfg(target_arch = "x86_64")]
+    fn drop_unresolved_custody(pid: libc::pid_t, tick: u64, read_err: &str) {
+        use std::io::Write as _;
+        let loud = || {
+            let _ = writeln!(
+                std::io::stderr(),
+                "scopebase unresolved-custody pid={pid} tick={tick} read_err={read_err}"
+            );
+        };
+        let mut status = 0;
+        // SAFETY: WNOHANG probe; never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid {
+            return; // Reaped: discharged, silent.
+        }
+        if got == 0 {
+            loud(); // Live owned child — loud, no kill.
+            return;
+        }
+        // ECHILD-shaped (reaped already, or never our child):
+        // kill-0 decides without fds.
+        // SAFETY: signal 0 queries only.
+        if unsafe { libc::kill(pid, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return; // Gone: discharged, silent.
+        }
+        // Present (kill-0 ok, EPERM, or anything else):
+        // unobservable-but-there — loud.
+        loud();
+    }
+
     impl Drop for FixtureGuard {
         fn drop(&mut self) {
             if self.disarmed {
@@ -7553,11 +7888,14 @@ mod tests {
             }
             match self.tick {
                 None => retire_audit_child_silent(self.pid),
-                Some(tick) => {
-                    if proc_starttime(self.pid) == Ok(Some(tick)) {
-                        retire_audit_child_silent(self.pid);
-                    }
-                }
+                Some(tick) => match proc_starttime(self.pid) {
+                    Ok(Some(now)) if now == tick => retire_audit_child_silent(self.pid),
+                    // R15-005: proven-gone/recycled stays silent
+                    // (as before); only a FAILED read takes the
+                    // fd-less fallback probe.
+                    Ok(_) => {}
+                    Err(error) => drop_unresolved_custody(self.pid, tick, &error),
+                },
             }
         }
     }

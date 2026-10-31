@@ -3343,6 +3343,49 @@ impl SilentChildGuard {
     }
 }
 
+/// R15-005: drop-time fallback when the pinned tick re-read
+/// FAILS (Err only — Ok arms are decided by the caller). Probes
+/// with waitpid + kill-0, which need NO fds (EMFILE-safe): a
+/// reaped child or a kill-0 ESRCH discharges silently (correct);
+/// anything else — live-0, or ECHILD-but-present (a live
+/// non-child the waitpid cannot see) — emits an explicit
+/// identity-preserving unresolved-custody line (pid + pinned
+/// tick + read error) via a fallible stderr write — never
+/// eprintln! in Drop (panicking during unwind aborts). Never
+/// signals: unresolved identity must not kill (R15-003), and a
+/// live-0 could be our own fork's recycle (R14-001 residual).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn drop_unresolved_custody(pid: i32, tick: u64, read_err: &str) {
+    use std::io::Write as _;
+    let loud = || {
+        let _ = writeln!(
+            std::io::stderr(),
+            "scopebase unresolved-custody pid={pid} tick={tick} read_err={read_err}"
+        );
+    };
+    let mut status = 0;
+    // SAFETY: WNOHANG probe; never blocks.
+    let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    if got == pid {
+        return; // Reaped: discharged, silent.
+    }
+    if got == 0 {
+        loud(); // Live owned child — loud, no kill (see doc).
+        return;
+    }
+    // ECHILD-shaped (reaped already, or never our child):
+    // kill-0 decides without fds.
+    // SAFETY: signal 0 queries only.
+    if unsafe { libc::kill(pid, 0) } != 0
+        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    {
+        return; // Gone: discharged, silent.
+    }
+    // Present (kill-0 ok, EPERM, or anything else):
+    // unobservable-but-there — loud.
+    loud();
+}
+
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 impl Drop for SilentChildGuard {
     fn drop(&mut self) {
@@ -3362,11 +3405,14 @@ impl Drop for SilentChildGuard {
             // milliseconds — a blind kill would murder it (the
             // full-suite flake). Residual: a same-tick recycle
             // inside the µs gate→signal window (S100-class).
-            Some(tick) => {
-                if task_starttime_checked(self.pid) == Ok(Some(tick)) {
-                    retire_child_silent(self.pid);
-                }
-            }
+            Some(tick) => match task_starttime_checked(self.pid) {
+                Ok(Some(now)) if now == tick => retire_child_silent(self.pid),
+                // R15-005: proven-gone/recycled stays silent (as
+                // before); only a FAILED read takes the fd-less
+                // fallback probe below.
+                Ok(_) => {}
+                Err(error) => drop_unresolved_custody(self.pid, tick, &error),
+            },
         }
     }
 }
@@ -3899,6 +3945,301 @@ fn late_pin_spares_second_replacement() {
         "survivor must be live, not a zombie"
     );
     kill_wait_child(seed);
+}
+
+/// R15-005: run one probe mode in a FRESH process image (the
+/// test binary re-executed with SCOPEBASE_R15005_MODE set): fd
+/// exhaustion stays contained in the child, and the parent only
+/// reads its stderr. Returns the child's stderr after asserting
+/// a clean exit plus the completion marker (a filter miss or
+/// harness surprise fails loud, never vacuous).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn emfile_probe_spawn(mode: &str, test: &str) -> String {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg(test)
+        .arg("--nocapture")
+        .env("SCOPEBASE_R15005_MODE", mode)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "{mode}: probe child must exit 0\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("R15005-CHILD-DONE mode={mode}")),
+        "{mode}: completion marker missing\n{stderr}"
+    );
+    stderr
+}
+
+/// R15-005: parse a `PREFIX ... pid=N tick=M ...` line from the
+/// probe child's stderr (R15005-PINNED or the custody line).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn emfile_probe_tagged(stderr: &str, prefix: &str, mode: &str) -> (i32, u64) {
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            let mut pid = None;
+            let mut tick = None;
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("pid=") {
+                    pid = value.parse::<i32>().ok();
+                }
+                if let Some(value) = word.strip_prefix("tick=") {
+                    tick = value.parse::<u64>().ok();
+                }
+            }
+            if let (Some(pid), Some(tick)) = (pid, tick) {
+                return (pid, tick);
+            }
+        }
+    }
+    panic!("{mode}: no parsable `{prefix}` line\n{stderr}");
+}
+
+/// R15-005: the probe-child body (runs under
+/// SCOPEBASE_R15005_MODE in a fresh image): stage the fixture,
+/// pin the guard, print R15005-PINNED, exhaust fds, drop the
+/// guard through a panicking observation, then verify per-mode
+/// (loud cites identity / silent discharged) and clean up loud.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn emfile_probe_child(mode: &str) {
+    use std::io::BufRead as _;
+    // Stage the fixture (all fds available here). The stranger
+    // mode keeps its sh parent for loud cleanup below.
+    let mut sh_parent: Option<std::process::Child> = None;
+    let pid = match mode {
+        "live" | "gone" => fork_pauser(),
+        "zombie" => {
+            // SAFETY: fork; the child only _exits (no runtime,
+            // no locks).
+            let kid = unsafe { libc::fork() };
+            if kid == 0 {
+                unsafe { libc::_exit(0) };
+            }
+            assert!(kid > 0, "zombie fork");
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let row =
+                    std::fs::read_to_string(format!("/proc/{kid}/stat")).expect("zombie stat");
+                let state = row
+                    .rsplit_once(") ")
+                    .and_then(|(_, after)| after.split_whitespace().next());
+                if state == Some("Z") {
+                    break;
+                }
+                assert!(Instant::now() < end, "child never zombied");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            kid
+        }
+        "stranger" => {
+            let mut parent = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg("sleep 879 & echo $!; wait")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sh parent spawns");
+            let mut line = String::new();
+            std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+                .read_line(&mut line)
+                .expect("grandchild pid readable");
+            let stranger = line.trim().parse::<i32>().expect("pid parses");
+            assert!(
+                matches!(task_state(stranger), Some(state) if state != 'Z'),
+                "staged stranger must be live"
+            );
+            {
+                let mut status = 0;
+                // SAFETY: WNOHANG probe only.
+                let got = unsafe { libc::waitpid(stranger, &mut status, libc::WNOHANG) };
+                assert!(got < 0, "staged stranger must not be our child");
+            }
+            sh_parent = Some(parent);
+            stranger
+        }
+        _ => panic!("unknown probe mode {mode}"),
+    };
+    // Pin BEFORE any mode-specific pre-step (gone retires
+    // pre-exhaust; the pin must cite the live fixture).
+    let guard = SilentChildGuard::new(pid);
+    let tick = task_starttime_checked(pid)
+        .expect("fixture stat readable")
+        .expect("fixture present");
+    assert_eq!(guard.tick, Some(tick), "constructor must pin the live tick");
+    eprintln!("R15005-PINNED pid={pid} tick={tick}");
+    // Exhaust fds (held, so the loud asserts and cleanup below
+    // can restore them).
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "exhaustion must consume fds");
+    // Functional proof of the fallback's precondition: the tick
+    // read now FAILS (Err, not None) in every mode.
+    assert!(
+        task_starttime_checked(pid).is_err(),
+        "tick read must fail under exhaustion"
+    );
+    // Reap UNDER exhaustion (kill+wait are fd-less): the gone
+    // number frees µs before the drop, so suite activity almost
+    // never recycles it mid-window (any hit is an honest loud
+    // skip below, never a flake).
+    if mode == "gone" {
+        kill_wait_child(pid);
+    }
+    // The panicking observation: the guard drops DURING unwind
+    // (a panicking Drop would abort here — the loud line must
+    // use a fallible write, never eprintln!).
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _guard_held = guard;
+        panic!("R15005 injected observation failure");
+    }));
+    assert!(outcome.is_err(), "injection must take");
+    // Restore fds for verification and cleanup.
+    drop(held);
+    match mode {
+        "live" => {
+            // The fallback never signals: the fixture survives
+            // with its pinned identity — then loud cleanup.
+            assert_eq!(
+                task_starttime_checked(pid),
+                Ok(Some(tick)),
+                "live fixture must survive the unresolved drop"
+            );
+            kill_wait_child(pid);
+            assert_eq!(task_starttime_checked(pid), Ok(None), "live retired loud");
+        }
+        "zombie" => {
+            // The fd-less waitpid-probe must have discharged it:
+            // ECHILD now (a reap HERE would prove the fallback
+            // did not reap — RED).
+            let mut status = 0;
+            // SAFETY: WNOHANG probe only.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            assert!(
+                got < 0,
+                "fallback must discharge the zombie (reaped here: {got})"
+            );
+        }
+        "gone" => {
+            // A recycled number (suite activity retaking it in
+            // the reap→drop window) makes the loud line CORRECT
+            // — report the contention so the parent skips loud
+            // instead of failing; the occupant is foreign and is
+            // never touched.
+            if matches!(task_starttime_checked(pid), Ok(Some(_))) {
+                eprintln!("R15005-GONE-RECYCLED pid={pid}");
+            }
+        }
+        "stranger" => {
+            assert_eq!(
+                task_starttime_checked(pid),
+                Ok(Some(tick)),
+                "stranger must survive the unresolved drop"
+            );
+            // Loud cleanup: kill the grandchild, reap sh.
+            // SAFETY: signal-only to the staged stranger.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            let mut parent = sh_parent.expect("sh parent staged");
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                if parent.try_wait().expect("parent wait").is_some() {
+                    break;
+                }
+                assert!(Instant::now() < end, "sh parent must exit");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        _ => unreachable!("mode checked above"),
+    }
+    eprintln!("R15005-CHILD-DONE mode={mode}");
+}
+
+/// R15-005: a pinned guard dropped under EMFILE over a LIVE
+/// child must emit the identity-preserving custody line.
+/// Pre-fix the drop skips silently (RED: no line); post-fix the
+/// fd-less waitpid-probe sees live-0 and yells (GREEN).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_live_drop_reports_unresolved_custody() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn("live", "emfile_live_drop_reports_unresolved_custody");
+    let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "live");
+    let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "live");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R15-005: a pinned guard dropped under EMFILE over a ZOMBIE
+/// child discharges it via the fd-less waitpid-probe — silent
+/// (nothing unresolved) but reaped. Pre-fix the drop skips and
+/// the child-side assert reaps instead (RED: got == pid).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_zombie_drop_discharges_silently() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn("zombie", "emfile_zombie_drop_discharges_silently");
+    assert!(
+        !stderr.contains("unresolved-custody"),
+        "zombie discharge must stay silent\n{stderr}"
+    );
+}
+
+/// R15-005: a pinned guard dropped under EMFILE over a GONE
+/// number (ECHILD + kill-0 ESRCH) stays silent. Guard role: an
+/// always-loud fallback fails here (mutant-checked, not RED —
+/// the pre-fix drop is silent too).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_gone_drop_stays_silent() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn("gone", "emfile_gone_drop_stays_silent");
+    if stderr.contains("R15005-GONE-RECYCLED") {
+        eprintln!("skip: gone number recycled mid-window (contended)");
+        return;
+    }
+    assert!(
+        !stderr.contains("unresolved-custody"),
+        "gone-number drop must stay silent\n{stderr}"
+    );
+}
+
+/// R15-005: a pinned guard dropped under EMFILE over a LIVE
+/// non-child (ECHILD + kill-0 present — the waitpid cannot see
+/// it) must yell: present but unobservable is unresolved, not
+/// gone. Pre-fix the drop skips silently (RED: no line).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_stranger_drop_reports_unresolved_custody() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn(
+        "stranger",
+        "emfile_stranger_drop_reports_unresolved_custody",
+    );
+    let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "stranger");
+    let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "stranger");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
 }
 
 /// R15-004 staging helper: steer a pauser onto `want`,
