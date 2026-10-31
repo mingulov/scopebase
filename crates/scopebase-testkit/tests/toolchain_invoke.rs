@@ -11,7 +11,7 @@
 //! copied. Grant: OWNER-2026-10-23.
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
 use scopebase_testkit::object::ToolchainInventory;
-use scopebase_testkit::toolchain::{run_pinned, CompilerClosure, NestedBounds};
+use scopebase_testkit::toolchain::{CompilerClosure, NestedBounds, run_pinned};
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -2090,7 +2090,7 @@ fn verify_reported_orphan(
             Err(_) => {
                 return Err(format!(
                     "orphan {pid} stat unreadable, left for manual retirement"
-                ))
+                ));
             }
         };
         if let Some(verified) = locked {
@@ -2116,7 +2116,7 @@ fn verify_reported_orphan(
                     Err(_) => {
                         return Err(format!(
                             "orphan {pid} stat unreadable, left for manual retirement"
-                        ))
+                        ));
                     }
                 }
             }
@@ -4129,12 +4129,12 @@ fn child_guard_drop_retires_verified_non_child() {
             "acquisition must pin the transmitted birth (stage broken otherwise)"
         );
     } // Drop fires here.
-      // R17-009: DISCHARGE required (not merely death) — the
-      // live shell reaps promptly; a lingering zombie past the
-      // window is unresolved (the old Z-or-gone verdict masked
-      // undischarged kills). R17-010: strict retirement
-      // evidence — unreadable samples keep polling and fail
-      // loud past the bound (never certified as gone).
+    // R17-009: DISCHARGE required (not merely death) — the
+    // live shell reaps promptly; a lingering zombie past the
+    // window is unresolved (the old Z-or-gone verdict masked
+    // undischarged kills). R17-010: strict retirement
+    // evidence — unreadable samples keep polling and fail
+    // loud past the bound (never certified as gone).
     let retired = await_task_gone_reaping(grand, tick, Duration::from_secs(5));
     // Cleanup (runs on RED too): tick-gated kill (R15-003 —
     // a blind kill would risk a recycled replacement), poll
@@ -4217,9 +4217,9 @@ fn adopted_kill_discharges_through_init() {
             "acquisition must pin the transmitted birth"
         );
     } // Drop fires here.
-      // Verdict: DISCHARGED (gone) — init reaps promptly.
-      // R17-010: strict evidence — unreadable samples keep
-      // polling and fail loud past the bound.
+    // Verdict: DISCHARGED (gone) — init reaps promptly.
+    // R17-010: strict evidence — unreadable samples keep
+    // polling and fail loud past the bound.
     let discharged = await_task_gone_reaping(orphan, otick, Duration::from_secs(5));
     // Cleanup (mutant-clean): tick-gated kill,
     // waitpid-assisted poll gone (R18-006: under a
@@ -4308,11 +4308,11 @@ fn nonchild_pin_recovery_probe() {
     let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _fired = pinned;
     })); // Drop fires here (scope end or unwind).
-         // R17-009: DISCHARGE required (not merely death) — the
-         // live shell reaps promptly; a lingering zombie past the
-         // window is unresolved. R17-010: strict evidence —
-         // unreadable samples keep polling and fail loud past
-         // the bound.
+    // R17-009: DISCHARGE required (not merely death) — the
+    // live shell reaps promptly; a lingering zombie past the
+    // window is unresolved. R17-010: strict evidence —
+    // unreadable samples keep polling and fail loud past
+    // the bound.
     let retired = await_task_gone_reaping(grand, tick, Duration::from_secs(5));
     // Cleanup (runs on RED too): tick-gated kill, poll gone,
     // reap the sh parent.
@@ -9787,39 +9787,27 @@ fn group_guard_reaped_leader_probe(stray: bool) {
     panic!("r17004 injected post-wait failure (verified)");
 }
 
-/// R17-004: a pinned guard dropped after its leader was
-/// reaped, with the group retaining a live member, must
-/// report explicit unresolved group custody (never silent —
-/// the unpinned arm yells for live groups) and must send NO
-/// signal (a stranger may have reformed the group, R14-006).
-/// RED: the Ok arm returns silently; GREEN: the loud line
-/// cites the pinned identity with leader=gone members=present.
+/// R18-011: the stray parent gate, extracted so the
+/// adopted-cleanup regression can run it against failure
+/// output and require rejection (a cleanup-stage failure
+/// prints every early marker — nonzero exit, the caught
+/// injection's hook output, DROPPED, SPARED, the custody
+/// line — so the gate MUST require the terminal verified
+/// message, which prints only after the disappearance loop
+/// proves discharge).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-#[test]
-fn group_guard_reaped_leader_reports_live_members() {
-    if std::env::var("SCOPEBASE_R17004_REAPED").as_deref() == Ok("stray") {
-        group_guard_reaped_leader_probe(true);
-        return;
-    }
-    let exe = std::env::current_exe().expect("own test binary");
-    let out = std::process::Command::new(exe)
-        .arg("--exact")
-        .arg("group_guard_reaped_leader_reports_live_members")
-        .arg("--nocapture")
-        .env("SCOPEBASE_R17004_REAPED", "stray")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .expect("probe child runs");
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+fn assert_r17004_stray_gate(stderr: &str, status: &std::process::ExitStatus) {
     assert!(
-        !out.status.success(),
+        !status.success(),
         "child must fail at the injected staging panic\n{stderr}"
     );
     assert!(
         stderr.contains("r17004 injected"),
         "panic must name the injection\n{stderr}"
+    );
+    assert!(
+        stderr.contains("r17004 injected post-wait failure (verified)"),
+        "terminal verified proof must land (cleanup failure prints every early marker)\n{stderr}"
     );
     assert!(
         stderr.contains("R17004-DROPPED"),
@@ -9874,6 +9862,100 @@ fn group_guard_reaped_leader_reports_live_members() {
     );
 }
 
+/// R17-004: a pinned guard dropped after its leader was
+/// reaped, with the group retaining a live member, must
+/// report explicit unresolved group custody (never silent —
+/// the unpinned arm yells for live groups) and must send NO
+/// signal (a stranger may have reformed the group, R14-006).
+/// RED: the Ok arm returns silently; GREEN: the loud line
+/// cites the pinned identity with leader=gone members=present.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_reaped_leader_reports_live_members() {
+    if std::env::var("SCOPEBASE_R17004_REAPED").as_deref() == Ok("stray") {
+        group_guard_reaped_leader_probe(true);
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_reaped_leader_reports_live_members")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R17004_REAPED", "stray")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_r17004_stray_gate(&stderr, &out.status);
+}
+
+/// R18-011: forced adoption must fail the parent gate — the
+/// probe marks itself subreaper, so the stray reparents to
+/// the probe instead of init; the probe kills it but never
+/// reaps it, the probe-held zombie keeps killpg-0 alive, and
+/// the cleanup loop fires at 5s. Every early marker still
+/// lands (nonzero exit, the caught injection's hook output,
+/// DROPPED, SPARED, custody line — the old gate passes this
+/// output) but the terminal verified proof cannot print
+/// (discharge unproven) and the gate MUST reject it.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_adopted_cleanup_fails_parent_gate() {
+    if std::env::var("SCOPEBASE_R17004_REAPED").as_deref() == Ok("adopt") {
+        // SAFETY: marks only this probe process a subreaper;
+        // no userspace state. Loud if refused (the mode is
+        // invalid without adoption).
+        let ret = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1 as libc::c_ulong, 0, 0, 0) };
+        assert_eq!(ret, 0, "probe must become subreaper");
+        group_guard_reaped_leader_probe(true);
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_adopted_cleanup_fails_parent_gate")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R17004_REAPED", "adopt")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // The failure mode is real: every early marker lands.
+    assert!(
+        !out.status.success(),
+        "adopted probe must fail cleanup\n{stderr}"
+    );
+    assert!(
+        stderr.contains("r17004 injected"),
+        "caught hook output must satisfy the old substring\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17004-DROPPED"),
+        "unwind must pass through the guard\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17004-SPARED spared=1"),
+        "stray must survive the drop (no signal)\n{stderr}"
+    );
+    assert!(
+        stderr.contains("scopebase unresolved-group"),
+        "drop must yell custody\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("(verified)"),
+        "terminal proof must be absent (discharge unproven)\n{stderr}"
+    );
+    // ...and the gate rejects exactly this output.
+    let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_r17004_stray_gate(&stderr, &out.status);
+    }));
+    assert!(fired.is_err(), "gate must reject cleanup-failed output");
+}
+
 /// R17-004: ESRCH twin — a pinned guard dropped after its
 /// leader was reaped, with the group fully gone, stays
 /// silent (guards the yell against always-loud mutants).
@@ -9903,6 +9985,14 @@ fn group_guard_reaped_leader_silent_when_group_gone() {
     assert!(
         stderr.contains("R17004-DROPPED"),
         "unwind must pass through the guard\n{stderr}"
+    );
+    // R18-011: the terminal verified proof (prints only after
+    // the disappearance loop proves discharge — without this
+    // the parent accepts cleanup failure, which prints every
+    // other marker above).
+    assert!(
+        stderr.contains("r17004 injected post-wait failure (verified)"),
+        "terminal verified proof must land\n{stderr}"
     );
     assert!(
         !stderr.contains("scopebase unresolved-group"),
@@ -10500,7 +10590,7 @@ fn concurrent_unframed_probes_ignore_each_other() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn poll_pin_retired_issues_no_numeric_wait() {
-    use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
+    use scopebase_testkit::fixture::linux::seccomp::{DenyAction, install_deny_one};
     let (pid, pinned) = spawn_orphan_sleeper("93");
     // Pin in the parent (asserting pinnability up front); the forked
     // probe inherits the pin across the fork.
@@ -10636,7 +10726,7 @@ fn poll_pin_retired_reaps_owned_zombie() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn survivor_cleanup_uses_no_numeric_kill_on_nonchild() {
-    use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
+    use scopebase_testkit::fixture::linux::seccomp::{DenyAction, install_deny_one};
     let (pid, pinned) = spawn_orphan_sleeper("92");
     let report = format!("verdict=err survivors={pid}:{pinned} children_after=1");
     // SAFETY: the child traps kill, runs cleanup, reports via _exit.
