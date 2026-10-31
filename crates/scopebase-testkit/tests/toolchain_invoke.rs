@@ -917,6 +917,37 @@ fn task_state(pid: i32) -> Option<char> {
     after_comm.split_whitespace().next()?.chars().next()
 }
 
+/// R16-012: settled live-process evidence — the no-signal
+/// oracle for survival asserts (R15-010's defect was tick-only
+/// checks: a kill-mutant's zombie keeps its tick and passes).
+/// Polls /proc STATE for `secs`: any Z (or disappearance)
+/// fails loud immediately (murdered/vanished); surviving the
+/// whole window proves live (SIGKILL delivery resolves in ms —
+/// a settled window cannot be fooled by async delivery); the
+/// final tick equality proves the SAME birth (no recycle).
+/// State reads only — never reaps.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn assert_task_settled_live(pid: i32, tick: u64, secs: u64, what: &str) {
+    let end = Instant::now() + Duration::from_secs(secs);
+    loop {
+        match task_state(pid) {
+            Some(state) if state != 'Z' => {
+                if Instant::now() >= end {
+                    break;
+                }
+            }
+            Some(_) => panic!("{what} {pid} zombified (murdered, tick kept)"),
+            None => panic!("{what} {pid} vanished (survival needs presence)"),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        task_starttime_checked(pid),
+        Ok(Some(tick)),
+        "{what} {pid} recycled during the settle window"
+    );
+}
+
 /// S112-round8: true when `pid` descends from `ancestor` (the test
 /// process) through live parent links. Any unreadable link, a
 /// cycle-guard trip, or reaching init first answers false —
@@ -4443,10 +4474,13 @@ fn emfile_probe_child(mode: &str) {
         "live" => {
             // The fallback never signals: the fixture survives
             // with its pinned identity — then loud cleanup.
-            assert_eq!(
-                task_starttime_checked(pid),
-                Ok(Some(tick)),
-                "live fixture must survive the unresolved drop"
+            // R16-012: settled-live, not tick-only (a zombie
+            // keeps its tick).
+            assert_task_settled_live(
+                pid,
+                tick,
+                2,
+                "live fixture must survive the unresolved drop",
             );
             kill_wait_child(pid);
             assert_eq!(task_starttime_checked(pid), Ok(None), "live retired loud");
@@ -4489,11 +4523,9 @@ fn emfile_probe_child(mode: &str) {
             eprintln!("R16004-STATUS retained pid={pid}");
         }
         "stranger" => {
-            assert_eq!(
-                task_starttime_checked(pid),
-                Ok(Some(tick)),
-                "stranger must survive the unresolved drop"
-            );
+            // R16-012: settled-live, not tick-only (a zombie
+            // keeps its tick).
+            assert_task_settled_live(pid, tick, 2, "stranger must survive the unresolved drop");
             // Loud cleanup: kill the grandchild, reap sh.
             // SAFETY: signal-only to the staged stranger.
             unsafe {
@@ -4905,20 +4937,16 @@ fn gated_kill_acts_on_matching_identity() {
         !kill_tick_gated_with(ppid, ptick, |_| Err("injected".to_string())),
         "unreadable stat must report unproven (false)"
     );
-    assert_eq!(
-        task_starttime_checked(ppid),
-        Ok(Some(ptick)),
-        "unreadable arm must not signal"
-    );
+    // R16-012: settled-live, not tick-only (a zombie keeps
+    // its tick).
+    assert_task_settled_live(ppid, ptick, 2, "unreadable arm must not signal");
     assert!(
         kill_tick_gated_with(ppid, ptick, |_| Ok(Some(ptick.wrapping_add(1)))),
         "mismatched scripted tick skips"
     );
-    assert_eq!(
-        task_starttime_checked(ppid),
-        Ok(Some(ptick)),
-        "mismatched arm must not signal"
-    );
+    // R16-012: settled-live, not tick-only (a zombie keeps
+    // its tick).
+    assert_task_settled_live(ppid, ptick, 2, "mismatched arm must not signal");
     // SAFETY: retiring our own parked task by verified identity.
     unsafe {
         libc::kill(ppid, libc::SIGKILL);

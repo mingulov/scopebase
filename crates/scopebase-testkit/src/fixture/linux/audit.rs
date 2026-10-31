@@ -2008,6 +2008,38 @@ mod tests {
             .next()
     }
 
+    /// R16-012: settled live-process evidence — the no-signal
+    /// oracle for survival asserts (audit twin of the toolchain
+    /// helper, same contract: R15-010's defect was tick-only
+    /// checks — a kill-mutant's zombie keeps its tick and
+    /// passes). Polls /proc STATE for `secs`: any Z (or
+    /// disappearance) fails loud immediately
+    /// (murdered/vanished); surviving the whole window proves
+    /// live; the final tick equality proves the SAME birth (no
+    /// recycle). State reads only — never reaps.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_proc_settled_live(pid: libc::pid_t, tick: u64, secs: u64, what: &str) {
+        use std::time::{Duration, Instant};
+        let end = Instant::now() + Duration::from_secs(secs);
+        loop {
+            match proc_state(pid) {
+                Some(state) if state != 'Z' => {
+                    if Instant::now() >= end {
+                        break;
+                    }
+                }
+                Some(_) => panic!("{what} {pid} zombified (murdered, tick kept)"),
+                None => panic!("{what} {pid} vanished (survival needs presence)"),
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(Some(tick)),
+            "{what} {pid} recycled during the settle window"
+        );
+    }
+
     /// R12-005: in-process steerer serialization for audit
     /// lib tests (twin of the toolchain file's STEER_SERIAL —
     /// lib tests and integration tests are SEPARATE processes,
@@ -4472,11 +4504,14 @@ mod tests {
         }
         // Anti-vacuity: denial took (writer survived the
         // failing path) or success certified (writer gone).
+        // R16-012: settled-live, not tick-only (a zombie keeps
+        // its tick).
         if denied {
-            assert_eq!(
-                proc_starttime(wpid),
-                Ok(Some(wtick)),
-                "denied writer must survive (else the denial never took)"
+            assert_proc_settled_live(
+                wpid,
+                wtick,
+                2,
+                "denied writer must survive (else the denial never took)",
             );
         } else {
             // The ok arm retires before reporting: gone now
@@ -7612,11 +7647,9 @@ mod tests {
             !kill_tick_gated_with(ppid, ptick, |_| Err("injected".to_string())),
             "unreadable stat must report unproven (false)"
         );
-        assert_eq!(
-            proc_starttime(ppid),
-            Ok(Some(ptick)),
-            "unreadable arm must not signal"
-        );
+        // R16-012: settled-live, not tick-only (a zombie
+        // keeps its tick).
+        assert_proc_settled_live(ppid, ptick, 2, "unreadable arm must not signal");
         // Scripted match: signals (victim dies).
         let mut doomed = spawn();
         let dpid = doomed.id() as libc::pid_t;
@@ -7646,11 +7679,9 @@ mod tests {
             kill_tick_gated_with(ppid, ptick, |_| Ok(Some(ptick.wrapping_add(1)))),
             "mismatched scripted tick skips"
         );
-        assert_eq!(
-            proc_starttime(ppid),
-            Ok(Some(ptick)),
-            "mismatched arm must not signal"
-        );
+        // R16-012: settled-live, not tick-only (a zombie
+        // keeps its tick).
+        assert_proc_settled_live(ppid, ptick, 2, "mismatched arm must not signal");
         // SAFETY: retiring our own parked victim by verified identity.
         unsafe {
             libc::kill(ppid, libc::SIGKILL);
@@ -8042,10 +8073,13 @@ mod tests {
         drop(held);
         match mode {
             "live" => {
-                assert_eq!(
-                    proc_starttime(pid),
-                    Ok(Some(tick)),
-                    "live fixture must survive the unresolved drop"
+                // R16-012: settled-live, not tick-only (a
+                // zombie keeps its tick).
+                assert_proc_settled_live(
+                    pid,
+                    tick,
+                    2,
+                    "live fixture must survive the unresolved drop",
                 );
                 let mut child = owned.take().expect("owned staged");
                 let _ = child.kill();
@@ -8090,11 +8124,9 @@ mod tests {
                 eprintln!("R16004-STATUS retained pid={pid}");
             }
             "stranger" => {
-                assert_eq!(
-                    proc_starttime(pid),
-                    Ok(Some(tick)),
-                    "stranger must survive the unresolved drop"
-                );
+                // R16-012: settled-live, not tick-only (a
+                // zombie keeps its tick).
+                assert_proc_settled_live(pid, tick, 2, "stranger must survive the unresolved drop");
                 // SAFETY: signal-only to the staged stranger.
                 unsafe {
                     libc::kill(pid, libc::SIGKILL);
