@@ -7198,9 +7198,73 @@ fn probe_tree_retirement_kills_stranded_group() {
 /// (RED); post-fix the guard-first order yells (GREEN).
 /// RED runs strand a 31s sleeper + shell zombie — the leak
 /// under test, cleaned on GREEN runs via the caveat.
+/// R16-009: outcome of a caveat-cited group retirement.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[derive(Debug, PartialEq, Eq)]
+enum CaveatGroupOutcome {
+    /// Killed within the proven lifetime; group ESRCH-verified dead.
+    Retired,
+    /// Refused: past the proven lifetime (a reformed stranger
+    /// would pass an existence check) — caller skips loud.
+    PastLifetime,
+}
+
+/// R16-009: retire a caveat-cited group number within the
+/// sleeper's PROVEN lifetime. The caveat cites a NUMBER, not an
+/// identity — existence alone cannot gate the kill (past the
+/// sleeper's lifetime a reformed stranger group passes it and
+/// would take SIGKILL). `spawned` is the parent's pre-spawn
+/// timestamp (≈ birth, conservative: birth cannot precede it;
+/// sleep cannot undershoot its clock without signals, and
+/// nothing signals it), so `elapsed < lifetime` proves OUR
+/// sleeper still holds the group. Past the lifetime the number
+/// is refused (no existence probe can recover identity).
+/// `reap_leader` reaps the leader handle WE hold (a zombie
+/// leader pins the group number and ESRCH never arrives — nobody
+/// else can reap OUR child); the caveat site passes a no-op
+/// because the audited helper already consumed and reaped the
+/// handle (R15-010 pump-through-handle).
+/// Residual: premature death inside the lifetime (OOM on a 4KB
+/// sleep) + exact-pgid reform — far narrower than S100 (the
+/// parent knows no identity to check; the child under EMFILE
+/// knows none to cite).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_caveat_group_within_lifetime(
+    pgid: i32,
+    spawned: Instant,
+    lifetime: Duration,
+    reap_leader: impl FnOnce(),
+) -> CaveatGroupOutcome {
+    if spawned.elapsed() >= lifetime {
+        return CaveatGroupOutcome::PastLifetime;
+    }
+    // SAFETY: signal-only to the staged group (proven ours by
+    // the lifetime gate above — the sleeper cannot have exited
+    // on its own clock yet, and nothing else signals it).
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+    reap_leader();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(pgid, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "caveat group {pgid} must die within its lifetime"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    CaveatGroupOutcome::Retired
+}
+
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn stranded_group_read_failure_retires_before_report() {
+    // R16-009: pre-spawn timestamp for the caveat lifetime gate.
+    let spawned = Instant::now();
     let exe = std::env::current_exe().expect("own test binary");
     let out = std::process::Command::new(exe)
         .arg("--exact")
@@ -7252,22 +7316,149 @@ fn stranded_group_read_failure_retires_before_report() {
         0,
         "stranded group must outlive the unresolved drop\n{stderr}"
     );
-    // SAFETY: signal-only to the staged group whose pgid the
-    // caveat cited (its sleeper is ours — alive from the caveat
-    // through the probe above, so the number cannot have
-    // recycled).
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
+    // R16-009: the kill is gated on the sleeper's proven 31s
+    // lifetime (existence above proves the drop didn't kill — it
+    // cannot authorize THIS kill past the lifetime). No-op
+    // reaper: the audited helper already consumed and reaped the
+    // leader handle.
+    match retire_caveat_group_within_lifetime(pgid, spawned, Duration::from_secs(31), || {}) {
+        CaveatGroupOutcome::Retired => {}
+        CaveatGroupOutcome::PastLifetime => {
+            eprintln!(
+                "skip: caveat group {pgid} outlived its proven 31s lifetime (machine stalled; the 31s sleeper bounds the leak)"
+            );
+        }
     }
+}
+
+/// R16-009: the caveat cleanup must refuse a group past its
+/// proven lifetime (existence alone would murder a reformed
+/// stranger) and retire one within it. Negative arm: force the
+/// original dead past a short lifetime, reform the number,
+/// require PastLifetime + replacement survival (mutant: gate
+/// removed → murders). Positive arm: a fresh group retires at
+/// once (mutant: always-refuse → fails). No S100 skip: the gate
+/// is time-only.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn caveat_cleanup_refuses_expired_lifetime() {
+    // In-test steering: hold the serial + prove writability (skip
+    // loud when unavailable).
+    let _serial = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_before = match std::fs::read_to_string("/proc/sys/kernel/ns_last_pid") {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    fn spawn_grouped() -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = std::process::Command::new("/bin/sleep");
+        command
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            command.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        command.spawn().expect("grouped sleep spawns")
+    }
+    // Negative arm: original dead past a SHORT lifetime, number
+    // reformed — must refuse.
+    let spawned = Instant::now();
+    let mut original = spawn_grouped();
+    let group = original.id() as i32;
+    // SAFETY: signal-only to our own staged group.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    let _ = original.wait();
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         // SAFETY: signal 0 probes existence only.
-        if unsafe { libc::killpg(pgid, 0) } < 0 {
+        if unsafe { libc::killpg(group, 0) } < 0 {
             break;
         }
-        assert!(Instant::now() < end, "caveat group {pgid} must die");
+        assert!(
+            Instant::now() < end,
+            "original group {group} must die before reform"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
+    let mut reformed = match steer_sleep_onto(group, true) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("skip: reform contended");
+            return;
+        }
+    };
+    let mut reform_guard = SilentChildGuard::new(group);
+    // Past the 100ms lifetime on the real clock (staging already
+    // consumed part of it; stalls only push further past).
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        retire_caveat_group_within_lifetime(group, spawned, Duration::from_millis(100), || {}),
+        CaveatGroupOutcome::PastLifetime,
+        "expired lifetime must refuse the kill"
+    );
+    // SAFETY: signal 0 probes existence only.
+    assert_eq!(
+        unsafe { libc::killpg(group, 0) },
+        0,
+        "reformed group must survive refusal"
+    );
+    assert!(
+        matches!(reformed.try_wait(), Ok(None)),
+        "reformed leader must stay live"
+    );
+    // Loud cleanup (verified, ours).
+    // SAFETY: signal-only to our own staged reformed group.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    let _ = reformed.wait();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "reformed group {group} must die in cleanup"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    reform_guard.disarm();
+    // Positive arm: a fresh group retires at once.
+    let mut fresh = spawn_grouped();
+    let fgroup = fresh.id() as i32;
+    let mut fresh_guard = SilentChildGuard::new(fgroup);
+    assert_eq!(
+        retire_caveat_group_within_lifetime(
+            fgroup,
+            Instant::now(),
+            Duration::from_secs(31),
+            || {
+                let _ = fresh.wait();
+            }
+        ),
+        CaveatGroupOutcome::Retired,
+        "fresh group must retire within its lifetime"
+    );
+    fresh_guard.disarm();
 }
 
 /// R16-007: a pinned guard dropped with working reads must
