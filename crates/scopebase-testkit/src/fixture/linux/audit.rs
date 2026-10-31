@@ -2802,6 +2802,92 @@ mod tests {
         }
     }
 
+    /// R21-012: bounded exit-await for an owned `Child`
+    /// handle — try-wait cadence (10ms), never blocking.
+    /// Returns the exit status when reaped within the
+    /// bound, None on timeout or try_wait error. (try_wait
+    /// reaps our own children and caches the status, so no
+    /// raw waitpid — and no stale-handle confusion.)
+    #[cfg(target_arch = "x86_64")]
+    fn await_child_exit(
+        child: &mut std::process::Child,
+        timeout: Duration,
+    ) -> Option<std::process::ExitStatus> {
+        let end = Instant::now() + timeout;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R21-012: discharge a staged owned child (bounded,
+    /// never blocking): gated kill on the known birth
+    /// (unknown birth: no kill — a blind signal is
+    /// forbidden), then a bounded reap-await. Returns
+    /// Ok(status) when reaped, Err(reason) when the
+    /// retirement is unproven (timeout, try_wait error).
+    /// PRECONDITION: the handle is unstale (never reaped
+    /// behind its back) — under it, an unreadable gate
+    /// (outage) falls back to the handle kill: our
+    /// unreaped child's number cannot recycle (the kernel
+    /// pins it), so the blind kill names the right task.
+    /// The fallback keeps an outage loud-but-clean (the
+    /// caller still records the observation fault from its
+    /// own reads); without it an outage stranded sleeps
+    /// for ~15min and the flag-waiting forker FOREVER.
+    /// Callers collect failures and fail loud only after
+    /// every staged process was attempted.
+    #[cfg(target_arch = "x86_64")]
+    fn discharge_staged_child(
+        child: &mut std::process::Child,
+        pid: libc::pid_t,
+        tick: Option<u64>,
+        timeout: Duration,
+        what: &str,
+    ) -> Result<std::process::ExitStatus, String> {
+        if let Some(known) = tick {
+            if !kill_tick_gated(pid, known) {
+                // Gate unreadable (outage): fall back to
+                // the handle (sound by the unstale
+                // precondition — the number is pinned).
+                let _ = child.kill();
+            }
+        }
+        match await_child_exit(child, timeout) {
+            Some(status) => Ok(status),
+            None => Err(format!("{what} {pid} undrained past {timeout:?}")),
+        }
+    }
+
+    /// R21-012: bounded report-file read — the forker
+    /// reports before exiting, so past its drain the file
+    /// cannot appear later; the short bound is settling
+    /// insurance only. Returns the parsed pid, None when
+    /// missing/unparseable past the bound (outage reads
+    /// fail the same way — the caller reports the fault).
+    #[cfg(target_arch = "x86_64")]
+    fn read_report_bounded(path: &std::path::Path, timeout: Duration) -> Option<libc::pid_t> {
+        let end = Instant::now() + timeout;
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(parsed) = text.trim().parse() {
+                    return Some(parsed);
+                }
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// R20-013(b): trailing run-proof that the production
     /// retire drained the holder (extracted from the
     /// birth-bracket test so the replacement regression
@@ -21602,7 +21688,16 @@ mod tests {
         // Fork choreography files (pid-unique).
         let me = std::process::id();
         let dir = std::env::temp_dir();
-        let flag_fork = dir.join(format!("scopebase-r19005-fork-{me}"));
+        // R21-012 flag fault: the fork flag sits under a
+        // never-created directory — the raise fails ENOENT
+        // and the forker (spawned watching it) waits
+        // forever — the hang shape.
+        let flag_fork = if std::env::var("SCOPEBASE_R21012_FLAG_FAULT").is_ok() {
+            dir.join(format!("scopebase-r21012-bogus-{me}"))
+                .join(format!("scopebase-r19005-fork-{me}"))
+        } else {
+            dir.join(format!("scopebase-r19005-fork-{me}"))
+        };
         let flag_forked = dir.join(format!("scopebase-r19005-forked-{me}"));
         let _ = std::fs::remove_file(&flag_fork);
         let _ = std::fs::remove_file(&flag_forked);
@@ -21613,7 +21708,19 @@ mod tests {
         // not be anyone's attributed child, or the
         // production TREE retire would legitimately take it
         // with its parent).
-        let script = "import os, sys
+        // R21-012 report fault: the forker waits for the
+        // flag, then exits clean WITHOUT forking or
+        // reporting (the miss arm must discharge the rest
+        // and fail loud naming the clean exit).
+        let script = if std::env::var("SCOPEBASE_R21012_SILENT_FORKER").is_ok() {
+            "import os, sys
+while not os.path.exists(sys.argv[1]):
+    import time
+    time.sleep(0.001)
+os._exit(0)
+"
+        } else {
+            "import os, sys
 while not os.path.exists(sys.argv[1]):
     import time
     time.sleep(0.001)
@@ -21624,8 +21731,9 @@ if c == 0:
 else:
     open(sys.argv[2], 'w').write(str(c))
     os._exit(0)
-";
-        let forker = std::process::Command::new("python3")
+"
+        };
+        let mut forker = std::process::Command::new("python3")
             .arg("-c")
             .arg(script)
             .arg(&flag_fork)
@@ -21646,6 +21754,19 @@ else:
                 format!("pipe:[{}]", want_ino.1),
                 "{who} must hold the collection write end (non-vacuity)"
             );
+        }
+        // R21-012 birth fault (gone variant): the forker
+        // dies before the window (gated kill + reap while
+        // healthy) — the miss arm must discharge the rest
+        // and fail loud naming the exit cause (the fork
+        // may never have happened).
+        if std::env::var("SCOPEBASE_R21012_FORKER_DEATH").is_ok() {
+            let early = proc_starttime(fpid)
+                .expect("forker stat readable")
+                .expect("forker visible");
+            assert!(kill_tick_gated(fpid, early), "forker signaled");
+            let _ = forker.wait();
+            assert_eq!(proc_starttime(fpid), Ok(None), "forker number must free");
         }
         // Steering state (the hook runs on this thread).
         struct Steer {
@@ -21750,72 +21871,162 @@ else:
             // refusal left the flag-gated forker (no
             // timeout) waiting forever holding the
             // collection write end, and !fired left the
-            // victim unkilled.
+            // victim unkilled. R21-012: collect-then-panic
+            // (every staged process is attempted — a loud
+            // failure never strands an unattempted one),
+            // the report is required LAST (after victim/
+            // legit/forker are drained), and no wait
+            // anywhere blocks.
             let stray = guard.stray.take();
             let victim = guard.victim.take();
             let forker = guard.forker.take();
             drop(guard);
-            if let Some((spid, stick)) = stray {
-                assert!(
-                    park_stray_bounded(spid, stick, Duration::from_secs(5)),
-                    "stray {spid} must park (unresolved parks never discharge)"
-                );
-            }
-            // Forker: raise the flag it waits on, bounded
-            // await its exit, then park the reported
-            // grandchild (sleeps 30s holding the write
-            // end — the flag-raise's own byproduct).
-            if let Some(mut forker) = forker {
-                let _ = std::fs::write(&flag_fork, "fork\n");
-                let end = Instant::now() + Duration::from_secs(10);
+            // R21-012 fault runs print the staged births
+            // (the regression proves discharge from them);
+            // read BEFORE the outage hold below.
+            let fault_run = [
+                "SCOPEBASE_R21012_FLAG_FAULT",
+                "SCOPEBASE_R21012_FORKER_DEATH",
+                "SCOPEBASE_R21012_OUTAGE",
+                "SCOPEBASE_R21012_SILENT_FORKER",
+            ]
+            .iter()
+            .any(|var| std::env::var(var).is_ok());
+            if fault_run {
                 let ftick = proc_starttime(fpid).ok().flatten();
-                loop {
-                    match forker.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) if Instant::now() < end => {
-                            std::thread::sleep(Duration::from_millis(10));
-                            continue;
-                        }
-                        _ => break,
-                    }
-                }
-                if let Some(t) = ftick {
-                    let _ = kill_tick_gated(fpid, t);
-                }
-                let _ = forker.wait();
-                let end = Instant::now() + Duration::from_secs(10);
-                let forked: Option<libc::pid_t> = loop {
-                    if let Ok(text) = std::fs::read_to_string(&flag_forked) {
-                        if let Ok(parsed) = text.trim().parse() {
-                            break Some(parsed);
-                        }
-                    }
-                    if Instant::now() >= end {
-                        break None;
-                    }
-                    std::thread::sleep(Duration::from_millis(1));
-                };
-                // The forker always reports before exiting:
-                // a missing report means the discharge is
-                // unproven — fail loud, never skip.
-                let forked = forked.expect("forker must report its fork for discharge");
-                let gtick = proc_starttime(forked).ok().flatten();
-                assert!(
-                    park_stray_bounded(forked, gtick, Duration::from_secs(5)),
-                    "forker byproduct {forked} must park (unresolved parks never discharge)"
+                eprintln!(
+                    "R21012-STAGED vpid={vpid}:{vtick} lpid={lpid}:{ltick} fpid={fpid}:{}",
+                    ftick.map_or_else(|| "gone".to_string(), |t| t.to_string())
                 );
             }
-            // Victim: kill gated + reap (already reaped in
-            // the miss shape — `None` then — stranded and
-            // unkilled in the !fired shape).
-            if let Some(mut victim) = victim {
-                let _ = kill_tick_gated(vpid, vtick);
-                let _ = victim.wait();
+            // R21-012 outage fault: hold EMFILE across the
+            // discharge section (restored before the flag
+            // files are removed and the verdict lands).
+            let _outage = std::env::var("SCOPEBASE_R21012_OUTAGE").is_ok().then(|| {
+                let confined = confine_fd_table_for_exhaustion();
+                let mut held = Vec::new();
+                while let Ok(file) = std::fs::File::open("/dev/null") {
+                    held.push(file);
+                }
+                assert!(!held.is_empty(), "outage exhaustion must consume fds");
+                (confined, held)
+            });
+            let mut failures: Vec<String> = Vec::new();
+            if let Some((spid, stick)) = stray {
+                if !park_stray_bounded(spid, stick, Duration::from_secs(5)) {
+                    failures.push(format!("stray {spid} unparked (unresolved)"));
+                }
             }
-            let _ = kill_tick_gated(lpid, ltick);
-            let _ = legit.wait();
+            // Forker discharge (bounded): raise the flag it
+            // waits on (CHECKED — an ignored write plus an
+            // unreadable birth hung the old blocking wait
+            // forever), await its exit, gated-kill + reap
+            // when still live. The exit status feeds the
+            // report step below.
+            let mut forker_exit: Option<Option<std::process::ExitStatus>> = None;
+            if let Some(mut forker) = forker {
+                let write_failed = match std::fs::write(&flag_fork, "fork\n") {
+                    Ok(()) => None,
+                    Err(error) => Some(format!("fork flag write failed: {error}")),
+                };
+                // Exit-await skipped when the write failed
+                // (the flag is absent — awaiting it is
+                // futile; straight to the gated kill).
+                let mut status = if write_failed.is_none() {
+                    await_child_exit(&mut forker, Duration::from_secs(10))
+                } else {
+                    None
+                };
+                if status.is_none() {
+                    let ftick = proc_starttime(fpid).ok().flatten();
+                    match ftick {
+                        Some(known) => {
+                            let _ = kill_tick_gated(fpid, known);
+                        }
+                        // Gate unreadable (outage): fall back
+                        // to the handle — unstale here (the
+                        // status above is None, so nothing
+                        // reaped it), hence the number is
+                        // pinned and the blind kill is sound.
+                        None => {
+                            let _ = forker.kill();
+                        }
+                    }
+                    status = await_child_exit(&mut forker, Duration::from_secs(5));
+                    if status.is_none() {
+                        failures.push(format!(
+                            "forker {fpid} undrained (birth {})",
+                            ftick.map_or_else(|| "unreadable".to_string(), |t| t.to_string())
+                        ));
+                    }
+                }
+                if let Some(message) = write_failed {
+                    failures.push(message);
+                }
+                forker_exit = Some(status);
+            }
+            // Victim: bounded discharge (already reaped in
+            // the miss shape — `None` then — stranded and
+            // unkilled in the !fired shape). BEFORE the
+            // report require (R21-012 order).
+            if let Some(mut victim) = victim {
+                if let Err(reason) = discharge_staged_child(
+                    &mut victim,
+                    vpid,
+                    Some(vtick),
+                    Duration::from_secs(5),
+                    "victim",
+                ) {
+                    failures.push(reason);
+                }
+            }
+            if let Err(reason) = discharge_staged_child(
+                &mut legit,
+                lpid,
+                Some(ltick),
+                Duration::from_secs(5),
+                "legitimate holder",
+            ) {
+                failures.push(reason);
+            }
+            // Report require LAST (the chicken-and-egg
+            // resolved: every staged process is drained
+            // first; the report names only the grandchild).
+            // A missing report still fails loud — the exit
+            // cause distinguishes died-pre-fork (the fork
+            // may never have happened) from exited-clean
+            // without reporting.
+            if let Some(exit) = forker_exit {
+                match read_report_bounded(&flag_forked, Duration::from_secs(2)) {
+                    Some(forked) => {
+                        let gtick = proc_starttime(forked).ok().flatten();
+                        if !park_stray_bounded(forked, gtick, Duration::from_secs(5)) {
+                            failures
+                                .push(format!("forker byproduct {forked} unparked (unresolved)"));
+                        }
+                    }
+                    None => failures.push(match exit {
+                        Some(status) if status.success() => {
+                            "forker exited 0 without reporting (the fork may never have \
+                             happened — discharge unproven)"
+                                .to_string()
+                        }
+                        Some(status) => format!(
+                            "forker exited {status} without reporting (the fork may never \
+                             have happened — discharge unproven)"
+                        ),
+                        None => {
+                            "forker undrained and report missing (discharge unproven)".to_string()
+                        }
+                    }),
+                }
+            }
+            drop(_outage);
             let _ = std::fs::remove_file(&flag_fork);
             let _ = std::fs::remove_file(&flag_forked);
+            if !failures.is_empty() {
+                panic!("miss-skip discharge failed:\n  {}", failures.join("\n  "));
+            }
             eprintln!("R20012-SKIP-DISCHARGED");
             eprintln!("skip: replacement steering missed");
             return;
@@ -21996,6 +22207,193 @@ else:
             park_stray_bounded(pid, None, Duration::from_millis(200)),
             "unknown-birth park over proven absence must certify"
         );
+    }
+
+    /// R21-012: parse the fault probe's staged-births
+    /// line (`R21012-STAGED vpid={pid}:{tick}
+    /// lpid={pid}:{tick} fpid={pid}:{tick|gone}`).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_r21012_staged(line: &str) -> Vec<(libc::pid_t, Option<u64>, &'static str)> {
+        let mut out = Vec::new();
+        for (slot, who) in line
+            .split_whitespace()
+            .skip(1)
+            .zip(["victim", "legit", "forker"])
+        {
+            let (_, rest) = slot.split_once('=').expect("staged slot shape");
+            let (pid, tick) = rest.split_once(':').expect("staged birth shape");
+            let pid: libc::pid_t = pid.parse().expect("staged pid parses");
+            let tick = if tick == "gone" {
+                None
+            } else {
+                Some(tick.parse().expect("staged tick parses"))
+            };
+            out.push((pid, tick, who));
+        }
+        assert_eq!(out.len(), 3, "three staged births");
+        out
+    }
+
+    /// R21-012: prove every staged birth retired — absence
+    /// or recycle (a still-live original birth fails; an
+    /// unreadable read fails — never an Err-as-gone pass).
+    /// Pre-window-reaped births (`gone`) prove nothing and
+    /// are skipped.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_r21012_staged_discharged(stderr: &str, shape: &str, fault: &str) {
+        let line = stderr
+            .lines()
+            .find(|line| line.contains("R21012-STAGED"))
+            .expect("probe must print staged births");
+        for (pid, tick, who) in parse_r21012_staged(line) {
+            let Some(tick) = tick else { continue };
+            match proc_starttime(pid) {
+                Ok(None) => {}
+                Ok(Some(now)) => assert_ne!(
+                    now, tick,
+                    "{who} birth must be retired ({shape}/{fault} stranded it)"
+                ),
+                Err(error) => panic!("{who} retirement unverifiable ({shape}/{fault}): {error}"),
+            }
+        }
+    }
+
+    /// R21-012: hygiene for a hung probe — gated-retire its
+    /// staged births (parsed from the partial stderr) so
+    /// the RED run stays clean. Orphaned to init on the
+    /// probe's death; init reaps once they die.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_r21012_staged(output: &std::process::Output) {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let Some(line) = stderr.lines().find(|line| line.contains("R21012-STAGED")) else {
+            return;
+        };
+        for (pid, tick, _) in parse_r21012_staged(line) {
+            if let Some(tick) = tick {
+                let _ = kill_tick_gated(pid, tick);
+            }
+        }
+    }
+
+    /// R21-012: independent flag/birth/report faults × both
+    /// skip shapes → bounded + discharged before loud
+    /// failure. Each cell runs the birth-bracket test
+    /// fresh-image with one shape forcing (miss / no-fire)
+    /// plus one fault: FLAG_FAULT (the fork-flag raise
+    /// fails ENOENT — the forker waits forever, the hang
+    /// shape), FORKER_DEATH (the forker dies pre-window —
+    /// the fork may never have happened), SILENT_FORKER
+    /// (clean exit without forking or reporting), OUTAGE
+    /// (EMFILE across the discharge — births unreadable,
+    /// gates dead).
+    /// Every cell must fail LOUD (nonzero + the fault
+    /// message, never the DISCHARGED citation) within a
+    /// 40s wrapper bound (a hang kills the probe and fails).
+    /// EVERY cell must also discharge every staged birth
+    /// (absence or recycle past the probe's exit) — even
+    /// the outage cell: unreadable gates fall back to the
+    /// unstale handle kill (the number is pinned, so the
+    /// blind kill is sound), keeping the outage loud (the
+    /// write + report faults still fail) but clean.
+    /// RED (pre-fix): flag/death/silent cells strand
+    /// victim/legit (the report `.expect` panics before
+    /// their block); outage cells hang in the blocking
+    /// forker wait.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn miss_skip_faults_discharge_before_loud_failure() {
+        use std::time::{Duration, Instant};
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        for (shape_var, shape) in [
+            ("SCOPEBASE_R20012_FORCE_MISS", "miss"),
+            ("SCOPEBASE_R20012_FORCE_NO_FIRE", "no-fire"),
+        ] {
+            for (fault_var, fault, loud, discharge) in [
+                (
+                    "SCOPEBASE_R21012_FLAG_FAULT",
+                    "flag",
+                    "fork flag write failed",
+                    true,
+                ),
+                (
+                    "SCOPEBASE_R21012_FORKER_DEATH",
+                    "death",
+                    "without reporting",
+                    true,
+                ),
+                (
+                    "SCOPEBASE_R21012_SILENT_FORKER",
+                    "silent",
+                    "exited 0 without reporting",
+                    true,
+                ),
+                (
+                    "SCOPEBASE_R21012_OUTAGE",
+                    "outage",
+                    "miss-skip discharge failed",
+                    true,
+                ),
+            ] {
+                let exe = std::env::current_exe().expect("own test binary");
+                let mut probe = std::process::Command::new(exe)
+                    .arg("--exact")
+                    .arg("fixture::linux::audit::tests::discovery_pins_birth_across_pipe_evidence")
+                    .arg("--nocapture")
+                    .env(shape_var, "1")
+                    .env(fault_var, "1")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .expect("probe child spawns");
+                // 40s wrapper bound (post-fix cells land in
+                // ≤ ~20s; a hang kills the probe and fails).
+                let end = Instant::now() + Duration::from_secs(40);
+                let output = loop {
+                    match probe.try_wait().expect("probe try_wait") {
+                        Some(_) => break probe.wait_with_output().expect("probe output"),
+                        None => {
+                            if Instant::now() >= end {
+                                let _ = probe.kill();
+                                let output = probe.wait_with_output().expect("probe output");
+                                retire_r21012_staged(&output);
+                                panic!("probe hung past 40s bound ({shape}/{fault})");
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    }
+                };
+                let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                // Environmental skips propagate (the fault
+                // never engaged).
+                if stderr.lines().any(|line| {
+                    line.contains("skip: python3 unavailable")
+                        || line.contains("skip: ns_last_pid unreadable")
+                        || line.contains("skip: ns_last_pid unwritable")
+                }) {
+                    eprintln!("skip (probe environmental, {shape}/{fault})");
+                    continue;
+                }
+                assert!(
+                    !output.status.success(),
+                    "fault probe must fail loud ({shape}/{fault})\n{stderr}"
+                );
+                assert!(
+                    stderr.contains(loud),
+                    "probe must name the fault ({shape}/{fault})\n{stderr}"
+                );
+                assert!(
+                    !stderr.contains("R20012-SKIP-DISCHARGED"),
+                    "failed discharge must never cite ({shape}/{fault})\n{stderr}"
+                );
+                if discharge {
+                    assert_r21012_staged_discharged(&stderr, shape, fault);
+                }
+            }
+        }
     }
 
     /// R19-006: pipe discovery must verify identity and mode
