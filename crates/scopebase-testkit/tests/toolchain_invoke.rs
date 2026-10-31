@@ -2521,6 +2521,9 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let live_tick = task_starttime_checked(live)
         .expect("pauser stat readable")
         .expect("pauser live");
+    // R15-004: late-pin the observed live tick (repairs a
+    // construction read the retry did not outlast).
+    live_guard.pin(live_tick);
     // Zombie-ours: a fork-only child that exits at once and is
     // never reaped until cleanup — keeps its tick in state Z.
     // SAFETY: fork; the child only _exits (no runtime, no locks).
@@ -2556,6 +2559,8 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let zombie_tick = task_starttime_checked(zombie)
         .expect("zombie stat readable")
         .expect("zombie present");
+    // R15-004: late-pin the observed live tick.
+    zombie_guard.pin(zombie_tick);
     // Recycled: kill an owned pauser, force a tick advance, retake
     // its number with a steered squatter (R12-005: cross-process
     // placement lock; a racing sibling spawn may steal it —
@@ -2568,6 +2573,8 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let victim_tick = task_starttime_checked(victim)
         .expect("victim stat readable")
         .expect("victim live");
+    // R15-004: late-pin the observed live tick.
+    victim_guard.pin(victim_tick);
     kill_wait_child(victim);
     victim_guard.disarm();
     std::thread::sleep(Duration::from_millis(50));
@@ -2627,6 +2634,9 @@ fn orphan_retirement_predicate_ignores_recycled_number() {
     let now = task_starttime_checked(victim)
         .expect("squatter stat readable")
         .expect("squatter live");
+    // R15-004: late-pin the squatter's live tick (the guard was
+    // armed at placement; this repairs a raced construction).
+    squatter_guard.pin(now);
     // R13-008: forced same-tick rejection runs the branch after a
     // real placement (a natural contended exit instead would miss
     // the scenario — the driver requires the forced report).
@@ -3254,6 +3264,33 @@ fn kill_tick_gated(pid: i32, tick: u64) -> bool {
     kill_tick_gated_with(pid, tick, task_starttime_checked)
 }
 
+/// R15-004: birth-tick pin with transient retry — a single
+/// EMFILE-class blip at guard construction must not leave the
+/// guard unpinned (an unpinned drop murders a recycled
+/// same-process child it cannot distinguish). Errors retry
+/// bounded (~100ms); Ok(None) (gone) returns immediately —
+/// death is not transient. The read fn is injected so the
+/// retry arms are unit-testable.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn pin_birth_tick_with(pid: i32, read: impl Fn(i32) -> Result<Option<u64>, String>) -> Option<u64> {
+    let end = Instant::now() + Duration::from_millis(100);
+    loop {
+        match read(pid) {
+            Ok(tick) => return tick,
+            Err(_) if Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// R15-004: the production pin reader.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn pin_birth_tick(pid: i32) -> Option<u64> {
+    pin_birth_tick_with(pid, task_starttime_checked)
+}
+
 /// R13-008: Drop guard retiring an owned fixture child on every
 /// exit (early return or panic). Covers pausers (retire) and
 /// zombies (discharge status — the kill also reaches a child hung
@@ -3277,7 +3314,7 @@ impl SilentChildGuard {
     /// owned child. Never panics: construction itself must not
     /// be a staging failure (the birth→read window it closes).
     fn new(pid: i32) -> Self {
-        let tick = task_starttime_checked(pid).ok().flatten();
+        let tick = pin_birth_tick(pid);
         SilentChildGuard {
             pid,
             tick,
@@ -3289,6 +3326,20 @@ impl SilentChildGuard {
     /// recycled) number.
     fn disarm(&mut self) {
         self.disarmed = true;
+    }
+
+    /// R15-004: late-pin a birth tick read after construction
+    /// (the caller just observed live identity while the guard
+    /// holds None — construction raced a transient read failure
+    /// the retry did not outlast). Unconditional set: the drop
+    /// re-verifies against the live tick, so a pin of OUR
+    /// child's tick degrades to a skip once stale, never a
+    /// murder. Caller obligation: pin only ticks read while the
+    /// child is known-ours and alive — never a post-retire
+    /// re-read (that could pin a squatter's tick, which the
+    /// drop WOULD match and signal).
+    fn pin(&mut self, tick: u64) {
+        self.tick = Some(tick);
     }
 }
 
@@ -3386,7 +3437,13 @@ fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i3
         let pid = birth();
         slot_a.set(pid);
         // R14-012: custody AT birth (the fix under test).
-        let _guard = SilentChildGuard::new(pid);
+        let mut _guard = SilentChildGuard::new(pid);
+        // R15-004: late-pin while known-ours and alive — BEFORE
+        // the explicit retire (a post-retire re-read could pin a
+        // squatter's tick).
+        if let Ok(Some(tick)) = task_starttime_checked(pid) {
+            _guard.pin(tick);
+        }
         retire_child_silent(pid);
         observe(pid);
     }));
@@ -3407,8 +3464,13 @@ fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i3
         let pid = birth();
         slot.set(pid);
         // R14-012: custody AT birth (the fix under test).
-        let _guard = SilentChildGuard::new(pid);
+        let mut _guard = SilentChildGuard::new(pid);
         observe(pid);
+        // R15-004: late-pin while known-ours and alive (the
+        // injected failure below unwinds through the guard).
+        if let Ok(Some(tick)) = task_starttime_checked(pid) {
+            _guard.pin(tick);
+        }
         // Later-spawn failure (injected): a missing binary.
         // Both arms diverge (the failure must report); the
         // impossible-Ok arm retires first so even it stays
@@ -3694,10 +3756,17 @@ fn drop_guard_spares_recycled_number() {
     let owned = fixture.id() as i32;
     // R14-012: custody AT birth (auto-pins the tick the stale
     // drop below deliberately holds).
-    let guard = SilentChildGuard::new(owned);
+    let mut guard = SilentChildGuard::new(owned);
     let owned_tick = task_starttime_checked(owned)
         .expect("fixture stat readable")
         .expect("fixture visible");
+    // R15-004: late-pin the live identity just observed — if
+    // construction raced a transient read failure (None), the
+    // stale drop below would murder the replacement it cannot
+    // distinguish; the pin converts it to a gated drop. A
+    // normally-constructed guard already holds this tick
+    // (no-op).
+    guard.pin(owned_tick);
     // Explicit loud retire (the R13-003/R13-008 tail shape):
     // from here the number is free and the guard is stale.
     // SAFETY: retiring our own fixture.
@@ -3737,6 +3806,8 @@ fn drop_guard_spares_recycled_number() {
     let standin_tick = task_starttime_checked(owned)
         .expect("stand-in stat readable")
         .expect("stand-in visible");
+    // R15-004: late-pin the stand-in's live tick.
+    standin_guard.pin(standin_tick);
     if standin_tick == owned_tick {
         kill_wait_child(owned);
         standin_guard.disarm();
@@ -3753,6 +3824,106 @@ fn drop_guard_spares_recycled_number() {
     );
     kill_wait_child(owned);
     standin_guard.disarm();
+}
+
+/// R15-004: a late pin converts an unpinned guard into a gated
+/// drop. The guard is constructed over a gone number (initial
+/// read fails persistently-None — the deterministic stand-in
+/// for a transient construction blip the retry did not
+/// outlast); a first replacement is steered on and late-pinned;
+/// a second replacement retakes the number; dropping the guard
+/// must spare it (the stale pin mismatches and skips), while an
+/// unpinned drop would murder it (waitpid-0 → kill). Pre-fix
+/// (no pin API) the only available drop murders (RED, proven by
+/// running the same staging with the pin call removed during
+/// development); post-fix the replacement survives (GREEN). A
+/// literal transient-EMFILE staging is infeasible in-process
+/// (fd exhaustion is process-global); transient healing is
+/// covered by the scripted unit test above.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn late_pin_spares_second_replacement() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let seed = fork_pauser();
+    kill_wait_child(seed);
+    // Guard over the gone number: initial read fails → None.
+    let mut guard = SilentChildGuard::new(seed);
+    // First replacement, steered on and late-pinned.
+    std::thread::sleep(Duration::from_millis(50));
+    if steer_pauser_onto(seed, &last_before).is_none() {
+        eprintln!("skip: first retake contended");
+        return;
+    }
+    let first_tick = task_starttime_checked(seed)
+        .expect("first stat readable")
+        .expect("first visible");
+    guard.pin(first_tick);
+    // Second replacement retakes the number.
+    kill_wait_child(seed);
+    std::thread::sleep(Duration::from_millis(50));
+    if steer_pauser_onto(seed, &last_before).is_none() {
+        eprintln!("skip: second retake contended");
+        return;
+    }
+    let second_tick = task_starttime_checked(seed)
+        .expect("second stat readable")
+        .expect("second visible");
+    if second_tick == first_tick {
+        kill_wait_child(seed);
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    drop(guard);
+    assert_eq!(
+        task_starttime_checked(seed),
+        Ok(Some(second_tick)),
+        "late-pinned drop must spare the second replacement"
+    );
+    assert!(
+        matches!(task_state(seed), Some(state) if state != 'Z'),
+        "survivor must be live, not a zombie"
+    );
+    kill_wait_child(seed);
+}
+
+/// R15-004 staging helper: steer a pauser onto `want`,
+/// returning its pid on success (mirrors the drop_guard
+/// placement loop; misses are retired inline).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn steer_pauser_onto(want: i32, last_before: &str) -> Option<i32> {
+    let _nsflock = ns_last_pid_flock();
+    let mut placed = None;
+    for _ in 0..100 {
+        if !steer_next_pid_unlocked(want) {
+            break;
+        }
+        let kid = fork_pauser();
+        if kid == want {
+            placed = Some(kid);
+            break;
+        }
+        let mut kid_guard = SilentChildGuard::new(kid);
+        kill_wait_child(kid);
+        kid_guard.disarm();
+    }
+    drop(_nsflock);
+    locked_restore_hint(last_before);
+    placed
 }
 
 /// R15-003: toolchain twin of the audit steered-replacement
@@ -3964,6 +4135,51 @@ fn gated_kill_acts_on_matching_identity() {
         libc::kill(ppid, libc::SIGKILL);
     }
     let _ = parked.wait();
+}
+
+/// R15-004: the birth pin retries transient read errors but
+/// returns gone immediately (scripted reads — EMFILE blips
+/// are not stageable deterministically). A fail,fail,ok
+/// script must pin (naive single-read returns None — RED);
+/// persistent errors exhaust to None; Ok(None) returns after
+/// exactly one read (death is not transient — no retry).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn birth_pin_retries_transient_errors() {
+    use std::cell::RefCell;
+    let script = RefCell::new(vec![
+        Err("blip1".to_string()),
+        Err("blip2".to_string()),
+        Ok(Some(42u64)),
+    ]);
+    let calls = RefCell::new(0);
+    let read = |_: i32| {
+        *calls.borrow_mut() += 1;
+        let mut script = script.borrow_mut();
+        if script.is_empty() {
+            return Ok(Some(42u64));
+        }
+        script.remove(0)
+    };
+    assert_eq!(
+        pin_birth_tick_with(1, read),
+        Some(42),
+        "transient blips must heal by retry"
+    );
+    assert_eq!(*calls.borrow(), 3, "two blips then the pin");
+    let persistent = |_: i32| -> Result<Option<u64>, String> { Err("stuck".to_string()) };
+    assert_eq!(
+        pin_birth_tick_with(1, persistent),
+        None,
+        "persistent errors exhaust to None"
+    );
+    let gone_calls = RefCell::new(0);
+    let gone = |_: i32| {
+        *gone_calls.borrow_mut() += 1;
+        Ok(None)
+    };
+    assert_eq!(pin_birth_tick_with(1, gone), None, "gone pins None");
+    assert_eq!(*gone_calls.borrow(), 1, "gone must not retry");
 }
 
 /// R13-006: settle P's Child handle after the ancestry run. When
@@ -6143,6 +6359,8 @@ fn probe_group_kill_decision_states() {
     let ours_tick = task_starttime_checked(ours_id)
         .expect("ours stat readable")
         .expect("ours visible");
+    // R15-004: late-pin the observed live tick.
+    ours_guard.pin(ours_tick);
     assert!(
         probe_group_kill_allowed(ours_id, ours_tick),
         "ours must allow the group signal"
@@ -6162,6 +6380,8 @@ fn probe_group_kill_decision_states() {
     let plain_tick = task_starttime_checked(plain_id)
         .expect("plain stat readable")
         .expect("plain visible");
+    // R15-004: late-pin the observed live tick.
+    plain_guard.pin(plain_tick);
     // SAFETY: getpgid queries only.
     assert_ne!(
         unsafe { libc::getpgid(plain_id) },
@@ -6374,9 +6594,11 @@ fn group_guard_drop_spares_reformed_stranger() {
     // R14-012: custody AT birth (auto-pins) — the reads below
     // panic safe; disarmed after the owner cleanup.
     let mut stranger_guard = SilentChildGuard::new(id);
-    task_starttime_checked(id)
+    let stranger_tick = task_starttime_checked(id)
         .expect("stranger stat readable")
         .expect("stranger visible");
+    // R15-004: late-pin the observed live tick.
+    stranger_guard.pin(stranger_tick);
     // SAFETY: getpgid queries only.
     assert_eq!(unsafe { libc::getpgid(id) }, id, "stranger must self-group");
     // Mismatched probe tick: the guard believes the group is

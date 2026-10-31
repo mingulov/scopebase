@@ -7025,6 +7025,156 @@ mod tests {
         let _ = parked.wait();
     }
 
+    /// R15-004: audit twin of the toolchain pin-retry unit test
+    /// (same scripted contract).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_birth_pin_retries_transient_errors() {
+        use std::cell::RefCell;
+        let script = RefCell::new(vec![
+            Err("blip1".to_string()),
+            Err("blip2".to_string()),
+            Ok(Some(42u64)),
+        ]);
+        let calls = RefCell::new(0);
+        let read = |_: libc::pid_t| {
+            *calls.borrow_mut() += 1;
+            let mut script = script.borrow_mut();
+            if script.is_empty() {
+                return Ok(Some(42u64));
+            }
+            script.remove(0)
+        };
+        assert_eq!(
+            pin_birth_tick_with(1, read),
+            Some(42),
+            "transient blips must heal by retry"
+        );
+        assert_eq!(*calls.borrow(), 3, "two blips then the pin");
+        let persistent =
+            |_: libc::pid_t| -> Result<Option<u64>, String> { Err("stuck".to_string()) };
+        assert_eq!(
+            pin_birth_tick_with(1, persistent),
+            None,
+            "persistent errors exhaust to None"
+        );
+        let gone_calls = RefCell::new(0);
+        let gone = |_: libc::pid_t| {
+            *gone_calls.borrow_mut() += 1;
+            Ok(None)
+        };
+        assert_eq!(pin_birth_tick_with(1, gone), None, "gone pins None");
+        assert_eq!(*gone_calls.borrow(), 1, "gone must not retry");
+    }
+
+    /// R15-004: audit twin of the toolchain late-pin test — a
+    /// late pin converts an unpinned fixture guard into a gated
+    /// drop across two steered retakes (skips unless
+    /// steerable). Duration 50 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_late_pin_spares_second_replacement() {
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let spawn = || {
+            std::process::Command::new("/bin/sleep")
+                .arg("50")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("candidate spawns")
+        };
+        let place_onto = |want: libc::pid_t| -> Option<std::process::Child> {
+            let _nsflock = ns_last_pid_flock();
+            let mut placed = None;
+            for _ in 0..100 {
+                if !audit_steer_next_pid_unlocked(want) {
+                    break;
+                }
+                let mut cand = spawn();
+                if cand.id() as libc::pid_t == want {
+                    placed = Some(cand);
+                    break;
+                }
+                let _ = cand.kill();
+                let _ = cand.wait();
+            }
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            placed
+        };
+        let mut seed = spawn();
+        let number = seed.id() as libc::pid_t;
+        let _ = seed.kill();
+        let _ = seed.wait();
+        // Guard over the gone number: initial read fails → None.
+        let mut guard = FixtureGuard::new(number);
+        // First replacement, steered on and late-pinned.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut first = match place_onto(number) {
+            Some(first) => first,
+            None => {
+                eprintln!("skip: first retake contended");
+                return;
+            }
+        };
+        let first_tick = proc_starttime(number)
+            .expect("first stat readable")
+            .expect("first visible");
+        guard.pin(first_tick);
+        // Second replacement retakes the number.
+        let _ = first.kill();
+        let _ = first.wait();
+        std::thread::sleep(Duration::from_millis(50));
+        let mut second = match place_onto(number) {
+            Some(second) => second,
+            None => {
+                eprintln!("skip: second retake contended");
+                return;
+            }
+        };
+        let second_tick = proc_starttime(number)
+            .expect("second stat readable")
+            .expect("second visible");
+        if second_tick == first_tick {
+            let _ = second.kill();
+            let _ = second.wait();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        drop(guard);
+        assert_eq!(
+            proc_starttime(number),
+            Ok(Some(second_tick)),
+            "late-pinned drop must spare the second replacement"
+        );
+        assert!(
+            matches!(proc_state(number), Some(state) if state != 'Z'),
+            "survivor must be live, not a zombie"
+        );
+        assert!(
+            matches!(second.try_wait(), Ok(None)),
+            "second owner status retained"
+        );
+        let _ = second.kill();
+        let _ = second.wait();
+    }
+
     /// R14-007: the adopted-zombie drain must re-decide
     /// foreignness EVERY pass, not once. Own group G with a
     /// zombie (reaped legitimately on pass 1); a barrier hook
@@ -7248,6 +7398,8 @@ mod tests {
         let holder_tick = proc_starttime(id)
             .expect("holder stat readable")
             .expect("holder visible");
+        // R15-004: late-pin the observed live tick.
+        holder_guard.pin(holder_tick);
         // SAFETY: getpgid queries only.
         assert_eq!(unsafe { libc::getpgid(id) }, id, "holder must self-group");
         // V: exits at once inside the holder's group; a stable
@@ -7323,6 +7475,33 @@ mod tests {
         assert!(!status.success(), "killed holder reports signal death");
     }
 
+    /// R15-004: audit twin of the toolchain birth pin —
+    /// transient retry with injected read (see the toolchain
+    /// twin for the contract).
+    #[cfg(target_arch = "x86_64")]
+    fn pin_birth_tick_with(
+        pid: libc::pid_t,
+        read: impl Fn(libc::pid_t) -> Result<Option<u64>, String>,
+    ) -> Option<u64> {
+        use std::time::{Duration, Instant};
+        let end = Instant::now() + Duration::from_millis(100);
+        loop {
+            match read(pid) {
+                Ok(tick) => return tick,
+                Err(_) if Instant::now() < end => {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// R15-004: the production pin reader.
+    #[cfg(target_arch = "x86_64")]
+    fn pin_birth_tick(pid: libc::pid_t) -> Option<u64> {
+        pin_birth_tick_with(pid, proc_starttime)
+    }
+
     /// R14-012: custody AT birth for lib-test fixtures — the
     /// audit twin of the toolchain's `SilentChildGuard`
     /// (separate harnesses, same contract): auto-pins the birth
@@ -7343,7 +7522,7 @@ mod tests {
         /// Never panics: construction itself must not be a
         /// staging failure (the birth→read window it closes).
         fn new(pid: libc::pid_t) -> Self {
-            let tick = proc_starttime(pid).ok().flatten();
+            let tick = pin_birth_tick(pid);
             FixtureGuard {
                 pid,
                 tick,
@@ -7355,6 +7534,14 @@ mod tests {
         /// number.
         fn disarm(&mut self) {
             self.disarmed = true;
+        }
+        /// R15-004: late-pin a birth tick read after construction
+        /// (audit twin of the toolchain `pin` — same contract:
+        /// the drop re-verifies, so a pin of OUR child's tick
+        /// degrades to a skip once stale; never pin a post-retire
+        /// re-read — that could pin a squatter's tick).
+        fn pin(&mut self, tick: u64) {
+            self.tick = Some(tick);
         }
     }
 
@@ -7540,7 +7727,13 @@ mod tests {
             let pid = birth();
             slot_a.set(pid);
             // R14-012: custody AT birth (the fix under test).
-            let _guard = FixtureGuard::new(pid);
+            let mut _guard = FixtureGuard::new(pid);
+            // R15-004: late-pin while known-ours and alive —
+            // BEFORE the explicit retire (a post-retire re-read
+            // could pin a squatter's tick).
+            if let Ok(Some(tick)) = proc_starttime(pid) {
+                _guard.pin(tick);
+            }
             retire_audit_child_silent(pid);
             observe(pid);
         }));
@@ -7562,8 +7755,13 @@ mod tests {
             let pid = birth();
             slot.set(pid);
             // R14-012: custody AT birth (the fix under test).
-            let _guard = FixtureGuard::new(pid);
+            let mut _guard = FixtureGuard::new(pid);
             observe(pid);
+            // R15-004: late-pin while known-ours and alive (the
+            // injected failure below unwinds through the guard).
+            if let Ok(Some(tick)) = proc_starttime(pid) {
+                _guard.pin(tick);
+            }
             // Later-spawn failure (injected): a missing
             // binary. Both arms diverge (the failure must
             // report); the impossible-Ok arm retires first so
