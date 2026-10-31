@@ -2707,6 +2707,24 @@ mod tests {
         }
     }
 
+    /// R21-010-killer: bounding-killer timeout/disconnect
+    /// tail (kill-only — never reaps). Hoisted from the
+    /// R20-013(c) live arm so the replacement regression
+    /// exercises the same artifact. The gate's `true`
+    /// covers mismatch and gone (idempotent-success), so no
+    /// waitpid may follow it: a replacement zombie at `id`
+    /// would be stolen in the send/timeout race (the exact
+    /// trap the R20-013(a) doc warns about). Kill only —
+    /// the kill unblocks a RED wait; GREEN reaps on the main
+    /// thread, RED unwinds through the plant guard.
+    #[cfg(target_arch = "x86_64")]
+    fn bounding_kill_assist(id: libc::pid_t, tick: u64) {
+        // Kill ONLY — no waitpid may follow the gate (its
+        // `true` covers mismatch/gone, so any reap would
+        // fire on an unverified birth).
+        let _ = kill_tick_gated(id, tick);
+    }
+
     /// R20-013(b): trailing run-proof that the production
     /// retire drained the holder (extracted from the
     /// birth-bracket test so the replacement regression
@@ -22960,12 +22978,7 @@ time.sleep(30)
             if brx.recv_timeout(std::time::Duration::from_secs(5)).is_ok() {
                 return;
             }
-            let _ = kill_tick_gated(id, retick);
-            let mut st = 0;
-            // SAFETY: WNOHANG assist only — our own child.
-            unsafe {
-                libc::waitpid(id, &mut st, libc::WNOHANG);
-            }
+            bounding_kill_assist(id, retick);
         });
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_expiry_reaped_probe(id, tick, &mut probe)
@@ -23027,6 +23040,86 @@ time.sleep(30)
             "ours-zombie must be drained by the proof, got {got}"
         );
         drop(probe);
+    }
+
+    /// R21-010-killer: the bounding-killer tail must never
+    /// reap. Pre-fix it ran gated-kill + unconditional
+    /// WNOHANG waitpid: the gate's `true` covers mismatch
+    /// (idempotent-success), so the waitpid fired on a
+    /// birth the gate never verified — stealing a
+    /// replacement zombie's status in the send/timeout race.
+    /// Zombie arm: retire an occupant, plant a
+    /// different-birth replacement settled zombie, run the
+    /// killer tail with the STALE birth (the race shape) —
+    /// the replacement's status must be retained (pre-fix:
+    /// stolen, RED). Live arm: same plant left live — the
+    /// occupant must survive (the gate must not signal a
+    /// birth it cannot verify). No timing: the tail runs
+    /// inline, deterministically.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn bounding_killer_tail_never_reaps() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        for live in [false, true] {
+            // Raw-reaped below (simulated expiry reap).
+            #[allow(clippy::zombie_processes)]
+            let probe = std::process::Command::new("/bin/sleep")
+                .arg("0.1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("probe spawns");
+            let id = probe.id() as libc::pid_t;
+            let tick = proc_starttime(id)
+                .expect("probe stat readable")
+                .expect("probe visible");
+            assert!(kill_tick_gated(id, tick), "expiry kills");
+            let mut st = 0;
+            // SAFETY: the expiry's raw reap (simulated).
+            let got = unsafe { libc::waitpid(id, &mut st, 0) };
+            assert_eq!(got, id, "expiry reaps");
+            drop(probe);
+            let (mut kid, mut guard) = match plant_replacement(id, tick) {
+                Some(planted) => planted,
+                None => return,
+            };
+            let retick = proc_starttime(id)
+                .expect("replacement readable")
+                .expect("replacement visible");
+            assert_ne!(retick, tick, "plant must be a different birth");
+            if !live {
+                assert!(
+                    settle_replacement_zombie(&mut kid, id),
+                    "replacement must settle zombie (stage broken otherwise)"
+                );
+            }
+            // The race shape: the killer tail acts on the
+            // stale birth (already reaped) while a foreign
+            // birth occupies the number.
+            bounding_kill_assist(id, tick);
+            if live {
+                assert!(
+                    matches!(proc_state(id), Some(state) if state != 'Z'),
+                    "live replacement must survive the killer tail"
+                );
+                assert!(kill_tick_gated(id, retick), "retire the survivor");
+                // SAFETY: blocking reap of our retired occupant.
+                let got = unsafe { libc::waitpid(id, &mut st, 0) };
+                assert_eq!(got, id, "survivor reaped");
+            } else {
+                // SAFETY: WNOHANG retention probe — our own child.
+                let got = unsafe { libc::waitpid(id, &mut st, libc::WNOHANG) };
+                assert_eq!(
+                    got, id,
+                    "replacement zombie status must be retained (killer tail stole it)"
+                );
+            }
+            guard.disarm();
+            drop(kid);
+        }
     }
 
     /// R20-015: the ≥5000 high-fd control must stage
