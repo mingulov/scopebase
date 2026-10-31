@@ -2249,6 +2249,70 @@ mod tests {
         found
     }
 
+    /// R17-003: steer a live sleeper onto the freed `want`
+    /// for a DIFFERENT birth tick than `orig_tick` (a
+    /// same-tick retake is S100-untestable), guarded from
+    /// placement. Returns None when contended or same-tick
+    /// (the caller degrades its arm — prints the reason —
+    /// never skips the test: the fixed hygiene runs
+    /// unconditionally, only the replacement proof is
+    /// opportunistic). The caller owns cleanup (kill+wait)
+    /// and disarms the guard after. Requires the caller's
+    /// serial hold (see [`steer_hold`]).
+    #[cfg(target_arch = "x86_64")]
+    fn plant_replacement(
+        want: libc::pid_t,
+        orig_tick: u64,
+    ) -> Option<(std::process::Child, FixtureGuard)> {
+        let mut kid = match steer_sleep_onto(want, false) {
+            Some(kid) => kid,
+            None => {
+                eprintln!("arm vacuous: retake contended");
+                return None;
+            }
+        };
+        let mut guard = FixtureGuard::new(want);
+        let retick = match proc_starttime(want) {
+            Ok(Some(tick)) => tick,
+            _ => {
+                let _ = kid.kill();
+                let _ = kid.wait();
+                guard.disarm();
+                eprintln!("arm vacuous: replacement unreadable");
+                return None;
+            }
+        };
+        if retick == orig_tick {
+            let _ = kid.kill();
+            let _ = kid.wait();
+            guard.disarm();
+            eprintln!("arm vacuous: same-tick retake (S100)");
+            return None;
+        }
+        Some((kid, guard))
+    }
+
+    /// R17-003: kill the owned replacement and settle it to a
+    /// zombie (unreaped — its status is the arm's evidence).
+    /// Returns false when the settle times out (the caller
+    /// treats the arm as failed-loud, never vacuous — a
+    /// SIGKILLed sleeper that never zombifies is broken
+    /// staging, not contention).
+    #[cfg(target_arch = "x86_64")]
+    fn settle_replacement_zombie(kid: &mut std::process::Child, pid: libc::pid_t) -> bool {
+        let _ = kid.kill();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(pid), Some(state) if state == 'Z') {
+                return true;
+            }
+            if std::time::Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     /// R12-005: python3 staged-probe marker — fork-only
     /// holders are staged probe-side (a probe-side fork
     /// inherits the piped stdio; an exec'd holder would lose
@@ -9717,11 +9781,21 @@ mod tests {
     /// (RED, proven by mutant runs during development);
     /// post-fix all retire (GREEN). Duration 47 is unique to
     /// this test.
+    /// R17-003: the OBS/ZOMBIE hygiene must be tick-gated
+    /// (the guards already discharged — a blind retire or
+    /// waitpid would murder or steal a recycled number's
+    /// replacement). Each number is retaken after cleanup,
+    /// before hygiene; replacements must survive retained.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn probe_staging_failures_retire_before_report() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
+        // R17-003: serial hold for the retake plants below
+        // (unconditional — the plants degrade, never skip).
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         fn spawn_sleep(dur: &str) -> std::process::Child {
             std::process::Command::new("/bin/sleep")
                 .arg(dur)
@@ -9734,18 +9808,78 @@ mod tests {
         // Arm OBS: sleeper birth, observation failure injected
         // before any read.
         let slot = std::cell::Cell::new(-1);
+        let otick_slot = std::cell::Cell::new(None);
         let obs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Temporary handle (the guard owns custody —
             // dropping the handle interferes with nothing).
             slot.set(spawn_sleep("47").id() as libc::pid_t);
             let pid = slot.get();
             let _guard = FixtureGuard::new(pid);
+            // The guard's own pin (custody, not observation —
+            // the test still performs no reads before the
+            // injection); the hygiene gate below needs it.
+            otick_slot.set(_guard.tick);
             panic!("R16011 injected observation failure");
         }));
         let opid = slot.get();
         assert!(opid > 0, "obs arm must stage a sleeper");
         let ostate = proc_starttime(opid);
-        retire_audit_child_silent(opid);
+        // R17-003: the hygiene runs ONLY while the number
+        // still names the staged sleeper (unknown pin,
+        // mismatch, or recycle: skip — a blind retire would
+        // murder or steal the replacement).
+        let gated_retire = || {
+            if otick_slot
+                .get()
+                .is_some_and(|t| proc_starttime(opid) == Ok(Some(t)))
+            {
+                retire_audit_child_silent(opid);
+            }
+        };
+        // R17-003 arm 1 (live): retake the discharged
+        // number, then run the hygiene — it must stand down
+        // with the replacement alive (RED: the blind retire
+        // murders + reaps it).
+        if let Some((mut live, mut live_guard)) =
+            plant_replacement(opid, otick_slot.get().unwrap_or(u64::MAX))
+        {
+            let start = Instant::now();
+            gated_retire();
+            // R17-003: SIGKILL-settle — death lands in ms,
+            // not µs (a just-killed task looks alive to an
+            // immediate try_wait — false GREEN, observed at
+            // Site C). 100ms is 10x the measured margin.
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "obs hygiene must not block on a live replacement"
+            );
+            assert!(
+                matches!(live.try_wait(), Ok(None)),
+                "live replacement must survive obs hygiene"
+            );
+            let _ = live.kill();
+            let _ = live.wait();
+            live_guard.disarm();
+        }
+        // R17-003 arm 2 (zombie): same hygiene shape, zombie
+        // replacement — its status must stay with its owner
+        // (RED: reaped by the blind retire).
+        if let Some((mut zombie, mut zombie_guard)) =
+            plant_replacement(opid, otick_slot.get().unwrap_or(u64::MAX))
+        {
+            assert!(
+                settle_replacement_zombie(&mut zombie, opid),
+                "replacement never zombied (broken staging)"
+            );
+            gated_retire();
+            assert!(
+                matches!(zombie.try_wait(), Ok(Some(_))),
+                "zombie replacement status must stay with its owner"
+            );
+            zombie_guard.disarm();
+        }
+        gated_retire();
         assert_eq!(ostate, Ok(None), "obs failure must not leak the sleeper");
         assert_audit_pid_free(opid, "obs");
         assert!(obs.is_err(), "obs failure must report");
@@ -9753,12 +9887,16 @@ mod tests {
         // failure injected at the zombie stage (the
         // discrimination shape — discharge, not just death).
         let slot = std::cell::Cell::new(-1);
+        let ztick_slot = std::cell::Cell::new(None);
         let zomb = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Temporary handle (the guard owns custody —
             // dropping the handle interferes with nothing).
             slot.set(spawn_sleep("47").id() as libc::pid_t);
             let pid = slot.get();
             let _guard = FixtureGuard::new(pid);
+            // The guard's own pin (custody); the hygiene gate
+            // below needs it.
+            ztick_slot.set(_guard.tick);
             // SAFETY: signal-only to our own staged sleeper.
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
@@ -9776,11 +9914,42 @@ mod tests {
         let zpid = slot.get();
         assert!(zpid > 0, "zombie arm must stage a sleeper");
         let zstate = proc_starttime(zpid);
+        // R17-003: the hygiene reaps ONLY while the number
+        // still names the staged sleeper (unknown pin,
+        // mismatch, or recycle: skip — a blind waitpid would
+        // steal the replacement's status).
+        let gated_reap = || {
+            if ztick_slot
+                .get()
+                .is_some_and(|t| proc_starttime(zpid) == Ok(Some(t)))
+            {
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of the tick-verified
+                // staged zombie.
+                unsafe { libc::waitpid(zpid, &mut status, libc::WNOHANG) };
+            }
+        };
+        // R17-003 (zombie number): retake the discharged
+        // number as a zombie, then run the hygiene — its
+        // status must stay with its owner (RED: stolen by
+        // the blind waitpid). No live arm: WNOHANG physically
+        // cannot affect a live child (returns 0) — the steal
+        // is the only hazard this hygiene poses.
+        if let Some((mut zombie, mut zombie_guard)) =
+            plant_replacement(zpid, ztick_slot.get().unwrap_or(u64::MAX))
         {
-            let mut status = 0;
-            // SAFETY: WNOHANG reap of our own staged zombie.
-            unsafe { libc::waitpid(zpid, &mut status, libc::WNOHANG) };
+            assert!(
+                settle_replacement_zombie(&mut zombie, zpid),
+                "replacement never zombied (broken staging)"
+            );
+            gated_reap();
+            assert!(
+                matches!(zombie.try_wait(), Ok(Some(_))),
+                "zombie replacement status must stay with its owner"
+            );
+            zombie_guard.disarm();
         }
+        gated_reap();
         assert_eq!(zstate, Ok(None), "zombie failure must not leak the sleeper");
         assert_audit_pid_free(zpid, "zombie");
         assert!(zomb.is_err(), "zombie failure must report");
@@ -13444,10 +13613,22 @@ mod tests {
     /// (RED); post-fix the body retires + reports (GREEN).
     /// Non-vacuity: the birth-timeout message proves the birth
     /// watch ran dry (the freeze held).
+    /// R17-003: the hygiene must be tick-gated per number (the
+    /// body may have retired either — the old "frozen ⇒
+    /// present" claim is stale exactly on GREEN paths, where
+    /// both numbers are free and blind signals would murder
+    /// replacements). Both numbers are retaken live before
+    /// hygiene; the probe number is additionally retaken as a
+    /// zombie (its wait must not steal).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn stopped_probe_frozen_discovery_retires_before_report() {
         use std::time::{Duration, Instant};
+        // R17-003: serial hold for the retake plants below
+        // (unconditional — the plants degrade, never skip).
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let exe = std::env::current_exe().expect("probe test binary path");
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-grandchild-r16010b-{}.pid",
@@ -13540,18 +13721,86 @@ mod tests {
         // present-proven (stopped tasks cannot exit), so the
         // kill needs no tick re-check; reap the probe, poll
         // the mid gone, remove RED litter, disarm.
-        // SAFETY: SIGKILL to our own frozen middleman.
-        unsafe { libc::kill(mid, libc::SIGKILL) };
-        // Our unreaped child cannot have recycled — safe.
-        let _ = child.kill();
-        let _ = child.wait();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if proc_starttime(mid) != Ok(Some(mid_tick)) {
-                break;
+        // R17-003: the hygiene operates ONLY while a
+        // number still names its staged task (unknown pin,
+        // mismatch, or recycle: skip — a blind kill would
+        // murder a same-number replacement, RED-proven).
+        let ptick = probe_guard.tick;
+        let mut gated_hygiene = || {
+            if proc_starttime(mid) == Ok(Some(mid_tick)) {
+                // SAFETY: SIGKILL to our own tick-verified
+                // frozen middleman.
+                unsafe { libc::kill(mid, libc::SIGKILL) };
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if proc_starttime(mid) != Ok(Some(mid_tick)) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "frozen mid must die in hygiene");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
             }
-            assert!(Instant::now() < end, "frozen mid must die in hygiene");
-            std::thread::sleep(Duration::from_millis(20));
+            // The probe child is ours — but the body may
+            // already have reaped it (then the number is
+            // fair game for retake): gate on the probe pin.
+            // NOTE (mutant C2 survived): on pidfd-std,
+            // Child::kill/wait on the body-reaped handle are
+            // task-scoped no-ops — the gate has no teeth HERE.
+            // Retained for legacy number-based std/kernels.
+            if ptick.is_some_and(|t| proc_starttime(id) == Ok(Some(t))) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        };
+        // R17-003 arm 1 (both numbers live): retake mid's and
+        // the probe's numbers, run the hygiene — both
+        // replacements must survive, bounded (RED: blind kills
+        // murder them).
+        let mid_live = plant_replacement(mid, mid_tick);
+        let probe_live = plant_replacement(id, ptick.unwrap_or(u64::MAX));
+        let start = Instant::now();
+        gated_hygiene();
+        // R17-003: SIGKILL-settle — death lands in ms, not
+        // µs; sampling try_wait immediately after the kill
+        // observes a living-but-doomed task (false GREEN —
+        // observed). 100ms is 10x the measured margin.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "hygiene must not block on live replacements"
+        );
+        if let Some((mut live, mut guard)) = mid_live {
+            assert!(
+                matches!(live.try_wait(), Ok(None)),
+                "mid-number replacement must survive hygiene"
+            );
+            let _ = live.kill();
+            let _ = live.wait();
+            guard.disarm();
+        }
+        if let Some((mut live, mut guard)) = probe_live {
+            assert!(
+                matches!(live.try_wait(), Ok(None)),
+                "probe-number replacement must survive hygiene"
+            );
+            let _ = live.kill();
+            let _ = live.wait();
+            guard.disarm();
+        }
+        // R17-003 arm 2 (probe zombie): status must stay with
+        // its owner (RED: reaped by the blind wait). No zombie
+        // arm for mid: kill cannot consume status.
+        if let Some((mut zombie, mut guard)) = plant_replacement(id, ptick.unwrap_or(u64::MAX)) {
+            assert!(
+                settle_replacement_zombie(&mut zombie, id),
+                "replacement never zombied (broken staging)"
+            );
+            gated_hygiene();
+            assert!(
+                matches!(zombie.try_wait(), Ok(Some(_))),
+                "probe-number zombie status must stay with its owner"
+            );
+            guard.disarm();
         }
         mid_guard.disarm();
         probe_guard.disarm();
