@@ -8003,6 +8003,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let _flock = ns_last_pid_flock();
         let mut placed = None;
+        // R18-008: the placed replacement takes custody AT
+        // placement (same restore-crossing window as the
+        // gated-cleanup twin below).
+        let mut placed_guard: Option<FixtureGuard> = None;
         for _ in 0..100 {
             if !audit_steer_next_pid_unlocked(id) {
                 break;
@@ -8020,6 +8024,7 @@ mod tests {
                 let _ = cand.wait();
                 continue;
             }
+            placed_guard = Some(FixtureGuard::new(id));
             placed = Some(cand);
             break;
         }
@@ -8032,12 +8037,16 @@ mod tests {
                 return;
             }
         };
+        // R18-008: placed, so the loop armed the guard — it
+        // covers the reads below plus every later assert.
+        let mut placed_guard = placed_guard.expect("placed replacement guarded");
         let replacement_tick = proc_starttime(id)
             .expect("replacement stat readable")
             .expect("replacement visible");
         if replacement_tick == first_tick {
             let _ = placed.kill();
             let _ = placed.wait();
+            placed_guard.disarm();
             eprintln!("skip: same-tick retake (S100 — untestable this run)");
             return;
         }
@@ -8062,6 +8071,7 @@ mod tests {
         );
         let _ = placed.kill();
         let status = placed.wait().expect("replacement owner keeps its status");
+        placed_guard.disarm();
         assert!(!status.success(), "killed replacement reports signal death");
     }
 
@@ -8126,6 +8136,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let _flock = ns_last_pid_flock();
         let mut placed = None;
+        // R18-008: the placed replacement takes custody AT
+        // placement — the restore below re-takes the flock
+        // (panics under EMFILE) and the post-restore reads can
+        // fail; unguarded, either strands the placed handle.
+        let mut placed_guard: Option<FixtureGuard> = None;
         for _ in 0..100 {
             if !audit_steer_next_pid_unlocked(id) {
                 break;
@@ -8143,6 +8158,7 @@ mod tests {
                 let _ = cand.wait();
                 continue;
             }
+            placed_guard = Some(FixtureGuard::new(id));
             placed = Some(cand);
             break;
         }
@@ -8155,12 +8171,17 @@ mod tests {
                 return;
             }
         };
+        // R18-008: placed, so the loop armed the guard — it
+        // covers the reads below plus every later assert (the
+        // handle owns status; the guard owns teardown-on-panic).
+        let mut placed_guard = placed_guard.expect("placed replacement guarded");
         let replacement_tick = proc_starttime(id)
             .expect("replacement stat readable")
             .expect("replacement visible");
         if replacement_tick == first_tick {
             let _ = placed.kill();
             let _ = placed.wait();
+            placed_guard.disarm();
             eprintln!("skip: same-tick retake (S100 — untestable this run)");
             return;
         }
@@ -8189,6 +8210,7 @@ mod tests {
         );
         let _ = placed.kill();
         let status = placed.wait().expect("replacement owner keeps its status");
+        placed_guard.disarm();
         assert!(!status.success(), "killed replacement reports signal death");
     }
 
@@ -10599,6 +10621,23 @@ mod tests {
             .read_line(&mut line)
             .expect("grandchild pid readable");
         let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R18-008: custody BEFORE the freeze — the grandchild
+        // pid arrives via pipe (received pid: expected-identity
+        // per the R17-008 contract), sighted-live in the
+        // immediately preceding read. Any later panic (T-poll,
+        // exhaustion, construction) retires through this guard
+        // instead of stranding a stopped task with its shell
+        // waiting. The pin assert lands pre-stop: a staging
+        // failure here leaks only RUNNING tasks (bounded
+        // self-exit), never a stopped one.
+        let pre_tick = proc_starttime(grand)
+            .expect("grandchild stat readable")
+            .expect("grandchild present");
+        let mut outer = FixtureGuard::new_expected(grand, pre_tick);
+        assert!(
+            outer.tick.is_some(),
+            "outer custody must pin pre-stop (stage broken otherwise)"
+        );
         // Freeze (the middleman essence): stopped tasks
         // cannot exit — the number is stable for late-pin.
         // SAFETY: SIGSTOP to our own staged grandchild.
@@ -10654,7 +10693,11 @@ mod tests {
         // polling and fail loud past the bound.
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (works
-        // on stopped tasks), poll gone, reap sh.
+        // on stopped tasks), poll gone, reap sh. The outer
+        // stays armed through it (a cleanup-loop panic with
+        // the grandchild still stopped must still retire —
+        // the tick-gated drop stays silent once gone, so the
+        // late disarm cannot double-retire).
         let _ = kill_tick_gated(grand, tick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -10672,6 +10715,9 @@ mod tests {
             assert!(Instant::now() < end, "sh parent must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
+        // R18-008: teardown complete (grandchild proven gone,
+        // sh reaped) — stand the outer down.
+        outer.disarm();
         assert!(retired, "recovered pin must retire the frozen grandchild");
         eprintln!("R17007-MRECOVERED retired=1");
     }
@@ -10707,6 +10753,104 @@ mod tests {
             stderr.contains("R17007-MRECOVERED retired=1"),
             "probe must cite the retirement\n{stderr}"
         );
+    }
+
+    /// R18-008: a failure immediately after stopping the
+    /// grandchild must still retire it before reporting
+    /// (freeze only under custody). Mirror of the frozen
+    /// probe's staging: outer guard pinned pre-stop, SIGSTOP,
+    /// T-settle, then an INJECTED panic (standing in for the
+    /// T-poll/exhaustion/construction asserts): unwind must
+    /// retire the stopped grandchild (stopped ⇒
+    /// strand-forever without custody — the sleeper never
+    /// wakes to exit and the shell waits). RED (no outer
+    /// guard): the grandchild stays stopped and the
+    /// gone-await fails. In-process (no fd exhaustion here).
+    /// Duration 70 is unique to this test (both harnesses).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frozen_post_stop_failure_retires_before_report() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 70 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pid readable");
+        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let pre_tick = proc_starttime(grand)
+            .expect("grandchild stat readable")
+            .expect("grandchild present");
+        let outer = FixtureGuard::new_expected(grand, pre_tick);
+        assert!(
+            outer.tick.is_some(),
+            "outer custody must pin pre-stop (stage broken otherwise)"
+        );
+        // SAFETY: SIGSTOP to our own staged grandchild.
+        assert_eq!(
+            unsafe { libc::kill(grand, libc::SIGSTOP) },
+            0,
+            "grandchild freeze"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(grand), Some(state) if state == 'T') {
+                break;
+            }
+            assert!(Instant::now() < end, "grandchild must stop");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Non-vacuity: stopped and holding its number at
+        // injection time (else the retirement below proves
+        // nothing).
+        assert!(
+            matches!(proc_state(grand), Some(state) if state == 'T'),
+            "grandchild must be stopped at injection"
+        );
+        assert_eq!(
+            proc_starttime(grand),
+            Ok(Some(pre_tick)),
+            "stopped grandchild holds its number at injection"
+        );
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = outer;
+            panic!("R18008 injected post-stop failure");
+        }));
+        assert!(fired.is_err(), "injection must unwind");
+        // Observe before cleanup: the frozen grandchild must
+        // be gone (outer-guard kill + the waiting sh's reap).
+        let retired = await_proc_gone_reaping(grand, pre_tick, Duration::from_secs(5));
+        // Cleanup (runs on RED too): tick-gated kill (works
+        // on stopped tasks), poll gone, reap sh.
+        let _ = kill_tick_gated(grand, pre_tick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(grand) != Ok(Some(pre_tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "staged grandchild must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if parent.try_wait().expect("parent wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "sh parent must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            retired,
+            "post-stop unwind must retire the frozen grandchild"
+        );
+        eprintln!("R18008-FROZEN retired=1");
     }
 
     /// R18-005: probe body (fresh image,
@@ -10956,6 +11100,10 @@ mod tests {
         // R17-006: custody across the restore (fresh, live,
         // microsecond window — bare construction is sound
         // here per the reservation contract).
+        // R18-008 residual: an unpinned drop is child-only
+        // (ECHILD-silent on the non-child sleeper) — pin
+        // failure + restore panic together strand
+        // (double-fault, accepted).
         let mut restore_guard = placed.as_ref().map(|_| FixtureGuard::new(want));
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
@@ -11108,8 +11256,18 @@ mod tests {
             let _ = sh2.kill();
             let _ = sh2.wait();
         }
+        // R18-008: custody across the restore (mirror of the
+        // twin test's R17-006 guard — a restore panic here
+        // stranded sh2 plus its sleeper). Residual: an
+        // unpinned drop is child-only (ECHILD-silent on the
+        // non-child sleeper) — pin failure + restore panic
+        // together strand (double-fault, accepted).
+        let mut restore_guard = placed.as_ref().map(|_| FixtureGuard::new(want));
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
+        if let Some(guard) = restore_guard.as_mut() {
+            guard.disarm();
+        }
         let (mut sh2, replacetick) = match placed {
             Some(placed) => placed,
             None => {
@@ -14491,6 +14649,14 @@ mod tests {
     /// R17-006: audit twin — a restore panic between placement
     /// and the caller's guard must still retire the placed
     /// sleeper (custody across the restore window).
+    /// R18-008: the inline sites carry the identical custody
+    /// shape and are covered by this probe review-matched
+    /// (guard armed before restore, restore under guard):
+    /// gated-cleanup's and observed-cleanup's placed loops
+    /// (in-loop arm, spanning the post-restore reads and
+    /// verdicts), both pipe-publication REPLACE loops
+    /// (post-loop pre-restore arm, disarmed right after
+    /// restore).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn audit_steer_restore_panic_retires_placed_sleeper() {
@@ -15889,11 +16055,20 @@ mod tests {
         }
         // Custody across the restore (R18-004: the child is a
         // pipe pid — expected-identity over the transmitted
-        // birth read just above; the parent is our child).
+        // birth read just above; the parent is our unreaped
+        // child — bare construction holds the reservation).
+        // R18-008: the parent rides its own guard too (a
+        // restore panic with the handle alone left a zombie
+        // to process exit; the guard reaps it on unwind).
         let mut rchild_guard = FixtureGuard::new_expected(rchild, rtick);
         assert!(
             rchild_guard.tick.is_some(),
             "replacement child custody must pin"
+        );
+        let mut parent_guard = FixtureGuard::new(pid);
+        assert!(
+            parent_guard.tick.is_some(),
+            "replacement parent custody must pin"
         );
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
@@ -15916,6 +16091,7 @@ mod tests {
         let _ = kill_tick_gated(rchild, rtick);
         rchild_guard.disarm();
         let status = parent.wait().expect("replacement parent reaps");
+        parent_guard.disarm();
         assert!(status.success(), "replacement parent must exit clean");
     }
 

@@ -4550,6 +4550,10 @@ fn child_expected_pin_refuses_recycled_non_child() {
     // R17-006: custody across the restore (fresh, live,
     // microsecond window — bare construction is sound here
     // per the reservation contract).
+    // R18-008 residual: an unpinned drop is child-only
+    // (ECHILD-silent on the non-child sleeper) — pin
+    // failure + restore panic together strand
+    // (double-fault, accepted).
     let mut restore_guard = placed.as_ref().map(|_| SilentChildGuard::new(want));
     drop(_nsflock);
     locked_restore_hint(&last_before);
@@ -4700,8 +4704,18 @@ fn pipe_acquisition_refuses_recycled_publication() {
         let _ = sh2.kill();
         let _ = sh2.wait();
     }
+    // R18-008: custody across the restore (mirror of the
+    // twin test's R17-006 guard — a restore panic here
+    // stranded sh2 plus its sleeper). Residual: an
+    // unpinned drop is child-only (ECHILD-silent on the
+    // non-child sleeper) — pin failure + restore panic
+    // together strand (double-fault, accepted).
+    let mut restore_guard = placed.as_ref().map(|_| SilentChildGuard::new(want));
     drop(_nsflock);
     locked_restore_hint(&last_before);
+    if let Some(guard) = restore_guard.as_mut() {
+        guard.disarm();
+    }
     let (mut sh2, replacetick) = match placed {
         Some(placed) => placed,
         None => {
@@ -5824,6 +5838,13 @@ fn steer_restore_window_probe() {
 /// (place → guard → restore); the helpers carry the same
 /// guard (review-matched — the window inside the helper is
 /// atomic from outside, uninjectable directly).
+/// R18-008: the inline sites carry the identical custody
+/// shape and are covered by this probe review-matched
+/// (guard armed before restore, restore under guard):
+/// gated_kill's stand-in loop (in-loop arm, spans the
+/// post-restore reads and verdicts), both
+/// pipe-publication REPLACE loops (post-loop pre-restore
+/// arm, disarmed right after restore).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn steer_restore_panic_retires_placed_pauser() {
@@ -5893,6 +5914,11 @@ fn gated_kill_spares_steered_replacement() {
     std::thread::sleep(Duration::from_millis(50));
     let _nsflock = ns_last_pid_flock();
     let mut standin = -1;
+    // R18-008: the placed stand-in takes custody AT placement
+    // (R16-011's post-loop construction crossed the fallible
+    // restore below unguarded — a restore panic strands the
+    // handle-less pauser).
+    let mut standin_guard: Option<SilentChildGuard> = None;
     for _ in 0..100 {
         if !steer_next_pid_unlocked(owned) {
             break;
@@ -5900,6 +5926,7 @@ fn gated_kill_spares_steered_replacement() {
         let kid = fork_pauser();
         if kid == owned {
             standin = kid;
+            standin_guard = Some(SilentChildGuard::new(kid));
             break;
         }
         let mut kid_guard = SilentChildGuard::new(kid);
@@ -5912,10 +5939,10 @@ fn gated_kill_spares_steered_replacement() {
         eprintln!("skip: fixture number not retaken (contended)");
         return;
     }
-    // R16-011: independent custody for the replacement (no
-    // fallible op sits between placement and break above, so
-    // post-loop construction closes every window below).
-    let mut standin_guard = SilentChildGuard::new(owned);
+    // R18-008: placed (the contended exit returned above), so
+    // the loop armed the guard — unwrap it for the disarms
+    // below.
+    let mut standin_guard = standin_guard.expect("placed stand-in guarded");
     let standin_tick = task_starttime_checked(owned)
         .expect("stand-in stat readable")
         .expect("stand-in visible");
