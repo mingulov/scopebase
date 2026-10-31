@@ -12320,6 +12320,44 @@ mod tests {
         obs_guard.disarm();
     }
 
+    /// R17-005: fd-table sentinel — hammers open/stat/spawn
+    /// while the EMFILE probe runs, recording (iterations,
+    /// failures) without ever panicking (a sentinel panic
+    /// would mask the verdict it guards).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Default)]
+    struct EmfileSentinel {
+        iterations: std::sync::atomic::AtomicU64,
+        failures: std::sync::atomic::AtomicU64,
+        stop: std::sync::atomic::AtomicBool,
+    }
+
+    /// R17-005: run the sentinel until `stop` sets: every
+    /// iteration opens /dev/null, stats /proc/self, and (every
+    /// tenth) spawns `true` — the descriptor uses the finding
+    /// names (opens, observations, spawns). Every outcome is
+    /// recorded; nothing panics, nothing is held across
+    /// iterations (each op's fd closes before the next).
+    #[cfg(target_arch = "x86_64")]
+    fn run_emfile_sentinel(sentinel: &EmfileSentinel) {
+        use std::sync::atomic::Ordering::Relaxed;
+        loop {
+            if sentinel.stop.load(Relaxed) {
+                break;
+            }
+            let n = sentinel.iterations.fetch_add(1, Relaxed) + 1;
+            if std::fs::File::open("/dev/null").is_err() {
+                sentinel.failures.fetch_add(1, Relaxed);
+            }
+            if std::fs::read_to_string("/proc/self/stat").is_err() {
+                sentinel.failures.fetch_add(1, Relaxed);
+            }
+            if n.is_multiple_of(10) && std::process::Command::new("true").status().is_err() {
+                sentinel.failures.fetch_add(1, Relaxed);
+            }
+        }
+    }
+
     /// R16-006: staging failure under EMFILE must report known
     /// identities as UNVERIFIED, never claim retirement. The held
     /// driver knows mid/writer tuples the helper's rediscovery
@@ -12331,9 +12369,11 @@ mod tests {
     /// UNVERIFIED with the cited tuples. The writer stays live in
     /// both (EMFILE forbids verification, so no blind kill) and
     /// the suite retires it loud post-restore.
-    #[test]
+    /// R17-005: probe body — runs in a FRESH process image (the
+    /// test re-execs itself with SCOPEBASE_R17005_EMFILE set);
+    /// in-process exhaustion would break the shared harness.
     #[cfg(target_arch = "x86_64")]
-    fn staging_failure_under_emfile_reports_unverified_known() {
+    fn staging_emfile_probe_body() {
         // Live probe + two known fixtures (recorded identities;
         // stand-in sleeps — the helper treats known tuples as
         // individual strays, no grouping assumed).
@@ -12385,6 +12425,16 @@ mod tests {
             held.push(file);
         }
         assert!(!held.is_empty(), "exhaustion must consume fds");
+        // Genuine-exhaustion evidence (never vacuous: a broken
+        // exhauster holds ~0).
+        eprintln!("R17005-HELD count={}", held.len());
+        // Hold the exhausted window open for concurrent
+        // observation (the staging itself fails in ~1ms —
+        // without the hold no concurrent fd user could ever
+        // land inside it, and the sentinel below would be
+        // vacuous). Genuine exhaustion throughout: `held`
+        // stays alive, the table stays full.
+        std::thread::sleep(std::time::Duration::from_millis(200));
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             held_probe_staging_failure(
                 &mut probe,
@@ -12446,6 +12496,111 @@ mod tests {
         );
         probe_guard.disarm();
         let _ = std::fs::remove_file(&pidfile);
+        // Report echo (the parent judges the text) + completion.
+        eprintln!("R17005-REPORT {text}");
+        eprintln!("R17005-PROBE-DONE");
+    }
+
+    /// R16-006: staging failure under EMFILE must report known
+    /// identities as UNVERIFIED, never claim retirement (see the
+    /// probe body for the RED/GREEN contract).
+    /// R17-005: the exhaustion runs in a FRESH process image
+    /// while a descriptor-using sentinel hammers the MAIN
+    /// harness's table — genuine in-probe exhaustion with the
+    /// sentinel unaffected (RED, observed during development: the
+    /// sentinel around in-process exhaustion fails; GREEN: the
+    /// fresh image isolates it).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn staging_failure_under_emfile_reports_unverified_known() {
+        use std::io::Read as _;
+        use std::sync::atomic::Ordering::Relaxed;
+        // Probe side (fresh image): run the body, report via
+        // stderr; the harness judges the child.
+        if std::env::var("SCOPEBASE_R17005_EMFILE").is_ok() {
+            staging_emfile_probe_body();
+            return;
+        }
+        // Parent side: the sentinel hammers the MAIN harness's
+        // fd table while the probe exhausts its OWN table in
+        // the child (manual spawn + alive-poll, not `.output()`:
+        // every sentinel iteration before the stop below ran
+        // while the probe was alive — the concurrency the
+        // finding requires, not a spin around it).
+        let sentinel = std::sync::Arc::new(EmfileSentinel::default());
+        let worker = sentinel.clone();
+        let handle = std::thread::spawn(move || run_emfile_sentinel(&worker));
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::staging_failure_under_emfile_reports_unverified_known")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R17005_EMFILE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let cpid = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(cpid);
+        let mut status = None;
+        loop {
+            match child.try_wait() {
+                Ok(Some(exited)) => {
+                    status = Some(exited);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                // ECHILD without our reap is impossible here
+                // (only this poll waits) — loud either way.
+                Err(_) => break,
+            }
+        }
+        probe_guard.disarm();
+        // The child exited: its pipes EOF at once (small
+        // output — no drain deadlock possible).
+        let mut stderr = String::new();
+        if let Some(pipe) = child.stderr.take() {
+            let mut pipe = pipe;
+            let _ = pipe.read_to_string(&mut stderr);
+        }
+        sentinel.stop.store(true, Relaxed);
+        handle.join().expect("sentinel joins");
+        let exited = status.expect("probe status observed");
+        assert!(exited.success(), "probe must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R17005-PROBE-DONE"),
+            "completion marker missing\n{stderr}"
+        );
+        let held = stderr
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("R17005-HELD count=")
+                    .and_then(|n| n.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        assert!(
+            held >= 50,
+            "genuine exhaustion must hold dozens, got {held}\n{stderr}"
+        );
+        assert!(
+            stderr.contains("UNVERIFIED"),
+            "report must say UNVERIFIED\n{stderr}"
+        );
+        assert!(
+            stderr.contains("known=["),
+            "report must carry the known tuples\n{stderr}"
+        );
+        let failures = sentinel.failures.load(Relaxed);
+        let iterations = sentinel.iterations.load(Relaxed);
+        assert!(
+            failures == 0,
+            "sentinel must stay healthy during the probe, {failures} failures in {iterations} iterations"
+        );
+        assert!(
+            iterations >= 10,
+            "sentinel must run during the probe, only {iterations} iterations"
+        );
     }
 
     /// R14-009: drive one parent's timeout branch against a probe
