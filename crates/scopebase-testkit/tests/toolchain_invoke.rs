@@ -3434,6 +3434,38 @@ fn kill_tick_gated(pid: i32, tick: u64) -> bool {
     kill_tick_gated_with(pid, tick, task_starttime_checked)
 }
 
+/// R18-007: tick-gated retirement for owned test children
+/// (toolchain twin of the audit helper — same contract):
+/// the gated signal above plus a bounded reaping wait (a
+/// stale `Child::wait` after a raw reap would block on, or
+/// steal status from, a recycled replacement; a blind
+/// numeric kill+wait would murder it — the gated ops below
+/// only run on tick-match). Same return contract as the
+/// gate. Never panics.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_tick_gated_toolchain_child(pid: i32, tick: u64) -> bool {
+    if task_starttime_checked(pid) != Ok(Some(tick)) {
+        return task_starttime_checked(pid).is_ok();
+    }
+    // SAFETY: tick-pinned owned child; errors ignored.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid on a tick-pinned child; never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid || got < 0 {
+            return true;
+        }
+        if Instant::now() >= end {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// R15-004: birth-tick pin with transient retry — a single
 /// EMFILE-class blip at guard construction must not leave the
 /// guard unpinned (an unpinned drop murders a recycled
@@ -5823,9 +5855,86 @@ fn steer_restore_window_probe() {
     // Observe before cleanup.
     let state = task_starttime_checked(pauser);
     let retired = task_retired_checked(pauser);
-    // Hygiene (mutant-clean): the perpetual pauser must die
-    // even on RED runs.
-    kill_wait_child(pauser);
+    // R18-007: tick-gated tail — the unwind drop above already
+    // raw-reaped, so the number is fair game for retake: a
+    // blind numeric kill would murder a recycled holder and a
+    // blind waitpid would block on or steal a replacement's
+    // status. Touch the number only while it still names the
+    // expected birth.
+    let restore_hygiene = || {
+        let _ = retire_tick_gated_toolchain_child(pauser, tick);
+    };
+    // R18-007 arms (opportunistic — degrade loud when
+    // unsteerable; single-threaded probe, no serial per the
+    // steer exemption): retake the discharged number, run
+    // the FULL tail. Arm 1 (live): bounded completion with
+    // the replacement alive (RED: blind kill murders / blind
+    // wait blocks). Arm 2 (zombie): status stays with its
+    // owner (RED: stolen by the blind wait).
+    if let Some(mut live) = steer_sleep_onto(pauser, false) {
+        let mut live_guard = SilentChildGuard::new(pauser);
+        let retick = task_starttime_checked(pauser)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick != tick {
+            let start = Instant::now();
+            restore_hygiene();
+            // R17-003: SIGKILL-settle (100ms, 10x margin).
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "restore hygiene must not block on a live replacement"
+            );
+            assert!(
+                matches!(live.try_wait(), Ok(None)),
+                "live replacement must survive restore hygiene"
+            );
+        } else {
+            eprintln!("arm vacuous: same-tick retake (S100)");
+        }
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
+    } else {
+        eprintln!("arm vacuous: retake contended");
+    }
+    if let Some(mut zombie) = steer_sleep_onto(pauser, false) {
+        let mut zombie_guard = SilentChildGuard::new(pauser);
+        let retick = task_starttime_checked(pauser)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if retick != tick {
+            let _ = zombie.kill();
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if task_retired_checked(pauser) == Ok(true) {
+                    break;
+                }
+                assert!(Instant::now() < end, "replacement never zombied");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            restore_hygiene();
+            assert!(
+                matches!(zombie.try_wait(), Ok(Some(_))),
+                "zombie replacement status must stay with its owner"
+            );
+        } else {
+            eprintln!("arm vacuous: same-tick retake (S100)");
+            let _ = zombie.kill();
+            let _ = zombie.wait();
+        }
+        zombie_guard.disarm();
+    } else {
+        eprintln!("arm vacuous: retake contended");
+    }
+    // Unarmed tail run (RED teardown when the arms are
+    // vacuous: the original still holds its number) +
+    // post-hygiene loudness (the gated primitive stands down
+    // silently on mismatch): the ORIGINAL birth must be gone
+    // — a recycled different-tick holder is not ours to touch
+    // (child_gone, not pid_free).
+    restore_hygiene();
+    assert_child_gone(pauser, tick, "restore-probe pauser");
     assert_eq!(state, Ok(None), "restore panic must not strand the pauser");
     assert_eq!(retired, Ok(true), "restore panic must discharge the pauser");
     eprintln!("R17006-RESTORED retired=1");
@@ -5985,6 +6094,8 @@ fn gated_kill_spares_steered_replacement() {
 /// test vacuously); wrong-tick and gone numbers skip; the
 /// unreadable arm reports false without signaling (injected
 /// read). Duration 51 is unique to this test.
+/// R18-007: same efficacy for the tick-gated RETIRE twin
+/// (acts on match, spares on wrong tick).
 /// R16-011: each staged sleeper rides a guard (a failed
 /// observation or assertion would otherwise strand it).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
@@ -6108,6 +6219,66 @@ fn gated_kill_acts_on_matching_identity() {
     }
     let _ = parked.wait();
     parked_guard.disarm();
+    // R18-007: the tick-gated RETIRE twin must still ACT on
+    // matching identity (a gate that never signals+reaps
+    // would pass the probe tails vacuously). Live owned
+    // child, matching tick — killed and reaped.
+    let mut owned = std::process::Command::new("/bin/sleep")
+        .arg("51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("owned spawns");
+    let opid = owned.id() as i32;
+    // R16-011: custody AT birth — the reads below panic safe.
+    let mut owned_guard = SilentChildGuard::new(opid);
+    let otick = task_starttime_checked(opid)
+        .expect("owned stat readable")
+        .expect("owned visible");
+    assert!(
+        retire_tick_gated_toolchain_child(opid, otick),
+        "gated retire acts on matching identity"
+    );
+    assert!(
+        !matches!(owned.try_wait(), Ok(None)),
+        "owned child retired by the gated retire (reaped or ECHILD)"
+    );
+    owned_guard.disarm();
+    // Wrong tick on a live task: spared with status retained.
+    let mut spared = std::process::Command::new("/bin/sleep")
+        .arg("51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spared spawns");
+    let dpid = spared.id() as i32;
+    let mut spared_guard = SilentChildGuard::new(dpid);
+    let dtick = task_starttime_checked(dpid)
+        .expect("spared stat readable")
+        .expect("spared visible");
+    let dwrong = dtick.wrapping_add(1 << 32);
+    assert!(
+        retire_tick_gated_toolchain_child(dpid, dwrong),
+        "gated retire skips a wrong tick"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        task_starttime_checked(dpid),
+        Ok(Some(dtick)),
+        "wrong-tick task must survive the gated retire"
+    );
+    assert!(
+        matches!(spared.try_wait(), Ok(None)),
+        "wrong-tick owner status retained"
+    );
+    // SAFETY: retiring our own spared task by verified identity.
+    unsafe {
+        libc::kill(dpid, libc::SIGKILL);
+    }
+    let _ = spared.wait();
+    spared_guard.disarm();
 }
 
 /// R15-004: the birth pin retries transient read errors but

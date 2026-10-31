@@ -4589,14 +4589,16 @@ mod tests {
             );
         } else {
             // The ok arm retires before reporting: gone now
-            // (falls out of the publish before any wait — reap
-            // via the handle first so the read below is final).
-            let _ = writer.wait();
-            assert_eq!(
-                proc_starttime(wpid),
-                Ok(None),
-                "retired writer must be gone"
-            );
+            // (publish's retire already raw-reaped through the
+            // gone-await — the handle is stale: a handle wait
+            // ECHILDs on the normal path and blocks on a live
+            // writer if the retire timed out. Tick-gated
+            // teardown only — never touch a recycled number).
+            let _ = retire_tick_gated_audit_child(wpid, wtick);
+            // Original-gone (not number-free — suite activity
+            // may recycle the freed number between retire and
+            // this read; a different-tick holder is not ours).
+            assert_audit_child_gone(wpid, wtick, "retired writer");
             writer_guard.disarm();
         }
         // Loud cleanup (plain kill+wait need no pidfd — the
@@ -11593,6 +11595,12 @@ mod tests {
         assert!(zomb.is_err(), "zombie failure must report");
         // Arm STRANGER: sh + grandchild, failure injected after
         // staging (the EMFILE stranger shape).
+        // R18-007: the handle goes stale at guard retirement
+        // (raw-reaped) and is never touched after — the
+        // tick-gated tail below owns teardown (a post-reap
+        // handle kill/wait would murder or steal a recycled
+        // number's replacement).
+        #[allow(clippy::zombie_processes)]
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg("sleep 47 & echo $!; wait")
@@ -11632,21 +11640,69 @@ mod tests {
         }));
         let sstate = proc_starttime(stranger);
         let hstate = proc_starttime(sh);
-        // Hygiene (mutant-clean): tick-gated stranger kill, sh
-        // kill+reap through the owned handle, poll both gone.
-        let _ = kill_tick_gated(stranger, stick);
-        let _ = parent.kill();
-        let _ = parent.wait();
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            let down = proc_starttime(stranger) != Ok(Some(stick))
-                && proc_starttime(sh) != Ok(Some(shtick));
-            if down {
-                break;
+        // R18-007: tick-gated tail — the guards above already
+        // raw-reaped, so the owned handle is stale:
+        // parent.kill() would signal a recycled number by raw
+        // pid and parent.wait() would block on or steal a
+        // replacement's status. Touch each number only while
+        // it still names the expected birth (gated stranger
+        // kill + gated sh retire + gone-poll); the stale
+        // handle is never touched again.
+        let stranger_hygiene = || {
+            let _ = kill_tick_gated(stranger, stick);
+            let _ = retire_tick_gated_audit_child(sh, shtick);
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                let down = proc_starttime(stranger) != Ok(Some(stick))
+                    && proc_starttime(sh) != Ok(Some(shtick));
+                if down {
+                    break;
+                }
+                assert!(Instant::now() < end, "stranger pair must die in hygiene");
+                std::thread::sleep(Duration::from_millis(20));
             }
-            assert!(Instant::now() < end, "stranger pair must die in hygiene");
-            std::thread::sleep(Duration::from_millis(20));
+        };
+        // R18-007 arm 1 (live): retake sh's discharged number,
+        // then run the FULL tail — bounded completion with the
+        // replacement alive (RED: the stale handle kill murders
+        // it / the stale wait blocks on its lifetime).
+        if let Some((mut live, mut live_guard)) = plant_replacement(sh, shtick) {
+            let start = Instant::now();
+            stranger_hygiene();
+            // R17-003: SIGKILL-settle (100ms, 10x margin).
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "stranger hygiene must not block on a live replacement"
+            );
+            assert!(
+                matches!(live.try_wait(), Ok(None)),
+                "live replacement must survive stranger hygiene"
+            );
+            let _ = live.kill();
+            let _ = live.wait();
+            live_guard.disarm();
         }
+        // R18-007 arm 2 (zombie): the replacement's status must
+        // stay with its owner (RED: stolen by the stale
+        // handle wait).
+        if let Some((mut zombie, mut guard)) = plant_replacement(sh, shtick) {
+            assert!(
+                settle_replacement_zombie(&mut zombie, sh),
+                "replacement never zombied (broken staging)"
+            );
+            stranger_hygiene();
+            assert!(
+                matches!(zombie.try_wait(), Ok(Some(_))),
+                "zombie replacement status must stay with its owner"
+            );
+            guard.disarm();
+        }
+        // Unarmed tail run (RED teardown when both arms are
+        // vacuous: the originals still hold their numbers, so
+        // no plant can land — without this the pair leaks and
+        // the gone-poll never runs).
+        stranger_hygiene();
         outer_sh.disarm();
         outer_stranger.disarm();
         assert_eq!(
@@ -14602,8 +14658,13 @@ mod tests {
     /// 41 is unique to this test.
     #[cfg(target_arch = "x86_64")]
     fn audit_steer_restore_window_probe() {
+        use std::time::{Duration, Instant};
         let hint = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
-        let mut sleeper = std::process::Command::new("/bin/sleep")
+        // R18-007: the handle goes stale at unwind retirement
+        // (raw-reaped) and is never touched after — the
+        // tick-gated tail below owns teardown.
+        #[allow(clippy::zombie_processes)]
+        let sleeper = std::process::Command::new("/bin/sleep")
             .arg("41")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -14635,13 +14696,63 @@ mod tests {
             panic!("unreachable: restore must panic under EMFILE");
         }));
         assert!(fired.is_err(), "restore must panic under EMFILE");
-        // Observe before cleanup (the handle below is the
-        // owner's — dropping it interferes with nothing).
+        // Observe before cleanup.
         let state = proc_starttime(pid);
-        // Hygiene (mutant-clean): kill+reap through the owned
-        // handle even on RED runs.
-        let _ = sleeper.kill();
-        let _ = sleeper.wait();
+        // R18-007: tick-gated tail — the unwind drop above
+        // already raw-reaped, so the owned handle is stale:
+        // sleeper.kill() would signal a recycled number by raw
+        // pid and sleeper.wait() would block on or steal a
+        // replacement's status. Touch the number only while it
+        // still names the expected birth.
+        let restore_hygiene = || {
+            let _ = retire_tick_gated_audit_child(pid, tick);
+        };
+        // R18-007 arms (opportunistic — degrade loud when
+        // unsteerable): retake the discharged number, run the
+        // FULL tail. Arm 1 (live): bounded completion with the
+        // replacement alive (RED: stale kill murders / stale
+        // wait blocks). Arm 2 (zombie): status stays with its
+        // owner (RED: stolen by the stale wait).
+        let _serial = steer_hold();
+        if _serial.is_some() {
+            if let Some((mut live, mut live_guard)) = plant_replacement(pid, tick) {
+                let start = Instant::now();
+                restore_hygiene();
+                // R17-003: SIGKILL-settle (100ms, 10x margin).
+                std::thread::sleep(Duration::from_millis(100));
+                assert!(
+                    start.elapsed() < Duration::from_secs(5),
+                    "restore hygiene must not block on a live replacement"
+                );
+                assert!(
+                    matches!(live.try_wait(), Ok(None)),
+                    "live replacement must survive restore hygiene"
+                );
+                let _ = live.kill();
+                let _ = live.wait();
+                live_guard.disarm();
+            }
+            if let Some((mut zombie, mut guard)) = plant_replacement(pid, tick) {
+                assert!(
+                    settle_replacement_zombie(&mut zombie, pid),
+                    "replacement never zombied (broken staging)"
+                );
+                restore_hygiene();
+                assert!(
+                    matches!(zombie.try_wait(), Ok(Some(_))),
+                    "zombie replacement status must stay with its owner"
+                );
+                guard.disarm();
+            }
+        }
+        // Unarmed tail run (RED teardown when the arms are
+        // vacuous: the original still holds its number) +
+        // post-hygiene loudness (the gated primitive stands
+        // down silently on mismatch): the ORIGINAL birth must
+        // be gone — a recycled different-tick holder is not
+        // ours to touch (child_gone, not pid_free).
+        restore_hygiene();
+        assert_audit_child_gone(pid, tick, "restore-probe sleeper");
         assert_eq!(state, Ok(None), "restore panic must not strand the sleeper");
         eprintln!("R17006-ARESTORED retired=1");
     }
@@ -15519,9 +15630,20 @@ mod tests {
             // SAFETY: tick-pinned staged writer.
             unsafe { libc::kill(writer, libc::SIGKILL) };
         }
-        // Our unreaped child cannot have recycled — safe.
-        let _ = child.kill();
-        let _ = child.wait();
+        // R18-007: post-retirement handle discipline — the body
+        // reaps the probe on GREEN (asserted below), so the old
+        // "unreaped" comment was wrong exactly there: a blind
+        // kill would murder whoever recycled the freed number.
+        // Reap-proven (cached status) ⇒ the original is gone
+        // through our own handle ⇒ nothing to kill — skip
+        // outright (even S100-safe). Otherwise tick-gated
+        // kill+reap only while the number still names the
+        // staged birth.
+        let ptick = probe_guard.tick;
+        if !probe_reaped && ptick.is_some_and(|t| proc_starttime(id) == Ok(Some(t))) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let end = Instant::now() + Duration::from_secs(10);
         loop {
             let down = proc_starttime(mid) != Ok(Some(mid_tick))
@@ -15700,11 +15822,28 @@ mod tests {
             // The probe child is ours — but the body may
             // already have reaped it (then the number is
             // fair game for retake): gate on the probe pin.
-            // NOTE (mutant C2 survived): on pidfd-std,
-            // Child::kill/wait on the body-reaped handle are
-            // task-scoped no-ops — the gate has no teeth HERE.
-            // Retained for legacy number-based std/kernels.
-            if ptick.is_some_and(|t| proc_starttime(id) == Ok(Some(t))) {
+            // R18-007 correction of the R17-003 C2 note
+            // (which wrongly credited pidfd task-scoping):
+            // default Command::spawn never pidfd-scopes the
+            // handle. child.wait() after the body reap is a
+            // no-op via the handle's status cache (filled by
+            // the probe_reaped try_wait above) or ECHILD on
+            // a reaped number — number-based semantics, not
+            // task scoping. child.kill() is a LIVE
+            // kill-by-number: on a recycled number it
+            // signals whoever holds it. The tick gate
+            // therefore HAS teeth (it withholds a real
+            // signal from a recycled holder); the old "no
+            // teeth" claim is retracted. C2's survival
+            // therefore implies its arms were vacuous in
+            // that run (a live numeric kill against an
+            // asserted-live replacement fails — proven by
+            // the R18-007 arm mutants); the kill side stays
+            // gated. Reap-proven (cached status) skips
+            // outright (even S100-safe — the original is
+            // gone through our own handle, so nothing is
+            // owed a signal).
+            if !probe_reaped && ptick.is_some_and(|t| proc_starttime(id) == Ok(Some(t))) {
                 let _ = child.kill();
                 let _ = child.wait();
             }
