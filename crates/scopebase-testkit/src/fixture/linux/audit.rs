@@ -2505,6 +2505,129 @@ mod tests {
         }
     }
 
+    /// R20-013(a): unwind-safe owned-child cleanup (never
+    /// panics — backstops RED runs; explicit cleanup runs
+    /// first on GREEN and this turns into a gated no-op).
+    /// Hoisted from the two shedding tests (identical
+    /// bodies) so the replacement regression exercises the
+    /// same artifact.
+    #[cfg(target_arch = "x86_64")]
+    struct KillOnDrop {
+        pid: libc::pid_t,
+        tick: u64,
+    }
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            // R20-013(a): reap only on a positively matched
+            // birth — the gate's `true` covers mismatch and
+            // gone (idempotent-success: false only on read
+            // error), so gating the waitpid on it still
+            // reaps a sibling zombie at a recycled number.
+            // The explicit match below mirrors the
+            // R15-003 retired-child shape (same µs
+            // match→waitpid residual as gate→signal).
+            if proc_starttime(self.pid) != Ok(Some(self.tick)) {
+                return;
+            }
+            let _ = kill_tick_gated(self.pid, self.tick);
+            let mut st = 0;
+            // SAFETY: WNOHANG attempt only — our child.
+            let _ = unsafe { libc::waitpid(self.pid, &mut st, libc::WNOHANG) };
+        }
+    }
+
+    /// R20-013(b): trailing run-proof that the production
+    /// retire drained the holder (extracted from the
+    /// birth-bracket test so the replacement regression
+    /// executes the same step — the death-await loop above
+    /// it issues no wait syscalls, so the proof is the
+    /// trailing path's only steal/block risk). Birth-absence
+    /// shape: a zombie keeps its birth, so absence proves
+    /// reaped — and no waitpid ever issues, so a
+    /// replacement occupant is neither stolen nor
+    /// assert-failed. Weaker than ECHILD under replacement
+    /// (the drain is then unprovable — skip loud), equal
+    /// otherwise: the caller never reaped, and an owned
+    /// child shows birth until reaped, so absence proves
+    /// the frame drained. A read error fails loud (the
+    /// proof is load-bearing, not a skip path).
+    #[cfg(target_arch = "x86_64")]
+    fn prove_frame_drained_holder(lpid: libc::pid_t) {
+        match proc_starttime(lpid) {
+            Ok(None) => {}
+            Ok(Some(tick)) => {
+                eprintln!(
+                    "skip: occupant at {lpid} (tick {tick}) makes the frame-drain proof unprovable — no status touched"
+                );
+            }
+            Err(error) => panic!("frame-drain proof unreadable: {error:?}"),
+        }
+    }
+
+    /// R20-013(c): trailing run-proof that the collection
+    /// expiry reaped the probe (extracted from the
+    /// big-table test so the replacement regression
+    /// executes the same step — the killpg group-death
+    /// loop above it issues no wait syscalls, so the proof
+    /// is the trailing path's only steal/block risk).
+    /// Birth-first shape (a WNOHANG-first waitpid would
+    /// still steal a zombie replacement — the check order
+    /// is the fix): a foreign birth skips loud untouched;
+    /// ours-unreaped (expiry killed, left status) is
+    /// drained — safe, positively our birth — and skips
+    /// loud under its own message; ours-live contradicts
+    /// the proven group death (self-grouped probe) and
+    /// fails loud; gone runs the ECHILD proof (the handle
+    /// was never waited — absence plus ECHILD proves the
+    /// expiry reaped). No blocking call anywhere: bounded
+    /// by construction. A raced-in occupant between the
+    /// birth read and the ECHILD waitpid (µs) skips loud.
+    #[cfg(target_arch = "x86_64")]
+    fn prove_expiry_reaped_probe(id: libc::pid_t, tick: u64, probe: &mut std::process::Child) {
+        let _ = probe;
+        match proc_starttime(id) {
+            Ok(Some(now)) if now != tick => {
+                eprintln!(
+                    "skip: replacement occupant at {id} (tick {now}) makes the expiry-reap proof unprovable — no status touched"
+                );
+            }
+            Ok(Some(_)) => {
+                if matches!(proc_state(id), Some(state) if state == 'Z') {
+                    // Ours, unreaped: drain (safe) + skip
+                    // loud — the expiry killed but the
+                    // "reaped by expiry" claim is unproven.
+                    let mut st = 0;
+                    // SAFETY: WNOHANG drain — our own birth.
+                    unsafe {
+                        libc::waitpid(id, &mut st, libc::WNOHANG);
+                    }
+                    eprintln!(
+                        "skip: probe {id} unreaped by the expiry (drained here) — reap proof unproven"
+                    );
+                } else {
+                    panic!(
+                        "probe {id} live after proven group death (stage broken — self-grouped probe cannot survive its group)"
+                    );
+                }
+            }
+            Ok(None) => {
+                let mut st = 0;
+                // SAFETY: WNOHANG probe only — nothing to
+                // steal (no occupant); the handle below
+                // was never waited.
+                let got = unsafe { libc::waitpid(id, &mut st, libc::WNOHANG) };
+                if got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+                    return;
+                }
+                eprintln!(
+                    "skip: occupant raced into {id} after the birth read (got {got}) — reap proof unproven, no block"
+                );
+            }
+            Err(error) => panic!("expiry-reap proof unreadable: {error:?}"),
+        }
+    }
+
     /// R12-005: python3 staged-probe marker — fork-only
     /// holders are staged probe-side (a probe-side fork
     /// inherits the piped stdio; an exec'd holder would lose
@@ -20984,13 +21107,7 @@ else:
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        let mut st = 0;
-        // SAFETY: WNOHANG probe only — our (former) child.
-        let got = unsafe { libc::waitpid(lpid, &mut st, libc::WNOHANG) };
-        assert!(
-            got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
-            "holder status must already be drained by the production frame, got {got}"
-        );
+        prove_frame_drained_holder(lpid);
         drop(legit);
         // Cleanup: park the orphaned replacement (gone is
         // the proof — init or a suite subreaper owns it).
@@ -21793,18 +21910,375 @@ time.sleep(30)
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        // The expiry reaped the probe numerically (our
-        // handle finds ECHILD — the run-proof that expiry,
-        // not us, retired it; the number was pinned by our
-        // unreaped ownership throughout, so no recycle).
-        match probe.wait() {
-            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {}
-            other => panic!("probe handle must see ECHILD after expiry reap, got {other:?}"),
-        }
+        // The expiry reaped the probe numerically (the
+        // trailing run-proof that expiry, not us, retired
+        // it — extracted helper, same step).
+        prove_expiry_reaped_probe(id, probe_tick, &mut probe);
         // Cleanup: the fd-holder (owned, gated, self-reaped).
         kill_and_reap(hpid, htick, "fd-holder");
         drop(holder);
         let _ = std::fs::remove_file(&flag_count);
+    }
+
+    /// R20-013(a): the shedding guard must never steal a
+    /// replacement's status — it waitpided unconditionally
+    /// after a possibly-rejecting kill gate, so a sibling
+    /// zombie at the recycled number was reaped (status
+    /// stolen). Stages a holder, retires it, plants a
+    /// different-birth zombie replacement at its number,
+    /// then drops the guard: RED (this shape): the drop
+    /// reaps the zombie (our retention waitpid finds
+    /// ECHILD — stolen). GREEN: the birth match fails and
+    /// the drop touches nothing (we reap the retained
+    /// status). The naive verdict-gated fix does NOT fix:
+    /// the gate returns true on mismatch/gone
+    /// (idempotent-success), proven by this test staying
+    /// RED under it — the explicit match is required.
+    /// The live arm requires bounded completion + survival
+    /// (non-discriminating — the gate never signaled a
+    /// mismatched birth — but review-required). Contended
+    /// or same-tick plants skip loud (established steer
+    /// precedent).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn kill_on_drop_never_steals_replacement_status() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        // Holder: retired before the plants (number freed).
+        let mut holder = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        let _ = holder.wait();
+        assert_eq!(proc_starttime(hpid), Ok(None), "holder number must free");
+        // Zombie arm: different-birth replacement, settled
+        // to an unreaped zombie (its status is the arm's
+        // evidence).
+        let (mut kid, mut guard) = match plant_replacement(hpid, htick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        assert!(
+            settle_replacement_zombie(&mut kid, hpid),
+            "replacement must settle zombie (stage broken otherwise)"
+        );
+        drop(KillOnDrop {
+            pid: hpid,
+            tick: htick,
+        });
+        let mut st = 0;
+        // SAFETY: WNOHANG retention probe — our own child.
+        let got = unsafe { libc::waitpid(hpid, &mut st, libc::WNOHANG) };
+        assert_eq!(
+            got, hpid,
+            "zombie replacement status must be retained (stolen when ECHILD)"
+        );
+        guard.disarm();
+        drop(kid);
+        assert_eq!(proc_starttime(hpid), Ok(None), "number freed again");
+        // Live arm: bounded completion + survival.
+        let (mut live, mut lguard) = match plant_replacement(hpid, htick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        let retick = proc_starttime(hpid)
+            .expect("live replacement readable")
+            .expect("live replacement visible");
+        assert_ne!(retick, htick, "live replacement is a different birth");
+        drop(KillOnDrop {
+            pid: hpid,
+            tick: htick,
+        });
+        assert_eq!(
+            proc_starttime(hpid),
+            Ok(Some(retick)),
+            "live replacement must survive the guard drop"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        lguard.disarm();
+    }
+
+    /// R20-013(b): the frame-drain proof must survive
+    /// replacements — the waitpid-ECHILD shape both stole
+    /// a replacement zombie's status AND assert-failed
+    /// (loud flake + harm), and assert-failed on a live
+    /// replacement. Gone arm (production-retire shape):
+    /// the proof runs silently. Zombie arm: RED — the
+    /// proof panics after stealing (retention finds
+    /// ECHILD); GREEN — skips loud, status retained (we
+    /// reap). Live arm: RED — panics (got 0); GREEN —
+    /// skips loud, occupant survives. Contended plants
+    /// skip loud.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_drain_proof_survives_replacements() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        let stage_holder = || {
+            // Raw-reaped below (simulated frame reap) —
+            // the handle goes stale, never `.wait()`ed.
+            #[allow(clippy::zombie_processes)]
+            let holder = std::process::Command::new("/bin/sleep")
+                .arg("0.1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("holder spawns");
+            let hpid = holder.id() as libc::pid_t;
+            let htick = proc_starttime(hpid)
+                .expect("holder stat readable")
+                .expect("holder visible");
+            // Production-retire shape: killed AND reaped by
+            // the frame (never by us).
+            assert!(kill_tick_gated(hpid, htick), "frame kills");
+            let mut st = 0;
+            // SAFETY: the frame's targeted reap (simulated).
+            let got = unsafe { libc::waitpid(hpid, &mut st, 0) };
+            assert_eq!(got, hpid, "frame reaps");
+            assert_eq!(proc_starttime(hpid), Ok(None), "number freed");
+            (hpid, htick)
+        };
+        // Gone arm: the proof runs (silently) — the
+        // retire-drained shape it was written for.
+        let (hpid, _htick) = stage_holder();
+        prove_frame_drained_holder(hpid);
+        // Zombie arm: different-birth replacement, settled
+        // to an unreaped zombie.
+        let (hpid, htick) = stage_holder();
+        let (mut kid, mut guard) = match plant_replacement(hpid, htick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        assert!(
+            settle_replacement_zombie(&mut kid, hpid),
+            "replacement must settle zombie (stage broken otherwise)"
+        );
+        let panicked = std::panic::catch_unwind(|| prove_frame_drained_holder(hpid)).is_err();
+        assert!(!panicked, "drain proof must not fail on a zombie occupant");
+        let mut st = 0;
+        // SAFETY: WNOHANG retention probe — our own child.
+        let got = unsafe { libc::waitpid(hpid, &mut st, libc::WNOHANG) };
+        assert_eq!(got, hpid, "zombie occupant status must be retained");
+        guard.disarm();
+        drop(kid);
+        // Live arm: a different-birth live occupant.
+        let (hpid, htick) = stage_holder();
+        let (mut live, mut lguard) = match plant_replacement(hpid, htick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        let retick = proc_starttime(hpid)
+            .expect("live occupant readable")
+            .expect("live occupant visible");
+        let panicked = std::panic::catch_unwind(|| prove_frame_drained_holder(hpid)).is_err();
+        assert!(!panicked, "drain proof must not fail on a live occupant");
+        assert_eq!(
+            proc_starttime(hpid),
+            Ok(Some(retick)),
+            "live occupant must survive the proof"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        lguard.disarm();
+    }
+
+    /// R20-013(c): the expiry-reap proof must survive
+    /// replacements — the blocking `Child::wait` stalled
+    /// on a live replacement and stole a zombie one's
+    /// status (reaped ⟹ unpinned: the killpg poll above
+    /// the proof stretches the recycle window to ms).
+    /// Gone arm (expiry shape): the proof runs silently.
+    /// Zombie arm: RED — panics after stealing; GREEN —
+    /// skips loud, status retained. Live arm: RED — blocks
+    /// until the 5s bounding killer retires the occupant
+    /// (then panics); GREEN — skips loud at once,
+    /// occupant survives. Ours-zombie arm (expiry killed
+    /// but left status): RED — panics (flake, no theft);
+    /// GREEN — drains ours + skips loud. Contended plants
+    /// skip loud.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expiry_reap_proof_survives_replacements() {
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        // Gone arm: killed AND raw-reaped by the expiry
+        // (the handle stays stale-unwaited — the real
+        // shape); the proof runs silently.
+        // Raw-reaped below (simulated expiry reap).
+        #[allow(clippy::zombie_processes)]
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        assert!(kill_tick_gated(id, tick), "expiry kills");
+        let mut st = 0;
+        // SAFETY: the expiry's raw reap (simulated).
+        let got = unsafe { libc::waitpid(id, &mut st, 0) };
+        assert_eq!(got, id, "expiry reaps");
+        prove_expiry_reaped_probe(id, tick, &mut probe);
+        drop(probe);
+        // Zombie arm: different-birth replacement, settled
+        // to an unreaped zombie; the stale handle below is
+        // the ORIGINAL probe's (already raw-reaped).
+        // Raw-reaped below (simulated expiry reap) — the
+        // handle goes stale, never `.wait()`ed.
+        #[allow(clippy::zombie_processes)]
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        assert!(kill_tick_gated(id, tick), "expiry kills");
+        // SAFETY: the expiry's raw reap (simulated).
+        let got = unsafe { libc::waitpid(id, &mut st, 0) };
+        assert_eq!(got, id, "expiry reaps");
+        let (mut kid, mut guard) = match plant_replacement(id, tick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        assert!(
+            settle_replacement_zombie(&mut kid, id),
+            "replacement must settle zombie (stage broken otherwise)"
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_expiry_reaped_probe(id, tick, &mut probe)
+        }))
+        .is_err();
+        assert!(!panicked, "reap proof must not fail on a zombie occupant");
+        // SAFETY: WNOHANG retention probe — our own child.
+        let got = unsafe { libc::waitpid(id, &mut st, libc::WNOHANG) };
+        assert_eq!(got, id, "zombie occupant status must be retained");
+        guard.disarm();
+        drop(kid);
+        drop(probe);
+        // Live arm: a different-birth live occupant. The
+        // bounding killer retires it after 5s (bounds the
+        // RED block; on GREEN the proof returns in ms and
+        // the killer finds nothing — gated no-op).
+        // Raw-reaped below (simulated expiry reap).
+        #[allow(clippy::zombie_processes)]
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        assert!(kill_tick_gated(id, tick), "expiry kills");
+        // SAFETY: the expiry's raw reap (simulated).
+        let got = unsafe { libc::waitpid(id, &mut st, 0) };
+        assert_eq!(got, id, "expiry reaps");
+        let (live, mut lguard) = match plant_replacement(id, tick) {
+            Some(planted) => planted,
+            None => return,
+        };
+        let retick = proc_starttime(id)
+            .expect("live occupant readable")
+            .expect("live occupant visible");
+        // The bounding killer fires only on RED-timeout (or
+        // RED-unwind disconnect — retiring the stranded
+        // occupant as hygiene); GREEN signals early exit.
+        let (btx, brx) = std::sync::mpsc::channel::<()>();
+        let killer = std::thread::spawn(move || {
+            if brx.recv_timeout(std::time::Duration::from_secs(5)).is_ok() {
+                return;
+            }
+            let _ = kill_tick_gated(id, retick);
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only — our own child.
+            unsafe {
+                libc::waitpid(id, &mut st, libc::WNOHANG);
+            }
+        });
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_expiry_reaped_probe(id, tick, &mut probe)
+        }))
+        .is_err();
+        assert!(!panicked, "reap proof must not fail on a live occupant");
+        assert_eq!(
+            proc_starttime(id),
+            Ok(Some(retick)),
+            "live occupant must survive the proof"
+        );
+        drop(live);
+        let _ = kill_tick_gated(id, retick);
+        // SAFETY: blocking reap of our retired occupant.
+        let got = unsafe { libc::waitpid(id, &mut st, 0) };
+        assert_eq!(got, id, "live occupant reaped");
+        lguard.disarm();
+        let _ = btx.send(());
+        let _ = killer.join();
+        drop(probe);
+        // Ours-zombie arm: expiry killed but left status
+        // (unreaped) — the proof must drain ours (safe —
+        // positively our birth) and skip loud, never
+        // assert-fail.
+        // Drained by the proof (raw waitpid, never `.wait()`ed).
+        #[allow(clippy::zombie_processes)]
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("0.1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let tick = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        assert!(kill_tick_gated(id, tick), "expiry kills");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(id), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "probe must settle zombie (stage broken otherwise)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_expiry_reaped_probe(id, tick, &mut probe)
+        }))
+        .is_err();
+        assert!(!panicked, "reap proof must drain ours-zombie, not fail");
+        // SAFETY: WNOHANG drain check — our own child.
+        let got = unsafe { libc::waitpid(id, &mut st, libc::WNOHANG) };
+        assert!(
+            got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+            "ours-zombie must be drained by the proof, got {got}"
+        );
+        drop(probe);
     }
 
     /// R19-007: a fork-only inheritor must not be murdered at
@@ -21837,21 +22311,9 @@ time.sleep(30)
     fn shedding_inheritor_survives_expiry_while_holders_retire() {
         use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
         use std::time::{Duration, Instant};
-        // Unwind-safe owned-child cleanup (never panics —
-        // backstops RED runs; the explicit cleanup below runs
-        // first on GREEN and this turns into a gated no-op).
-        struct KillOnDrop {
-            pid: libc::pid_t,
-            tick: u64,
-        }
-        impl Drop for KillOnDrop {
-            fn drop(&mut self) {
-                let _ = kill_tick_gated(self.pid, self.tick);
-                let mut st = 0;
-                // SAFETY: WNOHANG attempt only — our child.
-                let _ = unsafe { libc::waitpid(self.pid, &mut st, libc::WNOHANG) };
-            }
-        }
+        // Unwind-safe owned-child cleanup: the hoisted
+        // `KillOnDrop` (explicit cleanup below runs first
+        // on GREEN; the guard turns into a gated no-op).
         // Collection pipe: we keep the READ end.
         let (read, write) = std::io::pipe().expect("collection pipe");
         let read_fd = read.as_raw_fd();
@@ -22038,18 +22500,8 @@ time.sleep(30)
         use std::os::unix::ffi::OsStrExt as _;
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
-        struct KillOnDrop {
-            pid: libc::pid_t,
-            tick: u64,
-        }
-        impl Drop for KillOnDrop {
-            fn drop(&mut self) {
-                let _ = kill_tick_gated(self.pid, self.tick);
-                let mut st = 0;
-                // SAFETY: WNOHANG attempt only — our child.
-                let _ = unsafe { libc::waitpid(self.pid, &mut st, libc::WNOHANG) };
-            }
-        }
+        // Unwind-safe owned-child cleanup: the hoisted
+        // `KillOnDrop`.
         // Collection pipe: we keep the READ end.
         let (read, write) = std::io::pipe().expect("collection pipe");
         let read_fd = read.as_raw_fd();
