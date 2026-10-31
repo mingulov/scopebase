@@ -177,6 +177,159 @@ pub unsafe fn fork_shedding_exiter(code: u8) -> libc::pid_t {
     pid
 }
 
+/// R20-005: fork a pausing middleman that forks an
+/// exec'd grandchild sleep and reports its pid through a
+/// pipe. Returns the (middleman, grandchild) pids, or
+/// None when staging fails (fork/report error — never
+/// strands: a report failure kills + reaps the middleman
+/// before returning).
+///
+/// The grandchild's parent is the LIVE middleman — hence
+/// our non-child whatever subreaper state we hold (no
+/// prctl games). The middleman sheds everything but the
+/// report write end, nulls stdio (dup2 /dev/null — the
+/// grandchild must not inherit test stdio write ends),
+/// forks, reports via snprintf+write, and pauses forever.
+/// The grandchild execs /bin/sleep with an EMPTY env (no
+/// post-fork environ race). The report read is poll-bounded
+/// (5s) — a wedged middleman fails loud, never hangs the
+/// suite.
+///
+/// # Safety
+///
+/// Fork in a multithreaded context: the middleman runs
+/// syscalls only (shed + dup2 + fork + snprintf + write +
+/// pause) plus read-only inherited stack memory, and never
+/// returns; the parent must retire both children (the
+/// middleman pauses until signaled, the grandchild sleeps
+/// until signaled).
+#[cfg(test)]
+pub unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(libc::pid_t, libc::pid_t)> {
+    use std::os::unix::io::FromRawFd as _;
+    // Report pipe (CLOEXEC — out of the exec'd grandchild).
+    let mut pipe = [0; 2];
+    // SAFETY: pipe2 fills both ends.
+    if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return None;
+    }
+    let (read_fd, write_fd) = (pipe[0], pipe[1]);
+    assert!(
+        read_fd >= 3 && write_fd >= 3,
+        "report pipe must clear stdio (else the middleman's stdio-nulling clobbers it)"
+    );
+    let dur_c = std::ffi::CString::new(dur).ok()?;
+    // SAFETY: fork itself is always safe; the middleman
+    // upholds the syscall-only contract documented above.
+    let m1 = unsafe { libc::fork() };
+    if m1 == 0 {
+        unsafe {
+            shed_inherited_fds(&[write_fd]);
+            // Null stdio BEFORE forking the grandchild.
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+            if null < 0 {
+                libc::_exit(127);
+            }
+            if libc::dup2(null, 0) < 0 || libc::dup2(null, 1) < 0 || libc::dup2(null, 2) < 0 {
+                libc::_exit(127);
+            }
+            if null > 2 {
+                libc::close(null);
+            }
+            let m2 = libc::fork();
+            if m2 == 0 {
+                // Grandchild: exec sleep with an EMPTY env.
+                let path = c"/bin/sleep".as_ptr();
+                let argv0 = c"sleep".as_ptr();
+                let argv = [argv0, dur_c.as_ptr(), std::ptr::null()];
+                let envp = [std::ptr::null()];
+                libc::execve(path, argv.as_ptr(), envp.as_ptr());
+                libc::_exit(127);
+            }
+            if m2 < 0 {
+                libc::_exit(127);
+            }
+            // Report the grandchild pid, then pause forever.
+            let mut buf = [0 as libc::c_char; 32];
+            let len = libc::snprintf(
+                buf.as_mut_ptr(),
+                buf.len(),
+                c"%d\n".as_ptr(),
+                m2 as libc::c_int,
+            );
+            if len > 0 {
+                let mut written = 0;
+                while written < len {
+                    let got = libc::write(
+                        write_fd,
+                        buf.as_ptr().add(written as usize) as *const _,
+                        (len - written) as usize,
+                    );
+                    if got <= 0 {
+                        break;
+                    }
+                    written += got as libc::c_int;
+                }
+            }
+            loop {
+                libc::pause();
+            }
+        }
+    }
+    if m1 < 0 {
+        // SAFETY: ends owned by this scope.
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        return None;
+    }
+    // SAFETY: write end owned by this scope (the middleman
+    // holds its own copy).
+    unsafe {
+        libc::close(write_fd);
+    }
+    // Bounded report read (the middleman reports in µs).
+    let mut poller = libc::pollfd {
+        fd: read_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: polls our own pipe end.
+    let ready = unsafe { libc::poll(&mut poller, 1, 5000) };
+    let mut report = String::new();
+    let m2 = if ready > 0 {
+        use std::io::BufRead as _;
+        // SAFETY: read end owned by this scope (File takes
+        // the OwnedFd for its Read impl).
+        let owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(read_fd) };
+        let mut reader = std::io::BufReader::new(std::fs::File::from(owned));
+        if reader.read_line(&mut report).is_ok() {
+            report.trim().parse::<libc::pid_t>().ok()
+        } else {
+            None
+        }
+    } else {
+        // SAFETY: end owned by this scope.
+        unsafe {
+            libc::close(read_fd);
+        }
+        None
+    };
+    match m2 {
+        Some(m2) if m2 > 0 => Some((m1, m2)),
+        _ => {
+            // Report failure: retire the middleman (best
+            // effort) so None never strands.
+            unsafe {
+                libc::kill(m1, libc::SIGKILL);
+                let mut st = 0;
+                libc::waitpid(m1, &mut st, libc::WNOHANG);
+            }
+            None
+        }
+    }
+}
+
 /// Read the rendezvous slots. Sound in the forked child (plain atomic
 /// loads); the parent must only call this while holding the fork mutex.
 pub fn slots() -> (i32, i32, i32) {
@@ -185,4 +338,85 @@ pub fn slots() -> (i32, i32, i32) {
         SLOT_B.load(Ordering::Relaxed),
         SLOT_C.load(Ordering::Relaxed),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R20-005: the grandchild helper reports the true
+    /// grandchild pid; the grandchild is our non-child
+    /// (parented to the live middleman — no subreaper
+    /// assumption) with null stdio (it must not inherit
+    /// test stdio write ends). Cleanup retires both.
+    #[test]
+    fn pausing_grandchild_sleep_reports_nonchild() {
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("910") }.expect("grandchild staged");
+        // stat fields after ") ": state ppid ... starttime
+        // (rsplit: a comm containing ") " must not shift the
+        // fields).
+        let fields = |pid: libc::pid_t| -> Vec<String> {
+            let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("stat readable");
+            let after = text.rsplit_once(") ").map(|x| x.1).expect("comm stripped");
+            after.split_whitespace().map(str::to_string).collect()
+        };
+        let m2fields = fields(m2);
+        assert_eq!(
+            m2fields[1].parse::<libc::pid_t>().expect("ppid parses"),
+            m1,
+            "grandchild must be parented to the live middleman"
+        );
+        for fd in [0, 1, 2] {
+            let link = std::fs::read_link(format!("/proc/{m2}/fd/{fd}")).expect("stdio readable");
+            assert_eq!(
+                link.to_string_lossy(),
+                "/dev/null",
+                "grandchild stdio must be null"
+            );
+        }
+        // Non-child: waitpid must refuse (ECHILD), never
+        // report status.
+        let mut st = 0;
+        let got = unsafe { libc::waitpid(m2, &mut st, libc::WNOHANG) };
+        assert!(got < 0, "grandchild must not be our child");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD),
+            "non-child waitpid must refuse ECHILD"
+        );
+        // Cleanup: the sleeper (signaled by pid — live,
+        // verified above), then the middleman (reaped —
+        // ours). The sleeper zombifies under the pausing
+        // middleman (never reaped until the middleman dies),
+        // so death is unreadable-or-Z, not unreadable.
+        assert_eq!(
+            unsafe { libc::kill(m2, libc::SIGKILL) },
+            0,
+            "sleeper signaled"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let dead = match std::fs::read_to_string(format!("/proc/{m2}/stat")) {
+                Err(_) => true,
+                Ok(text) => {
+                    text.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next())
+                        == Some("Z")
+                }
+            };
+            if dead {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "sleeper must die");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            unsafe { libc::kill(m1, libc::SIGKILL) },
+            0,
+            "middleman signaled"
+        );
+        let mut mst = 0;
+        let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
+        assert_eq!(mgot, m1, "middleman status drains to us");
+    }
 }

@@ -3490,6 +3490,267 @@ fn fork_pauser() -> i32 {
     pid
 }
 
+/// R20-005 (toolchain twin): close every inherited fd but
+/// stdio and `keeps`. Faithful twin-port of the lib
+/// `shed_inherited_fds` (close_range sweep, syscalls only,
+/// no allocation; any failure `_exit(127)`s — a half-shed
+/// child must never run on). ALL post-fork branches below
+/// must run only this + raw syscalls (MT-fork rule).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+unsafe fn shed_inherited_fds(keep: &[i32]) {
+    // Sweep close_range windows between keeps (bound:
+    // u32::MAX; keeps below 3 need no action — stdio never
+    // sheds). Any failure _exits 127 WITHOUT reporting (the
+    // parent observes EOF/death, loud).
+    let mut lo: i64 = 3;
+    loop {
+        if lo > u32::MAX as i64 {
+            break;
+        }
+        let mut next: i64 = u32::MAX as i64 + 1;
+        for &fd in keep {
+            let fd = fd as i64;
+            if fd >= lo && fd < next {
+                next = fd;
+            }
+        }
+        if next > lo {
+            // SAFETY: close_range on our own table copy
+            // (plain fork never shares it); bounds checked
+            // above.
+            if unsafe {
+                libc::syscall(
+                    libc::SYS_close_range,
+                    lo as libc::c_long,
+                    (next - 1) as libc::c_long,
+                    0 as libc::c_long,
+                )
+            } != 0
+            {
+                unsafe { libc::_exit(127) };
+            }
+        }
+        if next > u32::MAX as i64 {
+            break;
+        }
+        lo = next + 1;
+    }
+}
+
+/// R20-005 (toolchain twin): fork a pausing middleman that
+/// forks an exec'd grandchild sleep and reports its pid.
+/// Twin-port of the lib `fork_pausing_grandchild_sleep`
+/// (same contract: live-middleman parentage ⟹ non-child;
+/// shed + null stdio; empty-env exec; poll-bounded report;
+/// None retires the middleman and never strands).
+///
+/// # Safety
+///
+/// Fork in a multithreaded context: the middleman runs
+/// syscalls only plus read-only inherited stack memory,
+/// and never returns; the parent must retire both
+/// children.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
+    use std::os::unix::io::FromRawFd as _;
+    let mut pipe = [0; 2];
+    // SAFETY: pipe2 fills both ends.
+    if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return None;
+    }
+    let (read_fd, write_fd) = (pipe[0], pipe[1]);
+    assert!(
+        read_fd >= 3 && write_fd >= 3,
+        "report pipe must clear stdio (else the middleman's stdio-nulling clobbers it)"
+    );
+    let dur_c = std::ffi::CString::new(dur).ok()?;
+    // SAFETY: fork itself is always safe; the middleman
+    // upholds the syscall-only contract documented above.
+    let m1 = unsafe { libc::fork() };
+    if m1 == 0 {
+        unsafe {
+            shed_inherited_fds(&[write_fd]);
+            // Null stdio BEFORE forking the grandchild.
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+            if null < 0 {
+                libc::_exit(127);
+            }
+            if libc::dup2(null, 0) < 0 || libc::dup2(null, 1) < 0 || libc::dup2(null, 2) < 0 {
+                libc::_exit(127);
+            }
+            if null > 2 {
+                libc::close(null);
+            }
+            let m2 = libc::fork();
+            if m2 == 0 {
+                // Grandchild: exec sleep with an EMPTY env.
+                let path = c"/bin/sleep".as_ptr();
+                let argv0 = c"sleep".as_ptr();
+                let argv = [argv0, dur_c.as_ptr(), std::ptr::null()];
+                let envp = [std::ptr::null()];
+                libc::execve(path, argv.as_ptr(), envp.as_ptr());
+                libc::_exit(127);
+            }
+            if m2 < 0 {
+                libc::_exit(127);
+            }
+            // Report the grandchild pid, then pause forever.
+            let mut buf = [0 as libc::c_char; 32];
+            let len = libc::snprintf(
+                buf.as_mut_ptr(),
+                buf.len(),
+                c"%d\n".as_ptr(),
+                m2 as libc::c_int,
+            );
+            if len > 0 {
+                let mut written = 0;
+                while written < len {
+                    let got = libc::write(
+                        write_fd,
+                        buf.as_ptr().add(written as usize) as *const _,
+                        (len - written) as usize,
+                    );
+                    if got <= 0 {
+                        break;
+                    }
+                    written += got as libc::c_int;
+                }
+            }
+            loop {
+                libc::pause();
+            }
+        }
+    }
+    if m1 < 0 {
+        // SAFETY: ends owned by this scope.
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+        return None;
+    }
+    // SAFETY: write end owned by this scope (the middleman
+    // holds its own copy).
+    unsafe {
+        libc::close(write_fd);
+    }
+    // Bounded report read (the middleman reports in µs).
+    let mut poller = libc::pollfd {
+        fd: read_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: polls our own pipe end.
+    let ready = unsafe { libc::poll(&mut poller, 1, 5000) };
+    let mut report = String::new();
+    let m2 = if ready > 0 {
+        use std::io::BufRead as _;
+        // SAFETY: read end owned by this scope (File takes
+        // the OwnedFd for its Read impl).
+        let owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(read_fd) };
+        let mut reader = std::io::BufReader::new(std::fs::File::from(owned));
+        if reader.read_line(&mut report).is_ok() {
+            report.trim().parse::<i32>().ok()
+        } else {
+            None
+        }
+    } else {
+        // SAFETY: end owned by this scope.
+        unsafe {
+            libc::close(read_fd);
+        }
+        None
+    };
+    match m2 {
+        Some(m2) if m2 > 0 => Some((m1, m2)),
+        _ => {
+            // Report failure: retire the middleman (best
+            // effort) so None never strands.
+            unsafe {
+                libc::kill(m1, libc::SIGKILL);
+                let mut st = 0;
+                libc::waitpid(m1, &mut st, libc::WNOHANG);
+            }
+            None
+        }
+    }
+}
+
+/// R20-005 (toolchain twin): the grandchild helper
+/// reports the true grandchild pid; the grandchild is our
+/// non-child (parented to the live middleman) with null
+/// stdio. Twin of the fork.rs unit test. Cleanup retires
+/// both.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn pausing_grandchild_sleep_reports_nonchild() {
+    let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("906") }.expect("grandchild staged");
+    // stat fields after ") ": state ppid ... starttime
+    // (rsplit: a comm containing ") " must not shift the
+    // fields).
+    let fields = |pid: i32| -> Vec<String> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("stat readable");
+        let after = text.rsplit_once(") ").map(|x| x.1).expect("comm stripped");
+        after.split_whitespace().map(str::to_string).collect()
+    };
+    let m2fields = fields(m2);
+    assert_eq!(
+        m2fields[1].parse::<i32>().expect("ppid parses"),
+        m1,
+        "grandchild must be parented to the live middleman"
+    );
+    for fd in [0, 1, 2] {
+        let link = std::fs::read_link(format!("/proc/{m2}/fd/{fd}")).expect("stdio readable");
+        assert_eq!(
+            link.to_string_lossy(),
+            "/dev/null",
+            "grandchild stdio must be null"
+        );
+    }
+    // Non-child: waitpid must refuse (ECHILD), never
+    // report status.
+    let mut st = 0;
+    let got = unsafe { libc::waitpid(m2, &mut st, libc::WNOHANG) };
+    assert!(got < 0, "grandchild must not be our child");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD),
+        "non-child waitpid must refuse ECHILD"
+    );
+    // Cleanup: the sleeper (zombifies under the pausing
+    // middleman — death is unreadable-or-Z), then the
+    // middleman (reaped — ours).
+    assert_eq!(
+        unsafe { libc::kill(m2, libc::SIGKILL) },
+        0,
+        "sleeper signaled"
+    );
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let dead = match std::fs::read_to_string(format!("/proc/{m2}/stat")) {
+            Err(_) => true,
+            Ok(text) => {
+                text.rsplit_once(") ")
+                    .and_then(|(_, after)| after.split_whitespace().next())
+                    == Some("Z")
+            }
+        };
+        if dead {
+            break;
+        }
+        assert!(Instant::now() < end, "sleeper must die");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        unsafe { libc::kill(m1, libc::SIGKILL) },
+        0,
+        "middleman signaled"
+    );
+    let mut mst = 0;
+    let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
+    assert_eq!(mgot, m1, "middleman status drains to us");
+}
+
 /// R12-002: SIGKILL + bounded reap of an owned fork-pauser
 /// (discarded steal attempts and final adoptees). Panics
 /// loud on failure — our own child must die and reap.
@@ -6526,6 +6787,18 @@ fn emfile_probe_child(mode: &str) {
     // never run unguarded; an unguarded failure orphans an
     // infinite pauser with no owner at all).
     let mut _owned_guard: Option<SilentChildGuard> = None;
+    // R20-005: transmitted birth, when a publisher named
+    // one (stranger modes — the tail reuses it, never a
+    // fresh read that a gap replacement would
+    // self-authenticate).
+    let mut transmitted: Option<u64> = None;
+    // R20-005: steered-replacement state (replacement
+    // tick + middleman pid) and custody, armed at
+    // placement; the replacement sits ON `pid`.
+    let mut _m1_guard: Option<SilentChildGuard> = None;
+    let mut _m2_guard: Option<SilentChildGuard> = None;
+    let mut repl_tick: Option<u64> = None;
+    let mut m1pid: Option<i32> = None;
     let pid = match mode {
         "live" | "gone" | "stolen" | "observe-fail" => {
             let pid = fork_pauser();
@@ -6560,7 +6833,7 @@ fn emfile_probe_child(mode: &str) {
             }
             kid
         }
-        "stranger" => {
+        "stranger" | "stranger-replaced" => {
             let mut parent = std::process::Command::new("/bin/sh")
                 .arg("-c")
                 .arg(pair_publisher_script("879", "wait"))
@@ -6581,6 +6854,7 @@ fn emfile_probe_child(mode: &str) {
             // self-authenticate).
             let (stranger, stranger_tick) =
                 parse_published_pair(line.trim(), "stranger publication");
+            transmitted = Some(stranger_tick);
             _stranger_guard = Some(SilentChildGuard::new_expected(stranger, stranger_tick));
             assert!(
                 matches!(task_state(stranger), Some(state) if state != 'Z'),
@@ -6593,6 +6867,113 @@ fn emfile_probe_child(mode: &str) {
                 assert!(got < 0, "staged stranger must not be our child");
             }
             sh_parent = Some(parent);
+            if mode == "stranger-replaced" {
+                // R20-005: kill the original, then steer a
+                // different-birth NON-CHILD replacement
+                // (pausing middleman's grandchild sleep)
+                // onto its number — the gap the tail must
+                // refuse via the transmitted birth, never
+                // fresh-read. Twin of the audit arm.
+                // SAFETY: signal-only to the staged stranger.
+                assert_eq!(
+                    unsafe { libc::kill(stranger, libc::SIGKILL) },
+                    0,
+                    "original stranger signaled"
+                );
+                // The original's shell reaps it and exits;
+                // poll the number free.
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if task_starttime_checked(stranger) == Ok(None) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "original number must free");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                // Drain the original shell itself (its zombie
+                // — usually at stranger-1 by spawn order —
+                // would shift every placement by one). The
+                // tail below re-observes the drained handle.
+                if let Some(parent) = sh_parent.as_mut() {
+                    let end = Instant::now() + Duration::from_secs(10);
+                    loop {
+                        if parent.try_wait().expect("parent wait").is_some() {
+                            break;
+                        }
+                        assert!(Instant::now() < end, "sh parent must exit");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                // Settle past any jiffy boundary (12ms > the
+                // 10ms HZ=100 jiffy, the coarsest on x86_64):
+                // the replacement birth below is then
+                // provably a different tick — asserted, not
+                // assumed.
+                std::thread::sleep(Duration::from_millis(12));
+                let last_path = "/proc/sys/kernel/ns_last_pid";
+                let last_before = std::fs::read_to_string(last_path).unwrap_or_default();
+                // Steer middleman→stranger-1 so its
+                // grandchild lands ON stranger; retry on
+                // ambient-shift misses (park + retry —
+                // contention skips loud below).
+                let placed: Option<(i32, u64)> = (0..20).find_map(|_| {
+                    let _flock = ns_last_pid_flock();
+                    if !steer_next_pid_unlocked(stranger - 1) {
+                        return None;
+                    }
+                    // SAFETY: child syscalls-only; both
+                    // retired below (miss-park or armed
+                    // guards).
+                    let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("906") }?;
+                    if m2 != stranger {
+                        // Miss: park + retry (the
+                        // middleman is ours — kill +
+                        // reap; its grandchild zombie
+                        // reparents to init on the
+                        // middleman's death).
+                        unsafe {
+                            libc::kill(m2, libc::SIGKILL);
+                            libc::kill(m1, libc::SIGKILL);
+                        }
+                        let end = Instant::now() + Duration::from_secs(5);
+                        loop {
+                            let mut st = 0;
+                            // SAFETY: WNOHANG assist
+                            // only — our child.
+                            if unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) } == m1 {
+                                break;
+                            }
+                            if Instant::now() >= end {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        return None;
+                    }
+                    let rtick = task_starttime_checked(m2).ok().flatten()?;
+                    _m1_guard = Some(SilentChildGuard::new(m1));
+                    _m2_guard = Some(SilentChildGuard::new_expected(m2, rtick));
+                    m1pid = Some(m1);
+                    Some((m2, rtick))
+                });
+                locked_restore_hint(&last_before);
+                let (m2, rtick) = match placed {
+                    Some(hit) => hit,
+                    None => {
+                        eprintln!("R20005-SKIP placement contended (retake race)");
+                        eprintln!("R15005-CHILD-DONE mode={mode}");
+                        return;
+                    }
+                };
+                assert_ne!(
+                    rtick, stranger_tick,
+                    "replacement birth must differ (jiffy-settled, stage broken otherwise)"
+                );
+                assert_eq!(m2, stranger, "replacement must sit on the number");
+                repl_tick = Some(rtick);
+                eprintln!("R20005-ORIGINAL pid={stranger} tick={stranger_tick}");
+                eprintln!("R20005-REPLACEMENT pid={m2} tick={rtick}");
+            }
             stranger
         }
         _ => panic!("unknown probe mode {mode}"),
@@ -6672,9 +7053,17 @@ fn emfile_probe_child(mode: &str) {
     // R17-007 late-pin below is replaced by refusal, which
     // stands down per R18-003 — the dedicated recovery
     // probes keep pin() covered).
-    let tick = task_starttime_checked(pid)
-        .expect("fixture stat readable")
-        .expect("fixture present");
+    // R20-005: stranger modes reuse the TRANSMITTED birth
+    // captured above — a fresh read here would let a gap
+    // replacement self-authenticate through the main
+    // guards (the transmitted guard's stand-down does
+    // not prevent the new grant).
+    let tick = match transmitted {
+        Some(birth) => birth,
+        None => task_starttime_checked(pid)
+            .expect("fixture stat readable")
+            .expect("fixture present"),
+    };
     // R16-011: staging custody for every mode (covers
     // every later assert — the drop test moves only the
     // mode guard, so this one still backstops the tails;
@@ -6683,6 +7072,16 @@ fn emfile_probe_child(mode: &str) {
     // Pin BEFORE any mode-specific pre-step (gone retires
     // pre-exhaust; the pin must cite the live fixture).
     let guard = SilentChildGuard::new_expected(pid, tick);
+    if mode == "stranger-replaced" {
+        // The replacement sits on the number with a
+        // different birth: both main guards must REFUSE
+        // (transmitted mismatch) — pinned here means the
+        // tail fresh-read and the replacement is doomed.
+        assert!(
+            _staging_guard.tick.is_none() && guard.tick.is_none(),
+            "main guards must refuse the replaced birth"
+        );
+    }
     eprintln!("R15005-PINNED pid={pid} tick={tick}");
     // R16-004: retire+reap A (guard stale-armed), steer B onto
     // the number, zombify B unreaped (the sibling-owned zombie
@@ -6754,6 +7153,17 @@ fn emfile_probe_child(mode: &str) {
     if mode == "gone" {
         kill_wait_child(pid);
     }
+    // R20-005: the steered unwind must READ identity (RED
+    // pinned kills, GREEN refused spares) — restore fds
+    // first; the shared drop below then frees an empty
+    // vec. (The exhaustion legs above still ran: the
+    // tick-read-must-fail assert fired pre-restore.)
+    let held = if mode == "stranger-replaced" {
+        drop(held);
+        Vec::new()
+    } else {
+        held
+    };
     // The panicking observation: the guard drops DURING unwind
     // (a panicking Drop would abort here — the loud line must
     // use a fallible write, never eprintln!).
@@ -6816,7 +7226,71 @@ fn emfile_probe_child(mode: &str) {
             }
             eprintln!("R16004-STATUS retained pid={pid}");
         }
-        "stranger" => {
+        "stranger" | "stranger-replaced" => {
+            if mode == "stranger-replaced" {
+                // R20-005: the complete path ran with refused
+                // guards — the replacement (never signaled)
+                // must be live. Then loud cleanup: the
+                // sleeper (tick-gated — ours by placement)
+                // dies-or-zombifies under the middleman, the
+                // middleman is reaped (ours), the sleeper
+                // zombie reparents to init (polled gone), the
+                // original shell (long exited) drains. Twin
+                // of the audit tail.
+                let rtick = repl_tick.expect("replacement staged");
+                assert_task_settled_live(
+                    pid,
+                    rtick,
+                    2,
+                    "replacement must survive the refused path",
+                );
+                eprintln!("R20005-SURVIVED pid={pid} tick={rtick}");
+                assert!(
+                    kill_tick_gated(pid, rtick),
+                    "replacement signaled (tick-gated)"
+                );
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let dead = match task_state(pid) {
+                        None => true,
+                        Some(state) => state == 'Z',
+                    };
+                    if dead {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "replacement must die");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let m1 = m1pid.expect("middleman staged");
+                // SAFETY: signal-only to our middleman.
+                unsafe {
+                    libc::kill(m1, libc::SIGKILL);
+                }
+                let mut status = 0;
+                // SAFETY: blocking reap of our SIGKILLed
+                // child — bounded by its death (µs).
+                let got = unsafe { libc::waitpid(m1, &mut status, 0) };
+                assert_eq!(got, m1, "middleman status drains to us");
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if task_starttime_checked(pid) == Ok(None) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "init must reap the orphaned zombie");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let mut parent = sh_parent.expect("sh parent staged");
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if parent.try_wait().expect("parent wait").is_some() {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "sh parent must exit");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                eprintln!("R15005-CHILD-DONE mode={mode}");
+                return;
+            }
             // R16-012: settled-live, not tick-only (a zombie
             // keeps its tick).
             assert_task_settled_live(pid, tick, 2, "stranger must survive the unresolved drop");
@@ -6963,6 +7437,45 @@ fn emfile_stranger_drop_reports_unresolved_custody() {
     let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "stranger");
     let cited = emfile_probe_tagged(&stderr, "scopebase unresolved-custody ", "stranger");
     assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R20-005 (toolchain twin): a stranger replaced between
+/// the arm checks and the common-tail acquisition must NOT
+/// self-authenticate — the tail reuses the transmitted
+/// birth, never a fresh read, and the different-birth
+/// non-child replacement survives the complete caller
+/// path. Twin of the audit
+/// `audit_emfile_stranger_replacement_refuses_transmitted`.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn emfile_stranger_replacement_refuses_transmitted() {
+    if let Ok(mode) = std::env::var("SCOPEBASE_R15005_MODE") {
+        emfile_probe_child(&mode);
+        return;
+    }
+    let stderr = emfile_probe_spawn(
+        "stranger-replaced",
+        "emfile_stranger_replacement_refuses_transmitted",
+    );
+    if stderr.contains("R20005-SKIP") {
+        eprintln!("skip: replacement stage contended (see probe stderr)");
+        return;
+    }
+    let pinned = emfile_probe_tagged(&stderr, "R15005-PINNED ", "stranger-replaced");
+    let orig = emfile_probe_tagged(&stderr, "R20005-ORIGINAL ", "stranger-replaced");
+    let repl = emfile_probe_tagged(&stderr, "R20005-REPLACEMENT ", "stranger-replaced");
+    assert_eq!(
+        pinned, orig,
+        "transmit must reuse the transmitted birth (never fresh-read)\n{stderr}"
+    );
+    assert_ne!(
+        repl.1, orig.1,
+        "replacement must be a different birth (stage broken otherwise)\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R20005-SURVIVED"),
+        "replacement must survive the complete path\n{stderr}"
+    );
 }
 
 /// R15-004 staging helper: steer a pauser onto `want`,
