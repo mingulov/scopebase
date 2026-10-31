@@ -9946,6 +9946,20 @@ mod tests {
         );
     }
 
+    /// R18-010: audit twin of the toolchain `assert_child_gone`
+    /// (R13-008) — the ORIGINAL (pinned tick) must be gone; a
+    /// recycled number with a different tick is NOT our
+    /// fixture. Unresolvable stat is never absence — it fails
+    /// loud. Skip paths verify before reporting.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_audit_child_gone(pid: libc::pid_t, pinned: u64, what: &str) {
+        match proc_starttime(pid) {
+            Ok(None) => {}
+            Ok(Some(now)) => assert_ne!(now, pinned, "{what} {pid} survived retirement"),
+            Err(error) => panic!("{what} {pid} retirement unresolved: {error}"),
+        }
+    }
+
     /// R14-012: staging custody driver — every birth shape takes
     /// custody AT birth (guard before any fallible read), proved
     /// by two genuine injections per birth: (A) observation
@@ -12125,6 +12139,15 @@ mod tests {
         // already raw-reaped, so a wait would block on or steal
         // a recycled number's replacement.
         let _ = retire_tick_gated_audit_child(vpid, vtick);
+        // R18-010: ORIGINAL verdicts run BEFORE the optional
+        // retake arms (a contended placement must SKIP only its
+        // arm — never suppress these). Foreign authority first:
+        // the forged victim survives, the record refuses loud.
+        assert!(survived, "forged victim must survive the read");
+        assert!(
+            refused.is_err(),
+            "foreign-owned record must be refused loud"
+        );
         // R17-002 arm 1 (live): steer a live replacement onto
         // the freed number, then run the tail — it must finish
         // bounded with the replacement alive (RED: the handle
@@ -12132,6 +12155,11 @@ mod tests {
         let mut live = match steer_sleep_onto(vpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge
+                // (a missing reap holds OUR tick on the number
+                // — fail loud; a stranger's number is genuine
+                // contention — skip).
+                assert_audit_child_gone(vpid, vtick, "victim");
                 eprintln!("skip: retake contended");
                 return;
             }
@@ -12166,6 +12194,9 @@ mod tests {
         let mut zombie = match steer_sleep_onto(vpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge
+                // (same mutant discriminator as arm 1).
+                assert_audit_child_gone(vpid, vtick, "victim");
                 eprintln!("skip: retake contended");
                 return;
             }
@@ -12196,11 +12227,8 @@ mod tests {
             "zombie replacement status must stay with its owner"
         );
         zombie_guard.disarm();
-        assert!(survived, "forged victim must survive the read");
-        assert!(
-            refused.is_err(),
-            "foreign-owned record must be refused loud"
-        );
+        // R18-010: original verdicts moved before the arms
+        // (unconditional — see above).
     }
 
     /// R14-003: when publication fails, the probe must retire
@@ -12711,6 +12739,23 @@ mod tests {
         // would block on or steal a recycled number's
         // replacement.
         let _ = retire_tick_gated_audit_child(wpid, wtick);
+        // R18-010: ORIGINAL verdicts run BEFORE the optional
+        // retake arms (a contended placement must SKIP only its
+        // arm — never suppress these). Cleanup rides along:
+        // the evidence above is already captured, and a
+        // verdict failure must not strand the root-owned plant.
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(failed.is_err(), "foreign tmp plant must refuse loud");
+        assert!(
+            after.is_some_and(|meta| meta.ino() == before.ino()),
+            "refusal must not delete the foreign plant"
+        );
+        assert!(
+            content.contains("r15001-foreign"),
+            "foreign plant content must survive refusal, got: {content:?}"
+        );
+        assert!(retired, "writer must retire before the loud refusal");
         // R17-002 arm 1 (live): steer a live replacement onto
         // the freed number, then run the tail — it must finish
         // bounded with the replacement alive (RED: the handle
@@ -12718,6 +12763,11 @@ mod tests {
         let mut live = match steer_sleep_onto(wpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge
+                // (a missing reap holds OUR tick on the number
+                // — fail loud; a stranger's number is genuine
+                // contention — skip).
+                assert_audit_child_gone(wpid, wtick, "writer");
                 eprintln!("skip: retake contended");
                 return;
             }
@@ -12752,6 +12802,9 @@ mod tests {
         let mut zombie = match steer_sleep_onto(wpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge
+                // (same mutant discriminator as arm 1).
+                assert_audit_child_gone(wpid, wtick, "writer");
                 eprintln!("skip: retake contended");
                 return;
             }
@@ -12782,18 +12835,8 @@ mod tests {
             "zombie replacement status must stay with its owner"
         );
         zombie_guard.disarm();
-        let _ = std::fs::remove_file(&tmp);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(failed.is_err(), "foreign tmp plant must refuse loud");
-        assert!(
-            after.is_some_and(|meta| meta.ino() == before.ino()),
-            "refusal must not delete the foreign plant"
-        );
-        assert!(
-            content.contains("r15001-foreign"),
-            "foreign plant content must survive refusal, got: {content:?}"
-        );
-        assert!(retired, "writer must retire before the loud refusal");
+        // R18-010: cleanup + original verdicts moved before the
+        // arms (unconditional — see above).
     }
 
     /// IR-003: an unreadable firstborn stat must retire the
@@ -12993,6 +13036,11 @@ mod tests {
             .spawn()
             .expect("writer spawns");
         let wpid = writer.id() as libc::pid_t;
+        // R18-010: pin the birth tick while the writer is
+        // known-ours and alive (skip-branch re-proof below).
+        let wtick_live = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
         // SAFETY: signal-only to our own staged writer.
         unsafe {
             libc::kill(wpid, libc::SIGKILL);
@@ -13011,6 +13059,13 @@ mod tests {
         let mut live = match steer_sleep_onto(wpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge —
+                // a pump-no-reap mutant leaves the writer zombie
+                // holding its number and must fail loud here
+                // (the verdicts below genuinely need the
+                // replacement, so they cannot move before the
+                // arms — the re-proof is the guard).
+                assert_audit_child_gone(wpid, wtick_live, "writer");
                 eprintln!("skip: retake contended");
                 return;
             }
@@ -13037,6 +13092,11 @@ mod tests {
             .spawn()
             .expect("writer spawns");
         let wpid = writer.id() as libc::pid_t;
+        // R18-010: pin the birth tick while the writer is
+        // known-ours and alive (skip-branch re-proof below).
+        let wtick_zombie = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
         // SAFETY: signal-only to our own staged writer.
         unsafe {
             libc::kill(wpid, libc::SIGKILL);
@@ -13055,6 +13115,11 @@ mod tests {
         let mut zombie = match steer_sleep_onto(wpid, false) {
             Some(kid) => kid,
             None => {
+                // R18-010: SKIP branch re-proves the discharge
+                // (same pump-no-reap discriminator as the live
+                // arm — verdicts need the replacement, so the
+                // re-proof is the guard).
+                assert_audit_child_gone(wpid, wtick_zombie, "writer");
                 eprintln!("skip: retake contended");
                 return;
             }

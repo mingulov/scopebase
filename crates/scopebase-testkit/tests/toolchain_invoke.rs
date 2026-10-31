@@ -4953,6 +4953,20 @@ fn probe_staging_failures_retire_before_report() {
     }));
     let sstate = task_starttime_checked(stranger);
     let hstate = task_starttime_checked(sh);
+    // R18-010: ORIGINAL verdicts run BEFORE the optional
+    // retake arms (a contended placement must SKIP only its
+    // arm — never suppress these). Stranger pair discharged
+    // first: a missing-reap mutant in the guards leaves sh
+    // holding its number and fails HERE — instead of
+    // blocking placement below into a silent SKIP.
+    assert_eq!(
+        sstate,
+        Ok(None),
+        "stranger failure must not leak the grandchild"
+    );
+    assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
+    assert_pid_free(sh, "stranger-sh");
+    assert!(failed.is_err(), "stranger failure must report");
     // R17-002 arm 1 (live): steer a live replacement onto
     // sh's freed number, then run the hygiene — the sh kill
     // must be tick-gated (stand down) with no handle wait
@@ -4960,6 +4974,10 @@ fn probe_staging_failures_retire_before_report() {
     let mut live = match steer_sleep_onto(sh, false) {
         Some(kid) => kid,
         None => {
+            // R18-010: SKIP branch re-proves the discharge
+            // (the original sh at its pinned tick must be
+            // gone — fail loud, never suppress).
+            assert_child_gone(sh, shtick, "stranger-sh");
             eprintln!("skip: retake contended");
             return;
         }
@@ -5009,6 +5027,9 @@ fn probe_staging_failures_retire_before_report() {
     let mut zombie = match steer_sleep_onto(sh, false) {
         Some(kid) => kid,
         None => {
+            // R18-010: SKIP branch re-proves the discharge
+            // (same mutant discriminator as arm 1).
+            assert_child_gone(sh, shtick, "stranger-sh");
             eprintln!("skip: retake contended");
             return;
         }
@@ -5041,14 +5062,8 @@ fn probe_staging_failures_retire_before_report() {
     zombie_guard.disarm();
     outer_sh.disarm();
     outer_stranger.disarm();
-    assert_eq!(
-        sstate,
-        Ok(None),
-        "stranger failure must not leak the grandchild"
-    );
-    assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
-    assert_pid_free(sh, "stranger-sh");
-    assert!(failed.is_err(), "stranger failure must report");
+    // R18-010: stranger-arm verdicts moved before the arms
+    // (unconditional — see above).
 }
 
 /// R14-001: a Drop guard must never signal a recycled number.
@@ -8942,6 +8957,26 @@ fn caveat_cleanup_refuses_expired_lifetime() {
         }
         command.spawn().expect("grouped sleep spawns")
     }
+    // R18-010: positive arm FIRST (a fresh group retires at
+    // once — placement-independent, so a contended reform
+    // below must SKIP only the negative arm, never suppress
+    // this).
+    let mut fresh = spawn_grouped();
+    let fgroup = fresh.id() as i32;
+    let mut fresh_guard = SilentChildGuard::new(fgroup);
+    assert_eq!(
+        retire_caveat_group_within_lifetime(
+            fgroup,
+            Instant::now(),
+            Duration::from_secs(31),
+            || {
+                let _ = fresh.wait();
+            }
+        ),
+        CaveatGroupOutcome::Retired,
+        "fresh group must retire within its lifetime"
+    );
+    fresh_guard.disarm();
     // Negative arm: original dead past a SHORT lifetime, number
     // reformed — must refuse.
     let spawned = Instant::now();
@@ -9009,23 +9044,8 @@ fn caveat_cleanup_refuses_expired_lifetime() {
         std::thread::sleep(Duration::from_millis(20));
     }
     reform_guard.disarm();
-    // Positive arm: a fresh group retires at once.
-    let mut fresh = spawn_grouped();
-    let fgroup = fresh.id() as i32;
-    let mut fresh_guard = SilentChildGuard::new(fgroup);
-    assert_eq!(
-        retire_caveat_group_within_lifetime(
-            fgroup,
-            Instant::now(),
-            Duration::from_secs(31),
-            || {
-                let _ = fresh.wait();
-            }
-        ),
-        CaveatGroupOutcome::Retired,
-        "fresh group must retire within its lifetime"
-    );
-    fresh_guard.disarm();
+    // R18-010: positive arm moved before the reform attempt
+    // (unconditional — see above).
 }
 
 /// R16-007: a pinned guard dropped with working reads must
@@ -9097,6 +9117,34 @@ fn pinned_group_drop_discharges_leader() {
         panic!("r16007 injected staging failure");
     }));
     assert!(fired.is_err(), "injection must unwind");
+    // R18-010: ORIGINAL verdicts run BEFORE the optional
+    // retake arms (a contended placement must SKIP only its
+    // arm — never suppress these). Leader discharged first:
+    // a kill-without-reap drop leaves a zombie leader that
+    // holds its number + tick and fails HERE — instead of
+    // blocking placement below into a silent SKIP.
+    assert_child_gone(group, ltick, "leader");
+    // ...and the group ESRCH-dead (members settle through
+    // init asynchronously — bounded await, not a sample).
+    {
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(group, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                if errno == libc::ESRCH {
+                    break;
+                }
+            }
+            assert!(
+                Instant::now() < end,
+                "group must be ESRCH-dead after the pinned drop"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     // R17-002 arm 1 (zombie): steer a zombie replacement onto
     // the discharged number, then run the oracle — it must
     // report discharged WITHOUT consuming the replacement's
@@ -9104,6 +9152,12 @@ fn pinned_group_drop_discharges_leader() {
     let mut zombie = match steer_sleep_onto(group, false) {
         Some(kid) => kid,
         None => {
+            // R18-010: the SKIP branch re-proves the
+            // precondition (defense in depth — a missing
+            // reap blocks placement, so a skip with the
+            // leader still naming the number fails loud
+            // instead of suppressing the verdict).
+            assert_child_gone(group, ltick, "leader-before-skip");
             eprintln!("skip: retake contended");
             return;
         }
@@ -9144,6 +9198,10 @@ fn pinned_group_drop_discharges_leader() {
     let mut live = match steer_sleep_onto(group, false) {
         Some(kid) => kid,
         None => {
+            // R18-010: SKIP branch re-proves the precondition
+            // (a missing reap blocks placement — fail loud,
+            // never suppress).
+            assert_child_gone(group, ltick, "leader-before-skip");
             eprintln!("skip: retake contended");
             return;
         }
@@ -9174,6 +9232,98 @@ fn pinned_group_drop_discharges_leader() {
     let errno = unsafe { libc::__errno_location().read() };
     assert_eq!(probed, -1, "group must be gone after the pinned drop");
     assert_eq!(errno, libc::ESRCH, "group probe must fail ESRCH-only");
+}
+
+/// R18-010: the omitted-leader-reap MUTANT scenario, pinned —
+/// a kill-without-reap drop leaves a zombie leader holding
+/// its number: the discharge verdict must FAIL (never SKIP),
+/// and placement onto the held number must stay blocked (the
+/// old order — steer first — skipped silently here). The
+/// verdict failure is captured (not fatal): this test
+/// requires the failure, then cleans up. Duration 87 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn omitted_leader_reap_fails_not_skips() {
+    use std::os::unix::process::CommandExt as _;
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    locked_restore_hint(&last_before);
+    // Parked stage: self-grouped sh (leader LIVE) + sleepers.
+    let mut stage = std::process::Command::new("/bin/sh");
+    stage
+        .arg("-c")
+        .arg("sleep 87 & sleep 87")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stage.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut leader = stage.spawn().expect("spawn parked stage");
+    let group = leader.id() as libc::pid_t;
+    let ltick = task_starttime_checked(group)
+        .expect("leader stat readable")
+        .expect("leader visible");
+    // The mutant: killpg ONLY (no reap — the drop under test
+    // reaps; this omits it).
+    // SAFETY: signal-only to our own staged group.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    // Non-vacuity: the leader is a zombie holding its number
+    // (killed, deliberately unreaped).
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_retired_checked(group) == Ok(true) {
+            break;
+        }
+        assert!(Instant::now() < end, "leader never zombied (stage broken)");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // NEW ORDER: the discharge verdict runs FIRST and must
+    // FAIL (captured — the failure is the requirement).
+    let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert_child_gone(group, ltick, "leader");
+    }));
+    assert!(
+        verdict.is_err(),
+        "omitted reap must fail the verdict (never skip)"
+    );
+    // ...and placement stays blocked (the old order skipped
+    // silently at this steer).
+    assert!(
+        steer_sleep_onto(group, false).is_none(),
+        "zombie-held number must block placement (old-order SKIP point)"
+    );
+    // Cleanup: reap the leader, retire the group dregs.
+    let _ = leader.wait();
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(Instant::now() < end, "group dregs must settle");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// R16-007: probe body (fresh image, SCOPEBASE_R16007_EMFILE) —
