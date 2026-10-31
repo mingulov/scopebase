@@ -1361,6 +1361,100 @@ fn task_retired_checked(pid: i32) -> Result<bool, String> {
     }
 }
 
+/// R17-010 (toolchain twin of `await_proc_gone_reaping`):
+/// strict retirement evidence for an expected (pid, starttime)
+/// identity. Proven absence (`Ok(None)`) and holder reuse (a
+/// different tick — the awaited task is gone, else the number
+/// could not host another) return true WITHOUT waiting; a live
+/// holder is polled (with a WNOHANG wait assist that reaps an
+/// adopted zombie and ECHILDs otherwise — always ignored);
+/// unreadable stats keep polling (never claimed gone, never
+/// waited on); past the bound the await returns false so the
+/// caller fails loud. Production callers use this; the
+/// unreadable-stat regressions use
+/// [`await_task_gone_reaping_with`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn await_task_gone_reaping(pid: i32, expected: u64, timeout: std::time::Duration) -> bool {
+    await_task_gone_reaping_with(pid, expected, timeout, task_starttime_checked)
+}
+
+/// R17-010: seam for the toolchain unreadable-stat
+/// regressions: `gate`, when it reports Err, must skip the
+/// wait (unknown is never waited on) and must never certify
+/// retirement. Production callers use
+/// [`await_task_gone_reaping`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn await_task_gone_reaping_with(
+    pid: i32,
+    expected: u64,
+    timeout: std::time::Duration,
+    gate: impl Fn(i32) -> Result<Option<u64>, String>,
+) -> bool {
+    let end = std::time::Instant::now() + timeout;
+    loop {
+        match gate(pid) {
+            Ok(None) => return true,
+            Ok(Some(now)) if now != expected => return true,
+            Ok(Some(_)) => {
+                // SAFETY: waitpid on the verified holder;
+                // reaps an adopted zombie, ECHILD
+                // otherwise — always ignored.
+                let mut status = 0;
+                unsafe {
+                    libc::waitpid(pid, &mut status, libc::WNOHANG);
+                }
+            }
+            Err(_) => {}
+        }
+        if std::time::Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// R17-010 (toolchain twin): an unreadable verification sample
+/// while the fixture is alive must never certify retirement —
+/// even after reads restore. Stubbed gate (Err twice, then the
+/// live tick forever): the await must time out false, not latch
+/// the earlier unknown as gone. Deterministic: the stub drives
+/// the gate; the pid exceeds pid_max so the live arm's waitpid
+/// can only ECHILD.
+#[test]
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn awaited_unreadable_while_live_never_verifies() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    let calls = AtomicUsize::new(0);
+    let gate = |_: i32| {
+        if calls.fetch_add(1, Ordering::SeqCst) < 2 {
+            Err("injected unreadable stat".to_string())
+        } else {
+            Ok(Some(9999))
+        }
+    };
+    assert!(
+        !await_task_gone_reaping_with(1073741824, 9999, Duration::from_millis(200), gate),
+        "unreadable samples over a live fixture must not verify"
+    );
+}
+
+/// R17-010 (toolchain twin): persistently unreadable stats fail
+/// loud past the bound (false → the caller's assert fires) —
+/// never certify as gone. Stubbed gate (Err forever), short
+/// timeout, pid past pid_max as above.
+#[test]
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn awaited_persistent_unreadable_never_verifies() {
+    use std::time::Duration;
+    let gate =
+        |_: i32| -> Result<Option<u64>, String> { Err("injected unreadable stat".to_string()) };
+    assert!(
+        !await_task_gone_reaping_with(1073741824, 9999, Duration::from_millis(200), gate),
+        "persistent unreadable stats must not verify"
+    );
+}
+
 /// S115-round8: survivor cleanup without a window hook.
 /// Production callers use this; the exit-during-window regression
 /// uses [`kill_survivors_with_hook`].
@@ -3967,17 +4061,10 @@ fn child_guard_drop_retires_verified_non_child() {
       // R17-009: DISCHARGE required (not merely death) — the
       // live shell reaps promptly; a lingering zombie past the
       // window is unresolved (the old Z-or-gone verdict masked
-      // undischarged kills).
-    let end = Instant::now() + Duration::from_secs(5);
-    let retired = loop {
-        if task_starttime_checked(grand) == Ok(None) {
-            break true;
-        }
-        if Instant::now() >= end {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+      // undischarged kills). R17-010: strict retirement
+      // evidence — unreadable samples keep polling and fail
+      // loud past the bound (never certified as gone).
+    let retired = await_task_gone_reaping(grand, tick, Duration::from_secs(5));
     // Cleanup (runs on RED too): tick-gated kill (R15-003 —
     // a blind kill would risk a recycled replacement), poll
     // gone, then reap the sh parent (its `wait` ends with
@@ -4057,16 +4144,9 @@ fn adopted_kill_discharges_through_init() {
         }
     } // Drop fires here.
       // Verdict: DISCHARGED (gone) — init reaps promptly.
-    let end = Instant::now() + Duration::from_secs(5);
-    let discharged = loop {
-        if task_starttime_checked(orphan) == Ok(None) {
-            break true;
-        }
-        if Instant::now() >= end {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+      // R17-010: strict evidence — unreadable samples keep
+      // polling and fail loud past the bound.
+    let discharged = await_task_gone_reaping(orphan, otick, Duration::from_secs(5));
     // Cleanup (mutant-clean): tick-gated kill, poll gone.
     let _ = kill_tick_gated(orphan, otick);
     let end = Instant::now() + Duration::from_secs(10);
@@ -4150,17 +4230,10 @@ fn nonchild_pin_recovery_probe() {
     })); // Drop fires here (scope end or unwind).
          // R17-009: DISCHARGE required (not merely death) — the
          // live shell reaps promptly; a lingering zombie past the
-         // window is unresolved.
-    let end = Instant::now() + Duration::from_secs(5);
-    let retired = loop {
-        if task_starttime_checked(grand) == Ok(None) {
-            break true;
-        }
-        if Instant::now() >= end {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+         // window is unresolved. R17-010: strict evidence —
+         // unreadable samples keep polling and fail loud past
+         // the bound.
+    let retired = await_task_gone_reaping(grand, tick, Duration::from_secs(5));
     // Cleanup (runs on RED too): tick-gated kill, poll gone,
     // reap the sh parent.
     let _ = kill_tick_gated(grand, tick);

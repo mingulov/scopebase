@@ -9924,20 +9924,14 @@ mod tests {
                 fired.pin(tick);
             }
         } // Drop fires here.
-          // R17-009: DISCHARGE required (not merely death) —
-          // the live shell reaps promptly; a lingering zombie
-          // past the window is unresolved (the old Z-or-gone
-          // verdict masked undischarged kills).
-        let end = Instant::now() + Duration::from_secs(5);
-        let retired = loop {
-            if proc_starttime(grand) == Ok(None) {
-                break true;
-            }
-            if Instant::now() >= end {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+          // R17-009: DISCHARGE required (not merely death) — the
+          // live shell reaps promptly; a lingering zombie past
+          // the window is unresolved (the old Z-or-gone verdict
+          // masked undischarged kills). R17-010: strict
+          // retirement evidence — proven absence or holder reuse
+          // verifies; unreadable samples keep polling and fail
+          // loud past the bound (never certified as gone).
+        let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (R15-003 —
         // a blind kill would risk a recycled replacement), poll
         // gone, then reap the sh parent (its `wait` ends with
@@ -10019,16 +10013,9 @@ mod tests {
             }
         } // Drop fires here.
           // Verdict: DISCHARGED (gone) — init reaps promptly.
-        let end = Instant::now() + Duration::from_secs(5);
-        let discharged = loop {
-            if proc_starttime(orphan) == Ok(None) {
-                break true;
-            }
-            if Instant::now() >= end {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+          // R17-010: strict evidence — unreadable samples keep
+          // polling and fail loud past the bound.
+        let discharged = await_proc_gone_reaping(orphan, otick, Duration::from_secs(5));
         // Cleanup (mutant-clean): tick-gated kill, poll gone.
         let _ = kill_tick_gated(orphan, otick);
         let end = Instant::now() + Duration::from_secs(10);
@@ -10111,19 +10098,12 @@ mod tests {
                 fired.pin(tick);
             }
         })); // Drop fires here (scope end or unwind).
-             // R17-009: DISCHARGE required (not merely death) —
-             // the live shell reaps promptly; a lingering zombie
-             // past the window is unresolved.
-        let end = Instant::now() + Duration::from_secs(5);
-        let retired = loop {
-            if proc_starttime(grand) == Ok(None) {
-                break true;
-            }
-            if Instant::now() >= end {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+             // R17-009: DISCHARGE required (not merely death) — the
+             // live shell reaps promptly; a lingering zombie past
+             // the window is unresolved. R17-010: strict evidence —
+             // unreadable samples keep polling and fail loud past
+             // the bound.
+        let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
         // gone, reap the sh parent.
         let _ = kill_tick_gated(grand, tick);
@@ -10258,16 +10238,9 @@ mod tests {
         assert!(fired.is_err(), "injection must unwind");
         // Observe before cleanup: the frozen grandchild must
         // be gone (signaled + reaped by the waiting sh).
-        let end = Instant::now() + Duration::from_secs(5);
-        let retired = loop {
-            if proc_starttime(grand) == Ok(None) {
-                break true;
-            }
-            if Instant::now() >= end {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        // R17-010: strict evidence — unreadable samples keep
+        // polling and fail loud past the bound.
+        let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (works
         // on stopped tasks), poll gone, reap sh.
         let _ = kill_tick_gated(grand, tick);
@@ -13962,18 +13935,33 @@ mod tests {
         // middleman legitimately outlives the timeout branch.
         let mid_end = Instant::now() + Duration::from_secs(15);
         loop {
-            if proc_starttime(mid) != Ok(Some(mid_tick)) {
-                break;
+            // R17-010: strict — only proven absence or holder
+            // reuse ends the poll; a live holder or an
+            // unreadable sample keeps polling (the bound below
+            // retires and fails loud either way — the old `!=`
+            // break let an unreadable sample skip the verdict).
+            match proc_starttime(mid) {
+                Ok(None) => break,
+                Ok(Some(now)) if now != mid_tick => break,
+                Ok(Some(_)) | Err(_) => {}
             }
             if Instant::now() >= mid_end {
-                // R15-008: audited, unchanged — the assert below
-                // names {mid} and fires only on proven survival,
-                // so no stranded fixture goes nameless here.
+                // R15-008: audited, unchanged — the match below
+                // names {mid} and fires on proven survival OR
+                // unreadable state, so no stranded fixture goes
+                // nameless here. R17-010: the old `!=` certified
+                // an unreadable sample as gone.
                 retire_known_stray_best_effort(mid, mid_tick);
-                assert!(
-                    proc_starttime(mid) != Ok(Some(mid_tick)),
-                    "orphaned middleman {mid} lingered past the hold test ({tag})"
-                );
+                match proc_starttime(mid) {
+                    Ok(None) => {}
+                    Ok(Some(now)) if now != mid_tick => {}
+                    Ok(Some(_)) => {
+                        panic!("orphaned middleman {mid} lingered past the hold test ({tag})")
+                    }
+                    Err(error) => panic!(
+                        "orphaned middleman {mid} unreadable past the hold test ({tag}): {error}"
+                    ),
+                }
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -14333,17 +14321,11 @@ mod tests {
         // Observe before cleanup: the writer must be gone
         // (bounded — the cascade either retires it fast or
         // never), then loud cleanup of whatever remains
-        // either way, then assert.
-        let end = Instant::now() + Duration::from_secs(30);
-        let writer_gone = loop {
-            if proc_starttime(writer) != Ok(Some(writer_tick)) {
-                break true;
-            }
-            if Instant::now() >= end {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
+        // either way, then assert. R17-010: strict evidence —
+        // the old `!=` certified unreadable samples as gone;
+        // unreadable now keeps polling and fails loud past
+        // the bound.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(30));
         // RED-path hygiene: retire the stranded pair by
         // tick-pinned identity (no blind signals).
         if proc_starttime(writer) == Ok(Some(writer_tick)) {
@@ -14511,10 +14493,15 @@ mod tests {
             Ok(_) => panic!("staging must diverge on the published record (it returned)"),
         };
         // Observe before cleanup: probe reaped? tree gone?
-        // pidfile removed by the body?
+        // pidfile removed by the body? R17-010: strict
+        // evidence — the old single-sample `!=` certified an
+        // unreadable sample as gone; the bounded await below
+        // keeps polling on unreadable and fails loud past the
+        // bound (2s: the body retires before it reports, so a
+        // just-retired pair settles inside the window).
         let probe_reaped = !matches!(child.try_wait(), Ok(None));
-        let mid_gone = proc_starttime(mid) != Ok(Some(mid_tick));
-        let writer_gone = proc_starttime(writer) != Ok(Some(writer_tick));
+        let mid_gone = await_proc_gone_reaping(mid, mid_tick, Duration::from_secs(2));
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
         let pidfile_gone = !pidfile.exists();
         // Hygiene (RED-clean): tick-gated kills, poll the pair
         // gone, reap the probe, remove RED litter, disarm.
@@ -14673,9 +14660,13 @@ mod tests {
         // Observe before cleanup: probe reaped? frozen mid
         // retired? pidfile removed by the body? (The writer was
         // never born — nothing to observe; the birth-timeout
-        // message below is the non-vacuity proof.)
+        // message below is the non-vacuity proof.) R17-010:
+        // strict evidence — the old single-sample `!=`
+        // certified an unreadable sample as gone; the bounded
+        // await keeps polling on unreadable and fails loud
+        // past the bound.
         let probe_reaped = !matches!(child.try_wait(), Ok(None));
-        let mid_gone = proc_starttime(mid) != Ok(Some(mid_tick));
+        let mid_gone = await_proc_gone_reaping(mid, mid_tick, Duration::from_secs(2));
         let pidfile_gone = !pidfile.exists();
         // Hygiene (RED-clean): the frozen middleman is
         // present-proven (stopped tasks cannot exit), so the
@@ -15424,6 +15415,49 @@ mod tests {
         // Survival proved and reaped by us — disarm so the
         // drop stays silent.
         guard.disarm();
+    }
+
+    /// R17-010: an unreadable verification sample while the
+    /// fixture is alive must never certify retirement — even
+    /// after reads restore. Stubbed gate (Err twice, then the
+    /// live tick forever): the await must time out false, not
+    /// latch the earlier unknown as gone. Deterministic: the
+    /// stub drives the gate; the pid exceeds pid_max so the
+    /// live arm's waitpid can only ECHILD.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_unreadable_while_live_never_verifies() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let calls = AtomicUsize::new(0);
+        let gate = |_: libc::pid_t| {
+            if calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                Err("injected unreadable stat".to_string())
+            } else {
+                Ok(Some(9999))
+            }
+        };
+        assert!(
+            !await_proc_gone_reaping_with(1073741824, 9999, Duration::from_millis(200), gate),
+            "unreadable samples over a live fixture must not verify"
+        );
+    }
+
+    /// R17-010: persistently unreadable stats fail loud past
+    /// the bound (false → the caller's assert fires) — never
+    /// certify as gone. Stubbed gate (Err forever), short
+    /// timeout, pid past pid_max as above.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn awaited_persistent_unreadable_never_verifies() {
+        use std::time::Duration;
+        let gate = |_: libc::pid_t| -> Result<Option<u64>, String> {
+            Err("injected unreadable stat".to_string())
+        };
+        assert!(
+            !await_proc_gone_reaping_with(1073741824, 9999, Duration::from_millis(200), gate),
+            "persistent unreadable stats must not verify"
+        );
     }
 
     /// R11-005: an absent number returns true immediately
