@@ -8699,7 +8699,9 @@ mod tests {
     /// probe-first drop when the birth read failed (IR-002: a
     /// gone number or a foreign recycle takes no signal),
     /// tick-gated drop otherwise (R14-001: a recycled number
-    /// is spared), disarm after explicit retires.
+    /// is spared; R16-010: a VERIFIED task takes SIGKILL even
+    /// when it is not our child — a staged grandchild the pin
+    /// proves ours), disarm after explicit retires.
     #[cfg(target_arch = "x86_64")]
     struct FixtureGuard {
         pid: libc::pid_t,
@@ -8779,7 +8781,10 @@ mod tests {
             match self.tick {
                 None => retire_audit_child_silent(self.pid),
                 Some(tick) => match proc_starttime(self.pid) {
-                    Ok(Some(now)) if now == tick => retire_audit_child_silent(self.pid),
+                    // R16-010: verified-ours takes the pinned
+                    // twin (signals non-children too); the
+                    // unpinned arm above stays child-only.
+                    Ok(Some(now)) if now == tick => retire_audit_task_silent(self.pid),
                     // R15-005: proven-gone/recycled stays silent
                     // (as before); only a FAILED read takes the
                     // fd-less fallback probe.
@@ -8805,6 +8810,9 @@ mod tests {
         let mut status = 0;
         // SAFETY: WNOHANG probe of a possibly-owned child; never blocks.
         let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        // R16-010: this probe-first shape is PINNED by IR-002
+        // (a live non-child takes no signal here) — the pinned
+        // twin below is the only evolution allowed.
         if got != 0 {
             // Our zombie discharged (got == pid), or not our
             // child at all (got < 0: gone, or a foreign
@@ -8819,6 +8827,48 @@ mod tests {
         loop {
             let mut status = 0;
             // SAFETY: waitpid on an owned child; WNOHANG never blocks.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid || got < 0 {
+                return;
+            }
+            if Instant::now() >= end {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R16-010: SIGKILL for a TICK-VERIFIED live task — the
+    /// pinned twin of `retire_audit_child_silent` (which stays
+    /// probe-first and spares non-children for the UNPINNED
+    /// path per IR-002). The pin proves OUR staged task (a
+    /// recycled number mismatches before this is reached), so a
+    /// non-child (a staged grandchild — waitpid ECHILDs, never
+    /// ours to reap) is owed SIGKILL exactly like an owned
+    /// live child; its parent (the live probe) or init reaps.
+    /// Our zombie discharges (waitpid hit, no kill needed); the
+    /// bounded reap loop only ever reaps an owned child
+    /// (ECHILD returns at once). Never panics (drop context).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_audit_task_silent(pid: libc::pid_t) {
+        use std::time::{Duration, Instant};
+        let mut status = 0;
+        // SAFETY: WNOHANG probe of a possibly-owned child; never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid {
+            // Our zombie discharged — done, no kill needed.
+            return;
+        }
+        // got == 0 (our live child) or got < 0 (not our child —
+        // a tick-verified staged task): SIGKILL either way.
+        // SAFETY: signal-only to a tick-verified staged task; errors ignored.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid on a possibly-owned child; WNOHANG never blocks.
             let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
             if got == pid || got < 0 {
                 return;
@@ -9216,6 +9266,103 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(survived, "silent retire must not murder a live non-child");
+    }
+
+    /// R16-010: the PINNED path is the twin of IR-002's unpinned
+    /// one — a tick-verified live NON-child (a staged
+    /// grandchild, never ours to waitpid) dropped through
+    /// `FixtureGuard` must DIE: the pin proves OUR task (a
+    /// recycled number mismatches and spares, as before) and
+    /// SIGKILL is owed (its parent — the live `sh` — or init
+    /// reaps; nothing we do can reap it). Pre-fix the drop
+    /// funnels into the child-only retire and ECHILDs without
+    /// signaling (RED: the grandchild stays live); post-fix the
+    /// verified arm signals (GREEN). The verdict reads /proc
+    /// STATE settled (IR-002 discipline: a tick cannot tell
+    /// live from zombie, SIGKILL delivery is async).
+    /// Observe-before-cleanup: RED runs retire the survivor so
+    /// the failure stays clean. Duration 58 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fixture_guard_drop_retires_verified_non_child() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 58 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pid readable");
+        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let tick = proc_starttime(grand)
+            .expect("grandchild stat readable")
+            .expect("grandchild present");
+        // Sanity: live, and not our child (the ECHILD the old
+        // path hid behind).
+        assert!(
+            matches!(proc_state(grand), Some(state) if state != 'Z'),
+            "staged grandchild must be live"
+        );
+        {
+            let mut status = 0;
+            // SAFETY: WNOHANG probe only.
+            let got = unsafe { libc::waitpid(grand, &mut status, libc::WNOHANG) };
+            assert!(got < 0, "staged grandchild must not be our child");
+        }
+        {
+            let pinned = FixtureGuard::new(grand);
+            assert_eq!(
+                pinned.tick,
+                Some(tick),
+                "constructor must pin the live tick"
+            );
+        } // Drop fires here.
+          // Observe before cleanup (IR-002 discipline): settled
+          // dead, or still live past the window.
+        let end = Instant::now() + Duration::from_secs(5);
+        let retired = loop {
+            match proc_state(grand) {
+                Some(state) if state != 'Z' => {
+                    if Instant::now() >= end {
+                        break false;
+                    }
+                }
+                _ => break true,
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        // Cleanup (runs on RED too): tick-gated kill (R15-003 —
+        // a blind kill would risk a recycled replacement), poll
+        // gone, then reap the sh parent (its `wait` ends with
+        // the grandchild).
+        let _ = kill_tick_gated(grand, tick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(grand) != Ok(Some(tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "staged grandchild must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if parent.try_wait().expect("parent wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "sh parent must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            retired,
+            "pinned guard drop must retire the verified grandchild"
+        );
     }
 
     /// R12-006: collection must expire under a saturated stdout.
@@ -12058,6 +12205,129 @@ mod tests {
         );
     }
 
+    /// R16-010: stopped-probe staging shared by the R15-002
+    /// test and the race/frozen regression arms — sight the
+    /// middleman, SIGSTOP the probe at once, await the writer
+    /// birth, pin the middleman tick, require an empty record.
+    /// Every staging failure diverges through
+    /// `timeout_retire_hung_probe` (retire-before-report: the
+    /// body retires the probe, snapshots + retires descendants,
+    /// retires `known`, removes the pidfile, then panics `what`
+    /// — the stopped shape is covered: SIGKILL lands on stopped
+    /// tasks, the snapshot reads /proc which stays visible),
+    /// and every staged fixture rides a guard from sight/birth
+    /// (unwind retires whatever the body missed — verified
+    /// silent when the body already retired it). The guards
+    /// move to the caller with the returned stage (disarm at
+    /// proven-gone, R16-001 pattern).
+    #[cfg(target_arch = "x86_64")]
+    struct StoppedProbeStage {
+        mid: libc::pid_t,
+        mid_tick: u64,
+        writer: libc::pid_t,
+        writer_tick: u64,
+        mid_guard: FixtureGuard,
+        writer_guard: FixtureGuard,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn stage_stopped_probe_unpublished(
+        child: &mut std::process::Child,
+        pidfile: &std::path::Path,
+        sight: std::time::Duration,
+        birth: std::time::Duration,
+    ) -> StoppedProbeStage {
+        use std::time::Instant;
+        let id = child.id() as libc::pid_t;
+        // Middleman sight (test-side, independent of the
+        // probe's own scan), then SIGSTOP at once — the writer
+        // is unborn (middleman needs exec+fork first), so no
+        // discovery slice could have published. Sight failures
+        // see the UNSTOPPED shape (the body's normal case).
+        let end = Instant::now() + sight;
+        let mid = loop {
+            if !matches!(child.try_wait(), Ok(None)) {
+                timeout_retire_hung_probe(
+                    child,
+                    pidfile,
+                    "r16010 staging: probe completed before middleman birth",
+                    &[],
+                );
+            }
+            if Instant::now() >= end {
+                timeout_retire_hung_probe(
+                    child,
+                    pidfile,
+                    "r16010 staging: middleman never born",
+                    &[],
+                );
+            }
+            if let Some(mid) = middleman_first_child(id) {
+                break mid;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let mid_guard = FixtureGuard::new(mid);
+        // SAFETY: SIGSTOP to our own probe child.
+        if unsafe { libc::kill(id, libc::SIGSTOP) } != 0 {
+            timeout_retire_hung_probe(child, pidfile, "r16010 staging: probe stop failed", &[]);
+        }
+        // Writer birth (the middleman runs unstopped). Birth
+        // failures see the STOPPED shape (the R16-010 hole) —
+        // the body covers it (kill + snapshot read stopped
+        // tasks fine); the mid guard backstops the unwind.
+        let end = Instant::now() + birth;
+        let (writer, writer_tick) = loop {
+            if let Some(born) = middleman_first_child(mid) {
+                if let Ok(Some(tick)) = proc_starttime(born) {
+                    break (born, tick);
+                }
+            }
+            if Instant::now() >= end {
+                timeout_retire_hung_probe(child, pidfile, "r16010 staging: writer never born", &[]);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let writer_guard = FixtureGuard::new(writer);
+        let mid_tick = match proc_starttime(mid) {
+            Ok(Some(tick)) => tick,
+            // The writer pair is proven (read at birth); the
+            // middleman rides the snapshot + its guard.
+            _ => timeout_retire_hung_probe(
+                child,
+                pidfile,
+                "r16010 staging: middleman stat unreadable",
+                &[(writer, writer_tick)],
+            ),
+        };
+        // The hole staged: the stopped probe published nothing.
+        let record = match std::fs::read_to_string(pidfile) {
+            Ok(record) => record,
+            Err(_) => timeout_retire_hung_probe(
+                child,
+                pidfile,
+                "r16010 staging: pidfile unreadable",
+                &[(mid, mid_tick), (writer, writer_tick)],
+            ),
+        };
+        if !record.trim().is_empty() {
+            timeout_retire_hung_probe(
+                child,
+                pidfile,
+                "r16010 staging: probe published before stop (publication won the race)",
+                &[(mid, mid_tick), (writer, writer_tick)],
+            );
+        }
+        StoppedProbeStage {
+            mid,
+            mid_tick,
+            writer,
+            writer_tick,
+            mid_guard,
+            writer_guard,
+        }
+    }
+
     /// R15-002: a probe stopped before its birth scan can never
     /// publish — the timeout must still retire the unpublished
     /// writer. Birth discovery polls in ≤20ms slices; a probe
@@ -12097,44 +12367,21 @@ mod tests {
             .spawn()
             .expect("spawn subreaper probe");
         let id = child.id() as libc::pid_t;
-        // Middleman sight (test-side, independent of the
-        // probe's own scan), then SIGSTOP at once — the writer
-        // is unborn (middleman needs exec+fork first), so no
-        // discovery slice could have published.
-        let end = Instant::now() + Duration::from_secs(60);
-        let mid = loop {
-            assert!(
-                child.try_wait().expect("probe wait").is_none(),
-                "probe completed before middleman birth (fixture broken)"
-            );
-            assert!(Instant::now() < end, "middleman never born (60s)");
-            if let Some(mid) = middleman_first_child(id) {
-                break mid;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        };
-        // SAFETY: SIGSTOP to our own probe child.
-        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
-        // Writer birth (the middleman runs unstopped).
-        let end = Instant::now() + Duration::from_secs(60);
-        let (writer, writer_tick) = loop {
-            if let Some(born) = middleman_first_child(mid) {
-                if let Ok(Some(tick)) = proc_starttime(born) {
-                    break (born, tick);
-                }
-            }
-            assert!(Instant::now() < end, "writer never born (60s)");
-            std::thread::sleep(Duration::from_millis(1));
-        };
-        let mid_tick = proc_starttime(mid)
-            .expect("middleman stat readable")
-            .expect("middleman visible");
-        // The hole staged: the stopped probe published nothing.
-        let record = std::fs::read_to_string(&pidfile).expect("pidfile readable");
-        assert!(
-            record.trim().is_empty(),
-            "stopped probe must publish nothing, got: {record:?}"
+        // R16-010: custody from birth (behavior-preserving on
+        // the happy path — the probe is reaped below, so the
+        // drop verifies gone and stays silent).
+        let mut probe_guard = FixtureGuard::new(id);
+        // Shared staging (R16-010 seam): sight, stop, birth,
+        // ticks, empty record. The stage owns the mid/writer
+        // guards (disarmed at proven-gone below).
+        let mut stage = stage_stopped_probe_unpublished(
+            &mut child,
+            &pidfile,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
         );
+        let (mid, mid_tick, writer, writer_tick) =
+            (stage.mid, stage.mid_tick, stage.writer, stage.writer_tick);
         let what = "r15002 stopped probe timeout";
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             timeout_retire_hung_probe(
@@ -12145,10 +12392,14 @@ mod tests {
             )
         }));
         let text = match fired {
-            Err(payload) => payload
-                .downcast::<String>()
-                .map(|boxed| *boxed)
-                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Err(payload) => {
+                // The body reaped the probe — stand down.
+                probe_guard.disarm();
+                payload
+                    .downcast::<String>()
+                    .map(|boxed| *boxed)
+                    .unwrap_or_else(|_| String::from("<non-string panic>"))
+            }
             Ok(_) => panic!("timeout branch must diverge (it returned)"),
         };
         // Observe before cleanup: the writer must be gone
@@ -12185,6 +12436,9 @@ mod tests {
             assert!(Instant::now() < end, "stranded pair must die in hygiene");
             std::thread::sleep(Duration::from_millis(20));
         }
+        // Proven down by the loop above — stand down.
+        stage.mid_guard.disarm();
+        stage.writer_guard.disarm();
         let _ = std::fs::remove_file(&pidfile);
         assert!(
             text.contains(what),
@@ -12193,6 +12447,313 @@ mod tests {
         assert!(
             writer_gone,
             "timeout must retire the unpublished writer (stopped probe)"
+        );
+    }
+
+    /// R16-010 arm A: publication wins the race — the probe's
+    /// scan publishes BEFORE the parent stops it (the
+    /// descheduled parent of the finding: it sights the
+    /// middleman after the writer forked and the scan
+    /// published). Staged deterministically: wait for a
+    /// NON-empty pidfile, snapshot the tree, then SIGSTOP
+    /// (frozen in the race shape) and run staging — the record
+    /// check must retire everything through the timeout body
+    /// before reporting. Pre-fix the bare assert panics with
+    /// the stopped probe + mid + writer live and the pidfile
+    /// littered (RED); post-fix the body reaps/retires/removes,
+    /// then reports (GREEN). The publication wait's own
+    /// failures diverge through the body too (a bare panic
+    /// there would orphan the same tree). Observe-before-
+    /// cleanup: hygiene retires RED leftovers so the failure
+    /// stays clean; asserts read captured evidence.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_probe_race_publication_retires_before_report() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r16010a-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn subreaper probe");
+        let id = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(id);
+        // Race staging: publication BEFORE any stop. Our own
+        // wait failures diverge through the body (same rule —
+        // a bare panic here would orphan the same tree).
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            if !matches!(child.try_wait(), Ok(None)) {
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "r16010a staging: probe completed before publication",
+                    &[],
+                );
+            }
+            if Instant::now() >= end {
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "r16010a staging: probe never published",
+                    &[],
+                );
+            }
+            let record = match std::fs::read_to_string(&pidfile) {
+                Ok(record) => record,
+                Err(_) => timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "r16010a staging: pidfile unreadable",
+                    &[],
+                ),
+            };
+            if !record.trim().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Snapshot the race tree for post evidence (mid + writer
+        // required — the record proves the writer born; missing
+        // is fixture-broken, retired clean through the body).
+        let (mid_seen, writer_seen) = snapshot_probe_tree(id);
+        let (mid, mid_tick) = match mid_seen {
+            Some(pair) => pair,
+            None => timeout_retire_hung_probe(
+                &mut child,
+                &pidfile,
+                "r16010a staging: race tree unreadable (mid missing)",
+                &[],
+            ),
+        };
+        let (writer, writer_tick) = match writer_seen {
+            Some(pair) => pair,
+            None => timeout_retire_hung_probe(
+                &mut child,
+                &pidfile,
+                "r16010a staging: race tree unreadable (writer missing)",
+                &[],
+            ),
+        };
+        // Freeze in the race shape. Any stop failure is
+        // contended (the probe completed in the window) —
+        // tick-gated loud cleanup + skip, never a failure.
+        // SAFETY: SIGSTOP to our own probe child.
+        if unsafe { libc::kill(id, libc::SIGSTOP) } != 0 {
+            if proc_starttime(mid) == Ok(Some(mid_tick)) {
+                // SAFETY: tick-pinned staged middleman.
+                unsafe { libc::kill(mid, libc::SIGKILL) };
+            }
+            if proc_starttime(writer) == Ok(Some(writer_tick)) {
+                // SAFETY: tick-pinned staged writer.
+                unsafe { libc::kill(writer, libc::SIGKILL) };
+            }
+            // Our unreaped child cannot have recycled — safe.
+            let _ = child.kill();
+            let _ = child.wait();
+            probe_guard.disarm();
+            let _ = std::fs::remove_file(&pidfile);
+            eprintln!("skip: probe completed before the race freeze (contended)");
+            return;
+        }
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stage_stopped_probe_unpublished(
+                &mut child,
+                &pidfile,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+            )
+        }));
+        let text = match fired {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("staging must diverge on the published record (it returned)"),
+        };
+        // Observe before cleanup: probe reaped? tree gone?
+        // pidfile removed by the body?
+        let probe_reaped = !matches!(child.try_wait(), Ok(None));
+        let mid_gone = proc_starttime(mid) != Ok(Some(mid_tick));
+        let writer_gone = proc_starttime(writer) != Ok(Some(writer_tick));
+        let pidfile_gone = !pidfile.exists();
+        // Hygiene (RED-clean): tick-gated kills, poll the pair
+        // gone, reap the probe, remove RED litter, disarm.
+        if proc_starttime(mid) == Ok(Some(mid_tick)) {
+            // SAFETY: tick-pinned staged middleman.
+            unsafe { libc::kill(mid, libc::SIGKILL) };
+        }
+        if proc_starttime(writer) == Ok(Some(writer_tick)) {
+            // SAFETY: tick-pinned staged writer.
+            unsafe { libc::kill(writer, libc::SIGKILL) };
+        }
+        // Our unreaped child cannot have recycled — safe.
+        let _ = child.kill();
+        let _ = child.wait();
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let down = proc_starttime(mid) != Ok(Some(mid_tick))
+                && proc_starttime(writer) != Ok(Some(writer_tick));
+            if down {
+                break;
+            }
+            assert!(Instant::now() < end, "race pair must die in hygiene");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        probe_guard.disarm();
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(probe_reaped, "body must reap the race probe");
+        assert!(mid_gone, "body must retire the race middleman");
+        assert!(writer_gone, "body must retire the race writer");
+        assert!(pidfile_gone, "body must remove the pidfile");
+        assert!(
+            text.contains("r16010 staging: probe published before stop"),
+            "staging must report through the timeout body, got: {text}"
+        );
+    }
+
+    /// R16-010 arm B: discovery fails AFTER SIGSTOP — the
+    /// middleman is frozen before it forks, so the writer is
+    /// never born and the birth loop must time out THROUGH the
+    /// timeout body (retire-before-report), not a bare assert.
+    /// Staged deterministically: SIGSTOP the middleman at
+    /// sight (a stopped task never forks), verify the writer
+    /// unborn WHILE frozen (born ⇒ the fork won the sight
+    /// window ⇒ contended skip with loud cleanup), then SIGSTOP
+    /// the probe and run staging with a short birth deadline.
+    /// Pre-fix the bare timeout assert strands the stopped pair
+    /// (RED); post-fix the body retires + reports (GREEN).
+    /// Non-vacuity: the birth-timeout message proves the birth
+    /// watch ran dry (the freeze held).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_probe_frozen_discovery_retires_before_report() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-grandchild-r16010b-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn subreaper probe");
+        let id = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(id);
+        // Sight + freeze the middleman (own loop — the freeze
+        // must land before the staging birth watch; bare
+        // asserts here unwind through the probe guard).
+        let end = Instant::now() + Duration::from_secs(60);
+        let mid = loop {
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before middleman birth (fixture broken)"
+            );
+            assert!(Instant::now() < end, "middleman never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                break mid;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        // SAFETY: SIGSTOP to our own staged middleman.
+        assert_eq!(
+            unsafe { libc::kill(mid, libc::SIGSTOP) },
+            0,
+            "middleman freeze"
+        );
+        let mut mid_guard = FixtureGuard::new(mid);
+        // Writer unborn while frozen? (frozen ⇒ never born —
+        // deterministic; born ⇒ contended skip, loud cleanup).
+        if let Some(born) = middleman_first_child(mid) {
+            if let Ok(Some(tick)) = proc_starttime(born) {
+                // SAFETY: tick-pinned staged writer.
+                unsafe { libc::kill(born, libc::SIGKILL) };
+            }
+            // The middleman is frozen-proven (a stopped task
+            // cannot exit — the number is still ours); the
+            // probe is our unreaped child (cannot recycle).
+            // SAFETY: SIGKILL to our own frozen middleman.
+            unsafe { libc::kill(mid, libc::SIGKILL) };
+            let _ = child.kill();
+            let _ = child.wait();
+            mid_guard.disarm();
+            probe_guard.disarm();
+            let _ = std::fs::remove_file(&pidfile);
+            eprintln!("skip: writer born before the freeze (contended)");
+            return;
+        }
+        let mid_tick = proc_starttime(mid)
+            .expect("middleman stat readable")
+            .expect("middleman visible");
+        // SAFETY: SIGSTOP to our own probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stage_stopped_probe_unpublished(
+                &mut child,
+                &pidfile,
+                Duration::from_secs(60),
+                Duration::from_secs(3),
+            )
+        }));
+        let text = match fired {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("staging must diverge on the frozen birth watch (it returned)"),
+        };
+        // Observe before cleanup: probe reaped? frozen mid
+        // retired? pidfile removed by the body? (The writer was
+        // never born — nothing to observe; the birth-timeout
+        // message below is the non-vacuity proof.)
+        let probe_reaped = !matches!(child.try_wait(), Ok(None));
+        let mid_gone = proc_starttime(mid) != Ok(Some(mid_tick));
+        let pidfile_gone = !pidfile.exists();
+        // Hygiene (RED-clean): the frozen middleman is
+        // present-proven (stopped tasks cannot exit), so the
+        // kill needs no tick re-check; reap the probe, poll
+        // the mid gone, remove RED litter, disarm.
+        // SAFETY: SIGKILL to our own frozen middleman.
+        unsafe { libc::kill(mid, libc::SIGKILL) };
+        // Our unreaped child cannot have recycled — safe.
+        let _ = child.kill();
+        let _ = child.wait();
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(mid) != Ok(Some(mid_tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "frozen mid must die in hygiene");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        mid_guard.disarm();
+        probe_guard.disarm();
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(probe_reaped, "body must reap the frozen probe");
+        assert!(mid_gone, "body must retire the frozen middleman");
+        assert!(pidfile_gone, "body must remove the pidfile");
+        assert!(
+            text.contains("r16010 staging: writer never born"),
+            "staging must report through the timeout body, got: {text}"
         );
     }
 
