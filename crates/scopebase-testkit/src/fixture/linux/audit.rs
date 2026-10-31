@@ -3392,7 +3392,8 @@ mod tests {
     /// sibling probe inheriting it would inject too).
     #[cfg(target_arch = "x86_64")]
     const IR003_INJECT_ENV: &str = "SCOPEBASE_IR003_FIRSTBORN_STAT_ERR";
-    /// IR-003: rendezvous — the verdict file (`pgid` line, then
+    /// IR-003: rendezvous — the verdict file (`pgid` line,
+    /// middleman-tick line (R15-003: 0 when already gone), then
     /// the panic message) the probe writes for the parent.
     #[cfg(target_arch = "x86_64")]
     const IR003_VERDICT_ENV: &str = "SCOPEBASE_IR003_VERDICT";
@@ -4295,7 +4296,12 @@ mod tests {
                 .unwrap_or_else(|| "ir003: non-string panic".to_string()),
         };
         let pgid = observed.load(std::sync::atomic::Ordering::SeqCst);
-        std::fs::write(&verdict, format!("{pgid}\n{message}\n")).expect("ir003 verdict written");
+        // R15-003: report the middleman tick too (0 when already
+        // gone) so the parent's RED-path hygiene killpg gates on
+        // identity instead of firing at a bare number.
+        let mtick = proc_starttime(pgid).ok().flatten().unwrap_or(0);
+        std::fs::write(&verdict, format!("{pgid}\n{mtick}\n{message}\n"))
+            .expect("ir003 verdict written");
     }
 
     /// R11-013: the confined-subreaper GUARD probe (see
@@ -6698,6 +6704,327 @@ mod tests {
         assert!(!status.success(), "killed replacement reports signal death");
     }
 
+    /// R15-003: tick-gated cleanup must spare a steered
+    /// different-birth replacement on a released number.
+    /// Fixture killed and reaped, then a different-tick
+    /// replacement steered onto the number (root-gated: skips
+    /// unless ns_last_pid is writable, mirroring the neighbor
+    /// above); both gated helpers run against the OLD tick and
+    /// must preserve replacement survival (handle-bound
+    /// try_wait-None: unreaped, unkilled) and owner status.
+    /// Pre-fix (unconditional cleanup kill) the replacement
+    /// dies (RED); post-fix both helpers skip it (GREEN).
+    /// Duration 55 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn gated_cleanup_spares_steered_replacement() {
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let fixture = std::process::Command::new("/bin/sleep")
+            .arg("55")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("fixture spawns");
+        let id = fixture.id() as libc::pid_t;
+        let first_tick = proc_starttime(id)
+            .expect("fixture stat readable")
+            .expect("fixture visible");
+        // SAFETY: retiring our own fixture.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let reap_end = Instant::now() + Duration::from_secs(5);
+        let got = loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own dying child.
+            let got = unsafe { libc::waitpid(id, &mut status, libc::WNOHANG) };
+            if got != 0 {
+                break got;
+            }
+            assert!(Instant::now() < reap_end, "fixture never reaped");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(got, id, "fixture reaped");
+        drop(fixture);
+        std::thread::sleep(Duration::from_millis(50));
+        let _flock = ns_last_pid_flock();
+        let mut placed = None;
+        for _ in 0..100 {
+            if !audit_steer_next_pid_unlocked(id) {
+                break;
+            }
+            let cand = std::process::Command::new("/bin/sleep")
+                .arg("55")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("candidate spawns");
+            if cand.id() as libc::pid_t != id {
+                let mut cand = cand;
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            placed = Some(cand);
+            break;
+        }
+        drop(_flock);
+        audit_locked_restore_hint(&last_before);
+        let mut placed = match placed {
+            Some(placed) => placed,
+            None => {
+                eprintln!("skip: fixture number not retaken (contended)");
+                return;
+            }
+        };
+        let replacement_tick = proc_starttime(id)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if replacement_tick == first_tick {
+            let _ = placed.kill();
+            let _ = placed.wait();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // Both gated helpers against the OLD tick: must skip the
+        // replacement (its tick differs from the reaped
+        // fixture's). Survival via the handle-bound probe (a
+        // starttime assert would pass on a zombie); owner
+        // status via try_wait-None (unreaped).
+        assert!(
+            kill_tick_gated(id, first_tick),
+            "gated kill skips a recycled number"
+        );
+        assert!(
+            retire_tick_gated_audit_child(id, first_tick),
+            "gated retire skips a recycled number"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            matches!(placed.try_wait(), Ok(None)),
+            "replacement must survive gated cleanup (alive and owner-unreaped)"
+        );
+        assert_eq!(
+            proc_starttime(id),
+            Ok(Some(replacement_tick)),
+            "survivor is the placed replacement, not a second recycle"
+        );
+        let _ = placed.kill();
+        let status = placed.wait().expect("replacement owner keeps its status");
+        assert!(!status.success(), "killed replacement reports signal death");
+    }
+
+    /// R15-003 efficacy guard (runs everywhere, no steering):
+    /// the gated helpers must still ACT on matching identity
+    /// (a gate that never signals would pass the steered test
+    /// vacuously). Live owned children retire; a live task
+    /// under the wrong tick is spared; a gone number is a
+    /// silent no-op. Duration 54 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn gated_cleanup_still_acts_on_matching_identity() {
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Helper (a): live owned child, matching tick — killed
+        // and reaped.
+        let mut owned = std::process::Command::new("/bin/sleep")
+            .arg("54")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("owned spawns");
+        let opid = owned.id() as libc::pid_t;
+        let otick = proc_starttime(opid)
+            .expect("owned stat readable")
+            .expect("owned visible");
+        assert!(
+            retire_tick_gated_audit_child(opid, otick),
+            "gated retire acts on matching identity"
+        );
+        assert!(
+            !matches!(owned.try_wait(), Ok(None)),
+            "owned child retired by the gated retire (reaped or ECHILD)"
+        );
+        // Helper (b): live task, matching tick — signaled (poll
+        // it gone; the owner handle reaps).
+        let mut staged = std::process::Command::new("/bin/sleep")
+            .arg("54")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staged spawns");
+        let spid = staged.id() as libc::pid_t;
+        let stick = proc_starttime(spid)
+            .expect("staged stat readable")
+            .expect("staged visible");
+        assert!(
+            kill_tick_gated(spid, stick),
+            "gated kill acts on matching identity"
+        );
+        // Reap-then-assert: a zombie keeps its tick, so the
+        // death poll must discharge it (bounded try_wait — a
+        // blocking wait would hang a genuine kill failure).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if staged.try_wait().expect("staged wait works").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "signaled task must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(proc_starttime(spid), Ok(None), "signaled task reaped gone");
+        // Wrong tick on a live task — spared by both helpers.
+        let mut stranger = std::process::Command::new("/bin/sleep")
+            .arg("54")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("stranger spawns");
+        let xpid = stranger.id() as libc::pid_t;
+        let xtick = proc_starttime(xpid)
+            .expect("stranger stat readable")
+            .expect("stranger visible");
+        let wrong = xtick.wrapping_add(1 << 32);
+        assert!(
+            kill_tick_gated(xpid, wrong),
+            "gated kill skips wrong-tick tasks"
+        );
+        assert!(
+            retire_tick_gated_audit_child(xpid, wrong),
+            "gated retire skips wrong-tick tasks"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            proc_starttime(xpid),
+            Ok(Some(xtick)),
+            "wrong-tick task must survive"
+        );
+        assert!(
+            matches!(stranger.try_wait(), Ok(None)),
+            "wrong-tick owner status retained"
+        );
+        // SAFETY: retiring our own stranger by verified identity.
+        unsafe {
+            libc::kill(xpid, libc::SIGKILL);
+        }
+        let _ = stranger.wait();
+        // Gone number — silent no-op for both.
+        let mut gone = std::process::Command::new("/bin/true")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("gone spawns");
+        let gpid = gone.id() as libc::pid_t;
+        let _ = gone.wait();
+        assert!(
+            kill_tick_gated(gpid, u64::MAX),
+            "gated kill no-ops a gone number"
+        );
+        assert!(
+            retire_tick_gated_audit_child(gpid, u64::MAX),
+            "gated retire no-ops a gone number"
+        );
+    }
+
+    /// R15-003: decision coverage over an injected read —
+    /// unreadable reports unproven-false without signaling, and
+    /// the scripted arms signal/skip exactly on tick-match
+    /// (staging EMFILE process-wide would break the parallel
+    /// suite, so the read is injected; signaling is observed on
+    /// staged victims, never self). Duration 53 is unique to
+    /// this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn gated_kill_decision_arms_over_injected_read() {
+        use std::time::{Duration, Instant};
+        let spawn = || {
+            std::process::Command::new("/bin/sleep")
+                .arg("53")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("victim spawns")
+        };
+        // Unreadable: false, no signal (victim survives).
+        let mut parked = spawn();
+        let ppid = parked.id() as libc::pid_t;
+        let ptick = proc_starttime(ppid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        assert!(
+            !kill_tick_gated_with(ppid, ptick, |_| Err("injected".to_string())),
+            "unreadable stat must report unproven (false)"
+        );
+        assert_eq!(
+            proc_starttime(ppid),
+            Ok(Some(ptick)),
+            "unreadable arm must not signal"
+        );
+        // Scripted match: signals (victim dies).
+        let mut doomed = spawn();
+        let dpid = doomed.id() as libc::pid_t;
+        let dtick = proc_starttime(dpid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        assert!(
+            kill_tick_gated_with(dpid, dtick, |_| Ok(Some(dtick))),
+            "matching scripted tick signals"
+        );
+        // Reap-then-assert (a zombie keeps its tick).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if doomed.try_wait().expect("doomed wait works").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "signaled victim must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            proc_starttime(dpid),
+            Ok(None),
+            "signaled victim reaped gone"
+        );
+        // Scripted mismatch: skips (victim survives).
+        assert!(
+            kill_tick_gated_with(ppid, ptick, |_| Ok(Some(ptick.wrapping_add(1)))),
+            "mismatched scripted tick skips"
+        );
+        assert_eq!(
+            proc_starttime(ppid),
+            Ok(Some(ptick)),
+            "mismatched arm must not signal"
+        );
+        // SAFETY: retiring our own parked victim by verified identity.
+        unsafe {
+            libc::kill(ppid, libc::SIGKILL);
+        }
+        let _ = parked.wait();
+    }
+
     /// R14-007: the adopted-zombie drain must re-decide
     /// foreignness EVERY pass, not once. Own group G with a
     /// zombie (reaped legitimately on pass 1); a barrier hook
@@ -7088,6 +7415,73 @@ mod tests {
         }
     }
 
+    /// R15-003: SIGKILL gated on a pinned birth tick — cleanup
+    /// must never signal a number it may have released (a pump
+    /// or helper may have reaped it; a steered replacement may
+    /// hold it now). Signals only when the current tick matches;
+    /// gone/recycled skips silently (nothing of ours); an
+    /// unreadable stat skips unproven. True when no further
+    /// action is needed (signaled, or nothing of ours); false
+    /// only when unreadable. Never panics (cleanup context).
+    /// The read fn is injected so the unreadable arm is
+    /// unit-testable without staging EMFILE.
+    #[cfg(target_arch = "x86_64")]
+    fn kill_tick_gated_with(
+        pid: libc::pid_t,
+        tick: u64,
+        read: impl Fn(libc::pid_t) -> Result<Option<u64>, String>,
+    ) -> bool {
+        match read(pid) {
+            Ok(Some(now)) if now == tick => {
+                // SAFETY: tick-pinned staged task; errors ignored.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                true
+            }
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    /// R15-003: the production caller of the gate above (reads
+    /// the live tick).
+    #[cfg(target_arch = "x86_64")]
+    fn kill_tick_gated(pid: libc::pid_t, tick: u64) -> bool {
+        kill_tick_gated_with(pid, tick, proc_starttime)
+    }
+
+    /// R15-003: tick-gated retirement for owned test children —
+    /// the gated signal above plus a bounded reaping wait (a
+    /// stale `Child::wait` after a raw reap would block on, or
+    /// steal status from, a recycled replacement; the gated
+    /// waitpid below only runs on tick-match). Same return
+    /// contract as the gate. Never panics.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_tick_gated_audit_child(pid: libc::pid_t, tick: u64) -> bool {
+        use std::time::{Duration, Instant};
+        if proc_starttime(pid) != Ok(Some(tick)) {
+            return proc_starttime(pid).is_ok();
+        }
+        // SAFETY: tick-pinned owned child; errors ignored.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: waitpid on a tick-pinned child; never blocks.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid || got < 0 {
+                return true;
+            }
+            if Instant::now() >= end {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// R14-012: a birth number is free only when /proc proves
     /// absence AND waitpid proves discharge (ECHILD — reaped). A
     /// zombie fails the first (it keeps its tick); an unreaped
@@ -7374,11 +7768,11 @@ mod tests {
         }
         // Cleanup (runs on RED too): kill our staged task by
         // number + tick, poll it gone, then reap the sh parent
-        // (its `wait` ends with the grandchild).
-        // SAFETY: staged task, tick-known; errors ignored.
-        unsafe {
-            libc::kill(stranger, libc::SIGKILL);
-        }
+        // (its `wait` ends with the grandchild). R15-003: the
+        // kill is tick-gated (on RED paths sh may have reaped
+        // the stranger already — a blind kill would murder a
+        // recycled replacement).
+        let _ = kill_tick_gated(stranger, stick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
             if proc_starttime(stranger) != Ok(Some(stick)) {
@@ -7943,8 +8337,10 @@ mod tests {
         let retired = proc_starttime(wpid) != Ok(Some(wtick));
         std::fs::set_permissions(&pidfile, std::fs::Permissions::from_mode(0o644)).ok();
         let _ = std::fs::remove_file(&pidfile);
-        unsafe { libc::kill(wpid, libc::SIGKILL) };
-        let _ = writer.wait();
+        // R15-003: tick-gated (the failure path retires the
+        // writer first; a blind cleanup kill would murder a
+        // recycled replacement).
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
         assert!(failed.is_err(), "unwritable pidfile must fail loud");
         assert!(retired, "writer must retire before the loud failure");
     }
@@ -8152,8 +8548,9 @@ mod tests {
         // (retired before the loud failure), then loud cleanup
         // of whatever remains either way.
         let retired = proc_starttime(wpid) != Ok(Some(wtick));
-        unsafe { libc::kill(wpid, libc::SIGKILL) };
-        let _ = writer.wait();
+        // R15-003: tick-gated (same post-retirement shape as the
+        // unwritable-pidfile test above).
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
         assert!(failed.is_err(), "non-UTF-8 rendezvous must fail loud");
         assert!(retired, "writer must retire before the loud failure");
     }
@@ -8229,8 +8626,8 @@ mod tests {
             publish_reported_grandchild(&GrandchildState::Live(wpid, wtick))
         });
         let retired = proc_starttime(wpid) != Ok(Some(wtick));
-        unsafe { libc::kill(wpid, libc::SIGKILL) };
-        let _ = writer.wait();
+        // R15-003: tick-gated (same post-retirement shape).
+        let _ = retire_tick_gated_audit_child(wpid, wtick);
         let _ = std::fs::remove_file(&pidfile);
         assert!(failed.is_err(), "doomed publish must fail loud");
         assert!(retired, "writer must retire before the loud failure");
@@ -8440,32 +8837,38 @@ mod tests {
             "ir003 probe must exit success, got {status}"
         );
         let report = std::fs::read_to_string(&verdict).expect("ir003 verdict readable");
-        let (pgid_line, message) = report.split_once('\n').expect("verdict has pgid line");
+        let (pgid_line, rest) = report.split_once('\n').expect("verdict has pgid line");
+        let (mtick_line, message) = rest.split_once('\n').expect("verdict has mtick line");
         let pgid = pgid_line
             .trim()
             .parse::<libc::pid_t>()
             .expect("pgid parses");
+        let mtick = mtick_line.trim().parse::<u64>().expect("mtick parses");
         assert!(pgid > 0, "probe must observe a middleman pgid, got {pgid}");
         let retired = message.contains("retired: true");
         if !retired {
-            // RED-path hygiene only: the leaked group is ours
-            // and live (a live group cannot have recycled), so
-            // a targeted killpg is exact. GREEN runs need
+            // RED-path hygiene only, tick-gated (R15-003): the
+            // group kill fires only while the middleman holds
+            // its reported birth (a bare-number killpg would
+            // murder a recycled foreign group). GREEN runs need
             // nothing (the retire verified ESRCH-empty before
-            // panicking).
-            // SAFETY: signal-only to our own leaked group.
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
-            }
-            let end = Instant::now() + Duration::from_secs(10);
-            loop {
-                // SAFETY: signal 0 probes existence only.
-                let probed = unsafe { libc::killpg(pgid, 0) };
-                if probed < 0 {
-                    break;
+            // panicking); a gate miss falls through to the
+            // message asserts below (which fail appropriately).
+            if mtick != 0 && proc_starttime(pgid) == Ok(Some(mtick)) {
+                // SAFETY: signal-only to our tick-pinned group.
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
                 }
-                assert!(Instant::now() < end, "leaked ir003 group must die");
-                std::thread::sleep(Duration::from_millis(20));
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    // SAFETY: signal 0 probes existence only.
+                    let probed = unsafe { libc::killpg(pgid, 0) };
+                    if probed < 0 {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "leaked ir003 group must die");
+                    std::thread::sleep(Duration::from_millis(20));
+                }
             }
         }
         let _ = std::fs::remove_file(&pidfile);
@@ -8603,8 +9006,9 @@ mod tests {
                 if Instant::now() >= end {
                     let _ = probe.kill();
                     let _ = probe.wait();
-                    unsafe { libc::kill(wpid, libc::SIGKILL) };
-                    let _ = writer.wait();
+                    // R15-003: tick-gated (the pump above may have
+                    // reaped the writer already).
+                    let _ = retire_tick_gated_audit_child(wpid, wtick);
                     panic!("{spec}: retire-denial probe hung past 30s");
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -8615,8 +9019,8 @@ mod tests {
                 let _ = stderr.read_to_end(&mut err);
             }
             if status.code() == Some(3) {
-                unsafe { libc::kill(wpid, libc::SIGKILL) };
-                let _ = writer.wait();
+                // R15-003: tick-gated (uniform with the main path).
+                let _ = retire_tick_gated_audit_child(wpid, wtick);
                 eprintln!("skip: seccomp unavailable for the retire-denial probe");
                 return;
             }
@@ -8624,8 +9028,11 @@ mod tests {
             // first, retire the writer either way (RED runs stay
             // clean), then assert.
             let live = proc_starttime(wpid) == Ok(Some(wtick));
-            unsafe { libc::kill(wpid, libc::SIGKILL) };
-            let _ = writer.wait();
+            // R15-003: tick-gated (the pump may have reaped the
+            // writer; a blind kill would murder a recycled
+            // replacement, and a stale Child::wait would steal
+            // its status or wait on its lifetime).
+            let _ = retire_tick_gated_audit_child(wpid, wtick);
             assert_eq!(
                 status.code(),
                 Some(expect),

@@ -3225,6 +3225,35 @@ fn retire_child_silent(pid: i32) {
     }
 }
 
+/// R15-003: toolchain twin of the audit tick-gated kill —
+/// SIGKILL only when the current tick matches the pinned one.
+/// Same contract (true unless unreadable; never panics), same
+/// injected-read seam for the unreadable arm.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn kill_tick_gated_with(
+    pid: i32,
+    tick: u64,
+    read: impl Fn(i32) -> Result<Option<u64>, String>,
+) -> bool {
+    match read(pid) {
+        Ok(Some(now)) if now == tick => {
+            // SAFETY: tick-pinned staged task; errors ignored.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            true
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// R15-003: the production caller of the gate above.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn kill_tick_gated(pid: i32, tick: u64) -> bool {
+    kill_tick_gated_with(pid, tick, task_starttime_checked)
+}
+
 /// R13-008: Drop guard retiring an owned fixture child on every
 /// exit (early return or panic). Covers pausers (retire) and
 /// zombies (discharge status — the kill also reaches a child hung
@@ -3604,11 +3633,11 @@ fn retire_child_silent_probe_first_spares_live_non_child() {
     }
     // Cleanup (runs on RED too): kill our staged task by
     // number + tick, poll it gone, then reap the sh parent
-    // (its `wait` ends with the grandchild).
-    // SAFETY: staged task, tick-known; errors ignored.
-    unsafe {
-        libc::kill(stranger, libc::SIGKILL);
-    }
+    // (its `wait` ends with the grandchild). R15-003:
+    // tick-gated (on RED paths sh may have reaped the
+    // stranger already — a blind kill would murder a
+    // recycled replacement).
+    let _ = kill_tick_gated(stranger, stick);
     let end = Instant::now() + Duration::from_secs(10);
     loop {
         if task_starttime_checked(stranger) != Ok(Some(stick)) {
@@ -3724,6 +3753,217 @@ fn drop_guard_spares_recycled_number() {
     );
     kill_wait_child(owned);
     standin_guard.disarm();
+}
+
+/// R15-003: toolchain twin of the audit steered-replacement
+/// test — the gated kill must spare a steered different-birth
+/// pauser on a released number. Staging mirrors drop_guard
+/// above (skips unless steerable); survival via settled
+/// live-state (a zombie keeps its tick) plus the unchanged
+/// replacement tick. Pre-fix the replacement dies (RED);
+/// post-fix it survives (GREEN).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn gated_kill_spares_steered_replacement() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let owned = fork_pauser();
+    let owned_tick = task_starttime_checked(owned)
+        .expect("fixture stat readable")
+        .expect("fixture visible");
+    kill_wait_child(owned);
+    std::thread::sleep(Duration::from_millis(50));
+    let _nsflock = ns_last_pid_flock();
+    let mut standin = -1;
+    for _ in 0..100 {
+        if !steer_next_pid_unlocked(owned) {
+            break;
+        }
+        let kid = fork_pauser();
+        if kid == owned {
+            standin = kid;
+            break;
+        }
+        let mut kid_guard = SilentChildGuard::new(kid);
+        kill_wait_child(kid);
+        kid_guard.disarm();
+    }
+    drop(_nsflock);
+    locked_restore_hint(&last_before);
+    if standin != owned {
+        eprintln!("skip: fixture number not retaken (contended)");
+        return;
+    }
+    let standin_tick = task_starttime_checked(owned)
+        .expect("stand-in stat readable")
+        .expect("stand-in visible");
+    if standin_tick == owned_tick {
+        kill_wait_child(owned);
+        eprintln!("skip: same-tick retake (S100 — untestable this run)");
+        return;
+    }
+    assert!(
+        kill_tick_gated(owned, owned_tick),
+        "gated kill skips a recycled number"
+    );
+    // Settled live-state survival (pausers never exit by
+    // themselves; a tick check alone would pass on a zombie).
+    let end = Instant::now() + Duration::from_secs(2);
+    loop {
+        match task_state(owned) {
+            Some(state) if state != 'Z' => {
+                if Instant::now() >= end {
+                    break;
+                }
+            }
+            _ => panic!("replacement must survive gated kill (murdered)"),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        task_starttime_checked(owned),
+        Ok(Some(standin_tick)),
+        "survivor is the placed replacement, not a second recycle"
+    );
+    kill_wait_child(owned);
+}
+
+/// R15-003 efficacy + decision guard (runs everywhere, no
+/// steering): the gated kill must still ACT on matching
+/// identity (a gate that never signals would pass the steered
+/// test vacuously); wrong-tick and gone numbers skip; the
+/// unreadable arm reports false without signaling (injected
+/// read). Duration 51 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn gated_kill_acts_on_matching_identity() {
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Matching identity: signaled, then reaped by the owner.
+    let mut staged = std::process::Command::new("/bin/sleep")
+        .arg("51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("staged spawns");
+    let spid = staged.id() as i32;
+    let stick = task_starttime_checked(spid)
+        .expect("staged stat readable")
+        .expect("staged visible");
+    assert!(
+        kill_tick_gated(spid, stick),
+        "gated kill acts on matching identity"
+    );
+    // Reap-then-assert (a zombie keeps its tick).
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if staged.try_wait().expect("staged wait works").is_some() {
+            break;
+        }
+        assert!(Instant::now() < end, "signaled task must die");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        task_starttime_checked(spid),
+        Ok(None),
+        "signaled task reaped gone"
+    );
+    // Wrong tick on a live task: spared.
+    let mut stranger = std::process::Command::new("/bin/sleep")
+        .arg("51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("stranger spawns");
+    let xpid = stranger.id() as i32;
+    let xtick = task_starttime_checked(xpid)
+        .expect("stranger stat readable")
+        .expect("stranger visible");
+    let wrong = xtick.wrapping_add(1 << 32);
+    assert!(kill_tick_gated(xpid, wrong), "wrong tick skips");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        task_starttime_checked(xpid),
+        Ok(Some(xtick)),
+        "wrong-tick task must survive"
+    );
+    assert!(
+        matches!(stranger.try_wait(), Ok(None)),
+        "wrong-tick owner status retained"
+    );
+    // SAFETY: retiring our own stranger by verified identity.
+    unsafe {
+        libc::kill(xpid, libc::SIGKILL);
+    }
+    let _ = stranger.wait();
+    // Gone number: silent no-op.
+    let mut gone = std::process::Command::new("/bin/true")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("gone spawns");
+    let gpid = gone.id() as i32;
+    let _ = gone.wait();
+    assert!(
+        kill_tick_gated(gpid, u64::MAX),
+        "gated kill no-ops a gone number"
+    );
+    // Injected read: unreadable reports false without
+    // signaling; scripted match signals; scripted mismatch
+    // skips.
+    let mut parked = std::process::Command::new("/bin/sleep")
+        .arg("51")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("parked spawns");
+    let ppid = parked.id() as i32;
+    let ptick = task_starttime_checked(ppid)
+        .expect("parked stat readable")
+        .expect("parked visible");
+    assert!(
+        !kill_tick_gated_with(ppid, ptick, |_| Err("injected".to_string())),
+        "unreadable stat must report unproven (false)"
+    );
+    assert_eq!(
+        task_starttime_checked(ppid),
+        Ok(Some(ptick)),
+        "unreadable arm must not signal"
+    );
+    assert!(
+        kill_tick_gated_with(ppid, ptick, |_| Ok(Some(ptick.wrapping_add(1)))),
+        "mismatched scripted tick skips"
+    );
+    assert_eq!(
+        task_starttime_checked(ppid),
+        Ok(Some(ptick)),
+        "mismatched arm must not signal"
+    );
+    // SAFETY: retiring our own parked task by verified identity.
+    unsafe {
+        libc::kill(ppid, libc::SIGKILL);
+    }
+    let _ = parked.wait();
 }
 
 /// R13-006: settle P's Child handle after the ancestry run. When
