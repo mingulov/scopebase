@@ -16037,16 +16037,51 @@ mod tests {
         obs_guard.disarm();
     }
 
+    /// R19-017: occurrence stamps — CLOCK_MONOTONIC nanos
+    /// of every sentinel iteration start plus every failure
+    /// (the verdict counts stamps strictly inside the
+    /// probe's [HELD, RELEASED] occurrence window instead
+    /// of arrival-snapped counters).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Default, Debug)]
+    struct EmfileStamps {
+        iters: Vec<u64>,
+        fails: Vec<u64>,
+    }
+
+    /// R19-017: monotonic nanos for cross-process
+    /// occurrence evidence — CLOCK_MONOTONIC is system-wide
+    /// (probe and harness share the host) and jump-free
+    /// (unlike SystemTime, an NTP step can neither admit
+    /// outside work nor strand inside work).
+    #[cfg(target_arch = "x86_64")]
+    fn monotonic_nanos() -> u64 {
+        // SAFETY: clock_gettime on CLOCK_MONOTONIC fills the
+        // struct; it cannot fail on Linux.
+        let mut spec = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut spec) };
+        assert_eq!(rc, 0, "monotonic clock must read");
+        (spec.tv_sec as u64)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(spec.tv_nsec as u64)
+    }
+
     /// R17-005: fd-table sentinel — hammers open/stat/spawn
     /// while the EMFILE probe runs, recording (iterations,
     /// failures) without ever panicking (a sentinel panic
     /// would mask the verdict it guards).
+    /// R19-017: plus per-iteration occurrence stamps (single
+    /// writer — the worker; the verdict reads after join).
     #[cfg(target_arch = "x86_64")]
     #[derive(Default)]
     struct EmfileSentinel {
         iterations: std::sync::atomic::AtomicU64,
         failures: std::sync::atomic::AtomicU64,
         stop: std::sync::atomic::AtomicBool,
+        stamps: std::sync::Mutex<EmfileStamps>,
     }
 
     /// R17-005: run the sentinel until `stop` sets: every
@@ -16055,6 +16090,11 @@ mod tests {
     /// names (opens, observations, spawns). Every outcome is
     /// recorded; nothing panics, nothing is held across
     /// iterations (each op's fd closes before the next).
+    /// R19-017: every iteration start is occurrence-stamped
+    /// (single lock, uncontended — only the worker writes;
+    /// a poisoned lock skips the stamp rather than panicking,
+    /// degrading to fewer stamps, which fail the verdict
+    /// loud, never vacuous).
     #[cfg(target_arch = "x86_64")]
     fn run_emfile_sentinel(sentinel: &EmfileSentinel) {
         use std::sync::atomic::Ordering::Relaxed;
@@ -16062,15 +16102,26 @@ mod tests {
             if sentinel.stop.load(Relaxed) {
                 break;
             }
+            let stamp = monotonic_nanos();
             let n = sentinel.iterations.fetch_add(1, Relaxed) + 1;
+            let mut failed = false;
             if std::fs::File::open("/dev/null").is_err() {
                 sentinel.failures.fetch_add(1, Relaxed);
+                failed = true;
             }
             if std::fs::read_to_string("/proc/self/stat").is_err() {
                 sentinel.failures.fetch_add(1, Relaxed);
+                failed = true;
             }
             if n.is_multiple_of(10) && std::process::Command::new("true").status().is_err() {
                 sentinel.failures.fetch_add(1, Relaxed);
+                failed = true;
+            }
+            if let Ok(mut stamps) = sentinel.stamps.lock() {
+                stamps.iters.push(stamp);
+                if failed {
+                    stamps.fails.push(stamp);
+                }
             }
         }
     }
@@ -16110,29 +16161,37 @@ mod tests {
         }
     }
 
-    /// R18-012: held-window handshake state — the drain thread
-    /// samples sentinel (iterations, failures) as each marker
-    /// line ARRIVES (not at EOF: both would read final counts
-    /// and the overlap would be vacuous). First marker of each
-    /// kind wins.
+    /// R18-012: held-window handshake state — the probe's
+    /// OCCURRENCE bounds (CLOCK_MONOTONIC nanos parsed from
+    /// the marker text), not arrival-snapped counters.
+    /// R19-017: sampling counters at marker ARRIVAL let a
+    /// drain descheduled across the hold count post-release
+    /// iterations as inside; occurrence evidence is
+    /// arrival-independent. First marker of each kind wins.
     #[cfg(target_arch = "x86_64")]
     #[derive(Clone, Default, Debug, PartialEq, Eq)]
     struct EmfileWindow {
-        held: Option<(u64, u64)>,
-        released: Option<(u64, u64)>,
+        held: Option<u64>,
+        released: Option<u64>,
     }
 
     /// R18-012: fold one stderr line into the window state.
+    /// R19-017: parse the occurrence stamp (`t=` nanos) from
+    /// the marker text — a marker without a parseable stamp
+    /// folds to None, which is a no-op under the first-wins
+    /// guard (never defaulted to 0: a 0 anchor would admit
+    /// every stamp). The two prefixes are mutually exclusive,
+    /// so the folds are independent.
     #[cfg(target_arch = "x86_64")]
-    fn note_emfile_marker(window: &mut EmfileWindow, line: &str, iters: u64, fails: u64) {
-        if line.starts_with("R17005-HELD") {
-            if window.held.is_none() {
-                window.held = Some((iters, fails));
-            }
-        } else if line == "R17005-RELEASED" {
-            if window.released.is_none() {
-                window.released = Some((iters, fails));
-            }
+    fn note_emfile_marker(window: &mut EmfileWindow, line: &str) {
+        let stamp = line
+            .split_whitespace()
+            .find_map(|word| word.strip_prefix("t=").and_then(|n| n.parse::<u64>().ok()));
+        if line.starts_with("R17005-HELD") && window.held.is_none() {
+            window.held = stamp;
+        }
+        if line.starts_with("R17005-RELEASED") && window.released.is_none() {
+            window.released = stamp;
         }
     }
 
@@ -16141,11 +16200,20 @@ mod tests {
     /// failures there. Activity confined outside the window
     /// (empty/unsnapped/misordered window) does NOT satisfy
     /// this.
+    /// R19-017: occurrence verdict — the bounds are probe
+    /// monotonic nanos, the activity is sentinel
+    /// per-iteration stamps; iterations strictly inside,
+    /// failures inside the closed window.
     #[cfg(target_arch = "x86_64")]
-    fn emfile_overlap_ok(window: &EmfileWindow) -> bool {
+    fn emfile_overlap_ok(window: &EmfileWindow, iters: &[u64], fails: &[u64]) -> bool {
         match (window.held, window.released) {
-            (Some((held_iters, held_fails)), Some((rel_iters, rel_fails))) => {
-                rel_iters.saturating_sub(held_iters) >= 10 && rel_fails == held_fails
+            (Some(held), Some(released)) if held < released => {
+                let inside = iters
+                    .iter()
+                    .filter(|t| **t > held && **t < released)
+                    .count();
+                let failed_inside = fails.iter().any(|t| *t >= held && *t <= released);
+                inside >= 10 && !failed_inside
             }
             _ => false,
         }
@@ -16158,14 +16226,15 @@ mod tests {
     /// Folds marker lines into the window handshake as they
     /// arrive; returns the full text (lossy — a non-UTF8
     /// path in a panic must truncate nothing).
+    /// R19-017: the fold parses occurrence stamps from the
+    /// marker text — no counter sampling (arrival time must
+    /// not become occurrence evidence).
     #[cfg(target_arch = "x86_64")]
     fn drain_emfile_stderr(
         pipe: std::process::ChildStderr,
-        sentinel: &EmfileSentinel,
         window: &std::sync::Mutex<EmfileWindow>,
     ) -> String {
         use std::io::BufRead as _;
-        use std::sync::atomic::Ordering::Relaxed;
         let mut text = String::new();
         let mut reader = std::io::BufReader::new(pipe);
         let mut buf = Vec::new();
@@ -16176,12 +16245,7 @@ mod tests {
                 Ok(_) => {
                     let line = String::from_utf8_lossy(&buf);
                     if let Ok(mut guard) = window.lock() {
-                        note_emfile_marker(
-                            &mut guard,
-                            line.trim_end(),
-                            sentinel.iterations.load(Relaxed),
-                            sentinel.failures.load(Relaxed),
-                        );
+                        note_emfile_marker(&mut guard, line.trim_end());
                     }
                     text.push_str(&line);
                 }
@@ -16194,6 +16258,8 @@ mod tests {
     /// R18-009: what the bounded launcher returns — exit
     /// status, full stderr, the window handshake, and final
     /// sentinel counters (read only after the worker joins).
+    /// R19-017: plus the sentinel occurrence stamps (taken
+    /// out of the mutex after the worker joins).
     #[cfg(target_arch = "x86_64")]
     struct EmfileLaunched {
         status: std::process::ExitStatus,
@@ -16201,6 +16267,7 @@ mod tests {
         window: EmfileWindow,
         iterations: u64,
         failures: u64,
+        stamps: EmfileStamps,
     }
 
     /// R18-009: bounded probe launcher — spawns the named test
@@ -16266,10 +16333,8 @@ mod tests {
         };
         let window = std::sync::Arc::new(std::sync::Mutex::new(EmfileWindow::default()));
         let drain_window = window.clone();
-        let drain_sentinel = sentinel.clone();
         let pipe = child.stderr.take().expect("stderr piped");
-        let drain =
-            std::thread::spawn(move || drain_emfile_stderr(pipe, &drain_sentinel, &drain_window));
+        let drain = std::thread::spawn(move || drain_emfile_stderr(pipe, &drain_window));
         // Bounded wait (the old loop was unbounded AND drained
         // only after exit — a child blocked on a full pipe
         // hung the suite forever).
@@ -16376,12 +16441,23 @@ mod tests {
         let stderr = drain.join().expect("drain thread joins");
         worker_guard.shutdown().expect("sentinel joins");
         let window = window.lock().map(|guard| guard.clone()).unwrap_or_default();
+        // The worker joined above, so this take sees every
+        // stamp (a poisoned lock can only come from a worker
+        // panic while holding it — the worker pushes only,
+        // which cannot panic — and degrades to empty stamps,
+        // which fail the verdict loud, never vacuous).
+        let stamps = sentinel
+            .stamps
+            .lock()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default();
         EmfileLaunched {
             status: status.expect("probe status observed"),
             stderr,
             window,
             iterations: sentinel.iterations.load(Relaxed),
             failures: sentinel.failures.load(Relaxed),
+            stamps,
         }
     }
 
@@ -16389,73 +16465,207 @@ mod tests {
     /// window and rejects everything else (empty window,
     /// below-bar, failures inside, missing/misordered
     /// markers).
+    /// R19-017: the window is occurrence time (probe
+    /// CLOCK_MONOTONIC nanos parsed from the marker text),
+    /// not arrival-snapped counters — a drain descheduled
+    /// across the hold used to count post-release iterations
+    /// as inside.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn emfile_overlap_verdict_pins_window_semantics() {
-        // Positive: fifteen clean iterations inside.
+        // Positive: fifteen clean iterations strictly inside.
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 115, 0);
-        assert!(emfile_overlap_ok(&window), "inside work must satisfy");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let inside: Vec<u64> = (1001..1016).collect();
+        assert!(
+            emfile_overlap_ok(&window, &inside, &[]),
+            "inside work must satisfy"
+        );
         // Boundary: exactly ten satisfies, nine does not.
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 110, 0);
-        assert!(emfile_overlap_ok(&window), "exactly ten must satisfy");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let ten: Vec<u64> = (1001..1011).collect();
+        assert!(
+            emfile_overlap_ok(&window, &ten, &[]),
+            "exactly ten must satisfy"
+        );
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 109, 0);
-        assert!(!emfile_overlap_ok(&window), "nine inside must not satisfy");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let nine: Vec<u64> = (1001..1010).collect();
+        assert!(
+            !emfile_overlap_ok(&window, &nine, &[]),
+            "nine inside must not satisfy"
+        );
         // Negative: empty window (nothing between markers).
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 100, 0);
-        assert!(!emfile_overlap_ok(&window), "empty window must not satisfy");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        assert!(
+            !emfile_overlap_ok(&window, &[], &[]),
+            "empty window must not satisfy"
+        );
         // Negative: a failure landed inside.
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 115, 1);
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
         assert!(
-            !emfile_overlap_ok(&window),
+            !emfile_overlap_ok(&window, &inside, &[1500]),
             "failure inside must not satisfy"
         );
         // Negative: missing markers.
         assert!(
-            !emfile_overlap_ok(&EmfileWindow::default()),
+            !emfile_overlap_ok(&EmfileWindow::default(), &inside, &[]),
             "unsnapped window must not satisfy"
         );
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
         assert!(
-            !emfile_overlap_ok(&window),
+            !emfile_overlap_ok(&window, &inside, &[]),
             "unreleased window must not satisfy"
         );
-        // Negative: misordered markers (protocol violation).
+        // Negative: misordered markers (protocol violation)
+        // and equal bounds (empty window).
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-RELEASED", 100, 0);
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 150, 0);
+        note_emfile_marker(&mut window, "R17005-RELEASED t=1000");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=2000");
         assert!(
-            !emfile_overlap_ok(&window),
+            !emfile_overlap_ok(&window, &inside, &[]),
             "misordered window must not satisfy"
         );
-        // First marker wins (a duplicated HELD after work
-        // must not shift the window start forward).
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 100, 0);
-        note_emfile_marker(&mut window, "R17005-HELD count=999", 150, 0);
-        note_emfile_marker(&mut window, "R17005-RELEASED", 160, 0);
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=1000");
         assert!(
-            emfile_overlap_ok(&window),
+            !emfile_overlap_ok(&window, &inside, &[]),
+            "equal-bounds window must not satisfy"
+        );
+        // First marker wins (a duplicated HELD after work
+        // must not shift the window start forward: the
+        // eleven stamps sit inside (1000, 2000) but outside
+        // (1500, 2000)).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1500");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let eleven: Vec<u64> = (1001..1012).collect();
+        assert!(
+            emfile_overlap_ok(&window, &eleven, &[]),
             "first HELD must anchor the window"
+        );
+        // First RELEASED wins too (the fail stamp at 1600
+        // is outside (1000, 1500) but inside (1000, 2000)).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=1500");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        assert!(
+            emfile_overlap_ok(&window, &eleven, &[1600]),
+            "first RELEASED must close the window"
         );
         // Non-marker lines (panic text, harness noise) fold
         // to nothing.
         let mut window = EmfileWindow::default();
-        note_emfile_marker(&mut window, "thread 'main' panicked at foo.rs:1", 100, 0);
-        note_emfile_marker(&mut window, "R17005-REPORT something", 115, 0);
+        note_emfile_marker(&mut window, "thread 'main' panicked at foo.rs:1");
+        note_emfile_marker(&mut window, "R17005-REPORT something");
         assert!(
-            !emfile_overlap_ok(&window),
+            !emfile_overlap_ok(&window, &inside, &[]),
             "noise without markers must not satisfy"
+        );
+        // Markers without a parseable occurrence stamp are
+        // ignored (never default to 0 — a 0-anchored window
+        // would admit every stamp).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        assert!(
+            !emfile_overlap_ok(&window, &inside, &[]),
+            "HELD without t= must not anchor"
+        );
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED");
+        assert!(
+            !emfile_overlap_ok(&window, &inside, &[]),
+            "RELEASED without t= must not close"
+        );
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=abc");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        assert!(
+            !emfile_overlap_ok(&window, &inside, &[]),
+            "unparseable t= must not anchor"
+        );
+    }
+
+    /// R19-017: delayed marker consumption with activity
+    /// confined outside the window must reject. The drain
+    /// reads HELD+RELEASED in order but a deschedule across
+    /// the hold snaps post-release counters — the
+    /// arrival-snapped old verdict counted those as inside.
+    /// Occurrence evidence (probe t= bounds, sentinel
+    /// per-iteration stamps) shows every stamp outside and
+    /// the verdict must refuse.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn emfile_overlap_rejects_activity_confined_outside_window() {
+        // All activity before the hold opened.
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let before: Vec<u64> = (900..920).collect();
+        assert!(
+            !emfile_overlap_ok(&window, &before, &[]),
+            "twenty pre-hold iterations must not satisfy"
+        );
+        // All activity after the release (the descheduled
+        // drain's exact miscount: ten healthy post-release
+        // iterations snapped as inside).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let after: Vec<u64> = (2001..2021).collect();
+        assert!(
+            !emfile_overlap_ok(&window, &after, &[]),
+            "twenty post-release iterations must not satisfy"
+        );
+        // Split across the window (ten before + ten after).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let mut split: Vec<u64> = (900..910).collect();
+        split.extend(2001..2011);
+        assert!(
+            !emfile_overlap_ok(&window, &split, &[]),
+            "split outside activity must not satisfy"
+        );
+        // Boundary-touching stamps are not strictly inside
+        // (ten exactly at HELD + ten exactly at RELEASED).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let mut edges = vec![1000; 10];
+        edges.extend(vec![2000; 10]);
+        assert!(
+            !emfile_overlap_ok(&window, &edges, &[]),
+            "boundary stamps must not count as inside"
+        );
+        // A failure exactly on a bound still fails (closed
+        // failure window: the bound is an emission instant,
+        // not proof of health).
+        let mut window = EmfileWindow::default();
+        note_emfile_marker(&mut window, "R17005-HELD count=999 t=1000");
+        note_emfile_marker(&mut window, "R17005-RELEASED t=2000");
+        let inside: Vec<u64> = (1001..1016).collect();
+        assert!(
+            !emfile_overlap_ok(&window, &inside, &[1000]),
+            "failure on the HELD bound must not satisfy"
+        );
+        assert!(
+            !emfile_overlap_ok(&window, &inside, &[2000]),
+            "failure on the RELEASED bound must not satisfy"
         );
     }
 
@@ -16589,7 +16799,11 @@ mod tests {
         );
         // Genuine-exhaustion evidence (never vacuous: a broken
         // exhauster holds ~0).
-        eprintln!("R17005-HELD count={}", held.len());
+        // R19-017: occurrence stamp — taken while the table
+        // is full (the fill loop completed above), so every
+        // sentinel iteration strictly after it ran against
+        // genuine exhaustion.
+        eprintln!("R17005-HELD count={} t={}", held.len(), monotonic_nanos());
         // Hold the exhausted window open for concurrent
         // observation (the staging itself fails in ~1ms —
         // without the hold no concurrent fd user could ever
@@ -16608,11 +16822,13 @@ mod tests {
             );
         }));
         drop(held);
-        // R18-012: window-end handshake — the drain thread
-        // snapshots sentinel counters at HELD and here; the
-        // parent's overlap verdict counts only iterations
-        // strictly inside this window.
-        eprintln!("R17005-RELEASED");
+        // R18-012: window-end handshake — the parent's
+        // overlap verdict counts only iterations strictly
+        // inside this window.
+        // R19-017: occurrence stamp — taken after the drop
+        // above, so every sentinel iteration strictly before
+        // it ran against genuine exhaustion.
+        eprintln!("R17005-RELEASED t={}", monotonic_nanos());
         let text = match fired {
             Err(payload) => payload
                 .downcast::<String>()
@@ -16706,8 +16922,13 @@ mod tests {
         let held = stderr
             .lines()
             .find_map(|line| {
-                line.strip_prefix("R17005-HELD count=")
-                    .and_then(|n| n.trim().parse::<usize>().ok())
+                // R19-017: the count is the first word (the
+                // marker now carries ` t=<nanos>` after it).
+                line.strip_prefix("R17005-HELD count=").and_then(|rest| {
+                    rest.split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse::<usize>().ok())
+                })
             })
             .unwrap_or(0);
         assert!(
@@ -16734,7 +16955,11 @@ mod tests {
             "RELEASED handshake missing\n{stderr}"
         );
         assert!(
-            emfile_overlap_ok(&launched.window),
+            emfile_overlap_ok(
+                &launched.window,
+                &launched.stamps.iters,
+                &launched.stamps.fails
+            ),
             "sentinel must work inside the held window, window={:?}\n{stderr}",
             launched.window
         );
