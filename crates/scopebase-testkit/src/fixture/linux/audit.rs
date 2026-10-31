@@ -7424,12 +7424,25 @@ mod tests {
     /// discovery and retire-time re-verification so the two
     /// can never disagree on what holding means.
     #[cfg(target_arch = "x86_64")]
-    fn fd_holds_wanted_write_end(
+    /// R21-002: strict per-fd holdership probe —
+    /// `Some(true)` holds a wanted write end, `Some(false)`
+    /// provably does not (content verdicts only), `None`
+    /// means UNOBSERVABLE (a read/open/stat failed — the fd
+    /// may or may not be a wanted end). Observation-error
+    /// sites (readlink, fdinfo × 2, fd open, fstat, slot
+    /// metadata) report `None`; content sites (non-pipe
+    /// target, non-UTF8 target — kernel pipe targets are
+    /// always `pipe:` + digits so anything else proves
+    /// non-membership — unparsable ino, ino miss, read-end
+    /// mode, post-hook mode loss, identity mismatch) report
+    /// `Some(false)`.
+    #[cfg(target_arch = "x86_64")]
+    fn fd_holds_wanted_write_end_strict(
         fd: &std::fs::DirEntry,
         pid: libc::pid_t,
         want: &[(u64, u64)],
         verify_hook: Option<&dyn Fn(libc::pid_t)>,
-    ) -> bool {
+    ) -> Option<bool> {
         use std::os::unix::fs::MetadataExt as _;
         use std::os::unix::fs::OpenOptionsExt as _;
         use std::os::unix::io::AsRawFd as _;
@@ -7443,33 +7456,30 @@ mod tests {
         let text = match std::fs::read_link(fd.path()) {
             Ok(target) => match target.into_os_string().into_string() {
                 Ok(text) => text,
-                Err(_) => return false,
+                Err(_) => return Some(false),
             },
-            Err(_) => return false,
+            Err(_) => return None,
         };
         let ino_text = match text
             .strip_prefix("pipe:[")
             .and_then(|rest| rest.strip_suffix(']'))
         {
             Some(ino_text) => ino_text,
-            None => return false,
+            None => return Some(false),
         };
         let ino: u64 = match ino_text.parse() {
             Ok(ino) => ino,
-            Err(_) => return false,
+            Err(_) => return Some(false),
         };
         if !want.iter().any(|(_, wanted)| *wanted == ino) {
-            return false;
+            return Some(false);
         }
         // Direction first (cheap filter for read-end
         // copies — our own forks spare): only WRITE
         // holders block EOF.
-        let info1 = match read_fdinfo(fd) {
-            Some(info) => info,
-            None => return false,
-        };
+        let info1 = read_fdinfo(fd)?;
         if !fdinfo_flags_grant_write(&info1) {
-            return false;
+            return Some(false);
         }
         // Ino match: fully identify (ino alone could
         // collide across pipefs instances) — open
@@ -7481,11 +7491,12 @@ mod tests {
             .open(fd.path())
         {
             Ok(file) => file,
-            Err(_) => return false,
+            Err(_) => return None,
         };
         let opened_id = match pipe_dev_ino(file.as_raw_fd()) {
             Some(id) if want.contains(&id) => id,
-            _ => return false,
+            None => return None,
+            Some(_) => return Some(false),
         };
         // R19-005/R19-006: verification hook (regression
         // steering only — production passes None). Fires
@@ -7504,18 +7515,33 @@ mod tests {
         // fails here, even a same-pipe end-swap) and
         // re-stat the slot THROUGH the path (a swap to
         // another writable file fails the equality).
-        let info2 = match read_fdinfo(fd) {
-            Some(info) => info,
-            None => return false,
-        };
+        let info2 = read_fdinfo(fd)?;
         if !fdinfo_flags_grant_write(&info2) {
-            return false;
+            return Some(false);
         }
         let path_id = match std::fs::metadata(fd.path()) {
             Ok(meta) => (meta.dev(), meta.ino()),
-            Err(_) => return false,
+            Err(_) => return None,
         };
-        path_id == opened_id
+        Some(path_id == opened_id)
+    }
+
+    /// R21-002: bool holdership probe for discovery —
+    /// non-attribution is fail-closed for kill authority
+    /// (an unobservable fd is simply never attributed, and
+    /// discovery never kills on a `false`), so `None`
+    /// folds to `false` here. Retire-time re-verification
+    /// uses the strict form (a `None` there is
+    /// `Unverifiable` — skipping is sound, certifying
+    /// Shed on an unobserved fd is not).
+    #[cfg(target_arch = "x86_64")]
+    fn fd_holds_wanted_write_end(
+        fd: &std::fs::DirEntry,
+        pid: libc::pid_t,
+        want: &[(u64, u64)],
+        verify_hook: Option<&dyn Fn(libc::pid_t)>,
+    ) -> bool {
+        fd_holds_wanted_write_end_strict(fd, pid, want, verify_hook).unwrap_or(false)
     }
 
     /// R20-002: retire-time holdership re-verification for
@@ -7541,6 +7567,23 @@ mod tests {
         NotOurs,
     }
 
+    /// R21-002: one birth-bracket read — `Ok(())` pins
+    /// `(pid, tick)`; mismatch/gone is `NotOurs` (frame-safe
+    /// retire-anyway — the frame's own gates handle
+    /// recycle/gone and never kill there); a read ERROR is
+    /// `Unverifiable` (skip loud — a transient error healing
+    /// before frame entry would pass the birth gate and
+    /// murder a shedder, the R19-007 violation). Shared by
+    /// BOTH bracket reads (pre- and post-scan).
+    #[cfg(target_arch = "x86_64")]
+    fn bracket_birth(pid: libc::pid_t, tick: u64) -> Result<(), HoldVerdict> {
+        match proc_starttime(pid) {
+            Ok(Some(t)) if t == tick => Ok(()),
+            Ok(_) => Err(HoldVerdict::NotOurs),
+            Err(_) => Err(HoldVerdict::Unverifiable),
+        }
+    }
+
     /// R20-002: re-verify that `(pid, tick)` still holds a
     /// write end of one of `want` — the R19-005 birth
     /// bracket (tick before AND after the scan) around the
@@ -7560,17 +7603,46 @@ mod tests {
         budget: &PipeScanBudget,
         spent: &mut usize,
     ) -> HoldVerdict {
-        match proc_starttime(pid) {
-            Ok(Some(t)) if t == tick => {}
-            _ => return HoldVerdict::NotOurs,
+        reverify_pipe_holdership_with_hook(pid, tick, want, budget, spent, None)
+    }
+
+    /// R21-002: re-verify with a verification hook (fires
+    /// inside the per-fd predicate after an identity match
+    /// — regression steering only; production passes
+    /// `None`). Strict scan: ANY entry error or predicate
+    /// `None` (unobservable fd) reports `Unverifiable`
+    /// (never partial-Shed — an unobserved fd may be the
+    /// wanted end). Verdict precedence: `Holds` (positive
+    /// evidence stands even if a LATER fd faults) >
+    /// `Unverifiable` > `Shed` (complete walk, nothing
+    /// found).
+    #[cfg(target_arch = "x86_64")]
+    fn reverify_pipe_holdership_with_hook(
+        pid: libc::pid_t,
+        tick: u64,
+        want: &[(u64, u64)],
+        budget: &PipeScanBudget,
+        spent: &mut usize,
+        verify_hook: Option<&dyn Fn(libc::pid_t)>,
+    ) -> HoldVerdict {
+        if let Err(verdict) = bracket_birth(pid, tick) {
+            return verdict;
         }
         let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
             Ok(fds) => fds,
             Err(_) => return HoldVerdict::Unverifiable,
         };
         let mut holds = false;
+        let mut unobservable = false;
         let mut complete = true;
-        for fd in fds.flatten() {
+        // R21-002: strict entries (never `.flatten()` — a
+        // dropped entry error is an incomplete scan, and an
+        // incomplete scan is never Shed).
+        for entry in fds {
+            let fd = match entry {
+                Ok(fd) => fd,
+                Err(_) => return HoldVerdict::Unverifiable,
+            };
             // R21-013: cap OR deadline exhaustion truncates
             // the walk (checked before each fd — an expired
             // or zero budget scans nothing). A truncated
@@ -7583,21 +7655,27 @@ mod tests {
                 break;
             }
             *spent += 1;
-            if fd_holds_wanted_write_end(&fd, pid, want, None) {
-                holds = true;
-                break;
+            match fd_holds_wanted_write_end_strict(&fd, pid, want, verify_hook) {
+                Some(true) => {
+                    holds = true;
+                    break;
+                }
+                Some(false) => {}
+                None => {
+                    unobservable = true;
+                    break;
+                }
             }
         }
-        match proc_starttime(pid) {
-            Ok(Some(t)) if t == tick => {}
-            _ => return HoldVerdict::NotOurs,
+        if let Err(verdict) = bracket_birth(pid, tick) {
+            return verdict;
         }
         if holds {
             HoldVerdict::Holds
-        } else if complete {
-            HoldVerdict::Shed
-        } else {
+        } else if unobservable || !complete {
             HoldVerdict::Unverifiable
+        } else {
+            HoldVerdict::Shed
         }
     }
 
@@ -24268,6 +24346,236 @@ time.sleep(30)
         drop(writer);
         let _ = std::fs::remove_file(&flag_count);
         let _ = std::fs::remove_file(&flag_big);
+    }
+
+    /// R21-002(a) outage probe (fresh image only — the
+    /// wrapper spawns this with `SCOPEBASE_R21002_OUTAGE`;
+    /// a direct run skips loud): stage a holder of a wanted
+    /// write end, exhaust OUR fd table (genuine EMFILE —
+    /// the first bracket read fails), call reverify, and
+    /// report the verdict + birth. `Unverifiable` is the
+    /// survival proof (the frame skips it; only
+    /// Holds/NotOurs retire — and reverify itself never
+    /// kills, so the live holder provably survives the
+    /// faulted call). Duration 954 is unique to this probe.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reverify_outage_probe() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if std::env::var("SCOPEBASE_R21002_OUTAGE").is_err() {
+            eprintln!("skip: probe needs SCOPEBASE_R21002_OUTAGE=1 (run the wrapper)");
+            return;
+        }
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("954")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let _wguard = FixtureGuard::new(wpid);
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "collection pipe must identify");
+        // Genuine outage: confine + fill OUR table (fresh
+        // image — siblings unaffected, the limit dies with
+        // the probe). Declared AFTER the guard (drops first —
+        // restores reads before any retire re-verifies).
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "fault exhaustion must consume fds");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        let verdict = reverify_pipe_holdership(wpid, wtick, &want, &ample, &mut spent);
+        // The verdict IS the survival proof (reads are dead
+        // here, so no aliveness sample is possible — but
+        // reverify never kills, and Unverifiable is the
+        // frame's skip verdict).
+        eprintln!("R21002-OUTAGE verdict={verdict:?} pid={wpid} tick={wtick}");
+        drop(held);
+        drop(_confined);
+        // Cleanup (loud): explicitly retire OUR pair now
+        // reads work again.
+        assert!(
+            retire_tick_gated_audit_child(wpid, wtick),
+            "probe writer retire readable"
+        );
+        assert!(
+            await_proc_gone_reaping(wpid, wtick, Duration::from_secs(5)),
+            "probe writer must drain"
+        );
+        let _ = writer;
+        eprintln!("R21002-OUTAGE-DONE");
+    }
+
+    /// R21-002(a) wrapper: the outage probe's verdict must
+    /// be `Unverifiable` (a birth-read ERROR never reports
+    /// `NotOurs` — retire-anyway on error would murder a
+    /// shedder if the error healed before frame entry).
+    /// Failure first, then the verdict marker, then the
+    /// completion marker (a probe that dies mid-cleanup is
+    /// a failed regression even with the right verdict).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reverify_birth_error_skips_loud() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::reverify_outage_probe")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R21002_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete despite the outage\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R21002-OUTAGE verdict=Unverifiable"),
+            "birth-read error must report Unverifiable (never NotOurs)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R21002-OUTAGE-DONE"),
+            "probe must retire its writer after restore\n{stderr}"
+        );
+    }
+
+    /// R21-002(b) + anti-overcorrection (in-process — no
+    /// exhaustion, sibling-safe): a predicate observation
+    /// fault (the hook kills the holder after the identity
+    /// match, before the trailing reads) reports
+    /// `Unverifiable`, never a false `Shed`; a dead birth
+    /// (gone-or-recycled) still reports `NotOurs` (the
+    /// frame-safe retire-anyway — S100-guarded: a same-tick
+    /// recycle makes the arm vacuous, never wrong). The
+    /// strict-ENTRY arm (2 lines — a readdir error is never
+    /// flattened away) is review-covered: procfs getdents
+    /// has no deterministic error injection, and `DirEntry`
+    /// has no public constructor for a fake iterator.
+    /// Duration 955 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reverify_strict_predicate_never_sheds_unobserved() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("955")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let _wguard = FixtureGuard::new(wpid);
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "collection pipe must identify");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        // Predicate fault: the hook kills OUR writer after
+        // the identity match and SYNCHRONOUSLY awaits death
+        // (death is async — without the await the trailing
+        // read races the dying task and the verdict
+        // flaps). The trailing fdinfo read then
+        // deterministically fails on the zombie's released
+        // table. No reap inside the hook (the zombie pins
+        // the birth bracket — the verdict must come from
+        // the predicate fault, not the bracket).
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership_with_hook(
+                wpid,
+                wtick,
+                &want,
+                &ample,
+                &mut spent,
+                Some(&|pid| {
+                    assert!(kill_tick_gated(pid, wtick), "hook must kill our writer");
+                    let end = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        match proc_starttime(pid) {
+                            Ok(Some(t)) if t == wtick => {
+                                // Alive or zombie — poll the
+                                // state until Z (released).
+                                if proc_state(pid) == Some('Z') {
+                                    break;
+                                }
+                            }
+                            _ => break,
+                        }
+                        assert!(Instant::now() < end, "hook-killed writer must reach zombie");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }),
+            ),
+            HoldVerdict::Unverifiable,
+            "predicate observation fault must report Unverifiable (never false Shed)"
+        );
+        // Reap the hook-killed writer (bounded, loud), then
+        // the anti-overcorrection arm: a dead birth reports
+        // NotOurs (S100-guarded — same-tick recycle would
+        // pass the bracket and scan a stranger's table, so
+        // that arm is vacuous, never wrong).
+        let start = Instant::now();
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own killed child.
+            if unsafe { libc::waitpid(wpid, &mut status, libc::WNOHANG) } == wpid {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "hook-killed writer must reap"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        match proc_starttime(wpid) {
+            Ok(None) => {
+                let mut spent = 0;
+                assert_eq!(
+                    reverify_pipe_holdership(wpid, wtick, &want, &ample, &mut spent),
+                    HoldVerdict::NotOurs,
+                    "gone birth must report NotOurs (frame-safe retire-anyway)"
+                );
+            }
+            Ok(Some(now)) if now != wtick => {
+                let mut spent = 0;
+                assert_eq!(
+                    reverify_pipe_holdership(wpid, wtick, &want, &ample, &mut spent),
+                    HoldVerdict::NotOurs,
+                    "recycled birth must report NotOurs (frame-safe retire-anyway)"
+                );
+            }
+            Ok(Some(_)) => {
+                eprintln!("vacuous: same-tick recycle (S100) — bracket would pass");
+            }
+            Err(error) => panic!("dead-birth stat must stay readable: {error:?}"),
+        }
+        // Cleanup: the writer is already reaped (discharged
+        // above); drop the handle.
+        let _ = writer;
     }
 
     /// R19-009 (end-to-end): a collection expiry beside a
