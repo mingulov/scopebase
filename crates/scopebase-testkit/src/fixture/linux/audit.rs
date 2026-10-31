@@ -3954,18 +3954,22 @@ mod tests {
     /// O_NOFOLLOW + own-uid + regular-file (the
     /// read_published_grandchild_strays shape): a
     /// create→open re-plant refuses loud (ELOOP) instead of
-    /// following into a victim. Residual (S100-µs-class): a
-    /// fifo swapped in between create and open still blocks
-    /// the read-open (O_RDONLY on a fifo waits for a
-    /// writer) — the sequenced preplant is closed; a racing
-    /// plant is outside the modeled adversary (same as
-    /// IR-001).
+    /// following into a victim.
+    /// R20-009: O_NONBLOCK — a fifo swapped in between
+    /// create and open returns at once (O_RDONLY on a fifo
+    /// would wait for a writer forever, with the pinned
+    /// guard unable to unwind and no parent timeout) and
+    /// the regular-file check below refuses it. Regular
+    /// reads ignore NONBLOCK, so the happy path is
+    /// unaffected. No racing-plant residual remains on
+    /// this open (the R19-011 note accepted one — the flag
+    /// closes it outright).
     #[cfg(target_arch = "x86_64")]
     fn open_diag_read(path: &std::path::Path) -> Result<std::fs::File, String> {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
         let file = std::fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)
             .map_err(|error| format!("diagnostics {path:?} unreadable: {error}"))?;
         let meta = file
@@ -12390,6 +12394,74 @@ mod tests {
         assert_eq!(
             victim_content, b"r19011-sentinel",
             "victim must keep its sentinel"
+        );
+    }
+
+    /// R20-009: a fifo swapped in between diag create and
+    /// read-open must neither block the open nor be
+    /// followed. Pre-fix (blocking O_RDONLY) the open waits
+    /// for a writer forever (RED: the timeout fires — the
+    /// pinned guard cannot unwind while blocked, and no
+    /// parent times it out); post-fix (O_NONBLOCK) the open
+    /// returns at once and the regular-file check refuses.
+    /// Sequenced deterministically: create, positive open
+    /// (O_NONBLOCK must not break regular reads), swap in
+    /// a fifo, read-open under a bounded driver. The driver
+    /// unblocks the worker on RED (a writer releases the
+    /// read open) so even RED leaks no thread; the fifo is
+    /// removed on all paths before the verdict.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn diag_fifo_swap_never_blocks_read_open() {
+        use std::io::Read as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        let stem = format!("scopebase-r20009-fifo-{}", std::process::id());
+        let diag = std::env::temp_dir().join(format!("{stem}.log"));
+        let _ = std::fs::remove_file(&diag);
+        write_diag_excl(&diag, b"r20009 diagnostics\n").expect("diag created");
+        // Positive control: the real diag opens and reads.
+        let mut control = String::new();
+        open_diag_read(&diag)
+            .expect("regular diag must open")
+            .read_to_string(&mut control)
+            .expect("regular diag must read");
+        assert_eq!(control, "r20009 diagnostics\n", "control must read through");
+        // Swap in the fifo (the create→open re-plant,
+        // sequenced instead of racing).
+        std::fs::remove_file(&diag).expect("swap unlinks own diag");
+        let cpath =
+            std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
+        // SAFETY: mkfifo on our own temp path; mode 600.
+        assert_eq!(
+            unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+            0,
+            "fifo planted"
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_path = diag.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(open_diag_read(&worker_path));
+        });
+        let mut blocked = false;
+        let refused = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(result) => result,
+            Err(_) => {
+                blocked = true;
+                // Unblock the worker (a writer releases the
+                // read open; the worker then refuses on the
+                // type check and exits — even RED leaks no
+                // thread).
+                let _ = std::fs::OpenOptions::new().write(true).open(&diag);
+                rx.recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("worker must exit after unblock")
+            }
+        };
+        let _ = worker.join();
+        let _ = std::fs::remove_file(&diag);
+        assert!(!blocked, "read-open must not block on a swapped-in fifo");
+        assert!(
+            refused.is_err(),
+            "read-open must refuse a fifo, got {refused:?}"
         );
     }
 
