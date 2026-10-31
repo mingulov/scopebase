@@ -134,5 +134,10 @@ path = "src/bin/scopebase-tc02-invoke-denial.rs"
 required-features = ["linux-fixtures", "toolchain"]
 
 [[bin]]
+name = "scopebase-pair-publisher"
+path = "src/bin/scopebase-pair-publisher.rs"
+required-features = ["linux-fixtures"]
+
+[[bin]]
 name = "scopebase-select"
 path = "src/bin/scopebase-select.rs"

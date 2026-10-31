@@ -9220,9 +9220,9 @@ mod tests {
         // birth — a failed expect/assert anywhere below unwinds
         // through retirement, never an orphaned sleeper).
         let mut owned: Option<std::process::Child> = None;
-        let mut sh_parent: Option<std::process::Child> = None;
+        let mut staged_publisher: Option<std::process::Child> = None;
         let mut _zguard: Option<FixtureGuard> = None;
-        let mut _sh_guard: Option<FixtureGuard> = None;
+        let mut _publisher_guard: Option<FixtureGuard> = None;
         let mut _stranger_guard: Option<FixtureGuard> = None;
         // R19-012: birth guard for the owned live/gone/stolen
         // arm (armed at birth below — the transmit read must
@@ -9278,19 +9278,19 @@ mod tests {
                 pid
             }
             "stranger" | "stranger-replaced" => {
-                let mut parent = std::process::Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(pair_publisher_script("52", "wait"))
+                let mut parent = std::process::Command::new(pair_publisher_bin())
+                    .arg("52")
+                    .arg("wait")
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::null())
                     .spawn()
-                    .expect("sh parent spawns");
+                    .expect("publisher spawns");
                 // R16-011: custody AT birth for the parent (the
                 // reads below unwind through retirement).
-                _sh_guard = Some(FixtureGuard::new(parent.id() as libc::pid_t));
+                _publisher_guard = Some(FixtureGuard::new(parent.id() as libc::pid_t));
                 let mut line = String::new();
-                std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+                std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
                     .read_line(&mut line)
                     .expect("grandchild pid readable");
                 // R19-001: transmitted pair (no receiver
@@ -9315,7 +9315,7 @@ mod tests {
                     let got = unsafe { libc::waitpid(stranger, &mut status, libc::WNOHANG) };
                     assert!(got < 0, "staged stranger must not be our child");
                 }
-                sh_parent = Some(parent);
+                staged_publisher = Some(parent);
                 if mode == "stranger-replaced" {
                     // R20-005: kill the original, then steer a
                     // different-birth NON-CHILD replacement
@@ -9329,7 +9329,7 @@ mod tests {
                         0,
                         "original stranger signaled"
                     );
-                    // The original's shell reaps it and exits;
+                    // The original's publisher reaps it and exits;
                     // poll the number free.
                     let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
                     loop {
@@ -9339,7 +9339,7 @@ mod tests {
                         assert!(std::time::Instant::now() < end, "original number must free");
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
-                    // Drain the original shell itself (it exits
+                    // Drain the original publisher itself (it exits
                     // once its `wait` reaps the dead sleep):
                     // its zombie (usually at stranger-1 by
                     // spawn order) would shift every placement
@@ -9347,13 +9347,13 @@ mod tests {
                     // `stranger` and the grandchild would
                     // miss. The tail below re-observes the
                     // drained handle.
-                    if let Some(parent) = sh_parent.as_mut() {
+                    if let Some(parent) = staged_publisher.as_mut() {
                         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
                         loop {
                             if parent.try_wait().expect("parent wait").is_some() {
                                 break;
                             }
-                            assert!(std::time::Instant::now() < end, "sh parent must exit");
+                            assert!(std::time::Instant::now() < end, "publisher must exit");
                             std::thread::sleep(std::time::Duration::from_millis(1));
                         }
                     }
@@ -9684,7 +9684,7 @@ mod tests {
                     // under the middleman, the middleman is
                     // reaped (ours), the sleeper zombie
                     // reparents to init (polled gone — init
-                    // reaps), the original shell (long exited)
+                    // reaps), the original publisher (long exited)
                     // drains.
                     let rtick = repl_tick.expect("replacement staged");
                     assert_proc_settled_live(
@@ -9728,13 +9728,13 @@ mod tests {
                         assert!(Instant::now() < end, "init must reap the orphaned zombie");
                         std::thread::sleep(Duration::from_millis(1));
                     }
-                    let mut parent = sh_parent.expect("sh parent staged");
+                    let mut parent = staged_publisher.expect("publisher staged");
                     let end = Instant::now() + Duration::from_secs(10);
                     loop {
                         if parent.try_wait().expect("parent wait").is_some() {
                             break;
                         }
-                        assert!(Instant::now() < end, "sh parent must exit");
+                        assert!(Instant::now() < end, "publisher must exit");
                         std::thread::sleep(Duration::from_millis(10));
                     }
                     eprintln!("R15005-CHILD-DONE mode={mode}");
@@ -9747,13 +9747,13 @@ mod tests {
                 unsafe {
                     libc::kill(pid, libc::SIGKILL);
                 }
-                let mut parent = sh_parent.expect("sh parent staged");
+                let mut parent = staged_publisher.expect("publisher staged");
                 let end = Instant::now() + Duration::from_secs(10);
                 loop {
                     if parent.try_wait().expect("parent wait").is_some() {
                         break;
                     }
-                    assert!(Instant::now() < end, "sh parent must exit");
+                    assert!(Instant::now() < end, "publisher must exit");
                     std::thread::sleep(Duration::from_millis(10));
                 }
             }
@@ -11268,11 +11268,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         // Cleanup (runs on RED too): kill our staged task by
-        // number + tick, poll it gone, then reap the sh parent
+        // number + tick, poll it gone, then reap the publisher
         // (its `wait` ends with the grandchild). R15-003: the
-        // kill is tick-gated (on RED paths sh may have reaped
-        // the stranger already — a blind kill would murder a
-        // recycled replacement).
+        // kill is tick-gated (on RED paths the publisher may
+        // have reaped the stranger already — a blind kill
+        // would murder a recycled replacement).
         let _ = kill_tick_gated(stranger, stick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -11293,6 +11293,30 @@ mod tests {
         assert!(survived, "silent retire must not murder a live non-child");
     }
 
+    /// R20-004: locate the controlled pair-publisher bin.
+    /// `CARGO_BIN_EXE_*` exists for integration tests only;
+    /// unit tests resolve beside the deps dir (bins land in
+    /// target/debug/). Loud when missing — run the full
+    /// package suite (bins build with it; `--lib`-only
+    /// skips bin builds).
+    #[cfg(target_arch = "x86_64")]
+    fn pair_publisher_bin() -> std::path::PathBuf {
+        if let Some(known) = option_env!("CARGO_BIN_EXE_scopebase-pair-publisher") {
+            return std::path::PathBuf::from(known);
+        }
+        let mut exe = std::env::current_exe().expect("own test binary");
+        exe.pop();
+        if exe.ends_with("deps") {
+            exe.pop();
+        }
+        let bin = exe.join("scopebase-pair-publisher");
+        assert!(
+            bin.is_file(),
+            "publisher bin missing at {bin:?} (run the full package suite)"
+        );
+        bin
+    }
+
     /// R19-001: pipe-publisher script — the publisher reads
     /// its OWN unreaped child's starttime (field 22 of
     /// /proc/PID/stat; robust to spaces in comm via the
@@ -11305,6 +11329,14 @@ mod tests {
     /// with [`parse_published_pair`] and must NEVER
     /// first-read the tick (a gap replacement would
     /// self-authenticate).
+    /// R20-004: SUPERSEDED by the controlled
+    /// `scopebase-pair-publisher` bin (bash reaps at
+    /// command boundaries — the "only waits at the end"
+    /// claim is false). This builder survives only as the
+    /// historical record pinned by the golden below (the
+    /// rationale pin uses a slow inline variant the fast
+    /// text cannot express); all production callers spawn
+    /// the bin.
     #[cfg(target_arch = "x86_64")]
     fn pair_publisher_script(sleep_secs: &str, tail: &str) -> String {
         format!(
@@ -11351,13 +11383,180 @@ mod tests {
         assert_eq!((pid, tick), (1234, 5678));
     }
 
+    /// R20-004: rationale pin — `/bin/sh` (bash here) reaps
+    /// dead background children at command boundaries, so a
+    /// shell publisher CANNOT hold its child unreaped from
+    /// spawn to stat (every `;` past the kill is a reap
+    /// point). Slow inline script — the fast historical
+    /// bytes above cannot express the settle window: spawn,
+    /// print P, self-kill, cross boundaries (an external
+    /// `sleep 0.2` included), then stat P. REAPED is the
+    /// pinned behavior. If a future shell stops reaping,
+    /// this fails and the bin rationale must be revisited —
+    /// that failure is the pin doing its job. Duration 83
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn shell_publisher_reaps_at_command_boundaries() {
+        use std::io::BufRead as _;
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 83 & P=$!; echo $P; kill -9 $P; sleep 0.2; if [ -e /proc/$P/stat ]; then echo HELD; else echo REAPED; fi; wait 2>/dev/null; echo DONE")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        let pid: libc::pid_t = lines
+            .next()
+            .expect("pid line")
+            .expect("pid readable")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        assert!(pid > 0, "publisher must print its child");
+        let verdict = lines
+            .next()
+            .expect("verdict line")
+            .expect("verdict readable");
+        assert_eq!(
+            verdict.trim(),
+            "REAPED",
+            "shell must reap the dead background child at a command boundary"
+        );
+        let done = lines.next().expect("done line").expect("done readable");
+        assert_eq!(done.trim(), "DONE", "script must run to completion");
+        let status = sh.wait().expect("shell exit");
+        assert!(status.success(), "shell must exit clean");
+    }
+
+    /// R20-004: killing the publisher's child BEFORE the
+    /// stat must not corrupt the transmitted birth. The
+    /// controlled publisher never auto-reaps (no SIGCHLD
+    /// handler — unlike bash, which reaps dead background
+    /// children at command boundaries), so the stat names
+    /// the zombie's ORIGINAL birth and the pair is exact.
+    /// Pause-hook flow: spawn with
+    /// SCOPEBASE_PUBLISHER_PAUSE_FILE set (flag absent →
+    /// publisher waits post-spawn), find the child via the
+    /// publisher's children file, read its live tick,
+    /// SIGKILL it, poll ZOMBIE (dead-but-unreaped PROOF),
+    /// create the flag, read the pair, require the exact
+    /// original pair + exit 0 + the number discharged (the
+    /// wait tail reaps the zombie). Duration 72 is unique
+    /// to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pair_publisher_pause_hook_transmits_original_birth() {
+        use std::io::BufRead as _;
+        let flag =
+            std::env::temp_dir().join(format!("scopebase-r20004-pause-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("72")
+            .arg("wait")
+            .env("SCOPEBASE_PUBLISHER_PAUSE_FILE", &flag)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("publisher spawns");
+        let pubpid = publisher.id() as libc::pid_t;
+        // The publisher spawns its sleep, then waits on the
+        // absent flag — find the (exactly one) child.
+        let sleep = {
+            let mut found = None;
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < end {
+                let text =
+                    std::fs::read_to_string(format!("/proc/{pubpid}/task/{pubpid}/children"))
+                        .unwrap_or_default();
+                let kids: Vec<libc::pid_t> = text
+                    .split_whitespace()
+                    .filter_map(|w| w.parse().ok())
+                    .collect();
+                if kids.len() == 1 {
+                    found = Some(kids[0]);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            found.expect("publisher must stage exactly one sleep child")
+        };
+        // Original tick while live.
+        let orig = proc_starttime(sleep)
+            .expect("sleep stat readable")
+            .expect("sleep live");
+        // Kill; poll ZOMBIE (dead but still the
+        // publisher's — it never reaps before its wait).
+        // SAFETY: signal-only to the staged sleep.
+        assert_eq!(
+            unsafe { libc::kill(sleep, libc::SIGKILL) },
+            0,
+            "sleep signaled"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if proc_state(sleep) == Some('Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "sleep must zombify (publisher must not reap it)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // The pair must NOT be available yet (the
+        // publisher waits on the absent flag — death
+        // provably precedes the stat; a hook-ignoring
+        // publisher would already have printed).
+        {
+            use std::os::unix::io::AsRawFd as _;
+            let mut poller = libc::pollfd {
+                fd: publisher
+                    .stdout
+                    .as_ref()
+                    .expect("publisher stdout")
+                    .as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: polls our own pipe end, zero timeout.
+            let ready = unsafe { libc::poll(&mut poller, 1, 0) };
+            assert_eq!(ready, 0, "pair must wait on the absent flag (hook engaged)");
+        }
+        // Release; read the pair.
+        std::fs::write(&flag, "go").expect("flag created");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair line readable");
+        let output = publisher.wait_with_output().expect("publisher reaps");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&flag);
+        let (pid, tick) = parse_published_pair(line.trim(), "paused publication");
+        assert_eq!(
+            (pid, tick),
+            (sleep, orig),
+            "transmitted must name the original birth despite pre-stat death\n{stderr}"
+        );
+        assert!(output.status.success(), "publisher must exit 0\n{stderr}");
+        assert_eq!(
+            proc_starttime(sleep),
+            Ok(None),
+            "publisher must reap its zombie (wait tail)"
+        );
+    }
+
     /// R16-010: the PINNED path is the twin of IR-002's unpinned
     /// one — a tick-verified live NON-child (a staged
     /// grandchild, never ours to waitpid) dropped through
     /// `FixtureGuard` must DIE: the pin proves OUR task (a
     /// recycled number mismatches and spares, as before) and
-    /// SIGKILL is owed (its parent — the live `sh` — or init
-    /// reaps; nothing we do can reap it). Pre-fix the drop
+    /// SIGKILL is owed (its parent — the live publisher —
+    /// or init reaps; nothing we do can reap it). Pre-fix
+    /// the drop
     /// funnels into the child-only retire and ECHILDs without
     /// signaling (RED: the grandchild stays live); post-fix the
     /// verified arm signals (GREEN). The verdict reads /proc
@@ -11371,16 +11570,16 @@ mod tests {
     fn fixture_guard_drop_retires_verified_non_child() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("58", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("58")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (the publisher's own
@@ -11418,7 +11617,7 @@ mod tests {
             );
         } // Drop fires here.
         // R17-009: DISCHARGE required (not merely death) — the
-        // live shell reaps promptly; a lingering zombie past
+        // live publisher reaps promptly; a lingering zombie past
         // the window is unresolved (the old Z-or-gone verdict
         // masked undischarged kills). R17-010: strict
         // retirement evidence — proven absence or holder reuse
@@ -11427,8 +11626,8 @@ mod tests {
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (R15-003 —
         // a blind kill would risk a recycled replacement), poll
-        // gone, then reap the sh parent (its `wait` ends with
-        // the grandchild).
+        // gone, then reap the publisher (its `wait` ends
+        // with the grandchild).
         let _ = kill_tick_gated(grand, tick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -11443,7 +11642,7 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
@@ -11454,8 +11653,8 @@ mod tests {
 
     /// R17-009: kill an ADOPTED grandchild via the pinned drop,
     /// then require status DISCHARGE (not merely death). The
-    /// shell exits immediately (no wait) so the sleeper is
-    /// orphaned to init; the pinned drop signals it; init
+    /// publisher exits immediately (no wait) so the sleeper
+    /// is orphaned to init; the pinned drop signals it; init
     /// reaps. The verdict requires GONE — a lingering zombie
     /// past the window is unresolved (zombie-tolerant custody
     /// would report it, never claim retirement). Duration 40
@@ -11465,26 +11664,26 @@ mod tests {
     fn adopted_kill_discharges_through_init() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
-        let mut sh = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("40", "exit 0"))
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("40")
+            .arg("exit 0")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("orphan pid readable");
         // R19-001: transmitted pair (parsed before the
-        // shell is reaped — the tick crosses the publication,
+        // publisher is reaped — the tick crosses the publication,
         // never a post-gap first-read).
         let (orphan, otick) = parse_published_pair(line.trim(), "orphan publication");
-        // Reap the shell: the sleeper is necessarily adopted
+        // Reap the publisher: the sleeper is necessarily adopted
         // away (proven by construction — no ppid parse needed).
-        let status = sh.wait().expect("shell exit");
-        assert!(status.success(), "shell must exit clean");
+        let status = publisher.wait().expect("publisher exit");
+        assert!(status.success(), "publisher must exit clean");
         // Sanity: live, and not our child.
         assert!(
             matches!(proc_state(orphan), Some(state) if state != 'Z'),
@@ -11535,14 +11734,15 @@ mod tests {
     /// R18-006: probe body (fresh image,
     /// SCOPEBASE_R18006_SUBREAPER) — confined subreaper
     /// adoption schedule: the probe marks itself subreaper,
-    /// stages sh + stranger, SIGSTOPs the shell (frozen:
-    /// cannot reap), kills the stranger (zombie under the
-    /// frozen shell), then SIGKILLs the shell WITHOUT
-    /// reaping (dies unreaped) so the stranger zombie adopts
-    /// to the probe. Then run the ACTUAL shared
-    /// stranger-pair hygiene: bounded disappearance + status
-    /// discharged through the probe (our waitpid is the only
-    /// reaper — the shell provably never reaped). RED
+    /// stages publisher + stranger, SIGSTOPs the publisher
+    /// (frozen: cannot reap), kills the stranger (zombie
+    /// under the frozen publisher), then SIGKILLs the
+    /// publisher WITHOUT reaping (dies unreaped) so the
+    /// stranger zombie adopts to the probe. Then run the
+    /// ACTUAL shared stranger-pair hygiene: bounded
+    /// disappearance + status discharged through the probe
+    /// (our waitpid is the only reaper — the publisher
+    /// provably never reaped). RED
     /// (stat-only poll): the adopted zombie persists and the
     /// hygiene times out. Duration 71 is unique to this
     /// test (both harnesses).
@@ -11558,72 +11758,72 @@ mod tests {
             0,
             "probe must become a child subreaper"
         );
-        // The sh handle goes stale at hygiene retirement
-        // (raw-reaped) and is never touched after.
+        // The publisher handle goes stale at hygiene
+        // retirement (raw-reaped) and is never touched after.
         #[allow(clippy::zombie_processes)]
-        let mut sh = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("71", "wait"))
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("71")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("stranger pid readable");
         // R19-001: transmitted pair (no receiver
         // first-read).
         let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-        let shpid = sh.id() as libc::pid_t;
-        let shtick = proc_starttime(shpid)
-            .expect("shell stat readable")
-            .expect("shell visible");
+        let pubpid = publisher.id() as libc::pid_t;
+        let pubtick = proc_starttime(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
         // Staging custody (R18-008 pattern): a staging panic
-        // below must not strand a SIGSTOP-frozen shell (stopped
-        // tasks never self-clean — unlike running shells that
+        // below must not strand a SIGSTOP-frozen publisher (stopped
+        // tasks never self-clean — unlike running publishers that
         // exit by sleep expiry). SIGKILL works on stopped
         // tasks; the tick-gated drops stay silent once gone.
         // The stranger pair arrived via pipe
         // (expected-identity over the transmitted birth); the
-        // shell is our unreaped child (bare construction
+        // publisher is our unreaped child (bare construction
         // holds the reservation).
         let mut stranger_guard = FixtureGuard::new_expected(stranger, stick);
         assert!(
             stranger_guard.tick.is_some(),
             "stranger custody must pin (stage broken otherwise)"
         );
-        let mut shell_guard = FixtureGuard::new(shpid);
+        let mut publisher_guard = FixtureGuard::new(pubpid);
         assert!(
-            shell_guard.tick.is_some(),
-            "shell custody must pin (stage broken otherwise)"
+            publisher_guard.tick.is_some(),
+            "publisher custody must pin (stage broken otherwise)"
         );
-        // Freeze the shell: from here it cannot reap.
-        // SAFETY: SIGSTOP to our own staged shell.
+        // Freeze the publisher: from here it cannot reap.
+        // SAFETY: SIGSTOP to our own staged publisher.
         assert_eq!(
-            unsafe { libc::kill(shpid, libc::SIGSTOP) },
+            unsafe { libc::kill(pubpid, libc::SIGSTOP) },
             0,
-            "shell freeze"
+            "publisher freeze"
         );
         let end = Instant::now() + Duration::from_secs(5);
         loop {
-            if matches!(proc_state(shpid), Some(state) if state == 'T') {
+            if matches!(proc_state(pubpid), Some(state) if state == 'T') {
                 break;
             }
-            assert!(Instant::now() < end, "shell must stop");
+            assert!(Instant::now() < end, "publisher must stop");
             std::thread::sleep(Duration::from_millis(1));
         }
-        // Kill the stranger under the frozen shell (false
+        // Kill the stranger under the frozen publisher (false
         // only on unreadable stat — broken staging; liveness
-        // itself is proven by the Z-loop plus the shell-still-T
+        // itself is proven by the Z-loop plus the publisher-still-T
         // assert below, not by this return value).
         assert!(
             kill_tick_gated(stranger, stick),
             "stranger kill must not fail unreadable (broken staging)"
         );
-        // Non-vacuity: stranger Z while the shell is still T
-        // (the shell provably never reaped across the death).
+        // Non-vacuity: stranger Z while the publisher is still T
+        // (the publisher provably never reaped across the death).
         let end = Instant::now() + Duration::from_secs(5);
         loop {
             if matches!(proc_state(stranger), Some(state) if state == 'Z') {
@@ -11633,32 +11833,32 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(
-            matches!(proc_state(shpid), Some(state) if state == 'T'),
-            "shell still frozen at stranger death (else it may have reaped)"
+            matches!(proc_state(pubpid), Some(state) if state == 'T'),
+            "publisher still frozen at stranger death (else it may have reaped)"
         );
-        // Kill the shell WITHOUT reaping: dies unreaped, so
+        // Kill the publisher WITHOUT reaping: dies unreaped, so
         // the stranger zombie adopts to the probe (nearest
         // subreaper ancestor). A stopped task needs no CONT
         // to die by SIGKILL.
-        // SAFETY: SIGKILL to our own frozen shell.
+        // SAFETY: SIGKILL to our own frozen publisher.
         assert_eq!(
-            unsafe { libc::kill(shpid, libc::SIGKILL) },
+            unsafe { libc::kill(pubpid, libc::SIGKILL) },
             0,
-            "shell kill must land on the frozen shell"
+            "publisher kill must land on the frozen publisher"
         );
         // Run the ACTUAL shared hygiene, timed (caught: RED
         // cleanup below still retires before reporting).
         let start = Instant::now();
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            stranger_pair_hygiene(stranger, stick, shpid, shtick);
+            stranger_pair_hygiene(stranger, stick, pubpid, pubtick);
         }));
         if fired.is_err() {
             // RED cleanup (silent awaits — the loud verdict
             // below reports the hygiene failure).
             let _ = kill_tick_gated(stranger, stick);
-            let _ = retire_tick_gated_audit_child(shpid, shtick);
+            let _ = retire_tick_gated_audit_child(pubpid, pubtick);
             let _ = await_proc_gone_reaping(stranger, stick, Duration::from_secs(5));
-            let _ = await_proc_gone_reaping(shpid, shtick, Duration::from_secs(5));
+            let _ = await_proc_gone_reaping(pubpid, pubtick, Duration::from_secs(5));
         }
         // Loud verdict (with the caught hygiene message for
         // debuggability).
@@ -11685,8 +11885,8 @@ mod tests {
         );
         // Retired by the hygiene above — stand down.
         stranger_guard.disarm();
-        shell_guard.disarm();
-        // Discharge: our waitpid is the only reaper (the shell
+        publisher_guard.disarm();
+        // Discharge: our waitpid is the only reaper (the publisher
         // provably never reaped) — ECHILD now proves the
         // adoptee status discharged through the probe. (No own
         // fork can have recycled the number in-probe; a
@@ -11702,7 +11902,7 @@ mod tests {
         );
         // Shell number: original gone (a recycled
         // different-tick holder is not ours).
-        assert_audit_child_gone(shpid, shtick, "adopted-hygiene shell");
+        assert_audit_child_gone(pubpid, pubtick, "adopted-hygiene publisher");
         eprintln!("R18006-ADOPTED retired=1");
     }
 
@@ -11740,10 +11940,11 @@ mod tests {
 
     /// R19-014: probe body (fresh image,
     /// SCOPEBASE_R19014_SUBREAPER) — forced-adoption schedule
-    /// (R18-006 pattern: STOP-freeze the shell, kill the
-    /// stranger, settle Z with the shell still T, SIGKILL the
-    /// shell WITHOUT reaping so the zombie adopts to the
-    /// probe), then the ACTUAL shared staging verdict. RED
+    /// (R18-006 pattern: STOP-freeze the publisher, kill
+    /// the stranger, settle Z with the publisher still T,
+    /// SIGKILL the publisher WITHOUT reaping so the zombie
+    /// adopts to the probe), then the ACTUAL shared staging
+    /// verdict. RED
     /// (sample-first verdict): the sample catches the adopted
     /// zombie (Some) and fails even though assistance would
     /// reap it. GREEN (assist-then-sample): the verdict
@@ -11762,25 +11963,25 @@ mod tests {
             "probe must become a child subreaper"
         );
         #[allow(clippy::zombie_processes)]
-        let mut sh = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("79", "wait"))
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("79")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("stranger pid readable");
         // R19-001: transmitted pair (no receiver
         // first-read).
         let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-        let shpid = sh.id() as libc::pid_t;
-        let shtick = proc_starttime(shpid)
-            .expect("shell stat readable")
-            .expect("shell visible");
+        let pubpid = publisher.id() as libc::pid_t;
+        let pubtick = proc_starttime(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
         // Staging custody (R18-008 pattern — a staging panic
         // must not strand the pair; the drops below stay
         // silent once the verdict retires it).
@@ -11789,33 +11990,33 @@ mod tests {
             stranger_guard.tick.is_some(),
             "stranger custody must pin (stage broken otherwise)"
         );
-        let mut shell_guard = FixtureGuard::new(shpid);
+        let mut publisher_guard = FixtureGuard::new(pubpid);
         assert!(
-            shell_guard.tick.is_some(),
-            "shell custody must pin (stage broken otherwise)"
+            publisher_guard.tick.is_some(),
+            "publisher custody must pin (stage broken otherwise)"
         );
-        // Freeze the shell: from here it cannot reap.
-        // SAFETY: SIGSTOP to our own staged shell.
+        // Freeze the publisher: from here it cannot reap.
+        // SAFETY: SIGSTOP to our own staged publisher.
         assert_eq!(
-            unsafe { libc::kill(shpid, libc::SIGSTOP) },
+            unsafe { libc::kill(pubpid, libc::SIGSTOP) },
             0,
-            "shell freeze"
+            "publisher freeze"
         );
         let end = Instant::now() + Duration::from_secs(5);
         loop {
-            if matches!(proc_state(shpid), Some(state) if state == 'T') {
+            if matches!(proc_state(pubpid), Some(state) if state == 'T') {
                 break;
             }
-            assert!(Instant::now() < end, "shell must stop");
+            assert!(Instant::now() < end, "publisher must stop");
             std::thread::sleep(Duration::from_millis(1));
         }
-        // Kill the stranger under the frozen shell.
+        // Kill the stranger under the frozen publisher.
         assert!(
             kill_tick_gated(stranger, stick),
             "stranger kill must not fail unreadable (broken staging)"
         );
-        // Non-vacuity: stranger Z while the shell is still T
-        // (the shell provably never reaped across the death).
+        // Non-vacuity: stranger Z while the publisher is still T
+        // (the publisher provably never reaped across the death).
         let end = Instant::now() + Duration::from_secs(5);
         loop {
             if matches!(proc_state(stranger), Some(state) if state == 'Z') {
@@ -11825,26 +12026,26 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(
-            matches!(proc_state(shpid), Some(state) if state == 'T'),
-            "shell still frozen at stranger death (else it may have reaped)"
+            matches!(proc_state(pubpid), Some(state) if state == 'T'),
+            "publisher still frozen at stranger death (else it may have reaped)"
         );
-        // Kill the shell WITHOUT reaping: dies unreaped, so
+        // Kill the publisher WITHOUT reaping: dies unreaped, so
         // the stranger zombie adopts to the probe (nearest
         // subreaper ancestor). A stopped task needs no CONT
         // to die by SIGKILL.
-        // SAFETY: SIGKILL to our own frozen shell.
+        // SAFETY: SIGKILL to our own frozen publisher.
         assert_eq!(
-            unsafe { libc::kill(shpid, libc::SIGKILL) },
+            unsafe { libc::kill(pubpid, libc::SIGKILL) },
             0,
-            "shell kill must land on the frozen shell"
+            "publisher kill must land on the frozen publisher"
         );
         // The ACTUAL shared verdict (RED pre-fix: the sample
         // catches the adopted zombie; GREEN post-fix: the
         // verdict assists first). RED cleanup rides the
-        // guards (they reap the adoptee + shell on unwind).
-        stranger_staging_verdict(stranger, stick, shpid, shtick, Duration::from_secs(5));
+        // guards (they reap the adoptee + publisher on unwind).
+        stranger_staging_verdict(stranger, stick, pubpid, pubtick, Duration::from_secs(5));
         stranger_guard.disarm();
-        shell_guard.disarm();
+        publisher_guard.disarm();
         eprintln!("R19014-VERDICT retired=1");
     }
 
@@ -11894,29 +12095,29 @@ mod tests {
         use std::io::BufRead as _;
         use std::time::Duration;
         #[allow(clippy::zombie_processes)]
-        let mut sh = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("77", "wait"))
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("77")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("stranger pid readable");
         let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-        let shpid = sh.id() as libc::pid_t;
-        let shtick = proc_starttime(shpid)
-            .expect("shell stat readable")
-            .expect("shell visible");
+        let pubpid = publisher.id() as libc::pid_t;
+        let pubtick = proc_starttime(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
         // Own teardown (the verdict below must NOT retire —
         // the drops here do).
         let _stranger_guard = FixtureGuard::new_expected(stranger, stick);
-        let _shell_guard = FixtureGuard::new(shpid);
+        let _publisher_guard = FixtureGuard::new(pubpid);
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            stranger_staging_verdict(stranger, stick, shpid, shtick, Duration::from_millis(200));
+            stranger_staging_verdict(stranger, stick, pubpid, pubtick, Duration::from_millis(200));
         }));
         assert!(
             failed.is_err(),
@@ -11940,16 +12141,16 @@ mod tests {
         // exhaustion below (fresh image — the limit dies
         // with the probe).
         let _confined = confine_fd_table_for_exhaustion();
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("42", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("42")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (parsed pre-exhaustion —
@@ -12004,13 +12205,13 @@ mod tests {
             let _fired = pinned;
         })); // Drop fires here (scope end or unwind).
         // R17-009: DISCHARGE required (not merely death) — the
-        // live shell reaps promptly; a lingering zombie past
+        // live publisher reaps promptly; a lingering zombie past
         // the window is unresolved. R17-010: strict evidence —
         // unreadable samples keep polling and fail loud past
         // the bound.
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
-        // gone, reap the sh parent.
+        // gone, reap the publisher.
         let _ = kill_tick_gated(grand, tick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -12025,7 +12226,7 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(retired, "recovered pin must retire the known grandchild");
@@ -12085,16 +12286,16 @@ mod tests {
         // exhaustion below (fresh image — the limit dies
         // with the probe).
         let _confined = confine_fd_table_for_exhaustion();
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("44", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("44")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (no receiver
@@ -12105,7 +12306,7 @@ mod tests {
         // expected-identity per the R17-008 contract over the
         // transmitted birth). Any later panic (T-poll,
         // exhaustion, construction) retires through this guard
-        // instead of stranding a stopped task with its shell
+        // instead of stranding a stopped task with its publisher
         // waiting. The pin assert lands pre-stop: a staging
         // failure here leaks only RUNNING tasks (bounded
         // self-exit), never a stopped one.
@@ -12164,12 +12365,12 @@ mod tests {
         }));
         assert!(fired.is_err(), "injection must unwind");
         // Observe before cleanup: the frozen grandchild must
-        // be gone (signaled + reaped by the waiting sh).
+        // be gone (signaled + reaped by the waiting publisher).
         // R17-010: strict evidence — unreadable samples keep
         // polling and fail loud past the bound.
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (works
-        // on stopped tasks), poll gone, reap sh. The outer
+        // on stopped tasks), poll gone, reap publisher. The outer
         // stays armed through it (a cleanup-loop panic with
         // the grandchild still stopped must still retire —
         // the tick-gated drop stays silent once gone, so the
@@ -12188,11 +12389,11 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         // R18-008: teardown complete (grandchild proven gone,
-        // sh reaped) — stand the outer down.
+        // publisher reaped) — stand the outer down.
         outer.disarm();
         assert!(retired, "recovered pin must retire the frozen grandchild");
         eprintln!("R17007-MRECOVERED retired=1");
@@ -12239,25 +12440,25 @@ mod tests {
     /// T-poll/exhaustion/construction asserts): unwind must
     /// retire the stopped grandchild (stopped ⇒
     /// strand-forever without custody — the sleeper never
-    /// wakes to exit and the shell waits). RED (no outer
-    /// guard): the grandchild stays stopped and the
-    /// gone-await fails. In-process (no fd exhaustion here).
+    /// wakes to exit and the publisher waits). RED (no outer
+    /// guard): the grandchild stays stopped and the gone-await
+    /// fails. In-process (no fd exhaustion here).
     /// Duration 70 is unique to this test (both harnesses).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn frozen_post_stop_failure_retires_before_report() {
         use std::io::BufRead as _;
         use std::time::{Duration, Instant};
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("70", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("70")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (no receiver
@@ -12300,10 +12501,10 @@ mod tests {
         }));
         assert!(fired.is_err(), "injection must unwind");
         // Observe before cleanup: the frozen grandchild must
-        // be gone (outer-guard kill + the waiting sh's reap).
+        // be gone (outer-guard kill + the waiting publisher's reap).
         let retired = await_proc_gone_reaping(grand, pre_tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (works
-        // on stopped tasks), poll gone, reap sh.
+        // on stopped tasks), poll gone, reap publisher.
         let _ = kill_tick_gated(grand, pre_tick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -12318,7 +12519,7 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
@@ -12353,16 +12554,16 @@ mod tests {
         // exhaustion below (fresh image — the limit dies
         // with the probe).
         let _confined = confine_fd_table_for_exhaustion();
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("86", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("86")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (parsed pre-exhaustion —
@@ -12434,7 +12635,7 @@ mod tests {
         // gone (retired + discharged by the unwind-drop).
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
-        // gone, reap the sh parent.
+        // gone, reap the publisher.
         let _ = kill_tick_gated(grand, tick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -12449,7 +12650,7 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         // Cleanup runs on RED too (the steered plant is a
@@ -12745,16 +12946,16 @@ mod tests {
         // exhaustion below (fresh image — the limit dies
         // with the probe).
         let _confined = confine_fd_table_for_exhaustion();
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("909", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("909")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
+            .expect("publisher spawns");
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pair readable");
         let (grand, transmitted) = parse_published_pair(line.trim(), "grandchild publication");
@@ -12798,7 +12999,7 @@ mod tests {
         // the drop (RED: parked — the drop stood down).
         let retired = await_proc_gone_reaping(grand, transmitted, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
-        // gone, reap the sh parent.
+        // gone, reap the publisher.
         let _ = kill_tick_gated(grand, transmitted);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -12813,7 +13014,7 @@ mod tests {
             if parent.try_wait().expect("parent wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "sh parent must exit");
+            assert!(Instant::now() < end, "publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
@@ -13212,27 +13413,27 @@ mod tests {
             return;
         }
         // Pair publishers (production post-fix shape).
-        let spawn_sh = || {
-            std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg(pair_publisher_script("907", "wait"))
+        let spawn_publisher = || {
+            std::process::Command::new(pair_publisher_bin())
+                .arg("907")
+                .arg("wait")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .expect("sh spawns")
+                .expect("publisher spawns")
         };
-        let read_pair = |sh: &mut std::process::Child| -> (libc::pid_t, u64) {
+        let read_pair = |publisher: &mut std::process::Child| -> (libc::pid_t, u64) {
             let mut line = String::new();
-            std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
                 .expect("sleep pair readable");
             parse_published_pair(line.trim(), "sleep publication")
         };
-        let mut sh1 = spawn_sh();
-        let (want, transmitted) = read_pair(&mut sh1);
+        let mut pub1 = spawn_publisher();
+        let (want, transmitted) = read_pair(&mut pub1);
         // Steering kill (choreography, using the transmitted
-        // birth — sh1 holds its child unreaped, so the number
+        // birth — pub1 holds its child unreaped, so the number
         // is stable): drives the pause-scale lifecycle below.
         assert!(
             kill_tick_gated(want, transmitted),
@@ -13240,43 +13441,43 @@ mod tests {
         );
         let end = Instant::now() + Duration::from_secs(10);
         loop {
-            if sh1.try_wait().expect("sh1 wait").is_some() {
+            if pub1.try_wait().expect("pub1 wait").is_some() {
                 break;
             }
-            assert!(Instant::now() < end, "publishing shell must exit");
+            assert!(Instant::now() < end, "publishing publisher must exit");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(proc_starttime(want), Ok(None), "number must free");
-        // REPLACE: steer sh2's sleeper (a non-child) onto the
-        // freed number. sh2 transmits its own pair — the
+        // REPLACE: steer pub2's sleeper (a non-child) onto the
+        // freed number. pub2 transmits its own pair — the
         // replacement's birth arrives without any receiver
-        // first-read (sh2 holds it unreaped throughout).
+        // first-read (pub2 holds it unreaped throughout).
         let _nsflock = ns_last_pid_flock();
         let mut placed = None;
         for _ in 0..100 {
             if !audit_steer_next_pid_unlocked(want - 1) {
                 break;
             }
-            let mut sh2 = spawn_sh();
-            let (sleep, sleep_tick) = read_pair(&mut sh2);
+            let mut pub2 = spawn_publisher();
+            let (sleep, sleep_tick) = read_pair(&mut pub2);
             if sleep == want {
                 if sleep_tick != transmitted {
-                    placed = Some((sh2, sleep_tick));
+                    placed = Some((pub2, sleep_tick));
                     break;
                 }
                 let _ = kill_tick_gated(want, transmitted);
-                let _ = sh2.kill();
-                let _ = sh2.wait();
+                let _ = pub2.kill();
+                let _ = pub2.wait();
                 drop(_nsflock);
                 audit_locked_restore_hint(&last_before);
                 eprintln!("skip: same-tick retake (S100 — untestable this run)");
                 return;
             }
-            // Miss: retire via the transmitted birth (sh2
-            // holds it unreaped), then its shell.
+            // Miss: retire via the transmitted birth (pub2
+            // holds it unreaped), then its publisher.
             let _ = kill_tick_gated(sleep, sleep_tick);
-            let _ = sh2.kill();
-            let _ = sh2.wait();
+            let _ = pub2.kill();
+            let _ = pub2.wait();
         }
         let mut restore_guard = placed.as_ref().map(|_| FixtureGuard::new(want));
         drop(_nsflock);
@@ -13284,7 +13485,7 @@ mod tests {
         if let Some(guard) = restore_guard.as_mut() {
             guard.disarm();
         }
-        let (mut sh2, replacetick) = match placed {
+        let (mut pub2, replacetick) = match placed {
             Some(placed) => placed,
             None => {
                 eprintln!("skip: replacement retake contended");
@@ -13312,7 +13513,7 @@ mod tests {
             2,
             "replacement must survive resumed acquisition",
         );
-        // Cleanup: retire the replacement, reap sh2.
+        // Cleanup: retire the replacement, reap pub2.
         let _ = kill_tick_gated(want, replacetick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -13322,7 +13523,7 @@ mod tests {
             assert!(Instant::now() < end, "replacement must die in cleanup");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let _ = sh2.wait();
+        let _ = pub2.wait();
     }
 
     /// R18-003: an expected-identity REFUSAL must stand down —
@@ -13623,29 +13824,29 @@ mod tests {
         // assert — `zstate` is the ns-anchored retirement
         // proof (same hint-thief exposure as obs).
         assert!(zomb.is_err(), "zombie failure must report");
-        // Arm STRANGER: sh + grandchild, failure injected after
-        // staging (the EMFILE stranger shape).
+        // Arm STRANGER: publisher + grandchild, failure
+        // injected after staging (the EMFILE stranger shape).
         // R18-007: the handle goes stale at guard retirement
         // (raw-reaped) and is never touched after — the
         // tick-gated tail below owns teardown (a post-reap
         // handle kill/wait would murder or steal a recycled
         // number's replacement).
         #[allow(clippy::zombie_processes)]
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(pair_publisher_script("47", "wait"))
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("47")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("sh parent spawns");
-        let sh = parent.id() as libc::pid_t;
+            .expect("publisher spawns");
+        let publisher = parent.id() as libc::pid_t;
         // Outer custody for the pre-catch reads (the inner
         // guards below are the tested artifact; these only
         // cover staging and verify silent at the end).
-        let mut outer_sh = FixtureGuard::new(sh);
+        let mut outer_publisher = FixtureGuard::new(publisher);
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
         // R19-001: transmitted pair (no receiver
@@ -13654,28 +13855,28 @@ mod tests {
         // refuses instead of authenticating the replacement).
         let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
         let mut outer_stranger = FixtureGuard::new_expected(stranger, stick);
-        let shtick = proc_starttime(sh)
-            .expect("sh stat readable")
-            .expect("sh present");
+        let pubtick = proc_starttime(publisher)
+            .expect("publisher stat readable")
+            .expect("publisher present");
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _sh_guard = FixtureGuard::new(sh);
+            let _publisher_guard = FixtureGuard::new(publisher);
             // R17-008: expected-identity — the stranger's tick
             // was read just above (refuse a recycled number).
             let _stranger_guard = FixtureGuard::new_expected(stranger, stick);
             panic!("R16011 injected stranger-staging failure");
         }));
         // R19-014: verdict pre-arms (R18-010: unconditional).
-        stranger_staging_verdict(stranger, stick, sh, shtick, Duration::from_secs(5));
+        stranger_staging_verdict(stranger, stick, publisher, pubtick, Duration::from_secs(5));
         // R18-007: tick-gated tail (shared helper — the
         // guards above already raw-reaped, so the owned
         // handle is stale and never touched again).
-        // R18-007 arm 1 (live): retake sh's discharged number,
+        // R18-007 arm 1 (live): retake publisher's discharged number,
         // then run the FULL tail — bounded completion with the
         // replacement alive (RED: the stale handle kill murders
         // it / the stale wait blocks on its lifetime).
-        if let Some((mut live, mut live_guard)) = plant_replacement(sh, shtick) {
+        if let Some((mut live, mut live_guard)) = plant_replacement(publisher, pubtick) {
             let start = Instant::now();
-            stranger_pair_hygiene(stranger, stick, sh, shtick);
+            stranger_pair_hygiene(stranger, stick, publisher, pubtick);
             // R17-003: SIGKILL-settle (100ms, 10x margin).
             std::thread::sleep(Duration::from_millis(100));
             assert!(
@@ -13693,12 +13894,12 @@ mod tests {
         // R18-007 arm 2 (zombie): the replacement's status must
         // stay with its owner (RED: stolen by the stale
         // handle wait).
-        if let Some((mut zombie, mut guard)) = plant_replacement(sh, shtick) {
+        if let Some((mut zombie, mut guard)) = plant_replacement(publisher, pubtick) {
             assert!(
-                settle_replacement_zombie(&mut zombie, sh),
+                settle_replacement_zombie(&mut zombie, publisher),
                 "replacement never zombied (broken staging)"
             );
-            stranger_pair_hygiene(stranger, stick, sh, shtick);
+            stranger_pair_hygiene(stranger, stick, publisher, pubtick);
             assert!(
                 matches!(zombie.try_wait(), Ok(Some(_))),
                 "zombie replacement status must stay with its owner"
@@ -13709,8 +13910,8 @@ mod tests {
         // vacuous: the originals still hold their numbers, so
         // no plant can land — without this the pair leaks and
         // the gone-poll never runs).
-        stranger_pair_hygiene(stranger, stick, sh, shtick);
-        outer_sh.disarm();
+        stranger_pair_hygiene(stranger, stick, publisher, pubtick);
+        outer_publisher.disarm();
         outer_stranger.disarm();
         // R19-014: retirement verdict ran pre-arms (shared
         // helper above) — only the failure report remains.
@@ -19140,44 +19341,44 @@ mod tests {
             eprintln!("skip: ns_last_pid unwritable (no reuse control)");
             return;
         }
-        let spawn_sh = |sleep: &str| {
-            std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg(pair_publisher_script(sleep, "wait"))
+        let spawn_publisher = |sleep: &str| {
+            std::process::Command::new(pair_publisher_bin())
+                .arg(sleep)
+                .arg("wait")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
                 .spawn()
-                .expect("sh spawns")
+                .expect("publisher spawns")
         };
-        let read_pair = |sh: &mut std::process::Child| -> (libc::pid_t, u64) {
+        let read_pair = |publisher: &mut std::process::Child| -> (libc::pid_t, u64) {
             let mut line = String::new();
-            std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
                 .expect("sleep pair readable");
             parse_published_pair(line.trim(), "sleep publication")
         };
-        // Victim parent sh1 (our child) + its sleeper C1.
-        let mut sh1 = spawn_sh("912");
-        let sh1pid = sh1.id() as libc::pid_t;
-        let (c1, c1tick) = read_pair(&mut sh1);
-        let sh1tick = proc_starttime(sh1pid)
-            .expect("sh1 stat readable")
-            .expect("sh1 visible");
+        // Victim parent pub1 (our child) + its sleeper C1.
+        let mut pub1 = spawn_publisher("912");
+        let pub1pid = pub1.id() as libc::pid_t;
+        let (c1, c1tick) = read_pair(&mut pub1);
+        let pub1tick = proc_starttime(pub1pid)
+            .expect("pub1 stat readable")
+            .expect("pub1 visible");
         // Steering state (the snapshot seam runs on this
         // thread; the frame borrows it by shared ref).
         struct Steer {
             calls: u32,
             held: Vec<std::fs::File>,
-            sh1: Option<std::process::Child>,
-            sh2: Option<std::process::Child>,
+            pub1: Option<std::process::Child>,
+            pub2: Option<std::process::Child>,
             cprime: Option<(libc::pid_t, u64)>,
         }
         let state = std::cell::RefCell::new(Steer {
             calls: 0,
             held: Vec::new(),
-            sh1: Some(sh1),
-            sh2: None,
+            pub1: Some(pub1),
+            pub2: None,
             cprime: None,
         });
         // Placement exclusion across the frame (the recycle
@@ -19190,7 +19391,7 @@ mod tests {
         // frame).
         let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let result = retire_stray_tree_frame_with(sh1pid, sh1tick, deadline, 0, &|_pid| -> (
+        let result = retire_stray_tree_frame_with(pub1pid, pub1tick, deadline, 0, &|_pid| -> (
             Vec<(libc::pid_t, u64)>,
             bool,
         ) {
@@ -19199,28 +19400,28 @@ mod tests {
             if state.calls == 1 {
                 // In-window recycle (models a genuine
                 // recycle between the frame's gate and its
-                // initial snapshot): retire sh1, steer sh2
+                // initial snapshot): retire pub1, steer pub2
                 // onto its number, THEN exhaust across the
                 // pin (spawn + pair read need fds first).
-                let mut sh1 = state.sh1.take().expect("sh1 staged");
-                assert!(kill_tick_gated(sh1pid, sh1tick), "victim parent signaled");
-                let _ = sh1.wait();
-                assert_eq!(proc_starttime(sh1pid), Ok(None), "victim number must free");
-                if !audit_steer_next_pid_unlocked(sh1pid) {
+                let mut pub1 = state.pub1.take().expect("pub1 staged");
+                assert!(kill_tick_gated(pub1pid, pub1tick), "victim parent signaled");
+                let _ = pub1.wait();
+                assert_eq!(proc_starttime(pub1pid), Ok(None), "victim number must free");
+                if !audit_steer_next_pid_unlocked(pub1pid) {
                     return (Vec::new(), true);
                 }
-                let mut sh2 = spawn_sh("913");
-                let sh2pid = sh2.id() as libc::pid_t;
-                let (cprime, cptick) = read_pair(&mut sh2);
-                if sh2pid != sh1pid {
+                let mut pub2 = spawn_publisher("913");
+                let pub2pid = pub2.id() as libc::pid_t;
+                let (cprime, cptick) = read_pair(&mut pub2);
+                if pub2pid != pub1pid {
                     // Steering miss (placement contention):
                     // park cleanly; the caller skips.
                     let _ = kill_tick_gated(cprime, cptick);
-                    let _ = sh2.kill();
-                    let _ = sh2.wait();
+                    let _ = pub2.kill();
+                    let _ = pub2.wait();
                     return (Vec::new(), true);
                 }
-                state.sh2 = Some(sh2);
+                state.pub2 = Some(pub2);
                 state.cprime = Some((cprime, cptick));
                 // Exhaust across the pin (the frame's
                 // pidfd_open + re-read run next).
@@ -19238,27 +19439,27 @@ mod tests {
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
         let mut state = state.borrow_mut();
-        let (sh2opt, cprime) = (state.sh2.take(), state.cprime);
+        let (sh2opt, cprime) = (state.pub2.take(), state.cprime);
         drop(state);
         // Steering-miss skip (placement contention above).
-        let (mut sh2, (cprime, cptick)) = match (sh2opt, cprime) {
-            (Some(sh2), Some(pair)) => (sh2, pair),
+        let (mut pub2, (cprime, cptick)) = match (sh2opt, cprime) {
+            (Some(pub2), Some(pair)) => (pub2, pair),
             _ => {
                 eprintln!("skip: replacement steering missed");
                 return;
             }
         };
-        // Non-vacuity: sh2 really sits on sh1's number with a
+        // Non-vacuity: pub2 really sits on pub1's number with a
         // different birth (else the recycle never staged).
-        let sh2tick = proc_starttime(sh1pid)
+        let pub2tick = proc_starttime(pub1pid)
             .expect("replacement stat readable")
             .expect("replacement visible");
-        if sh2tick == sh1tick {
+        if pub2tick == pub1tick {
             // Same-tick retake (S100): retire everything,
             // skip loud.
             let _ = kill_tick_gated(cprime, cptick);
-            let _ = sh2.kill();
-            let _ = sh2.wait();
+            let _ = pub2.kill();
+            let _ = pub2.wait();
             let _ = kill_tick_gated(c1, c1tick);
             let end = Instant::now() + Duration::from_secs(2);
             loop {
@@ -19293,13 +19494,13 @@ mod tests {
             "replacement child must survive the kept union",
         );
         assert_proc_settled_live(
-            sh1pid,
-            sh2tick,
+            pub1pid,
+            pub2tick,
             2,
             "replacement parent must survive the kept union",
         );
         // Cleanup: retire the replacement child (its status
-        // drains to sh2), reap sh2, retire orphaned C1.
+        // drains to pub2), reap pub2, retire orphaned C1.
         let _ = kill_tick_gated(cprime, cptick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
@@ -19309,7 +19510,7 @@ mod tests {
             assert!(Instant::now() < end, "replacement child must die");
             std::thread::sleep(Duration::from_millis(10));
         }
-        let status = sh2.wait().expect("replacement parent reaps");
+        let status = pub2.wait().expect("replacement parent reaps");
         assert!(status.success(), "replacement parent must exit clean");
         let _ = kill_tick_gated(c1, c1tick);
         let end = Instant::now() + Duration::from_secs(10);
