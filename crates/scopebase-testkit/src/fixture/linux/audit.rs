@@ -12183,23 +12183,16 @@ mod tests {
         // R19-001: transmitted pair (no receiver
         // first-read).
         let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-        let pubpid = publisher.id() as libc::pid_t;
-        let pubtick = proc_starttime(pubpid)
-            .expect("publisher stat readable")
-            .expect("publisher visible");
-        // Staging custody (R18-008 pattern — a staging panic
-        // must not strand the pair; the drops below stay
-        // silent once the verdict retires it).
+        // R20-010: custody immediately after parse (the
+        // stat below must never run unguarded).
         let mut stranger_guard = FixtureGuard::new_expected(stranger, stick);
         assert!(
             stranger_guard.tick.is_some(),
             "stranger custody must pin (stage broken otherwise)"
         );
-        let mut publisher_guard = FixtureGuard::new(pubpid);
-        assert!(
-            publisher_guard.tick.is_some(),
-            "publisher custody must pin (stage broken otherwise)"
-        );
+        let pubtick = proc_starttime(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
         // Freeze the publisher: from here it cannot reap.
         // SAFETY: SIGSTOP to our own staged publisher.
         assert_eq!(
@@ -12284,6 +12277,96 @@ mod tests {
             stderr.contains("R19014-VERDICT retired=1"),
             "probe must cite the verdict\n{stderr}"
         );
+    }
+
+    /// R20-010(2): custody at each pair-setup step — the
+    /// R19-014 probes ran spawn/read/parse/stat `.expect`s
+    /// with no guard (a panic stranded the pair). Two
+    /// phases: (a) guards at spawn (publisher) and parse
+    /// (stranger), then an injected failure → unwind retires
+    /// both; (b) the realistic shape — the publisher dies
+    /// before its stat read (`.expect("publisher visible")`
+    /// panics) → unwind retires the stranger through its
+    /// guard. Observe-before-cleanup (evidence, explicit
+    /// retire of leftovers, then the verdict — RED runs stay
+    /// clean). Durations 925/926 are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pair_setup_failure_retires_guarded_fixtures() {
+        use std::io::BufRead as _;
+        use std::time::Duration;
+        // Phase (a): injected failure after setup.
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("925")
+            .arg("wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("publisher spawns");
+        let pubpid = publisher.id() as libc::pid_t;
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("stranger pair readable");
+        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
+        let pubtick_a = proc_starttime(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Custody at each step (the fix): publisher at
+            // spawn, stranger at parse — the injected
+            // failure unwinds through both.
+            let _publisher_guard = FixtureGuard::new(pubpid);
+            let _stranger_guard = FixtureGuard::new_expected(stranger, stick);
+            panic!("R20010 injected post-setup failure");
+        }));
+        let gone_pub_a = await_proc_gone_reaping(pubpid, pubtick_a, Duration::from_secs(5));
+        let gone_str_a = await_proc_gone_reaping(stranger, stick, Duration::from_secs(5));
+        let _ = kill_tick_gated(stranger, stick);
+        let _ = publisher.kill();
+        let _ = publisher.wait();
+        assert!(failed.is_err(), "phase (a) must inject the failure");
+        assert!(
+            gone_pub_a && gone_str_a,
+            "phase (a) unwind must retire the pair"
+        );
+        // Phase (b): publisher dies before its stat read.
+        let mut publisher_b = std::process::Command::new(pair_publisher_bin())
+            .arg("926")
+            .arg("wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("publisher spawns");
+        let pubpid_b = publisher_b.id() as libc::pid_t;
+        let mut line_b = String::new();
+        std::io::BufReader::new(publisher_b.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line_b)
+            .expect("stranger pair readable");
+        let (stranger_b, stick_b) = parse_published_pair(line_b.trim(), "stranger publication");
+        let pubtick_b = proc_starttime(pubpid_b)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
+        let failed_b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _publisher_guard = FixtureGuard::new(pubpid_b);
+            let _stranger_guard = FixtureGuard::new_expected(stranger_b, stick_b);
+            assert!(kill_tick_gated(pubpid_b, pubtick_b));
+            let mut status = 0;
+            // SAFETY: blocking reap of our own killed child.
+            let got = unsafe { libc::waitpid(pubpid_b, &mut status, 0) };
+            assert_eq!(got, pubpid_b, "publisher reaps");
+            let _ = proc_starttime(pubpid_b)
+                .expect("publisher stat readable")
+                .expect("publisher visible");
+        }));
+        let gone_str_b = await_proc_gone_reaping(stranger_b, stick_b, Duration::from_secs(5));
+        let _ = kill_tick_gated(stranger_b, stick_b);
+        let _ = publisher_b.kill();
+        let _ = publisher_b.wait();
+        assert!(failed_b.is_err(), "phase (b) stat must fail");
+        assert!(gone_str_b, "phase (b) unwind must retire the stranger");
     }
 
     /// R19-014: sensitivity lock — the shared verdict must
@@ -22004,6 +22087,143 @@ time.sleep(30)
         Some((g, ltick, cpid, ctick))
     }
 
+    /// R20-010(3): skip-path C custody for the drain-mandate
+    /// skips — retire C, then prove drained. `context`
+    /// carries the site's drained-expectation rationale.
+    /// Retire-first is a no-op when pass 1 already reaped
+    /// (the gated kill skips non-ours, the waitpid ECHILDs);
+    /// the explicit drained-proof then requires `Ok(None)`
+    /// or a foreign birth — `Err` or still-ours fails loud
+    /// (the old vacuous `assert_ne!` passed on `Err`, and an
+    /// outage skipped with a known-zombie C undrained).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_and_prove_drained_for_skip(cpid: libc::pid_t, ctick: u64, context: &str) {
+        use std::time::{Duration, Instant};
+        // Retire first WITHOUT reads (the tick gate needs
+        // /proc — dead under outage): discriminate by
+        // kernel parenthood instead. waitpid == cpid ⟹ our
+        // zombie, reaped; ECHILD ⟹ foreign-or-gone, hands
+        // off; 0 ⟹ OUR live child (a foreigner would
+        // ECHILD), safe to signal — the µs waitpid→kill
+        // window matches the accepted gate→signal residual.
+        // Silent no-op when pass 1 already drained.
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG waitpid on the staged pid.
+            let waited = unsafe { libc::waitpid(cpid, &mut status, libc::WNOHANG) };
+            if waited == cpid {
+                break;
+            }
+            if waited == -1 {
+                let errno = std::io::Error::last_os_error().raw_os_error();
+                if errno == Some(libc::ECHILD) {
+                    break;
+                }
+                if errno == Some(libc::EINTR) {
+                    continue;
+                }
+                panic!("waitpid on C failed unexpectedly: {errno:?} ({context})");
+            }
+            // Proven-ours live child — signal it (an ESRCH
+            // race just means the next waitpid reaps).
+            // SAFETY: signal-only to our proven-own child.
+            unsafe {
+                libc::kill(cpid, libc::SIGKILL);
+            }
+            assert!(
+                Instant::now() < end,
+                "C must drain for the skip ({context})"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Explicit drained-proof (never vacuous on Err).
+        match proc_starttime(cpid) {
+            Ok(None) => {}
+            Ok(Some(t)) if t != ctick => {}
+            Ok(Some(_)) => panic!("C survived skip-path retire ({context})"),
+            Err(error) => panic!("C drain unprovable under outage ({context}): {error:?}"),
+        }
+    }
+
+    /// R20-010(3): an anchor/stat outage on the skip path
+    /// must fail loud, never skip over an unproven C — the
+    /// vacuous `assert_ne!` passed on `Err` (same outage as
+    /// the anchor's, realistic under ambient EMFILE
+    /// pressure) and skipped with a known-zombie C
+    /// undrained. Stages a live own child C, exhausts the fd
+    /// table, runs the skip-path helper: RED (vacuous
+    /// shape): the assert passes on `Err` and returns
+    /// normally (silent skip over a live C). GREEN: the
+    /// helper retires C (fd-less kill+reap works exhausted),
+    /// then the drained proof fails loud on `Err`. Requires
+    /// the panic (loud) + C gone after restore (nothing
+    /// stranded). Duration 929 is unique to this test.
+    /// Fresh-image probe body (exhausts the fd table).
+    #[cfg(target_arch = "x86_64")]
+    fn skip_path_outage_fails_loud_probe() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("929")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let cpid = child.id() as libc::pid_t;
+        let ctick = proc_starttime(cpid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retire_and_prove_drained_for_skip(cpid, ctick, "probe outage");
+        }));
+        drop(held);
+        let gone = proc_starttime(cpid) != Ok(Some(ctick));
+        let _ = kill_tick_gated(cpid, ctick);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(failed.is_err(), "outage must fail loud, never skip silent");
+        assert!(gone, "outage path must not strand C");
+        eprintln!("R20010-SKIP-OUTAGE-DONE");
+    }
+
+    /// R20-010(3) wrapper: the skip-outage probe runs
+    /// fresh-image (it exhausts the fd table — the limit
+    /// dies with the probe).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn skip_path_outage_fails_loud() {
+        if std::env::var("SCOPEBASE_R20010_SKIP_OUTAGE").is_ok() {
+            skip_path_outage_fails_loud_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::skip_path_outage_fails_loud")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R20010_SKIP_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the skip-outage case\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R20010-SKIP-OUTAGE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
     /// R19-008 (between passes): the group drain must re-run
     /// its anchor every pass — a same-process reform between
     /// passes (recycled number + self-group + zombie) keeps
@@ -22200,10 +22420,10 @@ time.sleep(30)
             // zombie would keep its birth, so absence proves
             // discharge — a foreign birth means the suite
             // recycled the freed number under load).
-            assert_ne!(
-                proc_starttime(cpid),
-                Ok(Some(ctick)),
-                "C was drained by pass 1 (stage broken otherwise)"
+            retire_and_prove_drained_for_skip(
+                cpid,
+                ctick,
+                "C was drained by pass 1 (stage broken otherwise)",
             );
             eprintln!("skip: reform steering missed");
             return;
@@ -22455,11 +22675,7 @@ time.sleep(30)
             // stray is already discharged above, so only an
             // external same-tick retake could still collide —
             // negligible, and loud if it ever does).
-            assert_ne!(
-                proc_starttime(cpid),
-                Ok(Some(ctick)),
-                "C status must already be drained"
-            );
+            retire_and_prove_drained_for_skip(cpid, ctick, "C status must already be drained");
             eprintln!("skip: reform steering missed");
             return;
         }

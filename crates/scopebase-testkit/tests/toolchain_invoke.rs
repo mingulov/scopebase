@@ -6114,6 +6114,10 @@ fn expected_pin_refusal_spares_live_owned_child() {
         .spawn()
         .expect("sleeper spawns");
     let pid = child.id() as i32;
+    // R20-010: custody AT birth (mirror the audit R19-012
+    // pattern — the starttime read below must never run
+    // unguarded; disarmed after the explicit retire).
+    let mut birth = SilentChildGuard::new(pid);
     let tick = task_starttime_checked(pid)
         .expect("sleeper stat readable")
         .expect("sleeper visible");
@@ -6139,6 +6143,7 @@ fn expected_pin_refusal_spares_live_owned_child() {
     );
     let _ = child.kill();
     let _ = child.wait();
+    birth.disarm();
 }
 
 /// R18-003 (toolchain twin): refusal over a ZOMBIE owned child
@@ -6158,6 +6163,10 @@ fn expected_pin_refusal_preserves_zombie_owned_child() {
         .spawn()
         .expect("sh spawns");
     let pid = child.id() as i32;
+    // R20-010: custody AT birth (the zombie-settle loop and
+    // stat reads below must never run unguarded; disarmed
+    // after our own wait preserves the status).
+    let mut birth = SilentChildGuard::new(pid);
     let end = Instant::now() + Duration::from_secs(5);
     loop {
         if matches!(task_state(pid), Some('Z')) {
@@ -6177,7 +6186,106 @@ fn expected_pin_refusal_preserves_zombie_owned_child() {
         );
     } // Drop fires here: must not reap.
     let status = child.wait().expect("zombie status stays with us");
+    birth.disarm();
     assert_eq!(status.code(), Some(99), "exit code must survive");
+}
+
+/// R20-010(1): custody AT birth cleans up failed first
+/// observations — the R18-003 refusal fixtures ran stat
+/// reads with no guard (a panic stranded sleep-899). Two
+/// phases: (a) pinned guard + injected post-guard failure →
+/// unwind retires through the verified drop; (b) unpinned
+/// guard under EMFILE (the pin exhausts to None) + a failing
+/// observation read → unwind retires through fd-less
+/// child-only cleanup. Both require disappearance after
+/// restore (observe-before-cleanup: evidence, explicit
+/// retire of leftovers, then the verdict — RED runs stay
+/// clean). Durations 923/924 are unique to this test.
+/// Fresh-image probe body (phase (b) exhausts the fd table).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn birth_custody_cleans_failed_first_observation_probe() {
+    // Phase (a): pinned guard, injected failure.
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("923")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sleeper spawns");
+    let pid = child.id() as i32;
+    let tick = task_starttime_checked(pid)
+        .expect("sleeper stat readable")
+        .expect("sleeper visible");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _birth = SilentChildGuard::new(pid);
+        panic!("R20010 injected post-guard failure");
+    }));
+    let gone_a = task_starttime_checked(pid) != Ok(Some(tick));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(failed.is_err(), "phase (a) must inject the failure");
+    assert!(gone_a, "phase (a) unwind must retire the fixture");
+    // Phase (b): unpinned guard under EMFILE, failing read.
+    let _confined = confine_fd_table_for_exhaustion();
+    let mut child2 = std::process::Command::new("/bin/sleep")
+        .arg("924")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sleeper spawns");
+    let pid2 = child2.id() as i32;
+    let tick2 = task_starttime_checked(pid2)
+        .expect("sleeper stat readable")
+        .expect("sleeper visible");
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "exhaustion must consume fds");
+    let failed2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _birth = SilentChildGuard::new(pid2);
+        let _ = task_starttime_checked(pid2).expect("fixture stat readable");
+    }));
+    drop(held);
+    let gone_b = task_starttime_checked(pid2) != Ok(Some(tick2));
+    let _ = child2.kill();
+    let _ = child2.wait();
+    assert!(failed2.is_err(), "phase (b) observation must fail");
+    assert!(gone_b, "phase (b) unwind must retire the fixture");
+    eprintln!("R20010-BIRTH-CUSTODY-DONE");
+}
+
+/// R20-010(1) wrapper: the birth-custody probe runs
+/// fresh-image (phase (b) exhausts the fd table — the limit
+/// dies with the probe).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn birth_custody_cleans_failed_first_observation() {
+    if std::env::var("SCOPEBASE_R20010_BIRTH_CUSTODY").is_ok() {
+        birth_custody_cleans_failed_first_observation_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("birth_custody_cleans_failed_first_observation")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R20010_BIRTH_CUSTODY", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "probe must complete the birth-custody case\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R20010-BIRTH-CUSTODY-DONE"),
+        "probe must cite completion\n{stderr}"
+    );
 }
 
 /// R19-014: stranger-staging verdict (shared by the staging
@@ -6487,29 +6595,32 @@ fn stranger_verdict_adoption_probe() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("publisher spawns");
+    let pubpid = publisher.id() as i32;
+    // Staging custody (a staging panic must not strand the
+    // pair; the drops below stay silent once the verdict
+    // retires it). R20-010: custody immediately after spawn
+    // (the read/parse/stat below must never run unguarded).
+    let mut publisher_guard = SilentChildGuard::new(pubpid);
+    assert!(
+        publisher_guard.tick.is_some(),
+        "publisher custody must pin (stage broken otherwise)"
+    );
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
         .expect("stranger pid readable");
     // R19-001: transmitted pair (no receiver first-read).
     let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-    let pubpid = publisher.id() as i32;
-    let pubtick = task_starttime_checked(pubpid)
-        .expect("publisher stat readable")
-        .expect("publisher visible");
-    // Staging custody (a staging panic must not strand the
-    // pair; the drops below stay silent once the verdict
-    // retires it).
+    // R20-010: custody immediately after parse (the
+    // stat below must never run unguarded).
     let mut stranger_guard = SilentChildGuard::new_expected(stranger, stick);
     assert!(
         stranger_guard.tick.is_some(),
         "stranger custody must pin (stage broken otherwise)"
     );
-    let mut publisher_guard = SilentChildGuard::new(pubpid);
-    assert!(
-        publisher_guard.tick.is_some(),
-        "publisher custody must pin (stage broken otherwise)"
-    );
+    let pubtick = task_starttime_checked(pubpid)
+        .expect("publisher stat readable")
+        .expect("publisher visible");
     // Freeze the publisher: from here it cannot reap.
     // SAFETY: SIGSTOP to our own staged publisher.
     assert_eq!(
@@ -6594,6 +6705,90 @@ fn stranger_staging_verdict_assists_adopted_zombie() {
         stderr.contains("R19014-VERDICT retired=1"),
         "probe must cite the verdict\n{stderr}"
     );
+}
+
+/// R20-010(2) (twin mirror): custody at each pair-setup
+/// step — spawn/read/parse/stat `.expect`s with no guard
+/// strand the pair on panic. Phase (a): guards at spawn
+/// (publisher) and parse (stranger), then an injected
+/// failure → unwind retires both. Phase (b): the publisher
+/// dies before its stat read → unwind retires the stranger
+/// through its guard. Observe-before-cleanup; durations
+/// 927/928 are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn pair_setup_failure_retires_guarded_fixtures() {
+    use std::io::BufRead as _;
+    use std::time::Duration;
+    // Phase (a): injected failure after setup.
+    let mut publisher = std::process::Command::new(pair_publisher_bin())
+        .arg("927")
+        .arg("wait")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("publisher spawns");
+    let pubpid = publisher.id() as i32;
+    let mut line = String::new();
+    std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line)
+        .expect("stranger pair readable");
+    let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
+    let pubtick_a = task_starttime_checked(pubpid)
+        .expect("publisher stat readable")
+        .expect("publisher visible");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _publisher_guard = SilentChildGuard::new(pubpid);
+        let _stranger_guard = SilentChildGuard::new_expected(stranger, stick);
+        panic!("R20010 injected post-setup failure");
+    }));
+    let gone_pub_a = await_task_gone_reaping(pubpid, pubtick_a, Duration::from_secs(5));
+    let gone_str_a = await_task_gone_reaping(stranger, stick, Duration::from_secs(5));
+    let _ = kill_tick_gated(stranger, stick);
+    let _ = publisher.kill();
+    let _ = publisher.wait();
+    assert!(failed.is_err(), "phase (a) must inject the failure");
+    assert!(
+        gone_pub_a && gone_str_a,
+        "phase (a) unwind must retire the pair"
+    );
+    // Phase (b): publisher dies before its stat read.
+    let mut publisher_b = std::process::Command::new(pair_publisher_bin())
+        .arg("928")
+        .arg("wait")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("publisher spawns");
+    let pubpid_b = publisher_b.id() as i32;
+    let mut line_b = String::new();
+    std::io::BufReader::new(publisher_b.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line_b)
+        .expect("stranger pair readable");
+    let (stranger_b, stick_b) = parse_published_pair(line_b.trim(), "stranger publication");
+    let pubtick_b = task_starttime_checked(pubpid_b)
+        .expect("publisher stat readable")
+        .expect("publisher visible");
+    let failed_b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _publisher_guard = SilentChildGuard::new(pubpid_b);
+        let _stranger_guard = SilentChildGuard::new_expected(stranger_b, stick_b);
+        assert!(kill_tick_gated(pubpid_b, pubtick_b));
+        let mut status = 0;
+        // SAFETY: blocking reap of our own killed child.
+        let got = unsafe { libc::waitpid(pubpid_b, &mut status, 0) };
+        assert_eq!(got, pubpid_b, "publisher reaps");
+        let _ = task_starttime_checked(pubpid_b)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
+    }));
+    let gone_str_b = await_task_gone_reaping(stranger_b, stick_b, Duration::from_secs(5));
+    let _ = kill_tick_gated(stranger_b, stick_b);
+    let _ = publisher_b.kill();
+    let _ = publisher_b.wait();
+    assert!(failed_b.is_err(), "phase (b) stat must fail");
+    assert!(gone_str_b, "phase (b) unwind must retire the stranger");
 }
 
 /// R19-014 (toolchain twin): sensitivity lock — the shared
