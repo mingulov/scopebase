@@ -11882,13 +11882,38 @@ mod tests {
     /// if reaping STOPS (poll exhausts → HELD → fail), which
     /// is when the bin rationale must be revisited. Duration
     /// 83 is unique to this test.
+    /// R21-018: shared shell rationale probe — victim
+    /// sleep, kill, poll, rendezvous gate, verdict. `dur`:
+    /// victim sleep seconds (unique per test); `flag`: a
+    /// rendezvous path the script waits for before its
+    /// final verdict read (the pin pre-creates it; the
+    /// replacement test creates it after planting — the
+    /// verdict read is then guaranteed post-plant,
+    /// deterministic, no race).
+    #[cfg(target_arch = "x86_64")]
+    fn shell_reap_probe_script(dur: &str, flag: &std::path::Path) -> String {
+        // R21-018: birth-tracked verdict — T0 captured
+        // pre-kill (post-") " field 20 = starttime, same
+        // strip the publisher bin uses); the poll breaks on
+        // gone-or-reticked and HELD requires the SAME birth
+        // to persist (a replacement occupant verdicts
+        // REAPED). Empty T0 fails loud (BROKEN).
+        format!(
+            "sleep {dur} & P=$!; echo $P; S=$(cat /proc/$P/stat); S=${{S##*) }}; T0=$(echo $S | cut -d' ' -f20); if [ -z \"$T0\" ]; then echo BROKEN; exit 1; fi; echo $T0; kill -9 $P; for i in 1 2 3 4 5 6 7 8 9 10; do S=$(cat /proc/$P/stat 2>/dev/null) || break; S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" != \"$T0\" ]; then break; fi; sleep 1; done; while [ ! -e {} ]; do sleep 0.05; done; S=$(cat /proc/$P/stat 2>/dev/null); if [ -n \"$S\" ]; then S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" = \"$T0\" ]; then echo HELD; else echo REAPED; fi; else echo REAPED; fi; wait 2>/dev/null; echo DONE",
+            flag.display()
+        )
+    }
+
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn shell_publisher_reaps_at_command_boundaries() {
         use std::io::BufRead as _;
+        let flag = std::env::temp_dir().join(format!("scopebase-r21018-go-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        std::fs::write(&flag, "go\n").expect("rendezvous pre-created");
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 83 & P=$!; echo $P; kill -9 $P; for i in 1 2 3 4 5 6 7 8 9 10; do if [ ! -e /proc/$P/stat ]; then break; fi; sleep 1; done; if [ -e /proc/$P/stat ]; then echo HELD; else echo REAPED; fi; wait 2>/dev/null; echo DONE")
+            .arg(shell_reap_probe_script("83", &flag))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -11903,6 +11928,14 @@ mod tests {
             .parse()
             .expect("pid parses");
         assert!(pid > 0, "publisher must print its child");
+        let tick: u64 = lines
+            .next()
+            .expect("tick line")
+            .expect("tick readable")
+            .trim()
+            .parse()
+            .expect("original tick parses (BROKEN fails loud)");
+        assert!(tick > 0, "original tick must be positive");
         let verdict = lines
             .next()
             .expect("verdict line")
@@ -11916,6 +11949,116 @@ mod tests {
         assert_eq!(done.trim(), "DONE", "script must run to completion");
         let status = sh.wait().expect("shell exit");
         assert!(status.success(), "shell must exit clean");
+        let _ = std::fs::remove_file(&flag);
+    }
+
+    /// R21-018: the rationale verdict must track BIRTH, not
+    /// number occupancy — the old `[ -e /proc/$P/stat ]`
+    /// verdict reports HELD whenever ANY occupant sits at
+    /// P, so a correct reap followed by a long-lived
+    /// replacement fails the rationale assertion. Runs the
+    /// shared probe, waits for the reap, steers a
+    /// different-birth replacement onto P, THEN releases
+    /// the rendezvous (the verdict read is guaranteed
+    /// post-plant): RED (occupancy shape): HELD. GREEN
+    /// (birth-tracked): REAPED. Steering contention skips
+    /// (rendezvous still released — no hang); S100
+    /// (same-tick retake is unknowable) skips without
+    /// asserting. Duration 87 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn shell_reap_verdict_tracks_birth_across_replacement() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        let flag =
+            std::env::temp_dir().join(format!("scopebase-r21018-replace-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell_reap_probe_script("87", &flag))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        // R21-009: guard at spawn (before any read).
+        let _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        let pid: libc::pid_t = lines
+            .next()
+            .expect("pid line")
+            .expect("pid readable")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        let tick: u64 = lines
+            .next()
+            .expect("tick line")
+            .expect("tick readable")
+            .trim()
+            .parse()
+            .expect("original tick parses (BROKEN fails loud)");
+        // Wait for the reap (bounded — a shell that never
+        // reaps breaks the pin itself, loud).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if !matches!(proc_starttime(pid), Ok(Some(_))) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "shell must reap the victim (pin broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Plant a different-birth long-lived replacement at
+        // P (contended → release + skip, never hang).
+        let mut replacement = match steer_sleep_onto(pid, false) {
+            Some(child) => child,
+            None => {
+                std::fs::write(&flag, "go\n").expect("rendezvous released");
+                let _ = sh.wait();
+                let _ = std::fs::remove_file(&flag);
+                eprintln!("skip: replacement steering contended");
+                return;
+            }
+        };
+        let _rguard = FixtureGuard::new(pid);
+        let retick = proc_starttime(pid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        // Rendezvous ALWAYS (even on later skips — no hang).
+        std::fs::write(&flag, "go\n").expect("rendezvous released");
+        let verdict = lines
+            .next()
+            .expect("verdict line")
+            .expect("verdict readable");
+        let done = lines.next().expect("done line").expect("done readable");
+        assert_eq!(done.trim(), "DONE", "script must run to completion");
+        let status = sh.wait().expect("shell exit");
+        assert!(status.success(), "shell must exit clean");
+        let _ = std::fs::remove_file(&flag);
+        let _ = replacement.kill();
+        let _ = replacement.wait();
+        if retick == tick {
+            // Same-tick retake (S100): the verdict cannot
+            // tell reaped-original from held-original —
+            // unknowable this run, skip without asserting.
+            eprintln!("skip: same-tick retake (S100 — verdict unknowable this run)");
+            return;
+        }
+        assert_eq!(
+            verdict.trim(),
+            "REAPED",
+            "verdict must recognize the original-child reap across a replacement occupant"
+        );
     }
 
     /// R20-004: killing the publisher's child BEFORE the
