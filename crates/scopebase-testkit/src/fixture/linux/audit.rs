@@ -4041,7 +4041,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r12_setup_panic_leaves_no_owned_status() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::panic::{catch_unwind, AssertUnwindSafe};
         use std::sync::atomic::{AtomicI32, Ordering};
         let slot = AtomicI32::new(-1);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -4994,7 +4994,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn tt04_r14011_retire_denial_probe() {
-        use super::super::seccomp::{DenyAction, install_deny_one};
+        use super::super::seccomp::{install_deny_one, DenyAction};
         let spec = match std::env::var(R14011_DENIAL_ENV) {
             Ok(spec) => spec,
             Err(_) => return,
@@ -5091,7 +5091,7 @@ mod tests {
     /// them past the probe's exit).
     #[cfg(target_arch = "x86_64")]
     fn r15008_probe_child(mode: &str) {
-        use super::super::seccomp::{DenyAction, install_deny_one};
+        use super::super::seccomp::{install_deny_one, DenyAction};
         use std::os::unix::process::CommandExt as _;
         use std::time::{Duration, Instant};
         let denied = mode != "publish-ok" && mode != "publish-lying";
@@ -5499,7 +5499,7 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     #[test]
     fn tt04_preflight_denial_exec_probe() {
-        use super::super::seccomp::{DenyAction, install_deny_one, install_deny_ptrace_request};
+        use super::super::seccomp::{install_deny_one, install_deny_ptrace_request, DenyAction};
         let spec = match std::env::var(PROBE_DENIAL_ENV) {
             Ok(spec) => spec,
             Err(_) => return,
@@ -12207,24 +12207,195 @@ mod tests {
 
     /// R19-001: parse a pipe-published birth pair ("pid
     /// tick": exactly two fields, positive pid).
+    /// R21-007: the Result core — the receiver's pre-parse
+    /// failure path retires the unknown-sleeper group BEFORE
+    /// failing loud, so it needs the cause as a value (never
+    /// a bare panic past the unreaped leader).
+    #[cfg(target_arch = "x86_64")]
+    fn try_parse_published_pair(line: &str, what: &str) -> Result<(libc::pid_t, u64), String> {
+        let mut parts = line.split_whitespace();
+        let pid_text = parts
+            .next()
+            .ok_or_else(|| format!("{what}: published pair missing pid in {line:?}"))?;
+        let pid: libc::pid_t = pid_text
+            .parse()
+            .map_err(|_| format!("{what}: published pid unparsable in {line:?}"))?;
+        let tick_text = parts
+            .next()
+            .ok_or_else(|| format!("{what}: published pair missing tick in {line:?}"))?;
+        let tick: u64 = tick_text
+            .parse()
+            .map_err(|_| format!("{what}: published tick unparsable in {line:?}"))?;
+        if parts.next().is_some() || pid <= 0 {
+            return Err(format!("{what}: published pair malformed in {line:?}"));
+        }
+        Ok((pid, tick))
+    }
+
+    /// R19-001: parse a pipe-published birth pair ("pid
+    /// tick": exactly two fields, positive pid).
     #[cfg(target_arch = "x86_64")]
     fn parse_published_pair(line: &str, what: &str) -> (libc::pid_t, u64) {
-        let mut parts = line.split_whitespace();
-        let pid: libc::pid_t = parts
-            .next()
-            .unwrap_or_else(|| panic!("{what}: published pair missing pid in {line:?}"))
-            .parse()
-            .unwrap_or_else(|_| panic!("{what}: published pid unparsable in {line:?}"));
-        let tick: u64 = parts
-            .next()
-            .unwrap_or_else(|| panic!("{what}: published pair missing tick in {line:?}"))
-            .parse()
-            .unwrap_or_else(|_| panic!("{what}: published tick unparsable in {line:?}"));
-        assert!(
-            parts.next().is_none() && pid > 0,
-            "{what}: published pair malformed in {line:?}"
+        try_parse_published_pair(line, what).unwrap_or_else(|cause| panic!("{cause}"))
+    }
+
+    /// R21-007/009/010 (holistic): spawn the controlled pair
+    /// publisher self-grouped (pgid == publisher pid from
+    /// microseconds after the fork — the R19-015 rule: the
+    /// group proof below is vacuous or murderous without
+    /// it). A setpgid failure is a loud spawn error (never a
+    /// silent ungrouped publisher). Stdout AND stderr piped —
+    /// read stderr only AFTER the group cleanup (the sleeper
+    /// inherits the write end: an early read blocks on a
+    /// stranded sleeper; post-cleanup all writers are dead so
+    /// EOF is prompt).
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_self_grouped_publisher(
+        secs: &str,
+        tail: &str,
+        envs: &[(&str, &str)],
+    ) -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = std::process::Command::new(pair_publisher_bin());
+        command
+            .arg(secs)
+            .arg(tail)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        command.spawn().expect("self-grouped publisher spawns")
+    }
+
+    /// R21-007/009/010 (holistic): await process-group `pgid`
+    /// empty (bounded). Drain our adopted zombies in the group
+    /// first (waitpid -pgid only touches OUR children — never
+    /// steals), then signal-0 probe for ESRCH. True when
+    /// empty. Never signals fatally (the probe is signal 0 —
+    /// safe on an unpinned number; a recycled pgid fails loud
+    /// here, never murders). Never panics.
+    #[cfg(target_arch = "x86_64")]
+    fn await_group_empty(pgid: libc::pid_t, timeout: std::time::Duration) -> bool {
+        use std::time::{Duration, Instant};
+        let end = Instant::now() + timeout;
+        loop {
+            loop {
+                let mut status = 0;
+                // SAFETY: -pgid filters to our children in the
+                // group; WNOHANG never blocks.
+                let got = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
+                if got > 0 {
+                    continue;
+                }
+                if got < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                }
+                break;
+            }
+            // SAFETY: signal 0 probes existence only.
+            let probed = unsafe { libc::killpg(pgid, 0) };
+            if probed < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                if errno == libc::ESRCH {
+                    return true;
+                }
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// R21-007 (receiver): retire a publisher whose pair never
+    /// parsed (stranger pid UNKNOWN — no tick-gated kill can
+    /// name it) via its self-group. Reservation-pinned: the
+    /// leader is OUR child and NOTHING reaped it yet (no guard
+    /// armed, no wait called — the number cannot have
+    /// recycled, so the first tick read below names OUR birth
+    /// and pgid == pid is certain). Order: pin + self-group
+    /// check → killpg FIRST (while the pin holds) → leader
+    /// kill → reap the leader through its handle (exit status
+    /// preserved) → drain adoptees → ESRCH proof. Returns the
+    /// leader's exit status. PANICS (loud — never silent,
+    /// never murdering) when the leader is already reaped
+    /// (reservation violated — a killpg would be unpinned),
+    /// never self-grouped (the killpg would name a foreign
+    /// group), unreadable (unverifiable), unreapable, or the
+    /// group survives the bounded settle. The member set is
+    /// closed (leader + /bin/sleep — neither forks), so one
+    /// pinned killpg suffices (no post-reap second strike —
+    /// that would be unpinned murder-bait).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_unparsed_publisher_group(
+        publisher: &mut std::process::Child,
+    ) -> std::process::ExitStatus {
+        use std::time::{Duration, Instant};
+        let pubpid = publisher.id() as libc::pid_t;
+        // Pin (live or zombie both pin — a zombie IS the
+        // unreaped reservation; gone means someone reaped
+        // behind our back).
+        match proc_starttime(pubpid) {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!(
+                "unparsed publisher {pubpid} already reaped (reservation violated — \
+                 group retire refused: unpinned killpg)"
+            ),
+            Err(error) => panic!(
+                "unparsed publisher {pubpid} tick unreadable ({error:?}) — group unverifiable"
+            ),
+        }
+        assert_eq!(
+            proc_pgrp(pubpid),
+            Some(pubpid),
+            "unparsed publisher {pubpid} never self-grouped — group retire refused \
+             (killpg would name a foreign group)"
         );
-        (pid, tick)
+        // SAFETY: SIGKILL to our own pinned group, then our
+        // own pinned child; errors ignored (a racing death
+        // answers ESRCH and the proof below still judges).
+        unsafe {
+            libc::killpg(pubpid, libc::SIGKILL);
+            libc::kill(pubpid, libc::SIGKILL);
+        }
+        // Reap the leader through its handle (status kept).
+        let start = Instant::now();
+        let status = loop {
+            match publisher.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        panic!("unparsed publisher {pubpid} unreapable after SIGKILL");
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("unparsed publisher {pubpid} wait failed: {error:?}"),
+            }
+        };
+        // Drain adoptees + prove ESRCH-empty (signal 0 only —
+        // safe now the pin is gone; a recycled pgid fails
+        // loud here, never murders).
+        assert!(
+            await_group_empty(pubpid, Duration::from_secs(5)),
+            "unparsed publisher {pubpid} group survived the retire"
+        );
+        status
     }
 
     /// R19-001: the publisher script renders exactly (golden —
@@ -12747,13 +12918,13 @@ mod tests {
                 "acquisition must pin the transmitted birth (stage broken otherwise)"
             );
         } // Drop fires here.
-        // R17-009: DISCHARGE required (not merely death) — the
-        // live publisher reaps promptly; a lingering zombie past
-        // the window is unresolved (the old Z-or-gone verdict
-        // masked undischarged kills). R17-010: strict
-        // retirement evidence — proven absence or holder reuse
-        // verifies; unreadable samples keep polling and fail
-        // loud past the bound (never certified as gone).
+          // R17-009: DISCHARGE required (not merely death) — the
+          // live publisher reaps promptly; a lingering zombie past
+          // the window is unresolved (the old Z-or-gone verdict
+          // masked undischarged kills). R17-010: strict
+          // retirement evidence — proven absence or holder reuse
+          // verifies; unreadable samples keep polling and fail
+          // loud past the bound (never certified as gone).
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill (R15-003 —
         // a blind kill would risk a recycled replacement), poll
@@ -12838,9 +13009,9 @@ mod tests {
                 "acquisition must pin the transmitted birth"
             );
         } // Drop fires here.
-        // Verdict: DISCHARGED (gone) — init reaps promptly.
-        // R17-010: strict evidence — unreadable samples keep
-        // polling and fail loud past the bound.
+          // Verdict: DISCHARGED (gone) — init reaps promptly.
+          // R17-010: strict evidence — unreadable samples keep
+          // polling and fail loud past the bound.
         let discharged = await_proc_gone_reaping(orphan, otick, Duration::from_secs(5));
         // Cleanup (mutant-clean): tick-gated kill,
         // waitpid-assisted poll gone (R18-006: under a
@@ -13226,30 +13397,49 @@ mod tests {
     /// panics) → unwind retires the stranger through its
     /// guard. Observe-before-cleanup (evidence, explicit
     /// retire of leftovers, then the verdict — RED runs stay
-    /// clean). Durations 925/926 are unique to this test.
+    /// clean). R21 holistic: self-grouped spawns, Result
+    /// setups (a read/parse/stat failure retires the
+    /// unknown-sleeper group before failing loud), gated
+    /// tails (never ungated kill + blocking wait), bounded
+    /// phase-(b) reap. Durations 925/926 are unique to this
+    /// test.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pair_setup_failure_retires_guarded_fixtures() {
         use std::io::BufRead as _;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
         // Phase (a): injected failure after setup.
-        let mut publisher = std::process::Command::new(pair_publisher_bin())
-            .arg("925")
-            .arg("wait")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("publisher spawns");
+        let mut publisher = spawn_self_grouped_publisher("925", "wait", &[]);
         let pubpid = publisher.id() as libc::pid_t;
-        let mut line = String::new();
-        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        // R21-009-pair-setup: the setup is a Result — a
+        // read/parse/stat failure retires the
+        // unknown-sleeper group BEFORE failing loud (never a
+        // bare `.expect` past the unreaped leader).
+        let setup: Result<((libc::pid_t, u64), u64), String> = (|| {
+            let mut line = String::new();
+            std::io::BufReader::new(
+                publisher
+                    .stdout
+                    .take()
+                    .ok_or_else(|| "publisher stdout missing".to_string())?,
+            )
             .read_line(&mut line)
-            .expect("stranger pair readable");
-        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
-        let pubtick_a = proc_starttime(pubpid)
-            .expect("publisher stat readable")
-            .expect("publisher visible");
+            .map_err(|error| format!("stranger pair unreadable: {error}"))?;
+            let pair = try_parse_published_pair(line.trim(), "stranger publication")?;
+            let pubtick = match proc_starttime(pubpid) {
+                Ok(Some(tick)) => tick,
+                Ok(None) => return Err("publisher gone pre-guard".to_string()),
+                Err(error) => return Err(format!("publisher stat unreadable: {error}")),
+            };
+            Ok((pair, pubtick))
+        })();
+        let ((stranger, stick), pubtick_a) = match setup {
+            Ok(ok) => ok,
+            Err(cause) => {
+                let status = retire_unparsed_publisher_group(&mut publisher);
+                panic!("phase (a) setup failed ({cause}) — group retired ({status:?})");
+            }
+        };
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Custody at each step (the fix): publisher at
             // spawn, stranger at parse — the injected
@@ -13261,49 +13451,513 @@ mod tests {
         let gone_pub_a = await_proc_gone_reaping(pubpid, pubtick_a, Duration::from_secs(5));
         let gone_str_a = await_proc_gone_reaping(stranger, stick, Duration::from_secs(5));
         let _ = kill_tick_gated(stranger, stick);
-        let _ = publisher.kill();
-        let _ = publisher.wait();
+        // R21-010-tails: gated retire + WNOHANG-only reap
+        // (never the ungated kill + blocking wait — the
+        // number may host a replacement now).
+        let _ = retire_tick_gated_audit_child(pubpid, pubtick_a);
         assert!(failed.is_err(), "phase (a) must inject the failure");
         assert!(
             gone_pub_a && gone_str_a,
             "phase (a) unwind must retire the pair"
         );
         // Phase (b): publisher dies before its stat read.
-        let mut publisher_b = std::process::Command::new(pair_publisher_bin())
-            .arg("926")
-            .arg("wait")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("publisher spawns");
+        let mut publisher_b = spawn_self_grouped_publisher("926", "wait", &[]);
         let pubpid_b = publisher_b.id() as libc::pid_t;
-        let mut line_b = String::new();
-        std::io::BufReader::new(publisher_b.stdout.take().expect("publisher stdout"))
+        let setup_b: Result<((libc::pid_t, u64), u64), String> = (|| {
+            let mut line_b = String::new();
+            std::io::BufReader::new(
+                publisher_b
+                    .stdout
+                    .take()
+                    .ok_or_else(|| "publisher stdout missing".to_string())?,
+            )
             .read_line(&mut line_b)
-            .expect("stranger pair readable");
-        let (stranger_b, stick_b) = parse_published_pair(line_b.trim(), "stranger publication");
-        let pubtick_b = proc_starttime(pubpid_b)
-            .expect("publisher stat readable")
-            .expect("publisher visible");
+            .map_err(|error| format!("stranger pair unreadable: {error}"))?;
+            let pair = try_parse_published_pair(line_b.trim(), "stranger publication")?;
+            let pubtick = match proc_starttime(pubpid_b) {
+                Ok(Some(tick)) => tick,
+                Ok(None) => return Err("publisher gone pre-guard".to_string()),
+                Err(error) => return Err(format!("publisher stat unreadable: {error}")),
+            };
+            Ok((pair, pubtick))
+        })();
+        let ((stranger_b, stick_b), pubtick_b) = match setup_b {
+            Ok(ok) => ok,
+            Err(cause) => {
+                let status = retire_unparsed_publisher_group(&mut publisher_b);
+                panic!("phase (b) setup failed ({cause}) — group retired ({status:?})");
+            }
+        };
         let failed_b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _publisher_guard = FixtureGuard::new(pubpid_b);
             let _stranger_guard = FixtureGuard::new_expected(stranger_b, stick_b);
             assert!(kill_tick_gated(pubpid_b, pubtick_b));
-            let mut status = 0;
-            // SAFETY: blocking reap of our own killed child.
-            let got = unsafe { libc::waitpid(pubpid_b, &mut status, 0) };
-            assert_eq!(got, pubpid_b, "publisher reaps");
+            // R21-010-tails: bounded WNOHANG reap (never a
+            // blocking wait — same µs behavior on the
+            // SIGKILLed child, loud instead of wedged on the
+            // impossible).
+            let start = Instant::now();
+            let reaped = loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of our own killed
+                // child; never blocks.
+                let got = unsafe { libc::waitpid(pubpid_b, &mut status, libc::WNOHANG) };
+                if got == pubpid_b {
+                    break true;
+                }
+                if got < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    break false;
+                }
+                if start.elapsed() >= Duration::from_secs(5) {
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            assert!(reaped, "publisher reaps");
             let _ = proc_starttime(pubpid_b)
                 .expect("publisher stat readable")
                 .expect("publisher visible");
         }));
         let gone_str_b = await_proc_gone_reaping(stranger_b, stick_b, Duration::from_secs(5));
         let _ = kill_tick_gated(stranger_b, stick_b);
-        let _ = publisher_b.kill();
-        let _ = publisher_b.wait();
+        let _ = retire_tick_gated_audit_child(pubpid_b, pubtick_b);
         assert!(failed_b.is_err(), "phase (b) stat must fail");
         assert!(gone_str_b, "phase (b) unwind must retire the stranger");
+    }
+
+    /// R21-007 + R21-010-tails + R21-009-pair-setup (holistic —
+    /// ONE test): every post-birth producer step fails prompt,
+    /// loud, and discharged; the receiver setup retires the
+    /// unknown-sleeper group on pre-parse failure; the
+    /// pair-setup tails never murder or steal planted
+    /// replacements. Publisher cells (pause/stat/comm/tick/
+    /// wait/epipe): each fresh self-grouped spawn must exit 2
+    /// promptly (≪ its sleep) with the group ESRCH-empty (the
+    /// sleeper retired by the publisher's own guard — never
+    /// orphaned). Receiver cells (eof/mangle): a pre-transmit
+    /// failure must surface as PROMPT EOF (never wedge the
+    /// read on the held pipe) and a torn pair must fail loud
+    /// with the parse cause — both with the unknown-sleeper
+    /// group retired (zombie-leader pin for eof, live-leader
+    /// pin for mangle). Pre-fix RED: pause/epipe strand the
+    /// sleep (group nonempty), the fault hook is ignored
+    /// (hangs in the wait tail), and the bare kill+reap shape
+    /// strands the unknown sleeper. Durations 933-941 and 951
+    /// are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pair_setup_holistic_retirement() {
+        use std::time::{Duration, Instant};
+        // One cell runner (env cells + the real-path EPIPE
+        // cell share it): bounded wait, observe-before-cleanup
+        // (sample group, retire leftovers, drain stderr —
+        // post-cleanup so a stranded sleeper cannot wedge the
+        // read), then judge code + step-fidelity + promptness
+        // + group-empty.
+        let run_pub_cell =
+            |step: &str, secs: &str, envs: &[(&str, &str)], drop_read: bool, marker: &str| {
+                let mut publisher = spawn_self_grouped_publisher(secs, "wait", envs);
+                if drop_read {
+                    drop(publisher.stdout.take());
+                }
+                let pubpid = publisher.id() as libc::pid_t;
+                let start = Instant::now();
+                let status = loop {
+                    match publisher.try_wait() {
+                        Ok(Some(status)) => break Some(status),
+                        Ok(None) => {
+                            if start.elapsed() >= Duration::from_secs(10) {
+                                break None;
+                            }
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(_) => break None,
+                    }
+                };
+                let elapsed = start.elapsed();
+                let empty = await_group_empty(pubpid, Duration::from_millis(500));
+                if status.is_none() {
+                    // Hung (fault ignored): kill OUR live unreaped
+                    // child by handle (reservation-held — the
+                    // number cannot have recycled), then its group
+                    // (continuously nonempty since spawn — the
+                    // sleep never died — so the killpg names only
+                    // our staged pair).
+                    let _ = publisher.kill();
+                    // SAFETY: SIGKILL to our own staged group.
+                    unsafe {
+                        libc::killpg(pubpid, libc::SIGKILL);
+                    }
+                    let _ = await_group_empty(pubpid, Duration::from_secs(5));
+                    let _ = publisher.wait();
+                } else if !empty {
+                    // Exited but stranded its sleeper (pre-fix
+                    // fail path): group continuously nonempty —
+                    // the killpg names only our orphan.
+                    // SAFETY: SIGKILL to our own staged group.
+                    unsafe {
+                        libc::killpg(pubpid, libc::SIGKILL);
+                    }
+                    let _ = await_group_empty(pubpid, Duration::from_secs(5));
+                }
+                // Post-cleanup stderr drain (all pipe writers
+                // dead now — EOF prompt; proves WHICH step failed).
+                let mut err = String::new();
+                if let Some(mut pipe) = publisher.stderr.take() {
+                    use std::io::Read as _;
+                    let _ = pipe.read_to_string(&mut err);
+                }
+                let status = status.unwrap_or_else(|| {
+                    panic!(
+                    "PUB-{step}: publisher hung (fault ignored?) after {elapsed:?}\nstderr: {err}"
+                )
+                });
+                assert!(
+                    elapsed < Duration::from_secs(5),
+                    "PUB-{step}: must fail promptly, took {elapsed:?}\nstderr: {err}"
+                );
+                assert_eq!(
+                    status.code(),
+                    Some(2),
+                    "PUB-{step}: must exit 2, got {status:?}\nstderr: {err}"
+                );
+                assert!(
+                    err.contains(marker),
+                    "PUB-{step}: stderr must name the failed step ({marker:?}), got {err:?}"
+                );
+                assert!(
+                    empty,
+                    "PUB-{step}: group must be ESRCH-empty (stranded sleeper)\nstderr: {err}"
+                );
+            };
+        // Real pause-timeout path (absent flag + short
+        // deadline hook — the 30s default would hang RED).
+        let pause_flag = format!("/tmp/scopebase-r21holistic-absent-{}", std::process::id());
+        run_pub_cell(
+            "pause",
+            "933",
+            &[
+                ("SCOPEBASE_PUBLISHER_PAUSE_FILE", pause_flag.as_str()),
+                ("SCOPEBASE_PUBLISHER_PAUSE_TIMEOUT_MS", "200"),
+            ],
+            false,
+            "pause flag never appeared",
+        );
+        // Fault-hook cells (each forced error branch post-spawn).
+        for (step, secs) in [
+            ("stat", "934"),
+            ("comm", "935"),
+            ("tick", "936"),
+            ("wait", "937"),
+        ] {
+            run_pub_cell(
+                step,
+                secs,
+                &[("SCOPEBASE_PUBLISHER_FAULT_STEP", step)],
+                false,
+                &format!("fault: {step}"),
+            );
+        }
+        // Real EPIPE path (no env): the read end drops at once —
+        // the transmit write must fail loud, not panic, and the
+        // sleep must be retired, not stranded.
+        run_pub_cell("epipe", "938", &[], true, "stdout broken");
+        // Receiver pre-parse-failure runner: the setup shape
+        // under test — try-parse, and on failure group-retire
+        // BEFORE any reap (the leader is still unreaped, so
+        // the killpg is pinned), then loud with the cause.
+        // Observe-before-cleanup (sample group, retire
+        // leftovers), then judge cause + group-empty.
+        let run_recv_fail = |step: &str,
+                             publisher: &mut std::process::Child,
+                             pubpid: libc::pid_t,
+                             line: &str,
+                             cause_sub: &str| {
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match try_parse_published_pair(line, "holistic publication") {
+                    Ok(_) => panic!("RECV-{step}: torn pair must not parse"),
+                    Err(cause) => {
+                        let status = retire_unparsed_publisher_group(publisher);
+                        panic!("RECV-{step}: setup failed ({cause}) — group retired ({status:?})");
+                    }
+                }
+            }));
+            let empty = await_group_empty(pubpid, Duration::from_millis(500));
+            if !empty {
+                // Retire leftovers (neuter/RED hygiene — the
+                // group never emptied, so the killpg names
+                // only our staged pair).
+                // SAFETY: SIGKILL to our own staged group.
+                unsafe {
+                    libc::killpg(pubpid, libc::SIGKILL);
+                }
+                let _ = await_group_empty(pubpid, Duration::from_secs(5));
+                let _ = publisher.try_wait();
+            }
+            let error = failed
+                .err()
+                .unwrap_or_else(|| panic!("RECV-{step}: must fail loud (the torn pair parsed?!)"));
+            let message = error.downcast_ref::<String>().cloned().unwrap_or_default();
+            assert!(
+                message.contains(cause_sub),
+                "RECV-{step}: cause must name the failure ({cause_sub:?}), got {message:?}"
+            );
+            assert!(
+                empty,
+                "RECV-{step}: group must be ESRCH-empty (unknown sleeper stranded)"
+            );
+        };
+        // RECV-eof: the publisher fails pre-transmit (real
+        // pause path) — the read must see EOF PROMPTLY (the
+        // publisher's guard closed the pipe; pre-fix the read
+        // wedged the full sleep) and the zombie-leader group
+        // must retire with the loud parse cause.
+        {
+            use std::io::BufRead as _;
+            let mut publisher = spawn_self_grouped_publisher(
+                "939",
+                "wait",
+                &[
+                    ("SCOPEBASE_PUBLISHER_PAUSE_FILE", pause_flag.as_str()),
+                    ("SCOPEBASE_PUBLISHER_PAUSE_TIMEOUT_MS", "200"),
+                ],
+            );
+            let pubpid = publisher.id() as libc::pid_t;
+            let start = Instant::now();
+            let mut line = String::new();
+            let bytes = std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+                .read_line(&mut line)
+                .expect("eof readable");
+            let elapsed = start.elapsed();
+            assert_eq!(bytes, 0, "RECV-eof: failed publisher must transmit nothing");
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "RECV-eof: EOF must arrive promptly, took {elapsed:?}"
+            );
+            run_recv_fail("eof", &mut publisher, pubpid, &line, "missing pid");
+        }
+        // RECV-mangle: real transmit, test-side torn pair
+        // (tick dropped — the torn-write class) — the
+        // live-leader group must retire with the loud parse
+        // cause (the stranger stays unknown throughout).
+        {
+            use std::io::BufRead as _;
+            let mut publisher = spawn_self_grouped_publisher("940", "wait", &[]);
+            let pubpid = publisher.id() as libc::pid_t;
+            let mut line = String::new();
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+                .read_line(&mut line)
+                .expect("pair readable");
+            let mangled = line
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            assert!(!mangled.is_empty(), "RECV-mangle: pair must transmit");
+            run_recv_fail("mangle", &mut publisher, pubpid, &mangled, "missing tick");
+        }
+        // TAIL-live-plant: the pair-setup tail must not murder
+        // a recycled occupant — retire OUR pair, plant a live
+        // replacement on the freed publisher number, run the
+        // tail with the STALE tick → the replacement is spared
+        // (live, same birth, still our unreaped child) and the
+        // tail is prompt (never a blocking wait). Pre-fix RED:
+        // the ungated `publisher.kill()` murders the plant.
+        // (Helper fn: a vacuous plant skips only its cell.)
+        tail_live_plant_cell();
+        // TAIL-zombie-plant: the tail must not STEAL a
+        // recycled occupant's status — same staging, but the
+        // plant settles to an unreaped zombie before the tail
+        // runs with the stale tick → WE still reap it (the
+        // tail's WNOHANG never fires on mismatch). Pre-fix
+        // RED: the blocking `publisher.wait()` reaps the
+        // plant's status through the unaware handle.
+        tail_zombie_plant_cell();
+    }
+
+    /// R21-010-tails (holistic cell): live-plant arm. Own fn
+    /// so a vacuous plant (contended reuse control) skips
+    /// ONLY this cell (the R17-003 rule — loud eprintln,
+    /// never a silent pass of the whole test).
+    #[cfg(target_arch = "x86_64")]
+    fn tail_live_plant_cell() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        {
+            let _hold = match steer_hold() {
+                Some(hold) => hold,
+                None => {
+                    eprintln!("TAIL-live: vacuous (no reuse control)");
+                    return;
+                }
+            };
+            let mut publisher = spawn_self_grouped_publisher("941", "wait", &[]);
+            let pubpid = publisher.id() as libc::pid_t;
+            let mut line = String::new();
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (stranger, stick) = parse_published_pair(line.trim(), "tail publication");
+            let pubtick = proc_starttime(pubpid)
+                .expect("publisher stat readable")
+                .expect("publisher visible");
+            // Retire OUR pair explicitly (loud): stranger
+            // first (its death releases the publisher's wait
+            // tail), then reap the publisher.
+            assert!(
+                retire_tick_gated_audit_child(stranger, stick),
+                "TAIL-live: stranger retire readable"
+            );
+            assert!(
+                await_proc_gone_reaping(stranger, stick, Duration::from_secs(5)),
+                "TAIL-live: stranger must drain"
+            );
+            let start = Instant::now();
+            let status = loop {
+                match publisher.try_wait() {
+                    Ok(Some(status)) => break status,
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!("TAIL-live: publisher must exit after its sleep dies");
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("TAIL-live: publisher wait failed: {error:?}"),
+                }
+            };
+            assert!(status.success(), "TAIL-live: publisher must exit clean");
+            // Plant a live replacement on the freed number
+            // (vacuous under contention — the R17-003 rule).
+            let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
+                Some(pair) => pair,
+                None => {
+                    eprintln!("TAIL-live: vacuous (plant contended)");
+                    return;
+                }
+            };
+            let retick = proc_starttime(pubpid)
+                .expect("replacement readable")
+                .expect("replacement live");
+            // THE tail (stale tick — the exact call the
+            // pair-setup tails make after OUR birth retired).
+            let start = Instant::now();
+            let _ = retire_tick_gated_audit_child(pubpid, pubtick);
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "TAIL-live: tail must be prompt (never blocking)"
+            );
+            assert_eq!(
+                proc_starttime(pubpid).expect("replacement readable"),
+                Some(retick),
+                "TAIL-live: replacement murdered?!"
+            );
+            // Settle (death is async — an instant sample
+            // misreads murder as survival): the plant must
+            // stay live with an empty pending mask across
+            // the FULL window (a murdered plant flips Z in
+            // ms; a spared one never receives a signal).
+            assert!(settle_spared(pubpid), "TAIL-live: replacement murdered?!");
+            assert!(
+                matches!(kid.try_wait(), Ok(None)),
+                "TAIL-live: replacement status stolen?!"
+            );
+            // Cleanup (loud): kill+reap the plant.
+            let _ = kid.kill();
+            let start = Instant::now();
+            loop {
+                match kid.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!("TAIL-live: plant must reap");
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("TAIL-live: plant wait failed: {error:?}"),
+                }
+            }
+            plant_guard.disarm();
+        }
+    }
+
+    /// R21-010-tails (holistic cell): zombie-plant arm. Own
+    /// fn so a vacuous plant skips ONLY this cell.
+    #[cfg(target_arch = "x86_64")]
+    fn tail_zombie_plant_cell() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        {
+            let _hold = match steer_hold() {
+                Some(hold) => hold,
+                None => {
+                    eprintln!("TAIL-zombie: vacuous (no reuse control)");
+                    return;
+                }
+            };
+            let mut publisher = spawn_self_grouped_publisher("951", "wait", &[]);
+            let pubpid = publisher.id() as libc::pid_t;
+            let mut line = String::new();
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (stranger, stick) = parse_published_pair(line.trim(), "tail publication");
+            let pubtick = proc_starttime(pubpid)
+                .expect("publisher stat readable")
+                .expect("publisher visible");
+            assert!(
+                retire_tick_gated_audit_child(stranger, stick),
+                "TAIL-zombie: stranger retire readable"
+            );
+            assert!(
+                await_proc_gone_reaping(stranger, stick, Duration::from_secs(5)),
+                "TAIL-zombie: stranger must drain"
+            );
+            let start = Instant::now();
+            let status = loop {
+                match publisher.try_wait() {
+                    Ok(Some(status)) => break status,
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!("TAIL-zombie: publisher must exit after its sleep dies");
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("TAIL-zombie: publisher wait failed: {error:?}"),
+                }
+            };
+            assert!(status.success(), "TAIL-zombie: publisher must exit clean");
+            let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
+                Some(pair) => pair,
+                None => {
+                    eprintln!("TAIL-zombie: vacuous (plant contended)");
+                    return;
+                }
+            };
+            assert!(
+                settle_replacement_zombie(&mut kid, pubpid),
+                "TAIL-zombie: staging broken (plant never zombified)"
+            );
+            // THE tail (stale tick).
+            let start = Instant::now();
+            let _ = retire_tick_gated_audit_child(pubpid, pubtick);
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "TAIL-zombie: tail must be prompt (never blocking)"
+            );
+            // The zombie is intact: WE reap it (not stolen).
+            match kid.try_wait() {
+                Ok(Some(status)) => assert!(
+                    !status.success(),
+                    "TAIL-zombie: plant must be our SIGKILLed zombie"
+                ),
+                other => panic!("TAIL-zombie: status stolen?! got {other:?}"),
+            }
+            plant_guard.disarm();
+        }
     }
 
     /// R19-014: sensitivity lock — the shared verdict must
@@ -13429,11 +14083,11 @@ mod tests {
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _fired = pinned;
         })); // Drop fires here (scope end or unwind).
-        // R17-009: DISCHARGE required (not merely death) — the
-        // live publisher reaps promptly; a lingering zombie past
-        // the window is unresolved. R17-010: strict evidence —
-        // unreadable samples keep polling and fail loud past
-        // the bound.
+             // R17-009: DISCHARGE required (not merely death) — the
+             // live publisher reaps promptly; a lingering zombie past
+             // the window is unresolved. R17-010: strict evidence —
+             // unreadable samples keep polling and fail loud past
+             // the bound.
         let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
         // Cleanup (runs on RED too): tick-gated kill, poll
         // gone, reap the publisher.
@@ -14846,8 +15500,8 @@ mod tests {
                 "mismatched expected birth must refuse"
             );
         } // Drop fires here: must stand down.
-        // Settle briefly — a dropped kill would land at once,
-        // but the live re-read below is the proof either way.
+          // Settle briefly — a dropped kill would land at once,
+          // but the live re-read below is the proof either way.
         let end = Instant::now() + Duration::from_millis(200);
         while Instant::now() < end {
             std::thread::sleep(Duration::from_millis(20));
@@ -27327,7 +27981,7 @@ time.sleep(30)
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pinless_drop_under_wait_denial_signals_nothing() {
-        use super::super::seccomp::{DenyAction, install_deny_one};
+        use super::super::seccomp::{install_deny_one, DenyAction};
         use std::time::{Duration, Instant};
         // SAFETY: the child installs a wait-denying filter, drops
         // a pin-less self guard, and reports survival via _exit.
