@@ -16163,7 +16163,8 @@ mod tests {
         // can panic) — the worker starts only after, so a
         // setup panic strands nothing.
         let exe = std::env::current_exe().expect("own test binary");
-        let mut child = std::process::Command::new(exe)
+        let mut command = std::process::Command::new(exe);
+        command
             .arg("--exact")
             .arg(test_path)
             .arg("--nocapture")
@@ -16173,9 +16174,28 @@ mod tests {
             // piped (a piped-but-unread stdout is the same
             // deadlock class as the stderr one this fixes).
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("probe child spawns");
+            .stderr(std::process::Stdio::piped());
+        // R19-015: the probe self-groups (its descendants
+        // inherit the group) so the timeout below retires
+        // the whole group — a bare child kill orphans the
+        // probe's sleeps (SIGKILL bypasses its guards).
+        // A setpgid failure is a loud spawn error (never a
+        // silent ungrouped probe — the group proof below
+        // would be vacuous or, worse, murder a recycled
+        // pgid).
+        // SAFETY: setpgid on self pre-exec, no userspace
+        // state.
+        unsafe {
+            use std::os::unix::process::CommandExt as _;
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = command.spawn().expect("probe child spawns");
         let cpid = child.id() as libc::pid_t;
         let mut probe_guard = FixtureGuard::new(cpid);
         // Worker + drain AFTER the fallible setup above.
@@ -16215,17 +16235,80 @@ mod tests {
             }
         };
         if timed_out {
-            // Loud timeout: SIGKILL our unreaped child (identity
-            // certain — no tick read needed, unlike the guard
-            // drop which degrades under unreadable /proc), reap
-            // it, drain what it said, stop the worker, then fail
-            // with the partial text. (The guard stays for the
-            // unwind window between spawn and here.)
+            // Loud timeout: retire the whole GROUP (R19-015 —
+            // a bare child kill orphans the probe's
+            // descendants: SIGKILL bypasses the probe's
+            // guards, and its sleeps linger 87+s (forever if
+            // stopped)). killpg FIRST, while the probe is
+            // still unreaped (number⟹group certain: the probe
+            // self-grouped at spawn, so pgid == cpid and the
+            // unreaped child pins the number) → kill → wait.
+            // SAFETY: SIGKILL to our own staged group.
+            let killpg_errno = if unsafe { libc::killpg(cpid, libc::SIGKILL) } == 0 {
+                None
+            } else {
+                // SAFETY: errno location for this thread.
+                Some(unsafe { libc::__errno_location().read() })
+            };
             let _ = child.kill();
             let _ = child.wait();
             probe_guard.disarm();
             let stderr = drain.join().unwrap_or_default();
             drop(worker_guard);
+            // Recorded descendants (R19015-STAGED pid/tick
+            // lines in the drained text), best-effort parsed
+            // (the timeout verdict never depends on the
+            // parse — the group proof below needs no
+            // per-descendant identities).
+            let mut recorded = Vec::new();
+            for line in stderr.lines() {
+                if let Some(rest) = line.strip_prefix("R19015-STAGED ") {
+                    let (mut pid, mut tick) = (None, None);
+                    for word in rest.split_whitespace() {
+                        if let Some(value) = word.strip_prefix("pid=") {
+                            pid = value.parse::<libc::pid_t>().ok();
+                        }
+                        if let Some(value) = word.strip_prefix("tick=") {
+                            tick = value.parse::<u64>().ok();
+                        }
+                    }
+                    if let (Some(pid), Some(tick)) = (pid, tick) {
+                        recorded.push((pid, tick));
+                    }
+                }
+            }
+            // Prove the group empty (killpg-0 ESRCH): members
+            // die by the killpg above and init reaps the
+            // orphans asynchronously, so poll bounded, never
+            // assert instant. Waitpid-assist runs INSIDE the
+            // loop (R18-006 pattern): a zombie that appears
+            // after an early pass (adopted late) is still
+            // reaped instead of spinning the poll to a false
+            // RED.
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let group_empty = loop {
+                for (pid, tick) in &recorded {
+                    waitpid_assist_verified(*pid, *tick);
+                }
+                // SAFETY: signal 0 probes existence only.
+                if unsafe { libc::killpg(cpid, 0) } < 0 {
+                    // SAFETY: errno location for this thread.
+                    if unsafe { libc::__errno_location().read() } == libc::ESRCH {
+                        break true;
+                    }
+                }
+                if std::time::Instant::now() >= end {
+                    break false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            if !group_empty {
+                panic!(
+                    "probe {test_path} timed out after {}s and group {cpid} never emptied \
+                     (killpg errno {killpg_errno:?} — descendants linger)\npartial stderr:\n{stderr}",
+                    timeout.as_secs()
+                );
+            }
             panic!(
                 "probe {test_path} timed out after {}s\npartial stderr:\n{stderr}",
                 timeout.as_secs()
@@ -16641,8 +16724,46 @@ mod tests {
     /// launcher's 3s hang-test bound must kill it first: the
     /// timeout is loud AND retires the stuck child, so the
     /// marker must be absent from the partial text).
+    /// R19-015: hang-after-staging — stage three recorded
+    /// RUNNING sleeps first (durations 85/88/89, unique to
+    /// this test — 87 belongs to omitted-leader-reap),
+    /// print their (pid,tick) records, then hang. The
+    /// timeout must retire the whole group (probe and
+    /// descendants), not just the probe. All-RUNNING is
+    /// load-bearing: a stopped member present at the orphan
+    /// instant would make the kernel SIGHUP+SIGCONT the
+    /// orphaned group on the probe's death (POSIX semantics
+    /// — SIGHUP's default kills), retiring the orphans
+    /// without any killpg and masking whether the launcher's
+    /// group kill works (proven: a stopped third sleep made
+    /// the no-killpg mutant pass). Stopped abandoners are
+    /// still covered by construction (SIGKILL kills stopped
+    /// tasks — no CONT needed).
     #[cfg(target_arch = "x86_64")]
     fn staging_emfile_hang_body() {
+        // Staging custody: a mid-staging spawn/stat panic
+        // must not strand earlier sleeps as init-orphans
+        // (the drops below retire them; never disarmed —
+        // the probe dies by SIGKILL mid-hang).
+        let mut staged_guards = Vec::new();
+        for dur in ["85", "88", "89"] {
+            let sleep = std::process::Command::new("/bin/sleep")
+                .arg(dur)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("hang sleep spawns");
+            let pid = sleep.id() as libc::pid_t;
+            // Detach (the sleep outlives the handle — the
+            // timeout must retire it, not this handle).
+            drop(sleep);
+            staged_guards.push(FixtureGuard::new(pid));
+            let tick = proc_starttime(pid)
+                .expect("sleep stat readable")
+                .expect("sleep visible");
+            eprintln!("R19015-STAGED pid={pid} tick={tick} dur={dur}");
+        }
         std::thread::sleep(std::time::Duration::from_secs(30));
         eprintln!("R17005-HANG-DONE");
     }
@@ -16715,6 +16836,48 @@ mod tests {
             !text.contains("R17005-HANG-DONE"),
             "stuck child must die before completing, got: {text}"
         );
+        // R19-015: every recorded descendant retired +
+        // discharged (the timeout kills the group, not just
+        // the probe — abandoned sleeps linger 87+s).
+        let mut staged = Vec::new();
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("R19015-STAGED ") {
+                let (mut pid, mut tick) = (None, None);
+                for word in rest.split_whitespace() {
+                    if let Some(value) = word.strip_prefix("pid=") {
+                        pid = value.parse::<libc::pid_t>().ok();
+                    }
+                    if let Some(value) = word.strip_prefix("tick=") {
+                        tick = value.parse::<u64>().ok();
+                    }
+                }
+                if let (Some(pid), Some(tick)) = (pid, tick) {
+                    staged.push((pid, tick));
+                }
+            }
+        }
+        assert_eq!(
+            staged.len(),
+            3,
+            "hang must stage three recorded sleeps, got: {text}"
+        );
+        // RED-path custody (expected-identity guards retire
+        // abandoned orphans on unwind); disarmed once the
+        // launcher-side retirement below proves out.
+        let mut guards = Vec::new();
+        for (pid, tick) in &staged {
+            guards.push(FixtureGuard::new_expected(*pid, *tick));
+        }
+        for (pid, tick) in &staged {
+            // Birth-gone (absence or foreign birth — a zombie
+            // keeps its birth, so this proves retired AND
+            // discharged; a numeric waitpid here would flake
+            // on frontier-retakes or steal a foreign status).
+            assert_audit_child_gone(*pid, *tick, "recorded hang sleep");
+        }
+        for guard in guards.iter_mut() {
+            guard.disarm();
+        }
     }
 
     /// R17-006: probe body (fresh image,
