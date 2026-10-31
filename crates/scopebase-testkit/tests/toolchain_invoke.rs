@@ -4405,22 +4405,141 @@ fn contention_hammers_stop_on_unwind_and_partial_start() {
     );
 }
 
+/// R22-012 (toolchain twin): env flag selecting the
+/// fault-child branch (fresh image).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+const R22012_FAULT_ENV: &str = "SCOPEBASE_R22012_FAULT";
+
+/// R22-012 (toolchain twin): one hammered sibling fd-op,
+/// retry-bounded (same rationale as lib — pressure, not
+/// proof; the holder-pid assert discriminates).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn hammer_sibling_fd_op() -> std::io::Result<()> {
+    let mut last = std::io::Error::other("unreached");
+    for _ in 0..3 {
+        let attempt = (|| -> std::io::Result<()> {
+            let (read, write) = std::io::pipe()?;
+            drop((read, write));
+            let file = std::fs::File::open("/dev/null")?;
+            drop(file);
+            Ok(())
+        })();
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last = error;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+    Err(last)
+}
+
+/// R22-012 (toolchain twin): current NOFILE soft limit.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn nofile_soft_limit() -> u64 {
+    // SAFETY: getrlimit with a valid local rlimit.
+    unsafe {
+        let mut limit: libc::rlimit = std::mem::zeroed();
+        assert_eq!(
+            libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit),
+            0,
+            "own rlimit readable"
+        );
+        limit.rlim_cur as u64
+    }
+}
+
 /// R21-009 (twin mirror): a failed FIRST observation over
 /// a staged middleman pair must unwind through the birth
 /// guard — both retired before the panic propagates
-/// (mirror of the lib regression; tight in-process EMFILE
-/// hold inside catch_unwind, birth-aware drainage checks).
+/// (mirror of the lib regression; R22-012: fresh-image
+/// child holds the fault, birth-aware drainage checks).
 /// Duration 109 is unique to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn middleman_pair_guard_discharges_on_first_read_failure() {
+    if std::env::var(R22012_FAULT_ENV).is_ok() {
+        r22012_fault_child_scenario();
+        return;
+    }
+    let me = std::process::id();
+    let limit_before = nofile_soft_limit();
+    let exe = std::env::current_exe().expect("own test binary");
+    let mut child = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("middleman_pair_guard_discharges_on_first_read_failure")
+        .arg("--nocapture")
+        .env(R22012_FAULT_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("fault child spawns");
+    // Sibling hammer while the child runs (bounded 60 s —
+    // a hung child is killed loud, never an unbounded
+    // hang).
+    let mut hammered = 0u64;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if child.try_wait().expect("child waitable").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("fault child hung past 60 s (killed loud)");
+        }
+        hammer_sibling_fd_op().expect("sibling fd-op succeeds during fresh-image fault");
+        hammered += 1;
+    }
+    assert!(
+        hammered > 100,
+        "hammer must pressure the fault window (got {hammered})"
+    );
+    let out = child.wait_with_output().expect("child reaps");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "fault child must exit 0\n{stderr}");
+    assert!(
+        stderr.contains("R22012-DISCHARGED"),
+        "discharge marker\n{stderr}"
+    );
+    let holder: u32 = stderr
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("R22012-HOLDER pid=")
+                .and_then(|pid| pid.trim().parse().ok())
+        })
+        .expect("holder marker\n{stderr}");
+    assert_ne!(
+        holder, me,
+        "fault must run in the child image (in-process reintroduction fails here)"
+    );
+    assert_eq!(
+        nofile_soft_limit(),
+        limit_before,
+        "rlimit preserved across the fault"
+    );
+}
+
+/// R22-012 child scenario (toolchain twin): the R21-009
+/// fault, run ONLY in the fresh-image child. Faithful port
+/// of the lib scenario (guard-handoff + confine + fill +
+/// faulted first read + birth-aware drain proof). Markers
+/// on stderr; any assert-fail exits nonzero (parent fails).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn r22012_fault_child_scenario() {
+    eprintln!("R22012-HOLDER pid={}", std::process::id());
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("109") }.expect("pair staged");
+    // R22-014 guard-handoff (same as lib): outer covers
+    // the setup reads, inner sees the fault unwind.
+    let mut outer = MiddlemanPairGuard::armed(m1, m2);
     let t1 = task_starttime_checked(m1)
         .expect("middleman stat readable")
         .expect("middleman visible");
     let t2 = task_starttime_checked(m2)
         .expect("grandchild stat readable")
         .expect("grandchild visible");
+    outer.disarm();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _pair = MiddlemanPairGuard::armed(m1, m2);
         let _confined = confine_fd_table_for_exhaustion();
@@ -4447,6 +4566,79 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
+    eprintln!("R22012-DISCHARGED");
+}
+
+/// R22-012 (toolchain twin): env flag selecting the hold
+/// characterization child branch (fresh image).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+const R22012_CHAR_ENV: &str = "SCOPEBASE_R22012_CHAR";
+
+/// R22-012 characterization (toolchain twin, PERMANENT):
+/// mirror of the lib characterization — a held EMFILE
+/// table breaks descriptor siblings by design; the hold
+/// runs in the child, the wrapper asserts markers + its
+/// own rlimit untouched.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn outage_hold_breaks_siblings_by_design() {
+    if std::env::var(R22012_CHAR_ENV).is_ok() {
+        let before = nofile_soft_limit();
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        assert!(
+            std::io::pipe().is_err(),
+            "sibling pipe must fail under the hold (EMFILE)"
+        );
+        assert!(
+            std::fs::File::open("/dev/null").is_err(),
+            "sibling open must fail under the hold (EMFILE)"
+        );
+        drop(held);
+        drop(_confined);
+        assert!(
+            std::io::pipe().is_ok(),
+            "sibling pipe must succeed after the drop"
+        );
+        assert!(
+            std::fs::File::open("/dev/null").is_ok(),
+            "sibling open must succeed after the drop"
+        );
+        assert_eq!(
+            nofile_soft_limit(),
+            before,
+            "single hold must restore the rlimit exactly"
+        );
+        eprintln!("R22012-CHAR-OK");
+        return;
+    }
+    let limit_before = nofile_soft_limit();
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("outage_hold_breaks_siblings_by_design")
+        .arg("--nocapture")
+        .env(R22012_CHAR_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("characterization child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "child must exit 0\n{stderr}");
+    assert!(
+        stderr.contains("R22012-CHAR-OK"),
+        "characterization marker\n{stderr}"
+    );
+    assert_eq!(
+        nofile_soft_limit(),
+        limit_before,
+        "wrapper rlimit untouched by the child hold"
+    );
 }
 
 /// R12-002: SIGKILL + bounded reap of an owned fork-pauser

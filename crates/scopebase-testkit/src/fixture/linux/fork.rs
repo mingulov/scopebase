@@ -1243,12 +1243,15 @@ mod tests {
             .map_err(|error| error.to_string())
     }
 
-    /// R21-009: tight in-process EMFILE hold (confine soft
-    /// NOFILE to 4096 + fill, restores on drop). Never
-    /// raises on confine, never lowers on restore (safe
-    /// under nesting with a sibling's hold). Process-global
-    /// while held — keep the hold to microseconds (the
-    /// single faulted read).
+    /// R21-009: tight EMFILE hold (confine soft NOFILE
+    /// to 4096 + fill, restores on drop). R22-012:
+    /// FRESH-IMAGE CHILDREN ONLY — never in the suite
+    /// process (a held table breaks descriptor siblings,
+    /// and this bookkeeping bypasses audit's confinement
+    /// bookkeeping — interleaved holds corrupt RLIMIT.
+    /// Single-hold-per-child only; concurrent holds in one
+    /// process are forbidden). Never raises on confine,
+    /// never lowers on restore.
     struct OutageHold {
         previous_cur: Option<libc::rlim_t>,
         _held: Vec<std::fs::File>,
@@ -1308,20 +1311,227 @@ mod tests {
         }
     }
 
+    /// R22-012: env flag selecting the fault-child branch
+    /// (fresh image) of the pair-guard test below.
+    const R22012_FAULT_ENV: &str = "SCOPEBASE_R22012_FAULT";
+
+    /// R22-012: one hammered sibling fd-op (pipe + open),
+    /// retry-bounded. Retries distinguish transient
+    /// exogenous µs-holds (pre-existing audit exhausters —
+    /// FLAKE01's family, 1ms apart they pass through)
+    /// from a WIDE regression (the fault moved back
+    /// in-process and held open — all retries fail). The
+    /// strict discrimination lives in the holder-pid
+    /// assert (structural); this hammer is pressure, not
+    /// proof.
+    fn hammer_sibling_fd_op() -> std::io::Result<()> {
+        let mut last = std::io::Error::other("unreached");
+        for _ in 0..3 {
+            let attempt = (|| -> std::io::Result<()> {
+                let (read, write) = std::io::pipe()?;
+                drop((read, write));
+                let file = std::fs::File::open("/dev/null")?;
+                drop(file);
+                Ok(())
+            })();
+            match attempt {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    last = error;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+        Err(last)
+    }
+
+    /// R22-012: current NOFILE soft limit (rlimit-preserved
+    /// assert — the fault must not leak a confine).
+    fn nofile_soft_limit() -> u64 {
+        // SAFETY: getrlimit with a valid local rlimit.
+        unsafe {
+            let mut limit: libc::rlimit = std::mem::zeroed();
+            assert_eq!(
+                libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit),
+                0,
+                "own rlimit readable"
+            );
+            limit.rlim_cur as u64
+        }
+    }
+
     /// R21-009: a failed FIRST observation over a staged
     /// middleman pair must unwind through the birth guard —
-    /// both retired before the panic propagates. Stages the
-    /// pair, arms the guard, faults the first read under a
-    /// tight in-process EMFILE hold (inside catch_unwind),
-    /// then proves both original births drained
-    /// (birth-aware — absence alone proves nothing when
-    /// parallel siblings reuse numbers; unreadable fails).
-    /// Duration 108 is unique to this test. Pre-fix RED
+    /// both retired before the panic propagates. R22-012:
+    /// the fault scenario runs in a FRESH-IMAGE child
+    /// (in-process EMFILE breaks descriptor siblings and
+    /// bypasses audit's confinement bookkeeping — the hold
+    /// must never live in the suite process). The wrapper
+    /// spawns self `--exact` with the env flag, hammers
+    /// sibling fd-ops while the child runs (all must
+    /// succeed — the child's table is its own), then
+    /// asserts exit 0 + discharge markers + holder-pid !=
+    /// self (STRUCTURAL: an in-process reintroduction
+    /// fails here deterministically) + rlimit preserved.
+    /// The child stages its OWN pair (it is the parent —
+    /// kill+reap both work there), arms the guard, faults
+    /// the first read under its own EMFILE hold (inside
+    /// catch_unwind), then proves both original births
+    /// drained (birth-aware; unreadable fails). Duration
+    /// 108 is unique to this test. Pre-fix RED
     /// (unguarded): the pair strands (m1 pausing, m2
     /// sleeping) — proven by neutering the guard line.
+    /// Orphan-transient note: a hammer panic orphans the
+    /// RUNNING child — safe (the child is self-sufficient:
+    /// it retires its own pair and exits alone in ms).
     #[test]
     fn middleman_pair_guard_discharges_on_first_read_failure() {
+        if std::env::var(R22012_FAULT_ENV).is_ok() {
+            r22012_fault_child_scenario();
+            return;
+        }
+        let me = std::process::id();
+        let limit_before = nofile_soft_limit();
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::fork::tests::middleman_pair_guard_discharges_on_first_read_failure")
+            .arg("--nocapture")
+            .env(R22012_FAULT_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("fault child spawns");
+        // Sibling hammer while the child runs (bounded
+        // 60 s — a hung child is killed loud, never an
+        // unbounded hang).
+        let mut hammered = 0u64;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if child.try_wait().expect("child waitable").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                panic!("fault child hung past 60 s (killed loud)");
+            }
+            hammer_sibling_fd_op().expect("sibling fd-op succeeds during fresh-image fault");
+            hammered += 1;
+        }
+        assert!(
+            hammered > 100,
+            "hammer must pressure the fault window (got {hammered})"
+        );
+        let out = child.wait_with_output().expect("child reaps");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "fault child must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R22012-DISCHARGED"),
+            "discharge marker\n{stderr}"
+        );
+        let holder: u32 = stderr
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("R22012-HOLDER pid=")
+                    .and_then(|pid| pid.trim().parse().ok())
+            })
+            .expect("holder marker\n{stderr}");
+        assert_ne!(
+            holder, me,
+            "fault must run in the child image (in-process reintroduction fails here)"
+        );
+        assert_eq!(
+            nofile_soft_limit(),
+            limit_before,
+            "rlimit preserved across the fault"
+        );
+    }
+
+    /// R22-012: env flag selecting the hold
+    /// characterization child branch (fresh image).
+    const R22012_CHAR_ENV: &str = "SCOPEBASE_R22012_CHAR";
+
+    /// R22-012 characterization (PERMANENT — passes
+    /// always): a held EMFILE table breaks descriptor
+    /// siblings BY DESIGN (pipe + open fail under the
+    /// hold, succeed after the drop; the rlimit restores
+    /// exactly). This is WHY fault holds live in
+    /// fresh-image children only — an in-process hold is a
+    /// suite-wide outage. The hold ITSELF runs in the
+    /// child (what it characterizes); the wrapper asserts
+    /// markers + its own rlimit untouched.
+    #[test]
+    fn outage_hold_breaks_siblings_by_design() {
+        if std::env::var(R22012_CHAR_ENV).is_ok() {
+            let before = nofile_soft_limit();
+            let hold = OutageHold::exhaust();
+            assert!(
+                std::io::pipe().is_err(),
+                "sibling pipe must fail under the hold (EMFILE)"
+            );
+            assert!(
+                std::fs::File::open("/dev/null").is_err(),
+                "sibling open must fail under the hold (EMFILE)"
+            );
+            drop(hold);
+            assert!(
+                std::io::pipe().is_ok(),
+                "sibling pipe must succeed after the drop"
+            );
+            assert!(
+                std::fs::File::open("/dev/null").is_ok(),
+                "sibling open must succeed after the drop"
+            );
+            assert_eq!(
+                nofile_soft_limit(),
+                before,
+                "single hold must restore the rlimit exactly"
+            );
+            eprintln!("R22012-CHAR-OK");
+            return;
+        }
+        let limit_before = nofile_soft_limit();
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::fork::tests::outage_hold_breaks_siblings_by_design")
+            .arg("--nocapture")
+            .env(R22012_CHAR_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("characterization child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "child must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R22012-CHAR-OK"),
+            "characterization marker\n{stderr}"
+        );
+        assert_eq!(
+            nofile_soft_limit(),
+            limit_before,
+            "wrapper rlimit untouched by the child hold"
+        );
+    }
+
+    /// R22-012 child scenario (lib): the R21-009 fault
+    /// (pair staging + guard + own-table EMFILE + faulted
+    /// first read + birth-aware drain proof), run ONLY in
+    /// the fresh-image child. Markers on stderr; any
+    /// assert-fail exits nonzero (parent fails).
+    fn r22012_fault_child_scenario() {
+        eprintln!("R22012-HOLDER pid={}", std::process::id());
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("108") }.expect("pair staged");
+        // R22-014 guard-handoff: the OUTER guard covers the
+        // setup reads (they can fail — outage — before any
+        // inner scope exists); disarmed once the INNER
+        // guard (the R21-009 guard under test — the fault
+        // unwind must pass THROUGH it) arms. The handoff
+        // gap holds only infallible ops (catch setup), so
+        // no panic path strands.
+        let mut outer = MiddlemanPairGuard::armed(m1, m2);
         // Births captured healthy first (the faulted read
         // below cannot name them).
         let t1 = fork_starttime(m1)
@@ -1330,6 +1540,7 @@ mod tests {
         let t2 = fork_starttime(m2)
             .expect("grandchild stat readable")
             .expect("grandchild visible");
+        outer.disarm();
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pair = MiddlemanPairGuard::armed(m1, m2);
             let _hold = OutageHold::exhaust();
@@ -1351,5 +1562,6 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+        eprintln!("R22012-DISCHARGED");
     }
 }
