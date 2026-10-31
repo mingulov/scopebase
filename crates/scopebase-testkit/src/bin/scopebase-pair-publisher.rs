@@ -9,10 +9,12 @@
 //! publisher child dying before the stat read could be
 //! reaped + recycled first, transmitting the replacement's
 //! tick — the exact gap R19-001 closed on the receiver
-//! side. This binary installs no SIGCHLD handler and waits
-//! only at the end: the child is live-or-zombie at the
-//! stat, and both name the original birth (a zombie keeps
-//! it) — the reservation is genuinely sound.
+//! side. This binary normalizes SIGCHLD to SIG_DFL at
+//! startup (R21-005: an inherited SIG_IGN survives exec
+//! and would auto-reap) and waits only at the end: the
+//! child is live-or-zombie at the stat, and both name the
+//! original birth (a zombie keeps it) — the reservation is
+//! genuinely sound for any launcher.
 //!
 //! Usage: scopebase-pair-publisher <sleep_secs> <tail>
 //!   tail: "wait" (reap the sleep, exit 0) or "exit 0" (exit
@@ -39,7 +41,30 @@ fn fail(message: &str) -> ! {
     std::process::exit(2);
 }
 
+fn normalize_sigchld() {
+    // R21-005: SIG_IGN survives exec (POSIX) and makes
+    // Linux auto-reap children — a launcher that ignores
+    // SIGCHLD would silently release the sleep's PID on
+    // pre-stat death, and the stat could name a
+    // replacement's birth. Normalize to SIG_DFL at startup
+    // so the NEVER-auto-reaped claim holds for ANY
+    // launcher; fail loud if the disposition cannot be set
+    // (a child we cannot keep unreaped is unpublishable).
+    // SAFETY: sigaction on SIGCHLD with an empty mask, no
+    // handler installed, result checked.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = libc::SIG_DFL;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = 0;
+        if libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) != 0 {
+            fail("SIGCHLD disposition cannot be set (auto-reap risk)");
+        }
+    }
+}
+
 fn main() {
+    normalize_sigchld();
     let mut args = std::env::args();
     let _argv0 = args.next();
     let secs = args

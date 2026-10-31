@@ -12195,6 +12195,131 @@ mod tests {
         );
     }
 
+    /// R21-005: the controlled publisher must normalize an
+    /// inherited SIGCHLD=SIG_IGN disposition. SIG_IGN survives
+    /// exec (POSIX) and makes Linux auto-reap children — a
+    /// launcher that ignores SIGCHLD would silently release
+    /// the sleep's PID on pre-stat death, and the stat could
+    /// name a replacement's birth (the NEVER-auto-reaped claim
+    /// would be false for that launcher). The publisher resets
+    /// SIGCHLD to SIG_DFL at startup and fails loud if the
+    /// disposition cannot be set; the wait tail already fails
+    /// loud on ECHILD (the waitpid-works assertion).
+    /// Regression: launch the publisher under `trap '' CHLD`
+    /// (SIG_IGN inherited through the launcher's exec), then
+    /// the R20-004 pause-hook flow — pre-fix the killed sleep
+    /// auto-reaps (no zombie: RED at the zombify poll);
+    /// post-fix the zombie persists and the pair names the
+    /// original birth. Duration 80 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pair_publisher_normalizes_inherited_sigchld_ign() {
+        use std::io::BufRead as _;
+        let flag =
+            std::env::temp_dir().join(format!("scopebase-r21005-pause-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        // Launcher: ignore SIGCHLD, then exec the publisher —
+        // the ignored disposition survives into it (POSIX).
+        // sh -c 'script' name args…: $0 is the bin path.
+        let mut publisher = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("trap '' CHLD; exec \"$0\" \"$@\"")
+            .arg(pair_publisher_bin())
+            .arg("80")
+            .arg("wait")
+            .env("SCOPEBASE_PUBLISHER_PAUSE_FILE", &flag)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("launcher spawns");
+        let pubpid = publisher.id() as libc::pid_t;
+        // The publisher spawns its sleep, then waits on the
+        // absent flag — find the (exactly one) child.
+        let sleep = {
+            let mut found = None;
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < end {
+                let text =
+                    std::fs::read_to_string(format!("/proc/{pubpid}/task/{pubpid}/children"))
+                        .unwrap_or_default();
+                let kids: Vec<libc::pid_t> = text
+                    .split_whitespace()
+                    .filter_map(|w| w.parse().ok())
+                    .collect();
+                if kids.len() == 1 {
+                    found = Some(kids[0]);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            found.expect("publisher must stage exactly one sleep child")
+        };
+        // Original tick while live.
+        let orig = proc_starttime(sleep)
+            .expect("sleep stat readable")
+            .expect("sleep live");
+        // Kill; poll ZOMBIE (dead but still the
+        // publisher's — it must have normalized the
+        // inherited SIG_IGN, else the kernel auto-reaps).
+        // SAFETY: signal-only to the staged sleep.
+        assert_eq!(
+            unsafe { libc::kill(sleep, libc::SIGKILL) },
+            0,
+            "sleep signaled"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if proc_state(sleep) == Some('Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "sleep must zombify (publisher must normalize inherited SIG_IGN)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // The pair must NOT be available yet (the
+        // publisher waits on the absent flag — death
+        // provably precedes the stat).
+        {
+            use std::os::unix::io::AsRawFd as _;
+            let mut poller = libc::pollfd {
+                fd: publisher
+                    .stdout
+                    .as_ref()
+                    .expect("publisher stdout")
+                    .as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: polls our own pipe end, zero timeout.
+            let ready = unsafe { libc::poll(&mut poller, 1, 0) };
+            assert_eq!(ready, 0, "pair must wait on the absent flag (hook engaged)");
+        }
+        // Release; read the pair.
+        std::fs::write(&flag, "go").expect("flag created");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair line readable");
+        let output = publisher.wait_with_output().expect("publisher reaps");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let _ = std::fs::remove_file(&flag);
+        let (pid, tick) = parse_published_pair(line.trim(), "paused publication");
+        assert_eq!(
+            (pid, tick),
+            (sleep, orig),
+            "transmitted must name the original birth despite pre-stat death\n{stderr}"
+        );
+        assert!(output.status.success(), "publisher must exit 0\n{stderr}");
+        assert_eq!(
+            proc_starttime(sleep),
+            Ok(None),
+            "publisher must reap its zombie (wait tail)"
+        );
+    }
+
     /// R16-010: the PINNED path is the twin of IR-002's unpinned
     /// one — a tick-verified live NON-child (a staged
     /// grandchild, never ours to waitpid) dropped through

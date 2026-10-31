@@ -4949,6 +4949,111 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
     );
 }
 
+/// R21-005 (twin mirror): the controlled publisher must
+/// normalize an inherited SIGCHLD=SIG_IGN disposition
+/// (SIG_IGN survives exec and auto-reaps). Same launcher
+/// as the audit harness: `trap '' CHLD` in a child shell,
+/// then exec the publisher — the trap never touches the
+/// test's own process. Pre-fix the killed sleep auto-reaps
+/// (RED at the zombify poll); post-fix the pair names the
+/// original birth. Duration 82 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn pair_publisher_normalizes_inherited_sigchld_ign() {
+    use std::io::BufRead as _;
+    let flag = std::env::temp_dir().join(format!(
+        "scopebase-r21005-twin-pause-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&flag);
+    let mut publisher = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("trap '' CHLD; exec \"$0\" \"$@\"")
+        .arg(pair_publisher_bin())
+        .arg("82")
+        .arg("wait")
+        .env("SCOPEBASE_PUBLISHER_PAUSE_FILE", &flag)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("launcher spawns");
+    let pubpid = publisher.id() as i32;
+    let sleep = {
+        let mut found = None;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < end {
+            let text = std::fs::read_to_string(format!("/proc/{pubpid}/task/{pubpid}/children"))
+                .unwrap_or_default();
+            let kids: Vec<i32> = text
+                .split_whitespace()
+                .filter_map(|w| w.parse().ok())
+                .collect();
+            if kids.len() == 1 {
+                found = Some(kids[0]);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        found.expect("publisher must stage exactly one sleep child")
+    };
+    let orig = task_starttime_checked(sleep)
+        .expect("sleep stat readable")
+        .expect("sleep live");
+    // SAFETY: signal-only to the staged sleep.
+    assert_eq!(
+        unsafe { libc::kill(sleep, libc::SIGKILL) },
+        0,
+        "sleep signaled"
+    );
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if task_state(sleep) == Some('Z') {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < end,
+            "sleep must zombify (publisher must normalize inherited SIG_IGN)"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    {
+        use std::os::unix::io::AsRawFd as _;
+        let mut poller = libc::pollfd {
+            fd: publisher
+                .stdout
+                .as_ref()
+                .expect("publisher stdout")
+                .as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: polls our own pipe end, zero timeout.
+        let ready = unsafe { libc::poll(&mut poller, 1, 0) };
+        assert_eq!(ready, 0, "pair must wait on the absent flag (hook engaged)");
+    }
+    std::fs::write(&flag, "go").expect("flag created");
+    let mut line = String::new();
+    std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line)
+        .expect("pair line readable");
+    let output = publisher.wait_with_output().expect("publisher reaps");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = std::fs::remove_file(&flag);
+    let (pid, tick) = parse_published_pair(line.trim(), "paused publication");
+    assert_eq!(
+        (pid, tick),
+        (sleep, orig),
+        "transmitted must name the original birth despite pre-stat death\n{stderr}"
+    );
+    assert!(output.status.success(), "publisher must exit 0\n{stderr}");
+    assert_eq!(
+        task_starttime_checked(sleep),
+        Ok(None),
+        "publisher must reap its zombie (wait tail)"
+    );
+}
+
 /// Observe-before-cleanup: RED runs retire the survivor so the
 /// failure stays clean. Duration 57 is unique to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
