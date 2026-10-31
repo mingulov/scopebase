@@ -9854,6 +9854,78 @@ mod tests {
         panic!("{mode}: no parsable `{prefix}` line\n{stderr}");
     }
 
+    /// R21-009: the faulted placement attempt's pair
+    /// must have drained before the retry — birth-aware
+    /// (gone or recycled proves the original drained; the
+    /// steered allocator reuses freed numbers, so absence
+    /// alone proves nothing). 5s per leg (init reaps the
+    /// orphaned grandchild asynchronously); an unreadable
+    /// read fails loud (unverifiable, never a pass).
+    /// No-op when no attempt faulted. Observe-before-cleanup:
+    /// on failure the pair is retired before re-raising
+    /// (the check failed ⟹ the fix never retired this pair
+    /// ⟹ m1 is our unreaped child, so m2's number is pinned
+    /// and the blind kill is sound) so RED runs stay clean.
+    #[cfg(target_arch = "x86_64")]
+    fn assert_r21009_faulted_pair_drained(
+        faulted: &std::cell::Cell<Option<(libc::pid_t, u64, libc::pid_t, u64)>>,
+    ) {
+        let Some((fm1, ft1, fm2, ft2)) = faulted.get() else {
+            return;
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for (fpid, fbirth, who) in [
+                (fm1, ft1, "faulted middleman"),
+                (fm2, ft2, "faulted grandchild"),
+            ] {
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    match proc_starttime(fpid) {
+                        Ok(Some(now)) if now == fbirth => {}
+                        Ok(_) => break,
+                        Err(error) => {
+                            panic!("{who} {fpid} drainage unverifiable (outage?): {error:?}")
+                        }
+                    }
+                    assert!(
+                        std::time::Instant::now() < end,
+                        "{who} {fpid} stranded by the faulted placement (must drain before retry)"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }));
+        if outcome.is_err() {
+            // m1 is our unreaped child (nothing retired
+            // this pair) — probe-first for robustness.
+            let mut st = 0;
+            // SAFETY: WNOHANG probe of our own child.
+            if unsafe { libc::waitpid(fm1, &mut st, libc::WNOHANG) } == 0 {
+                // SAFETY: signal-only to the pinned grandchild.
+                unsafe {
+                    libc::kill(fm2, libc::SIGKILL);
+                }
+                // SAFETY: signal-only to our own child.
+                unsafe {
+                    libc::kill(fm1, libc::SIGKILL);
+                }
+            }
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                // SAFETY: WNOHANG reap of our own child.
+                let got = unsafe { libc::waitpid(fm1, &mut st, libc::WNOHANG) };
+                if got != 0 {
+                    break;
+                }
+                if std::time::Instant::now() >= end {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("faulted placement pair stranded (must drain before retry) — see above");
+        }
+    }
+
     /// R15-005: the probe-child body (audit twin of the
     /// toolchain child — Command-spawned fixtures, same
     /// pin/exhaust/panic-drop/verify flow).
@@ -9901,6 +9973,11 @@ mod tests {
         let mut _m2_guard: Option<FixtureGuard> = None;
         let mut repl_tick: Option<u64> = None;
         let mut m1pid: Option<libc::pid_t> = None;
+        // R21-009 fault (one-shot): fail the first placed
+        // attempt's birth read (tight EMFILE around it).
+        let fault_armed =
+            std::cell::Cell::new(std::env::var("SCOPEBASE_R21009_PLACEMENT_OUTAGE").is_ok());
+        let faulted_attempt = std::cell::Cell::new(None);
         let pid = match mode {
             "live" | "gone" | "stolen" | "observe-fail" => {
                 let child = spawn_sleep("51");
@@ -10065,8 +10142,58 @@ mod tests {
                             }
                             return None;
                         }
-                        let rtick = proc_starttime(m2).ok().flatten()?;
-                        _m1_guard = Some(FixtureGuard::new(m1));
+                        // R21-009 fault: one-shot EMFILE around the
+                        // birth read of the first placed
+                        // attempt (pre-fix the `?` below
+                        // retries stranding m1/m2). Births
+                        // captured HEALTHY first (the drain
+                        // check is birth-aware — the steered
+                        // allocator reuses freed numbers, so
+                        // absence alone proves nothing).
+                        let fault = fault_armed.replace(false);
+                        if fault {
+                            if let (Ok(Some(t1)), Ok(Some(t2))) =
+                                (proc_starttime(m1), proc_starttime(m2))
+                            {
+                                faulted_attempt.set(Some((m1, t1, m2, t2)));
+                            }
+                        }
+                        let _outage = fault.then(|| {
+                            let confined = confine_fd_table_for_exhaustion();
+                            let mut held = Vec::new();
+                            while let Ok(file) = std::fs::File::open("/dev/null") {
+                                held.push(file);
+                            }
+                            assert!(!held.is_empty(), "fault hold must consume fds");
+                            (confined, held)
+                        });
+                        // R21-009: guard m1 at birth (before
+                        // the fallible birth read) — a read
+                        // failure must retry WITHOUT
+                        // stranding the staged pair.
+                        let m1_guard = FixtureGuard::new(m1);
+                        let rtick = match proc_starttime(m2) {
+                            Ok(Some(t)) => t,
+                            _ => {
+                                // Read failed (outage) or m2
+                                // gone: blind-kill m2 (m1
+                                // lives — the pausing
+                                // middleman exits only by
+                                // our signal — so m2's
+                                // number is pinned; mirrors
+                                // the miss-park order),
+                                // retire m1, retry.
+                                // SAFETY: signal-only to the
+                                // pinned grandchild.
+                                unsafe {
+                                    libc::kill(m2, libc::SIGKILL);
+                                }
+                                drop(m1_guard);
+                                return None;
+                            }
+                        };
+                        drop(_outage);
+                        _m1_guard = Some(m1_guard);
                         _m2_guard = Some(FixtureGuard::new_expected(m2, rtick));
                         m1pid = Some(m1);
                         Some((m2, rtick))
@@ -10076,10 +10203,20 @@ mod tests {
                         Some(hit) => hit,
                         None => {
                             eprintln!("R20005-SKIP placement contended (retake race)");
+                            // R21-009 fault check (also on
+                            // the skip path — pre-fix the
+                            // stranded pair squats the
+                            // target number and every retry
+                            // misses into this skip).
+                            assert_r21009_faulted_pair_drained(&faulted_attempt);
                             eprintln!("R15005-CHILD-DONE mode={mode}");
                             return;
                         }
                     };
+                    // R21-009 fault check: the faulted
+                    // attempt's pair must have drained
+                    // before the retry.
+                    assert_r21009_faulted_pair_drained(&faulted_attempt);
                     assert_ne!(
                         rtick, stranger_tick,
                         "replacement birth must differ (jiffy-settled, stage broken otherwise)"
@@ -10597,6 +10734,48 @@ mod tests {
         assert!(
             stderr.contains("R20005-SURVIVED"),
             "replacement must survive the complete path\n{stderr}"
+        );
+    }
+
+    /// R21-009 (placement): a failed first birth read
+    /// inside the steered placement must retry WITHOUT
+    /// stranding the staged middleman pair (pre-fix the
+    /// `?` retried abandoning m1/m2 — m1 pausing forever).
+    /// Runs the stranger-replaced probe with a one-shot
+    /// EMFILE fault around the first placed attempt's
+    /// read; the probe's internal drain check fails loud
+    /// pre-fix (stranded middleman) and the probe
+    /// completes post-fix. Contention skips propagate.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn placement_outage_drains_before_retry() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::audit_emfile_stranger_replacement_refuses_transmitted")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R15005_MODE", "stranger-replaced")
+            .env("SCOPEBASE_R21009_PLACEMENT_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // Failure first: a failed probe is a failed
+        // regression even when a skip marker printed
+        // (environmental skips exit 0).
+        assert!(
+            out.status.success(),
+            "probe must complete despite the faulted placement read\n{stderr}"
+        );
+        if stderr.contains("R20005-SKIP") {
+            eprintln!("skip: replacement stage contended (see probe stderr)");
+            return;
+        }
+        assert!(
+            stderr.contains("R15005-CHILD-DONE mode=stranger-replaced"),
+            "completion marker missing\n{stderr}"
         );
     }
 
@@ -22898,12 +23077,35 @@ time.sleep(30)
             .spawn()
             .expect("writer spawns");
         let wpid = writer.id() as libc::pid_t;
+        // R21-009: guard at birth (before the fallible
+        // first read — R20-014 armed it after).
+        let _wguard = FixtureGuard::new(wpid);
+        // R21-009 fault: fail the first observation (reads
+        // dead at the stat below — the `.expect` panics
+        // and the guard must unwind-retire before it).
+        // Birth captured healthy first (birth-aware
+        // wrapper check). Declared AFTER the guard (drops
+        // first — restores reads before the retire
+        // re-verifies).
+        let _fault = std::env::var("SCOPEBASE_R21009_R20014_WRITER_FAIL")
+            .is_ok()
+            .then(|| {
+                let tick = proc_starttime(wpid)
+                    .expect("pre-fault birth readable")
+                    .expect("pre-fault writer visible");
+                eprintln!("R21009-WRITER pid={wpid} tick={tick}");
+                let confined = confine_fd_table_for_exhaustion();
+                let mut held = Vec::new();
+                while let Ok(file) = std::fs::File::open("/dev/null") {
+                    held.push(file);
+                }
+                assert!(!held.is_empty(), "fault exhaustion must consume fds");
+                (confined, held)
+            });
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
-        // R20-014: unwind backstop (the RED panic stranded
-        // this writer — bare handle, no guard).
-        let _wguard = FixtureGuard::new(wpid);
+        drop(_fault);
         assert!(
             _wguard.tick.is_some(),
             "writer custody must pin (stage broken otherwise)"
@@ -23231,12 +23433,35 @@ time.sleep(30)
         }
         let mut probe = probe_cmd.spawn().expect("probe spawns");
         let id = probe.id() as libc::pid_t;
+        // R21-009: guard at birth (before the fallible
+        // first read — R20-014 armed it after).
+        let _pguard = FixtureGuard::new(id);
+        // R21-009 fault: fail the first observation (reads
+        // dead at the stat below — the `.expect` panics
+        // and the guard must unwind-retire before it).
+        // Birth captured healthy first (birth-aware
+        // wrapper check). Declared AFTER the guard (drops
+        // first — restores reads before the retire
+        // re-verifies).
+        let _fault = std::env::var("SCOPEBASE_R21009_R20014_PROBE_FAIL")
+            .is_ok()
+            .then(|| {
+                let tick = proc_starttime(id)
+                    .expect("pre-fault birth readable")
+                    .expect("pre-fault probe visible");
+                eprintln!("R21009-PROBE pid={id} tick={tick}");
+                let confined = confine_fd_table_for_exhaustion();
+                let mut held = Vec::new();
+                while let Ok(file) = std::fs::File::open("/dev/null") {
+                    held.push(file);
+                }
+                assert!(!held.is_empty(), "fault exhaustion must consume fds");
+                (confined, held)
+            });
         let probe_tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
-        // R20-014: unwind backstop (post-staging asserts
-        // must not strand the probe).
-        let _pguard = FixtureGuard::new(id);
+        drop(_fault);
         assert!(
             _pguard.tick.is_some(),
             "probe custody must pin (stage broken otherwise)"
@@ -23302,6 +23527,86 @@ time.sleep(30)
         kill_and_reap(hpid, htick, "fd-holder");
         drop(holder);
         let _ = std::fs::remove_file(&flag_count);
+    }
+
+    /// R21-009 (R20-014): a failed FIRST observation over the
+    /// writer/probe must panic with the staged fixture
+    /// already retired — the birth guard (armed at spawn)
+    /// unwind-retires before the `.expect` propagates. Two
+    /// cells (writer test + probe test), each fresh-image
+    /// with reads dead at its first stat: the probe must
+    /// FAIL loud (never complete) and the staged birth must
+    /// be gone-or-recycled (birth-aware; unreadable fails).
+    /// Pre-fix RED: the post-stat guard never arms and the
+    /// sleeper strands.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn first_read_failure_discharges_before_panic() {
+        for (test, fault_var, marker, read_name) in [
+            (
+                "fixture::linux::audit::tests::discovery_scan_budget_truncates_loud",
+                "SCOPEBASE_R21009_R20014_WRITER_FAIL",
+                "R21009-WRITER",
+                "writer stat readable",
+            ),
+            (
+                "fixture::linux::audit::tests::expiry_beside_bigtable_stays_bounded_and_loud",
+                "SCOPEBASE_R21009_R20014_PROBE_FAIL",
+                "R21009-PROBE",
+                "probe stat readable",
+            ),
+        ] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg(test)
+                .arg("--nocapture")
+                .env(fault_var, "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                !out.status.success(),
+                "fault probe must fail loud ({marker})\n{stderr}"
+            );
+            assert!(
+                stderr.contains(read_name),
+                "probe must name the failed first read ({marker})\n{stderr}"
+            );
+            let line = stderr
+                .lines()
+                .find(|line| line.contains(marker))
+                .unwrap_or_else(|| {
+                    panic!("probe must print the staged birth ({marker})\n{stderr}")
+                });
+            // {marker} pid={pid} tick={tick}.
+            let mut parts = line.split_whitespace().skip(1);
+            let pid: libc::pid_t = parts
+                .next()
+                .expect("pid slot")
+                .strip_prefix("pid=")
+                .expect("pid shape")
+                .parse()
+                .expect("pid parses");
+            let tick: u64 = parts
+                .next()
+                .expect("tick slot")
+                .strip_prefix("tick=")
+                .expect("tick shape")
+                .parse()
+                .expect("tick parses");
+            match proc_starttime(pid) {
+                Ok(None) => {}
+                Ok(Some(now)) => assert_ne!(
+                    now, tick,
+                    "staged birth must be retired ({marker} stranded by the failed first read)"
+                ),
+                Err(error) => panic!("staged retirement unverifiable ({marker}): {error:?}"),
+            }
+        }
     }
 
     /// R20-014: a confined holder must still publish its

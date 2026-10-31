@@ -564,12 +564,81 @@ mod tests {
             // syscall-only child (audited above).
             let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("913") }
                 .expect("report must arrive bounded");
+            // R21-009: guard at birth (the assert below
+            // must not strand the pair).
+            let mut pair = MiddlemanPairGuard::armed(m1, m2);
             assert!(m1 > 0 && m2 > 0 && m1 != m2, "pids must be valid");
             retire(m1, m2);
+            pair.disarm();
         }
         stop.store(true, Ordering::Relaxed);
         for hammer in hammers {
             let _ = hammer.join();
+        }
+    }
+
+    /// R21-009: birth guard for a staged middleman pair —
+    /// armed at fork (before the fallible stat reads);
+    /// drop retires both (m2 blind-killed FIRST while m1
+    /// lives — the middleman pauses until signaled, so
+    /// m2's number is pinned; then m1 killed + reaped,
+    /// bounded). Probe-first: an already-reaped m1 (unwind
+    /// past the tail's reap) means m2 is dead-orphaned
+    /// draining to init — nothing owed. Disarm after the
+    /// explicit tail.
+    struct MiddlemanPairGuard {
+        m1: libc::pid_t,
+        m2: libc::pid_t,
+        disarmed: bool,
+    }
+
+    impl MiddlemanPairGuard {
+        fn armed(m1: libc::pid_t, m2: libc::pid_t) -> Self {
+            MiddlemanPairGuard {
+                m1,
+                m2,
+                disarmed: false,
+            }
+        }
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+    }
+
+    impl Drop for MiddlemanPairGuard {
+        fn drop(&mut self) {
+            if self.disarmed {
+                return;
+            }
+            let mut st = 0;
+            // SAFETY: WNOHANG probe of our own child.
+            if unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) } != 0 {
+                // m1 zombie (reaped by the probe) or gone
+                // (reaped by the tail): m2 is dead-orphaned
+                // draining to init — nothing owed.
+                return;
+            }
+            // m1 live: m2's number is pinned — blind kill
+            // sound.
+            // SAFETY: signal-only to the pinned grandchild.
+            unsafe {
+                libc::kill(self.m2, libc::SIGKILL);
+            }
+            // SAFETY: signal-only to our own child.
+            unsafe {
+                libc::kill(self.m1, libc::SIGKILL);
+            }
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                // SAFETY: WNOHANG reap of our own child.
+                if unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) } != 0 {
+                    return;
+                }
+                if std::time::Instant::now() >= end {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
         }
     }
 
@@ -581,6 +650,9 @@ mod tests {
     #[test]
     fn pausing_grandchild_sleep_reports_nonchild() {
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("910") }.expect("grandchild staged");
+        // R21-009: guard at birth (before the fallible
+        // stat reads below).
+        let mut pair = MiddlemanPairGuard::armed(m1, m2);
         // stat fields after ") ": state ppid ... starttime
         // (rsplit: a comm containing ") " must not shift the
         // fields).
@@ -647,5 +719,139 @@ mod tests {
         let mut mst = 0;
         let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
         assert_eq!(mgot, m1, "middleman status drains to us");
+        pair.disarm();
+    }
+
+    /// R21-009: starttime read for the regression's
+    /// birth-aware checks (fork-local — audit's helper is
+    /// out of reach). `Ok(None)` is proven absence
+    /// (ENOENT); anything else unreadable is `Err`.
+    fn fork_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
+        let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let after = text
+            .rsplit_once(") ")
+            .map(|pair| pair.1)
+            .ok_or_else(|| "comm shape".to_string())?;
+        after
+            .split_whitespace()
+            .nth(19)
+            .ok_or_else(|| "starttime field".to_string())?
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    /// R21-009: tight in-process EMFILE hold (confine soft
+    /// NOFILE to 4096 + fill, restores on drop). Never
+    /// raises on confine, never lowers on restore (safe
+    /// under nesting with a sibling's hold). Process-global
+    /// while held — keep the hold to microseconds (the
+    /// single faulted read).
+    struct OutageHold {
+        previous_cur: Option<libc::rlim_t>,
+        _held: Vec<std::fs::File>,
+    }
+
+    impl OutageHold {
+        fn exhaust() -> Self {
+            // SAFETY: getrlimit/setrlimit with a valid local rlimit.
+            let previous_cur = unsafe {
+                let mut limit: libc::rlimit = std::mem::zeroed();
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    None
+                } else {
+                    let original = limit.rlim_cur;
+                    let cap = original.min(4096);
+                    if cap < original {
+                        limit.rlim_cur = cap;
+                        if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                            return OutageHold {
+                                previous_cur: None,
+                                _held: Self::fill(),
+                            };
+                        }
+                    }
+                    Some(original)
+                }
+            };
+            OutageHold {
+                previous_cur,
+                _held: Self::fill(),
+            }
+        }
+        fn fill() -> Vec<std::fs::File> {
+            let mut held = Vec::new();
+            while let Ok(file) = std::fs::File::open("/dev/null") {
+                held.push(file);
+            }
+            assert!(!held.is_empty(), "exhaustion must consume fds");
+            held
+        }
+    }
+
+    impl Drop for OutageHold {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous_cur {
+                // SAFETY: getrlimit/setrlimit with a valid local rlimit.
+                unsafe {
+                    let mut limit: libc::rlimit = std::mem::zeroed();
+                    if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0
+                        && limit.rlim_cur < previous
+                    {
+                        limit.rlim_cur = previous;
+                        libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+                    }
+                }
+            }
+        }
+    }
+
+    /// R21-009: a failed FIRST observation over a staged
+    /// middleman pair must unwind through the birth guard —
+    /// both retired before the panic propagates. Stages the
+    /// pair, arms the guard, faults the first read under a
+    /// tight in-process EMFILE hold (inside catch_unwind),
+    /// then proves both original births drained
+    /// (birth-aware — absence alone proves nothing when
+    /// parallel siblings reuse numbers; unreadable fails).
+    /// Duration 108 is unique to this test. Pre-fix RED
+    /// (unguarded): the pair strands (m1 pausing, m2
+    /// sleeping) — proven by neutering the guard line.
+    #[test]
+    fn middleman_pair_guard_discharges_on_first_read_failure() {
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("108") }.expect("pair staged");
+        // Births captured healthy first (the faulted read
+        // below cannot name them).
+        let t1 = fork_starttime(m1)
+            .expect("middleman stat readable")
+            .expect("middleman visible");
+        let t2 = fork_starttime(m2)
+            .expect("grandchild stat readable")
+            .expect("grandchild visible");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _pair = MiddlemanPairGuard::armed(m1, m2);
+            let _hold = OutageHold::exhaust();
+            std::fs::read_to_string(format!("/proc/{m2}/stat")).expect("first read");
+        }));
+        assert!(failed.is_err(), "faulted first read must panic");
+        for (pid, birth, who) in [(m1, t1, "middleman"), (m2, t2, "grandchild")] {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match fork_starttime(pid) {
+                    Ok(Some(now)) if now == birth => {}
+                    Ok(_) => break,
+                    Err(error) => panic!("{who} {pid} drainage unverifiable: {error}"),
+                }
+                assert!(
+                    std::time::Instant::now() < end,
+                    "{who} {pid} stranded by the failed first read (guard must retire)"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
     }
 }

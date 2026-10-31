@@ -3650,6 +3650,72 @@ unsafe fn shed_inherited_fds(keep: &[i32]) {
 
 /// R20-005 (toolchain twin): fork a pausing middleman that
 /// forks an exec'd grandchild sleep and reports its pid.
+/// R21-009 (twin mirror): birth guard for a staged
+/// middleman pair — armed at fork (before the fallible
+/// stat reads); drop retires both (m2 blind-killed FIRST
+/// while m1 lives — the middleman pauses until signaled,
+/// so m2's number is pinned; then m1 killed + reaped,
+/// bounded). Probe-first: an already-reaped m1 means m2
+/// is dead-orphaned draining to init — nothing owed.
+/// Disarm after the explicit tail.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct MiddlemanPairGuard {
+    m1: i32,
+    m2: i32,
+    disarmed: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl MiddlemanPairGuard {
+    fn armed(m1: i32, m2: i32) -> Self {
+        MiddlemanPairGuard {
+            m1,
+            m2,
+            disarmed: false,
+        }
+    }
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for MiddlemanPairGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        let mut st = 0;
+        // SAFETY: WNOHANG probe of our own child.
+        if unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) } != 0 {
+            // m1 zombie (reaped by the probe) or gone
+            // (reaped by the tail): m2 is dead-orphaned
+            // draining to init — nothing owed.
+            return;
+        }
+        // m1 live: m2's number is pinned — blind kill sound.
+        // SAFETY: signal-only to the pinned grandchild.
+        unsafe {
+            libc::kill(self.m2, libc::SIGKILL);
+        }
+        // SAFETY: signal-only to our own child.
+        unsafe {
+            libc::kill(self.m1, libc::SIGKILL);
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            // SAFETY: WNOHANG reap of our own child.
+            if unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) } != 0 {
+                return;
+            }
+            if std::time::Instant::now() >= end {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
 /// Twin-port of the lib `fork_pausing_grandchild_sleep`
 /// (same contract: live-middleman parentage ⟹ non-child;
 /// shed + null stdio; empty-env exec; poll-bounded report;
@@ -3820,6 +3886,9 @@ unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
 #[test]
 fn pausing_grandchild_sleep_reports_nonchild() {
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("906") }.expect("grandchild staged");
+    // R21-009: guard at birth (before the fallible stat
+    // reads below).
+    let mut pair = MiddlemanPairGuard::armed(m1, m2);
     // stat fields after ") ": state ppid ... starttime
     // (rsplit: a comm containing ") " must not shift the
     // fields).
@@ -3884,6 +3953,7 @@ fn pausing_grandchild_sleep_reports_nonchild() {
     let mut mst = 0;
     let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
     assert_eq!(mgot, m1, "middleman status drains to us");
+    pair.disarm();
 }
 
 /// R21-017 (toolchain twin): behavioral companion — bounded
@@ -3944,12 +4014,60 @@ fn grandchild_reports_under_libc_contention() {
         // child (audited by the call-path test).
         let (m1, m2) =
             unsafe { fork_pausing_grandchild_sleep("914") }.expect("report must arrive bounded");
+        // R21-009: guard at birth (the assert below must
+        // not strand the pair).
+        let mut pair = MiddlemanPairGuard::armed(m1, m2);
         assert!(m1 > 0 && m2 > 0 && m1 != m2, "pids must be valid");
         retire(m1, m2);
+        pair.disarm();
     }
     stop.store(true, Ordering::Relaxed);
     for hammer in hammers {
         let _ = hammer.join();
+    }
+}
+
+/// R21-009 (twin mirror): a failed FIRST observation over
+/// a staged middleman pair must unwind through the birth
+/// guard — both retired before the panic propagates
+/// (mirror of the lib regression; tight in-process EMFILE
+/// hold inside catch_unwind, birth-aware drainage checks).
+/// Duration 109 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn middleman_pair_guard_discharges_on_first_read_failure() {
+    let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("109") }.expect("pair staged");
+    let t1 = task_starttime_checked(m1)
+        .expect("middleman stat readable")
+        .expect("middleman visible");
+    let t2 = task_starttime_checked(m2)
+        .expect("grandchild stat readable")
+        .expect("grandchild visible");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pair = MiddlemanPairGuard::armed(m1, m2);
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        std::fs::read_to_string(format!("/proc/{m2}/stat")).expect("first read");
+    }));
+    assert!(failed.is_err(), "faulted first read must panic");
+    for (pid, birth, who) in [(m1, t1, "middleman"), (m2, t2, "grandchild")] {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match task_starttime_checked(pid) {
+                Ok(Some(now)) if now == birth => {}
+                Ok(_) => break,
+                Err(error) => panic!("{who} {pid} drainage unverifiable: {error}"),
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "{who} {pid} stranded by the failed first read (guard must retire)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 }
 
@@ -6588,9 +6706,38 @@ fn birth_custody_cleans_failed_first_observation_probe() {
         .spawn()
         .expect("sleeper spawns");
     let pid = child.id() as i32;
+    // R21-009: birth guard at spawn (before the fallible
+    // first read); disarmed after the read transfers
+    // custody to the guard under test (outer coverage
+    // would mask the inner retire — discrimination).
+    let mut outer = SilentChildGuard::new(pid);
+    // R21-009 fault: fail the first observation (reads
+    // dead at the stat below — the `.expect` panics and
+    // the outer guard must unwind-retire before it).
+    // Birth captured healthy first (birth-aware wrapper
+    // check — absence alone proves nothing). Declared
+    // AFTER `outer` (drops first — restores reads before
+    // the retire re-verifies).
+    let _fault = std::env::var("SCOPEBASE_R21009_BIRTH_STAT_FAIL")
+        .is_ok()
+        .then(|| {
+            let tick = task_starttime_checked(pid)
+                .expect("pre-fault birth readable")
+                .expect("pre-fault fixture visible");
+            eprintln!("R21009-BIRTH pid={pid} tick={tick}");
+            let confined = confine_fd_table_for_exhaustion();
+            let mut held = Vec::new();
+            while let Ok(file) = std::fs::File::open("/dev/null") {
+                held.push(file);
+            }
+            assert!(!held.is_empty(), "fault exhaustion must consume fds");
+            (confined, held)
+        });
     let tick = task_starttime_checked(pid)
         .expect("sleeper stat readable")
         .expect("sleeper visible");
+    drop(_fault);
+    outer.disarm();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _birth = SilentChildGuard::new(pid);
         panic!("R20010 injected post-guard failure");
@@ -6610,9 +6757,14 @@ fn birth_custody_cleans_failed_first_observation_probe() {
         .spawn()
         .expect("sleeper spawns");
     let pid2 = child2.id() as i32;
+    // R21-009: birth guard at spawn (before the fallible
+    // first read); disarmed after the read transfers
+    // custody to the guard under test (discrimination).
+    let mut outer2 = SilentChildGuard::new(pid2);
     let tick2 = task_starttime_checked(pid2)
         .expect("sleeper stat readable")
         .expect("sleeper visible");
+    outer2.disarm();
     let mut held = Vec::new();
     while let Ok(file) = std::fs::File::open("/dev/null") {
         held.push(file);
@@ -6661,6 +6813,74 @@ fn birth_custody_cleans_failed_first_observation() {
         stderr.contains("R20010-BIRTH-CUSTODY-DONE"),
         "probe must cite completion\n{stderr}"
     );
+}
+
+/// R21-009 (birth-custody): a failed FIRST observation
+/// must panic with the staged fixture already retired —
+/// the birth guard (armed at spawn) unwind-retires before
+/// the `.expect` propagates. Runs the birth-custody probe
+/// with reads dead at the phase-(a) stat: the probe must
+/// FAIL (loud first-observation failure, never the
+/// completion citation) and the staged birth must be
+/// gone-or-recycled (birth-aware — absence alone proves
+/// nothing; unreadable fails). Pre-fix RED: the unguarded
+/// stat strands the sleeper.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn birth_stat_failure_discharges_before_panic() {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("birth_custody_cleans_failed_first_observation")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R20010_BIRTH_CUSTODY", "1")
+        .env("SCOPEBASE_R21009_BIRTH_STAT_FAIL", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "fault probe must fail loud (first observation dead)\n{stderr}"
+    );
+    assert!(
+        stderr.contains("sleeper stat readable"),
+        "probe must name the failed first read\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("R20010-BIRTH-CUSTODY-DONE"),
+        "failed probe must never cite completion\n{stderr}"
+    );
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("R21009-BIRTH"))
+        .expect("probe must print the staged birth");
+    // R21009-BIRTH pid={pid} tick={tick}.
+    let mut parts = line.split_whitespace().skip(1);
+    let pid: i32 = parts
+        .next()
+        .expect("pid slot")
+        .strip_prefix("pid=")
+        .expect("pid shape")
+        .parse()
+        .expect("pid parses");
+    let tick: u64 = parts
+        .next()
+        .expect("tick slot")
+        .strip_prefix("tick=")
+        .expect("tick shape")
+        .parse()
+        .expect("tick parses");
+    match task_starttime_checked(pid) {
+        Ok(None) => {}
+        Ok(Some(now)) => assert_ne!(
+            now, tick,
+            "staged birth must be retired (stranded by the failed first read)"
+        ),
+        Err(error) => panic!("staged retirement unverifiable: {error}"),
+    }
 }
 
 /// R21-011(c) outage probe (fresh-image: exhausts the fd
