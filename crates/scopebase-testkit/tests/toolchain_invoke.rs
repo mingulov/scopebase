@@ -1378,6 +1378,22 @@ fn await_task_gone_reaping(pid: i32, expected: u64, timeout: std::time::Duration
     await_task_gone_reaping_with(pid, expected, timeout, task_starttime_checked)
 }
 
+/// R21-011(c): R20-010 custody verdict — true when the
+/// awaited birth is proven gone (absence or recycle). An
+/// UNREADABLE stat fails loud (an outage hides liveness —
+/// the old `!= Ok(Some)` shape verdicts green over unknown
+/// state). Hoisted from the birth-custody probe's two
+/// phases so the outage regression exercises the same
+/// artifact.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn custody_retired_or_fail(pid: i32, tick: u64, what: &str) -> bool {
+    match task_starttime_checked(pid) {
+        Ok(None) => true,
+        Ok(Some(now)) => now != tick,
+        Err(error) => panic!("{what} custody unreadable (outage?): {error}"),
+    }
+}
+
 /// R17-010: seam for the toolchain unreadable-stat
 /// regressions: `gate`, when it reports Err, must skip the
 /// wait (unknown is never waited on) and must never certify
@@ -6579,7 +6595,7 @@ fn birth_custody_cleans_failed_first_observation_probe() {
         let _birth = SilentChildGuard::new(pid);
         panic!("R20010 injected post-guard failure");
     }));
-    let gone_a = task_starttime_checked(pid) != Ok(Some(tick));
+    let gone_a = custody_retired_or_fail(pid, tick, "phase (a) fixture");
     let _ = child.kill();
     let _ = child.wait();
     assert!(failed.is_err(), "phase (a) must inject the failure");
@@ -6607,7 +6623,7 @@ fn birth_custody_cleans_failed_first_observation_probe() {
         let _ = task_starttime_checked(pid2).expect("fixture stat readable");
     }));
     drop(held);
-    let gone_b = task_starttime_checked(pid2) != Ok(Some(tick2));
+    let gone_b = custody_retired_or_fail(pid2, tick2, "phase (b) fixture");
     let _ = child2.kill();
     let _ = child2.wait();
     assert!(failed2.is_err(), "phase (b) observation must fail");
@@ -6643,6 +6659,81 @@ fn birth_custody_cleans_failed_first_observation() {
     );
     assert!(
         stderr.contains("R20010-BIRTH-CUSTODY-DONE"),
+        "probe must cite completion\n{stderr}"
+    );
+}
+
+/// R21-011(c) outage probe (fresh-image: exhausts the fd
+/// table — the limit dies with the probe). Under held
+/// EMFILE the stat read errors (a genuine observation
+/// outage over a LIVE fixture): the custody verdict must
+/// fail loud, never green-verdict over unknown state (the
+/// old `!= Ok(Some)` shape returned true on Err). Duration
+/// 931 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn custody_oracle_outage_probe() {
+    let _confined = confine_fd_table_for_exhaustion();
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("931")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sleeper spawns");
+    let pid = child.id() as i32;
+    let tick = task_starttime_checked(pid)
+        .expect("sleeper stat readable")
+        .expect("sleeper visible");
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "exhaustion must consume fds");
+    let failed_loud = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        custody_retired_or_fail(pid, tick, "probe fixture")
+    })) {
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains("unreadable")),
+        Ok(_) => false,
+    };
+    drop(held);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        failed_loud,
+        "outage must fail loud on unreadable custody, never green-verdict"
+    );
+    eprintln!("R21011-TWIN-OUTAGE-DONE");
+}
+
+/// R21-011(c) outage wrapper: the probe runs fresh-image
+/// (it exhausts the fd table).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn custody_oracle_outage_refuses_green_verdict() {
+    if std::env::var("SCOPEBASE_R21011_TWIN_OUTAGE").is_ok() {
+        custody_oracle_outage_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("custody_oracle_outage_refuses_green_verdict")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R21011_TWIN_OUTAGE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "probe must complete the outage case\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R21011-TWIN-OUTAGE-DONE"),
         "probe must cite completion\n{stderr}"
     );
 }

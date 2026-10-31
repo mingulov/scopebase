@@ -2725,6 +2725,83 @@ mod tests {
         let _ = kill_tick_gated(id, tick);
     }
 
+    /// R21-011(a): await a birth's retirement — gone or
+    /// recycled returns true; a still-matching birth waits
+    /// (bounded, 10ms cadence; false on timeout with ours
+    /// still live). An UNREADABLE stat fails loud: an
+    /// outage hides liveness (breaking would cite
+    /// retirement over a possibly-live task), and the kill
+    /// gate is equally dead under outage (nothing was
+    /// signaled). The waitpid-assist reaps suite-adopted
+    /// zombies (WNOHANG — never blocks). Hoisted from the
+    /// four R19003/R20011 cleanup loops so the outage
+    /// regression exercises the same artifact.
+    #[cfg(target_arch = "x86_64")]
+    fn await_birth_retired(
+        pid: libc::pid_t,
+        tick: u64,
+        assist: bool,
+        timeout: Duration,
+        what: &str,
+    ) -> bool {
+        let end = Instant::now() + timeout;
+        loop {
+            if assist {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only.
+                unsafe {
+                    libc::waitpid(pid, &mut st, libc::WNOHANG);
+                }
+            }
+            match proc_starttime(pid) {
+                Ok(Some(now)) if now == tick => {}
+                Ok(_) => return true,
+                Err(error) => panic!("{what} retirement unreadable (outage?): {error}"),
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R21-011(b): park an orphaned stray — kill gated on the
+    /// known birth (unknown birth: no kill possible — a blind
+    /// signal is forbidden), then await ABSENCE with
+    /// waitpid-assist (bounded). Returns true only when
+    /// absence-or-recycle is PROVEN (unknown birth: absence
+    /// only — a hosted birth of unknown identity never
+    /// proves the stray gone); false (unresolved — never
+    /// claims parked) on timeout or an unreadable stat.
+    /// Callers assert (an unresolved park fails loud before
+    /// any discharge citation). Hoisted from the
+    /// birth-bracket test's closure so the outage regression
+    /// exercises the same artifact.
+    #[cfg(target_arch = "x86_64")]
+    fn park_stray_bounded(spid: libc::pid_t, stick: Option<u64>, timeout: Duration) -> bool {
+        if let Some(t) = stick {
+            let _ = kill_tick_gated(spid, t);
+        }
+        let end = Instant::now() + timeout;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only.
+            unsafe {
+                libc::waitpid(spid, &mut st, libc::WNOHANG);
+            }
+            match (proc_starttime(spid), stick) {
+                (Ok(None), _) => return true,
+                (Ok(Some(now)), Some(known)) if now != known => return true,
+                (Ok(Some(_)), _) => {}
+                (Err(_), _) => return false,
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// R20-013(b): trailing run-proof that the production
     /// retire drained the holder (extracted from the
     /// birth-bracket test so the replacement regression
@@ -20535,21 +20612,16 @@ mod tests {
                 // GREEN-tail loop; the citation below proves
                 // it (the regression requires it).
                 let _ = kill_tick_gated(c1, c1tick);
-                let end = Instant::now() + Duration::from_secs(10);
-                loop {
-                    // SAFETY: WNOHANG assist only — C1
-                    // reparented to init (reaps itself) or to
-                    // this suite (we reap).
-                    let mut st = 0;
-                    unsafe {
-                        libc::waitpid(c1, &mut st, libc::WNOHANG);
-                    }
-                    if proc_starttime(c1) != Ok(Some(c1tick)) {
-                        break;
-                    }
-                    assert!(Instant::now() < end, "orphaned victim child must die");
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+                assert!(
+                    await_birth_retired(
+                        c1,
+                        c1tick,
+                        true,
+                        Duration::from_secs(10),
+                        "orphaned victim child"
+                    ),
+                    "orphaned victim child must die"
+                );
                 eprintln!("R20011-C1-RETIRED");
                 eprintln!("skip: replacement steering missed");
                 return;
@@ -20567,21 +20639,17 @@ mod tests {
             let _ = pub2.kill();
             let _ = pub2.wait();
             let _ = kill_tick_gated(c1, c1tick);
-            let end = Instant::now() + Duration::from_secs(2);
-            loop {
-                let mut st = 0;
-                // SAFETY: WNOHANG assist only.
-                unsafe {
-                    libc::waitpid(c1, &mut st, libc::WNOHANG);
-                }
-                if proc_starttime(c1) != Ok(Some(c1tick)) {
-                    break;
-                }
-                if Instant::now() >= end {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            // S100 arm preserves its silent-timeout strand
+            // (pre-existing: c1 may stay live past 2s —
+            // out of scope for R21-011, which covers the
+            // outage-Err shape only).
+            let _ = await_birth_retired(
+                c1,
+                c1tick,
+                true,
+                Duration::from_secs(2),
+                "orphaned victim child",
+            );
             eprintln!("skip: same-tick retake (S100 — untestable this run)");
             return;
         }
@@ -20608,31 +20676,29 @@ mod tests {
         // Cleanup: retire the replacement child (its status
         // drains to pub2), reap pub2, retire orphaned C1.
         let _ = kill_tick_gated(cprime, cptick);
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            if proc_starttime(cprime) != Ok(Some(cptick)) {
-                break;
-            }
-            assert!(Instant::now() < end, "replacement child must die");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            await_birth_retired(
+                cprime,
+                cptick,
+                false,
+                Duration::from_secs(10),
+                "replacement child"
+            ),
+            "replacement child must die"
+        );
         let status = pub2.wait().expect("replacement parent reaps");
         assert!(status.success(), "replacement parent must exit clean");
         let _ = kill_tick_gated(c1, c1tick);
-        let end = Instant::now() + Duration::from_secs(10);
-        loop {
-            // SAFETY: WNOHANG assist only — C1 reparented to
-            // init (reaps itself) or to this suite (we reap).
-            let mut st = 0;
-            unsafe {
-                libc::waitpid(c1, &mut st, libc::WNOHANG);
-            }
-            if proc_starttime(c1) != Ok(Some(c1tick)) {
-                break;
-            }
-            assert!(Instant::now() < end, "orphaned victim child must die");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            await_birth_retired(
+                c1,
+                c1tick,
+                true,
+                Duration::from_secs(10),
+                "orphaned victim child"
+            ),
+            "orphaned victim child must die"
+        );
         eprintln!("R19003-PINFAIL-DONE");
     }
 
@@ -20733,6 +20799,90 @@ mod tests {
             }
             panic!("forced miss skipped without retiring c1 ({mode})\n{stderr}");
         }
+    }
+
+    /// R21-011 outage probe (fresh-image: exhausts the fd
+    /// table — the limit dies with the probe). Under held
+    /// EMFILE every stat read errors (a genuine observation
+    /// outage over a LIVE fixture): (a) the
+    /// birth-retirement await must fail loud (never certify
+    /// retirement — the old break-on-Err cited
+    /// R20011-C1-RETIRED over a possibly-live c1); (b) the
+    /// stray park must report unresolved (never claim
+    /// parked), for known AND unknown birth. Duration 930
+    /// is unique to this test.
+    #[cfg(target_arch = "x86_64")]
+    fn outage_oracles_refuse_to_certify_probe() {
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("930")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        // (a): the await must panic (loud), never certify.
+        let failed_loud = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            await_birth_retired(pid, tick, false, Duration::from_secs(5), "probe fixture")
+        })) {
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .is_some_and(|message| message.contains("unreadable")),
+            Ok(_) => false,
+        };
+        // (b): the park must report unresolved, never parked.
+        let parked_known = park_stray_bounded(pid, Some(tick), Duration::from_millis(200));
+        let parked_unknown = park_stray_bounded(pid, None, Duration::from_millis(200));
+        drop(held);
+        let _ = kill_tick_gated(pid, tick);
+        let _ = child.wait();
+        assert!(
+            failed_loud,
+            "(a) outage must fail loud on unreadable retirement, never certify"
+        );
+        assert!(!parked_known, "(b) outage must not park a known birth");
+        assert!(!parked_unknown, "(b) outage must not park an unknown birth");
+        eprintln!("R21011-OUTAGE-DONE");
+    }
+
+    /// R21-011 outage wrapper: the outage probe runs
+    /// fresh-image (it exhausts the fd table).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn outage_oracles_refuse_to_certify() {
+        if std::env::var("SCOPEBASE_R21011_OUTAGE").is_ok() {
+            outage_oracles_refuse_to_certify_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::outage_oracles_refuse_to_certify")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R21011_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the outage case\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R21011-OUTAGE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
     }
 
     /// R20-006: a denied pin over a gone number must KEEP
@@ -21592,28 +21742,6 @@ else:
         assert!(!truncated, "small fixture population must scan fully");
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
-        // Park-a-stray helper (orphaned forks: kill gated,
-        // waitpid-assist for suite adoption, bounded).
-        let park_stray = |spid: libc::pid_t, stick: Option<u64>| {
-            if let Some(t) = stick {
-                let _ = kill_tick_gated(spid, t);
-            }
-            let end = Instant::now() + Duration::from_secs(5);
-            loop {
-                let mut st = 0;
-                // SAFETY: WNOHANG assist only.
-                unsafe {
-                    libc::waitpid(spid, &mut st, libc::WNOHANG);
-                }
-                if proc_starttime(spid) != Ok(stick) {
-                    break;
-                }
-                if Instant::now() >= end {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        };
         let mut guard = state.borrow_mut();
         if guard.missed || !guard.fired {
             // Steering miss (or hook never fired — stage
@@ -21628,7 +21756,10 @@ else:
             let forker = guard.forker.take();
             drop(guard);
             if let Some((spid, stick)) = stray {
-                park_stray(spid, stick);
+                assert!(
+                    park_stray_bounded(spid, stick, Duration::from_secs(5)),
+                    "stray {spid} must park (unresolved parks never discharge)"
+                );
             }
             // Forker: raise the flag it waits on, bounded
             // await its exit, then park the reported
@@ -21669,7 +21800,10 @@ else:
                 // unproven — fail loud, never skip.
                 let forked = forked.expect("forker must report its fork for discharge");
                 let gtick = proc_starttime(forked).ok().flatten();
-                park_stray(forked, gtick);
+                assert!(
+                    park_stray_bounded(forked, gtick, Duration::from_secs(5)),
+                    "forker byproduct {forked} must park (unresolved parks never discharge)"
+                );
             }
             // Victim: kill gated + reap (already reaped in
             // the miss shape — `None` then — stranded and
@@ -21694,7 +21828,10 @@ else:
             // Same-tick retake (S100): park and skip loud.
             // (R20-012: hook already consumed forker/victim
             // here — nothing staged remains.)
-            park_stray(vpid, Some(rtick));
+            assert!(
+                park_stray_bounded(vpid, Some(rtick), Duration::from_secs(5)),
+                "S100 replacement must park (unresolved parks never discharge)"
+            );
             let _ = kill_tick_gated(lpid, ltick);
             let _ = legit.wait();
             eprintln!("R20012-SKIP-DISCHARGED");
@@ -21749,7 +21886,10 @@ else:
         drop(legit);
         // Cleanup: park the orphaned replacement (gone is
         // the proof — init or a suite subreaper owns it).
-        park_stray(vpid, Some(rtick));
+        assert!(
+            park_stray_bounded(vpid, Some(rtick), Duration::from_secs(5)),
+            "orphaned replacement must park (unresolved parks never discharge)"
+        );
         let _ = std::fs::remove_file(&flag_fork);
         let _ = std::fs::remove_file(&flag_forked);
     }
@@ -21813,6 +21953,49 @@ else:
             }
             panic!("forced skip stranded staged processes ({mode})\n{stderr}");
         }
+    }
+
+    /// R21-011(b): an unknown-birth park over a LIVE occupant
+    /// must await absence and report unresolved — never the
+    /// instant silent no-op (pre-fix the `!= Ok(None)` break
+    /// fired at once on any hosted birth, then the caller
+    /// cited DISCHARGED). The 200ms bound keeps it fast;
+    /// the survivor is retired explicitly, and its survival
+    /// proves no blind signal fired. Second arm: a
+    /// self-exited occupant parks true (genuine absence
+    /// still certifies). Duration 932 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn unknown_birth_park_reports_unresolved_over_live_occupant() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("932")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        assert!(
+            !park_stray_bounded(pid, None, Duration::from_millis(200)),
+            "unknown-birth park over a live occupant must report unresolved"
+        );
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(Some(tick)),
+            "the occupant must survive (no blind signal)"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        // Absence still certifies: a reaped-away number parks
+        // true even with unknown birth.
+        assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+        assert!(
+            park_stray_bounded(pid, None, Duration::from_millis(200)),
+            "unknown-birth park over proven absence must certify"
+        );
     }
 
     /// R19-006: pipe discovery must verify identity and mode
