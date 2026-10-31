@@ -10301,17 +10301,18 @@ mod tests {
             let got = unsafe { libc::waitpid(grand, &mut status, libc::WNOHANG) };
             assert!(got < 0, "staged grandchild must not be our child");
         }
-        // R17-007: pin-before-panic — if construction
-        // exhausted its budget (None) while the explicit read
-        // recovered the tick, late-pin the recovered identity
-        // so the drop retires it (a bare assert would unwind
-        // unpinned and ECHILD past the known grandchild).
+        // R18-005: no late-pin — expected-identity
+        // refusal is terminal (a late pin cannot undisarm a
+        // refusal, and must not resurrect a mismatch): a
+        // refusal here means the transmitted birth is gone
+        // or unreadable (stage broken), and proceeding
+        // disarmed would vacate the retirement under test.
         {
-            let mut fired = pinned;
-            if fired.tick.is_none() {
-                eprintln!("R17007 construction pin missed; late-pinning recovered tick");
-                fired.pin(tick);
-            }
+            let fired = pinned;
+            assert!(
+                fired.tick.is_some(),
+                "acquisition must pin the transmitted birth (stage broken otherwise)"
+            );
         } // Drop fires here.
           // R17-009: DISCHARGE required (not merely death) — the
           // live shell reaps promptly; a lingering zombie past
@@ -10456,7 +10457,7 @@ mod tests {
             held.push(file);
         }
         assert!(!held.is_empty(), "exhaustion must consume fds");
-        let pinned = FixtureGuard::new(grand);
+        let mut pinned = FixtureGuard::new(grand);
         assert!(
             pinned.tick.is_none(),
             "construction must fail under EMFILE (stage broken otherwise)"
@@ -10466,6 +10467,18 @@ mod tests {
         let tick = proc_starttime(grand)
             .expect("grandchild stat readable")
             .expect("grandchild present");
+        // R17-007: pin-before-panic — the constructor
+        // exhausted its budget (None) while the explicit read
+        // recovered the tick. R18-005: the recovered
+        // identity reaches the guard HERE, before every
+        // fallible check below (a panic anywhere below
+        // unwinds through a PINNED guard that retires the
+        // known grandchild); the diagnostic follows the pin,
+        // never precedes it.
+        if pinned.tick.is_none() {
+            pinned.pin(tick);
+            eprintln!("R17007 construction pin missed; late-pinned recovered tick");
+        }
         // Sanity: live, and not our child.
         assert!(
             matches!(proc_state(grand), Some(state) if state != 'Z'),
@@ -10477,18 +10490,9 @@ mod tests {
             let got = unsafe { libc::waitpid(grand, &mut status, libc::WNOHANG) };
             assert!(got < 0, "staged grandchild must not be our child");
         }
-        // R17-007: pin-before-panic — the constructor
-        // exhausted its budget (None) while the explicit read
-        // recovered the tick: late-pin the recovered identity
-        // so the drop retires it (a bare assert would unwind
-        // unpinned and ECHILD past the known grandchild).
         // Caught (probe scaffolding): RED runs reach cleanup.
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut fired = pinned;
-            if fired.tick.is_none() {
-                eprintln!("R17007 construction pin missed; late-pinning recovered tick");
-                fired.pin(tick);
-            }
+            let _fired = pinned;
         })); // Drop fires here (scope end or unwind).
              // R17-009: DISCHARGE required (not merely death) — the
              // live shell reaps promptly; a lingering zombie past
@@ -10617,11 +10621,13 @@ mod tests {
         // R17-007: pin-before-panic — late-pin the recovered
         // tick so the later unwind retires the frozen
         // grandchild (stopped ⇒ the number is stable — the pin
-        // cannot authorize a replacement).
+        // cannot authorize a replacement). R18-005: the pin
+        // lands before the diagnostic (a failing write must
+        // never precede custody).
         let mut mid_guard = mid_guard;
         if mid_guard.tick.is_none() {
-            eprintln!("R17007 construction pin missed; late-pinning recovered tick");
             mid_guard.pin(tick);
+            eprintln!("R17007 construction pin missed; late-pinned recovered tick");
         }
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = mid_guard;
@@ -10685,6 +10691,137 @@ mod tests {
         );
         assert!(
             stderr.contains("R17007-MRECOVERED retired=1"),
+            "probe must cite the retirement\n{stderr}"
+        );
+    }
+
+    /// R18-005: probe body (fresh image,
+    /// SCOPEBASE_R18005) — exhaust construction, recover
+    /// the birth tick, then fail a diagnostic write
+    /// (read-only handle): the recovered tick must reach
+    /// the guard BEFORE the fallible check, so the pinned
+    /// unwind-drop retires + discharges the grandchild
+    /// before the failure reports. RED (pin after the
+    /// failure point): the unwind drops unpinned and
+    /// ECHILDs past the live grandchild. Duration 86 is
+    /// unique to this test. Fresh image: whole-table
+    /// exhaustion is process-shared — in-process staging
+    /// flaked under suite EMFILE pressure (drops verify
+    /// reads that siblings starve).
+    #[cfg(target_arch = "x86_64")]
+    fn recovered_pin_precedes_fallible_probe() {
+        use std::io::{BufRead as _, Write as _};
+        use std::time::{Duration, Instant};
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 86 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pid readable");
+        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // Fail the constructor reads: exhaust through
+        // construction (the retry budget expires to None).
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let pinned = FixtureGuard::new(grand);
+        assert!(
+            pinned.tick.is_none(),
+            "construction must fail under EMFILE (stage broken otherwise)"
+        );
+        drop(held);
+        // The explicit birth read succeeds after restore.
+        let tick = proc_starttime(grand)
+            .expect("grandchild stat readable")
+            .expect("grandchild present");
+        // Diagnostics file, opened read-only below (the
+        // write fails for real — no suite-wide interference,
+        // unlike closing stderr).
+        let diag =
+            std::env::temp_dir().join(format!("scopebase-r18005-{}.log", std::process::id()));
+        std::fs::write(&diag, "r18005 diagnostics\n").expect("diagnostics created");
+        // GREEN: the pin sits BEFORE the failure point —
+        // the unwind drops pinned and retires (RED was the
+        // pin after the write, which dropped unpinned).
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut fired = pinned;
+            if fired.tick.is_none() {
+                fired.pin(tick);
+            }
+            let mut log = std::fs::File::open(&diag).expect("diagnostics readable");
+            writeln!(log, "R18005 recovered tick={tick}").expect("diagnostic write");
+        }));
+        assert!(
+            fired.is_err(),
+            "diagnostic write must fail (read-only handle)"
+        );
+        // Observe before cleanup: the grandchild must be
+        // gone (retired + discharged by the unwind-drop).
+        let retired = await_proc_gone_reaping(grand, tick, Duration::from_secs(5));
+        // Cleanup (runs on RED too): tick-gated kill, poll
+        // gone, reap the sh parent.
+        let _ = kill_tick_gated(grand, tick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(grand) != Ok(Some(tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "staged grandchild must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if parent.try_wait().expect("parent wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "sh parent must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&diag);
+        assert!(
+            retired,
+            "pinned unwind must retire before the failure reports"
+        );
+        eprintln!("R18005-RECOVERED retired=1");
+    }
+
+    /// R18-005: the recovered tick must reach the guard
+    /// BEFORE the next fallible check (fresh-image wrapper
+    /// — the probe body above runs in a child with its own
+    /// fd table).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn recovered_pin_precedes_fallible_checks() {
+        if std::env::var("SCOPEBASE_R18005").is_ok() {
+            recovered_pin_precedes_fallible_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::recovered_pin_precedes_fallible_checks")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R18005", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must retire through the preceding pin\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R18005-RECOVERED retired=1"),
             "probe must cite the retirement\n{stderr}"
         );
     }
