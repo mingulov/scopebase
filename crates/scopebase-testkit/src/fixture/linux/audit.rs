@@ -20429,9 +20429,9 @@ mod tests {
             eprintln!("skip: steer unwritable mid-test (no reuse control)");
             return;
         }
-        let mut parent = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg("sleep 82 & echo $!; wait")
+        let mut parent = std::process::Command::new(pair_publisher_bin())
+            .arg("82")
+            .arg("wait")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -20448,13 +20448,14 @@ mod tests {
             return;
         }
         let mut line = String::new();
-        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        std::io::BufReader::new(parent.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
-            .expect("replacement child pid readable");
-        let rchild = line.trim().parse::<libc::pid_t>().expect("pid parses");
-        let rtick = proc_starttime(rchild)
-            .expect("replacement child stat readable")
-            .expect("replacement child visible");
+            .expect("replacement child pair readable");
+        // R21-006: transmitted pair (never a fresh read —
+        // this PID-only site was missed by the R20-004
+        // migration, and the fresh birth below fed kill
+        // authority).
+        let (rchild, rtick) = parse_published_pair(line.trim(), "replacement publication");
         let ptick = proc_starttime(pid)
             .expect("replacement parent stat readable")
             .expect("replacement parent visible");
@@ -20473,8 +20474,10 @@ mod tests {
         }
         // Custody across the restore (R18-004: the child is a
         // pipe pid — expected-identity over the transmitted
-        // birth read just above; the parent is our unreaped
-        // child — bare construction holds the reservation).
+        // pair above (R21-006: the old comment called a
+        // fresh read "transmitted"); the parent is our
+        // unreaped child — bare construction holds the
+        // reservation).
         // R18-008: the parent rides its own guard too (a
         // restore panic with the handle alone left a zombie
         // to process exit; the guard reaps it on unwind).
@@ -20511,6 +20514,96 @@ mod tests {
         let status = parent.wait().expect("replacement parent reaps");
         parent_guard.disarm();
         assert!(status.success(), "replacement parent must exit clean");
+    }
+
+    /// R21-006: the reexpansion test's replacement receiver
+    /// was missed by the 24-site R20-004 migration: PID-only
+    /// shell publication + fresh-read birth + kill authority
+    /// (FixtureGuard). A forced replace between publication
+    /// and the first read authenticates the REPLACEMENT (the
+    /// fresh read returns its birth) and teardown murders
+    /// it. Post-migration the receiver pins the TRANSMITTED
+    /// pair: the forced replace refuses, the pin assert
+    /// fails loud (never silent), and the replacement
+    /// survives teardown. Duration 107 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn replacement_receiver_refuses_recycled_publication() {
+        use std::io::BufRead as _;
+        let Some(_serial) = steer_hold() else {
+            return;
+        };
+        // Migrated flow (GREEN): controlled publication
+        // transmits the pair (RED was proven with the old
+        // PID-only shell publication + fresh read: the
+        // replacement was murdered in teardown).
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("107")
+            .arg("wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("publisher spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("child pair readable");
+        let (child, orig) = parse_published_pair(line.trim(), "child publication");
+        // Attacker (in-test killer): kill the original; the
+        // publisher's wait reaps it and exits; plant a
+        // different-birth replacement on the freed number.
+        // SAFETY: signal-only to the staged original.
+        assert_eq!(
+            unsafe { libc::kill(child, libc::SIGKILL) },
+            0,
+            "original signaled"
+        );
+        let status = publisher.wait().expect("publisher reaps + exits");
+        assert!(status.success(), "publisher must exit clean");
+        assert_eq!(proc_starttime(child), Ok(None), "number must free");
+        let (kid, mut pguard) = match plant_replacement(child, orig) {
+            Some(planted) => planted,
+            None => return,
+        };
+        let retick = proc_starttime(child)
+            .expect("replacement readable")
+            .expect("replacement visible");
+        assert_ne!(retick, orig, "plant must be a different birth");
+        // Receiver (the site's flow): pin the
+        // TRANSMITTED birth (never a fresh read — the
+        // forced replace already landed).
+        let guard = FixtureGuard::new_expected(child, orig);
+        // The site asserts the pin: post-migration the
+        // refusal fails it LOUD (pre-migration it pins the
+        // replacement and passes silent).
+        let pin_failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert!(guard.tick.is_some(), "receiver pin");
+        }))
+        .is_err();
+        // Teardown (the site's shape): gated kill on the
+        // transmitted birth, then drop the guard.
+        let _ = kill_tick_gated(child, orig);
+        drop(guard);
+        // The replacement must survive the assertion
+        // failure + teardown (pre-fix: murdered).
+        assert!(
+            matches!(proc_state(child), Some(state) if state != 'Z'),
+            "replacement must survive the recycled publication"
+        );
+        // Loudness: the pin must fail (refusal), never pass
+        // silent over a recycled number.
+        assert!(pin_failed, "pin must fail loud on a recycled publication");
+        // Explicit cleanup (post-verdict): retire the
+        // survivor, disarm the plant guard.
+        assert!(kill_tick_gated(child, retick), "retire the survivor");
+        let mut st = 0;
+        // SAFETY: blocking reap of our retired occupant.
+        let got = unsafe { libc::waitpid(child, &mut st, 0) };
+        assert_eq!(got, child, "survivor reaped");
+        pguard.disarm();
+        drop(kid);
     }
 
     /// R19-003: a pin failure must re-verify before keeping
