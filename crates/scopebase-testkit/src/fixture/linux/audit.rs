@@ -5413,7 +5413,7 @@ mod tests {
         strays: &[(libc::pid_t, u64)],
         group_died: bool,
     ) {
-        expire_probe_collection_with_hook(id, expected, strays, group_died, None);
+        expire_probe_collection_with_hook(id, expected, strays, group_died, None, None);
     }
 
     /// R13-003 anchor check, shared by the up-front decision
@@ -5443,6 +5443,12 @@ mod tests {
     /// re-decides foreignness every pass (a regroup between
     /// passes reforms the number — draining on would reap the
     /// replacement owner's zombie).
+    /// R15-007: `reap_hook` runs after every successful inner
+    /// reap (BEFORE that reap's recheck — it simulates the
+    /// adversary between reaps, so the recheck must observe its
+    /// plant); the drain re-decides after EVERY reap (a reform
+    /// between inner waits would otherwise lose the
+    /// replacement's status with no further check).
     #[cfg(target_arch = "x86_64")]
     fn expire_probe_collection_with_hook(
         id: libc::pid_t,
@@ -5450,6 +5456,7 @@ mod tests {
         strays: &[(libc::pid_t, u64)],
         group_died: bool,
         pass_hook: Option<&dyn Fn()>,
+        reap_hook: Option<&dyn Fn()>,
     ) {
         use std::time::Duration;
         // Known strays below still retire individually (their
@@ -5528,6 +5535,28 @@ mod tests {
                     // own group; WNOHANG never blocks.
                     let got = unsafe { libc::waitpid(-id, &mut status, libc::WNOHANG) };
                     if got > 0 {
+                        // R15-007: the per-reap seam runs FIRST
+                        // (it simulates the adversary between
+                        // reaps — the recheck below must observe
+                        // its plant), then re-decide: this reap
+                        // may have freed the number for a
+                        // reformed group, and the next wait would
+                        // steal the replacement's status with no
+                        // further check. Bounded: one recheck per
+                        // reap, never per spin. Residual: the
+                        // recheck→waitpid µs inside one iteration
+                        // is unclosable TOCTOU (no atomic
+                        // check-and-reap exists) — S100-class,
+                        // consistent with R13-003.
+                        if let Some(hook) = reap_hook {
+                            hook();
+                        }
+                        if group_is_foreign(id, expected) {
+                            eprintln!(
+                                "expiry: group {id} reformed mid-reap — inner stops (no theft)"
+                            );
+                            break;
+                        }
                         continue;
                     }
                     if got < 0 {
@@ -7618,7 +7647,7 @@ mod tests {
                 break;
             }
         };
-        expire_probe_collection_with_hook(id, own_tick, &[], false, Some(&barrier));
+        expire_probe_collection_with_hook(id, own_tick, &[], false, Some(&barrier), None);
         audit_locked_restore_hint(&last_before);
         // Loud owner cleanup of our fixtures either way, then
         // skips, then the verdict.
@@ -7647,6 +7676,201 @@ mod tests {
         );
         let status = child.wait().expect("replacement owner keeps its status");
         drop(sleeper);
+        assert_eq!(
+            status.code(),
+            Some(3),
+            "replacement status must survive the drain (no theft)"
+        );
+    }
+
+    /// R15-007: the drain re-decides foreignness after EVERY
+    /// successful inner reap (not once per outer pass). Stage: a
+    /// group with ONE zombie Z1 and a reaped leader; the
+    /// per-reap hook reforms the freed leader number after that
+    /// (last) reap (steered sh/exit-3, self-grouped, zombie —
+    /// the replacement shape; the steer needs the group empty —
+    /// a zombie-held pgid pins its struct pid). Pre-fix the next
+    /// inner waitpid steals R's status (RED: the reform is gone,
+    /// the owner wait fails); post-fix the post-reap recheck
+    /// sees the reform and stops (GREEN: R's exit-3 status
+    /// survives for its owner). Reuse-control gated (skip when
+    /// ns_last_pid unreadable/unwritable — the operative gate;
+    /// root implies it upstream): without placement the reform
+    /// cannot stage.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn drain_rechecks_foreignness_each_reap() {
+        use std::cell::{Cell, RefCell};
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        // R12-002: serialize steerers (whole-test hold).
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // Leader L: self-grouped, exits at once; Z1 joins L's
+        // group pre-exit and zombifies (true exits immediately).
+        let mut leader = std::process::Command::new("/bin/sh");
+        leader
+            .arg("-c")
+            .arg("exit 7")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            leader.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut leader = leader.spawn().expect("leader spawns");
+        let id = leader.id() as libc::pid_t;
+        let spawn_member = || {
+            let mut member = std::process::Command::new("true");
+            member
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid into the live leader group pre-exec.
+            unsafe {
+                member.pre_exec(move || {
+                    libc::setpgid(0, id);
+                    Ok(())
+                });
+            }
+            member.spawn().expect("member spawns")
+        };
+        let mut z1 = spawn_member();
+        // Settle into Z BEFORE the drain (bounded poll on /proc
+        // state — never a reaping wait).
+        let z1_id = z1.id() as libc::pid_t;
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(z1_id), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "z1 never zombied");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Pin the leader's tick, then reap it (frees the NUMBER;
+        // the pgid stays busy via Z1).
+        let own_tick = proc_starttime(id)
+            .expect("leader stat readable")
+            .expect("leader visible");
+        let leader_status = leader.wait().expect("leader reaped");
+        assert_eq!(leader_status.code(), Some(7), "our leader reaped");
+        // Per-reap plant (fires once, after the last — only —
+        // reap, when the group is empty and the number is
+        // unpinned): reform id at a different birth with its own
+        // zombie R. Outputs via cells (Fn, not FnMut).
+        let planted = Cell::new(false);
+        let replacement_tick = Cell::new(0u64);
+        let replacement: RefCell<Option<std::process::Child>> = RefCell::new(None);
+        let reformed = Cell::new(false);
+        let reap_hook = || {
+            if planted.get() {
+                return;
+            }
+            planted.set(true);
+            // The steer succeeds: Z1 (the only member) was just
+            // reaped, so the group is empty and nothing pins the
+            // number (a zombie-held pgid pins its struct pid —
+            // steering onto it is impossible until the group
+            // empties; that is why the stage holds ONE zombie).
+            let _flock = ns_last_pid_flock();
+            for _ in 0..100 {
+                if !audit_steer_next_pid_unlocked(id) {
+                    break;
+                }
+                let mut cmd = std::process::Command::new("/bin/sh");
+                cmd.arg("-c")
+                    .arg("exit 3")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec.
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                // The placed candidate is waited via the owner
+                // cell below (clippy cannot see through the cell;
+                // every other path waits inline).
+                #[allow(clippy::zombie_processes)]
+                let cand = cmd.spawn().expect("candidate spawns");
+                if cand.id() as libc::pid_t != id {
+                    let mut cand = cand;
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+                // Placed at the freed number AND self-grouped:
+                // the group is reformed at a different birth.
+                if let Ok(Some(tick)) = proc_starttime(id) {
+                    replacement_tick.set(tick);
+                    *replacement.borrow_mut() = Some(cand);
+                    reformed.set(true);
+                    // Settle R into Z BEFORE returning: the theft
+                    // under test needs R waitable at the next
+                    // inner wait (a live R would skip the reap
+                    // and vacate the RED — the mutant survives).
+                    let z_end = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        if matches!(proc_state(id), Some(state) if state == 'Z') {
+                            break;
+                        }
+                        assert!(Instant::now() < z_end, "replacement never zombified");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                } else {
+                    let mut cand = cand;
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                }
+                break;
+            }
+        };
+        expire_probe_collection_with_hook(id, own_tick, &[], false, None, Some(&reap_hook));
+        audit_locked_restore_hint(&last_before);
+        // Loud owner cleanup of our fixtures either way (the
+        // drain reaped Z1 already — the wait tolerates ECHILD),
+        // then skips, then the verdict.
+        let _ = z1.wait();
+        let mut replacement = replacement.borrow_mut().take();
+        if !reformed.get() {
+            eprintln!("skip: group number not reformed (contended)");
+            return;
+        }
+        if replacement_tick.get() == own_tick {
+            if let Some(mut child) = replacement.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            eprintln!("skip: same-tick reform (S100 — untestable this run)");
+            return;
+        }
+        let mut child = replacement.take().expect("replacement stored");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(id) },
+            id,
+            "replacement must reform the group"
+        );
+        let status = child.wait().expect("replacement owner keeps its status");
         assert_eq!(
             status.code(),
             Some(3),
