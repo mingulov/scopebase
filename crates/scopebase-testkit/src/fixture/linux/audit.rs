@@ -9946,6 +9946,59 @@ mod tests {
         }
     }
 
+    /// R18-006: waitpid-assist for hygiene polls — reap a
+    /// tick-verified zombie (our child, or an adoptee under a
+    /// subreaper/PID1 runner — a killed stranger whose shell
+    /// died before reaping reparents to the suite and stat
+    /// alone never clears it, timing the poll out). GATED: the
+    /// waitpid fires ONLY while /proc proves the number still
+    /// hosts the expected birth — a recycled number's zombie
+    /// belongs to its owner (never steal — IR-002/R16-004;
+    /// same µs gate→waitpid TOCTOU residual as
+    /// [`await_proc_gone_reaping`]). ECHILD/0 always fine.
+    /// Never blocks, never panics.
+    #[cfg(target_arch = "x86_64")]
+    fn waitpid_assist_verified(pid: libc::pid_t, tick: u64) {
+        if proc_starttime(pid) == Ok(Some(tick)) {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of the verified holder;
+            // never blocks. Errors ignored.
+            unsafe {
+                libc::waitpid(pid, &mut status, libc::WNOHANG);
+            }
+        }
+    }
+
+    /// Stranger-pair hygiene (shared by the staging test and
+    /// the R18-006 adoption probe — the probe exercises this
+    /// actual path): tick-gated stranger kill (the guards
+    /// already raw-reaped, so owned handles are stale —
+    /// never touch them here), tick-gated sh retire, then a
+    /// gone-poll with waitpid-assist (R18-006: under a
+    /// subreaper/PID1 runner the killed stranger reparents to
+    /// the suite as a zombie nobody else waitpids — stat
+    /// alone would time out). Asserts bounded completion.
+    #[cfg(target_arch = "x86_64")]
+    fn stranger_pair_hygiene(stranger: libc::pid_t, stick: u64, sh: libc::pid_t, shtick: u64) {
+        use std::time::{Duration, Instant};
+        let _ = kill_tick_gated(stranger, stick);
+        let _ = retire_tick_gated_audit_child(sh, shtick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // R18-006: reap tick-verified zombies (adopted or
+            // owned) so the poll below observes them gone.
+            waitpid_assist_verified(stranger, stick);
+            waitpid_assist_verified(sh, shtick);
+            let down = proc_starttime(stranger) != Ok(Some(stick))
+                && proc_starttime(sh) != Ok(Some(shtick));
+            if down {
+                break;
+            }
+            assert!(Instant::now() < end, "stranger pair must die in hygiene");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// R14-012: a birth number is free only when /proc proves
     /// absence AND waitpid proves discharge (ECHILD — reaped). A
     /// zombie fails the first (it keeps its tick); an unreaped
@@ -10447,10 +10500,14 @@ mod tests {
           // R17-010: strict evidence — unreadable samples keep
           // polling and fail loud past the bound.
         let discharged = await_proc_gone_reaping(orphan, otick, Duration::from_secs(5));
-        // Cleanup (mutant-clean): tick-gated kill, poll gone.
+        // Cleanup (mutant-clean): tick-gated kill,
+        // waitpid-assisted poll gone (R18-006: under a
+        // subreaper/PID1 runner the killed orphan reparents to
+        // the suite as a zombie — stat alone would time out).
         let _ = kill_tick_gated(orphan, otick);
         let end = Instant::now() + Duration::from_secs(10);
         loop {
+            waitpid_assist_verified(orphan, otick);
             if proc_starttime(orphan) != Ok(Some(otick)) {
                 break;
             }
@@ -10460,6 +10517,212 @@ mod tests {
         assert!(
             discharged,
             "adopted kill must discharge through the adopter, not linger as zombie"
+        );
+    }
+
+    /// R18-006: probe body (fresh image,
+    /// SCOPEBASE_R18006_SUBREAPER) — confined subreaper
+    /// adoption schedule: the probe marks itself subreaper,
+    /// stages sh + stranger, SIGSTOPs the shell (frozen:
+    /// cannot reap), kills the stranger (zombie under the
+    /// frozen shell), then SIGKILLs the shell WITHOUT
+    /// reaping (dies unreaped) so the stranger zombie adopts
+    /// to the probe. Then run the ACTUAL shared
+    /// stranger-pair hygiene: bounded disappearance + status
+    /// discharged through the probe (our waitpid is the only
+    /// reaper — the shell provably never reaped). RED
+    /// (stat-only poll): the adopted zombie persists and the
+    /// hygiene times out. Duration 71 is unique to this
+    /// test (both harnesses).
+    #[cfg(target_arch = "x86_64")]
+    fn adopted_stranger_hygiene_probe() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // Confined subreaper (fresh image — the process-global
+        // mark stays inside the probe).
+        // SAFETY: prctl on self; marking a fresh probe process.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "probe must become a child subreaper"
+        );
+        // The sh handle goes stale at hygiene retirement
+        // (raw-reaped) and is never touched after.
+        #[allow(clippy::zombie_processes)]
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 71 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("stranger pid readable");
+        let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let shpid = sh.id() as libc::pid_t;
+        let stick = proc_starttime(stranger)
+            .expect("stranger stat readable")
+            .expect("stranger visible");
+        let shtick = proc_starttime(shpid)
+            .expect("shell stat readable")
+            .expect("shell visible");
+        // Staging custody (R18-008 pattern): a staging panic
+        // below must not strand a SIGSTOP-frozen shell (stopped
+        // tasks never self-clean — unlike running shells that
+        // exit by sleep expiry). SIGKILL works on stopped
+        // tasks; the tick-gated drops stay silent once gone.
+        // The stranger pid arrived via pipe (expected-identity
+        // over the sighted birth); the shell is our unreaped
+        // child (bare construction holds the reservation).
+        let mut stranger_guard = FixtureGuard::new_expected(stranger, stick);
+        assert!(
+            stranger_guard.tick.is_some(),
+            "stranger custody must pin (stage broken otherwise)"
+        );
+        let mut shell_guard = FixtureGuard::new(shpid);
+        assert!(
+            shell_guard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        // Freeze the shell: from here it cannot reap.
+        // SAFETY: SIGSTOP to our own staged shell.
+        assert_eq!(
+            unsafe { libc::kill(shpid, libc::SIGSTOP) },
+            0,
+            "shell freeze"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(shpid), Some(state) if state == 'T') {
+                break;
+            }
+            assert!(Instant::now() < end, "shell must stop");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Kill the stranger under the frozen shell (false
+        // only on unreadable stat — broken staging; liveness
+        // itself is proven by the Z-loop plus the shell-still-T
+        // assert below, not by this return value).
+        assert!(
+            kill_tick_gated(stranger, stick),
+            "stranger kill must not fail unreadable (broken staging)"
+        );
+        // Non-vacuity: stranger Z while the shell is still T
+        // (the shell provably never reaped across the death).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(stranger), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "stranger must zombify");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            matches!(proc_state(shpid), Some(state) if state == 'T'),
+            "shell still frozen at stranger death (else it may have reaped)"
+        );
+        // Kill the shell WITHOUT reaping: dies unreaped, so
+        // the stranger zombie adopts to the probe (nearest
+        // subreaper ancestor). A stopped task needs no CONT
+        // to die by SIGKILL.
+        // SAFETY: SIGKILL to our own frozen shell.
+        assert_eq!(
+            unsafe { libc::kill(shpid, libc::SIGKILL) },
+            0,
+            "shell kill must land on the frozen shell"
+        );
+        // Run the ACTUAL shared hygiene, timed (caught: RED
+        // cleanup below still retires before reporting).
+        let start = Instant::now();
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stranger_pair_hygiene(stranger, stick, shpid, shtick);
+        }));
+        if fired.is_err() {
+            // RED cleanup (silent awaits — the loud verdict
+            // below reports the hygiene failure).
+            let _ = kill_tick_gated(stranger, stick);
+            let _ = retire_tick_gated_audit_child(shpid, shtick);
+            let _ = await_proc_gone_reaping(stranger, stick, Duration::from_secs(5));
+            let _ = await_proc_gone_reaping(shpid, shtick, Duration::from_secs(5));
+        }
+        // Loud verdict (with the caught hygiene message for
+        // debuggability).
+        let ok = fired.is_ok();
+        let text = match fired {
+            Ok(()) => String::new(),
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .or_else(|payload| {
+                    payload
+                        .downcast::<&str>()
+                        .map(|literal| literal.to_string())
+                })
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+        };
+        assert!(
+            ok,
+            "hygiene must complete bounded (adopted zombie reaped): {text}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "hygiene must retire the adoptee promptly"
+        );
+        // Retired by the hygiene above — stand down.
+        stranger_guard.disarm();
+        shell_guard.disarm();
+        // Discharge: our waitpid is the only reaper (the shell
+        // provably never reaped) — ECHILD now proves the
+        // adoptee status discharged through the probe. (No own
+        // fork can have recycled the number in-probe; a
+        // foreign recycle reports ECHILD identically.)
+        let mut status = 0;
+        // SAFETY: WNOHANG discharge probe.
+        let got = unsafe { libc::waitpid(stranger, &mut status, libc::WNOHANG) };
+        // SAFETY: errno location for this thread.
+        let errno = unsafe { libc::__errno_location().read() };
+        assert!(
+            got < 0 && errno == libc::ECHILD,
+            "adoptee status must discharge through the probe"
+        );
+        // Shell number: original gone (a recycled
+        // different-tick holder is not ours).
+        assert_audit_child_gone(shpid, shtick, "adopted-hygiene shell");
+        eprintln!("R18006-ADOPTED retired=1");
+    }
+
+    /// R18-006: driver — the confined-subreaper probe above
+    /// runs in a child with its own process identity (the
+    /// prctl mark must not leak into the suite).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn adopted_stranger_hygiene_retires_through_subreaper() {
+        if std::env::var("SCOPEBASE_R18006_SUBREAPER").is_ok() {
+            adopted_stranger_hygiene_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::adopted_stranger_hygiene_retires_through_subreaper")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R18006_SUBREAPER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must retire the adoptee through the hygiene\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R18006-ADOPTED retired=1"),
+            "probe must cite the retirement\n{stderr}"
         );
     }
 
@@ -11640,35 +11903,16 @@ mod tests {
         }));
         let sstate = proc_starttime(stranger);
         let hstate = proc_starttime(sh);
-        // R18-007: tick-gated tail — the guards above already
-        // raw-reaped, so the owned handle is stale:
-        // parent.kill() would signal a recycled number by raw
-        // pid and parent.wait() would block on or steal a
-        // replacement's status. Touch each number only while
-        // it still names the expected birth (gated stranger
-        // kill + gated sh retire + gone-poll); the stale
-        // handle is never touched again.
-        let stranger_hygiene = || {
-            let _ = kill_tick_gated(stranger, stick);
-            let _ = retire_tick_gated_audit_child(sh, shtick);
-            let end = Instant::now() + Duration::from_secs(10);
-            loop {
-                let down = proc_starttime(stranger) != Ok(Some(stick))
-                    && proc_starttime(sh) != Ok(Some(shtick));
-                if down {
-                    break;
-                }
-                assert!(Instant::now() < end, "stranger pair must die in hygiene");
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        };
+        // R18-007: tick-gated tail (shared helper — the
+        // guards above already raw-reaped, so the owned
+        // handle is stale and never touched again).
         // R18-007 arm 1 (live): retake sh's discharged number,
         // then run the FULL tail — bounded completion with the
         // replacement alive (RED: the stale handle kill murders
         // it / the stale wait blocks on its lifetime).
         if let Some((mut live, mut live_guard)) = plant_replacement(sh, shtick) {
             let start = Instant::now();
-            stranger_hygiene();
+            stranger_pair_hygiene(stranger, stick, sh, shtick);
             // R17-003: SIGKILL-settle (100ms, 10x margin).
             std::thread::sleep(Duration::from_millis(100));
             assert!(
@@ -11691,7 +11935,7 @@ mod tests {
                 settle_replacement_zombie(&mut zombie, sh),
                 "replacement never zombied (broken staging)"
             );
-            stranger_hygiene();
+            stranger_pair_hygiene(stranger, stick, sh, shtick);
             assert!(
                 matches!(zombie.try_wait(), Ok(Some(_))),
                 "zombie replacement status must stay with its owner"
@@ -11702,7 +11946,7 @@ mod tests {
         // vacuous: the originals still hold their numbers, so
         // no plant can land — without this the pair leaks and
         // the gone-poll never runs).
-        stranger_hygiene();
+        stranger_pair_hygiene(stranger, stick, sh, shtick);
         outer_sh.disarm();
         outer_stranger.disarm();
         assert_eq!(
@@ -15455,6 +15699,12 @@ mod tests {
         }
         let end = Instant::now() + Duration::from_secs(10);
         loop {
+            // R18-006: reap tick-verified zombies (the pair's
+            // parents are dead on RED paths — adopted to the
+            // suite under a subreaper runner, stat alone
+            // would time out).
+            waitpid_assist_verified(writer, writer_tick);
+            waitpid_assist_verified(mid, mid_tick);
             let writer_down = proc_starttime(writer) != Ok(Some(writer_tick));
             let mid_down = proc_starttime(mid) != Ok(Some(mid_tick));
             if writer_down && mid_down {
@@ -15646,6 +15896,11 @@ mod tests {
         }
         let end = Instant::now() + Duration::from_secs(10);
         loop {
+            // R18-006: reap tick-verified zombies (the probe
+            // parent is reaped on GREEN — adoptees under a
+            // subreaper runner, stat alone would time out).
+            waitpid_assist_verified(mid, mid_tick);
+            waitpid_assist_verified(writer, writer_tick);
             let down = proc_starttime(mid) != Ok(Some(mid_tick))
                 && proc_starttime(writer) != Ok(Some(writer_tick));
             if down {
@@ -15812,6 +16067,10 @@ mod tests {
                 unsafe { libc::kill(mid, libc::SIGKILL) };
                 let end = Instant::now() + Duration::from_secs(10);
                 loop {
+                    // R18-006: reap the tick-verified zombie
+                    // (probe parent reaped on GREEN — adoptee
+                    // under a subreaper runner).
+                    waitpid_assist_verified(mid, mid_tick);
                     if proc_starttime(mid) != Ok(Some(mid_tick)) {
                         break;
                     }
@@ -16380,6 +16639,10 @@ mod tests {
         }
         let end = Instant::now() + Duration::from_secs(10);
         loop {
+            // R18-006: reap the tick-verified zombie (dead-mid
+            // premise — the writer is adopted, stat alone
+            // would time out under a subreaper runner).
+            waitpid_assist_verified(writer, wtick);
             if proc_starttime(writer) != Ok(Some(wtick)) {
                 break;
             }
@@ -16512,6 +16775,10 @@ mod tests {
         }
         let end = Instant::now() + Duration::from_secs(10);
         loop {
+            // R18-006: reap the tick-verified zombie (dead
+            // leaders — the orphan is adopted, stat alone
+            // would time out under a subreaper runner).
+            waitpid_assist_verified(child, ctick);
             if proc_starttime(child) != Ok(Some(ctick)) {
                 break;
             }

@@ -3434,6 +3434,30 @@ fn kill_tick_gated(pid: i32, tick: u64) -> bool {
     kill_tick_gated_with(pid, tick, task_starttime_checked)
 }
 
+/// R18-006: waitpid-assist for hygiene polls (toolchain
+/// twin of the audit helper — same contract): reap a
+/// tick-verified zombie (our child, or an adoptee under a
+/// subreaper/PID1 runner) so stat polls observe its
+/// disappearance. Fires ONLY while the number still hosts
+/// the expected birth (never steal a recycled number's
+/// zombie — IR-002/R16-004; same µs gate→waitpid TOCTOU
+/// residual as `await_task_gone_reaping`). Never blocks,
+/// never panics. Reap path pinned by the audit adoption
+/// probe only (identical prctl/fork/kill/waitpid syscalls —
+/// harness-independent mechanics; the wrappers differ by
+/// stat-reader name alone).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn waitpid_assist_verified(pid: i32, tick: u64) {
+    if task_starttime_checked(pid) == Ok(Some(tick)) {
+        let mut status = 0;
+        // SAFETY: WNOHANG reap of the verified holder;
+        // never blocks. Errors ignored.
+        unsafe {
+            libc::waitpid(pid, &mut status, libc::WNOHANG);
+        }
+    }
+}
+
 /// R18-007: tick-gated retirement for owned test children
 /// (toolchain twin of the audit helper — same contract):
 /// the gated signal above plus a bounded reaping wait (a
@@ -4197,10 +4221,14 @@ fn adopted_kill_discharges_through_init() {
       // R17-010: strict evidence — unreadable samples keep
       // polling and fail loud past the bound.
     let discharged = await_task_gone_reaping(orphan, otick, Duration::from_secs(5));
-    // Cleanup (mutant-clean): tick-gated kill, poll gone.
+    // Cleanup (mutant-clean): tick-gated kill,
+    // waitpid-assisted poll gone (R18-006: under a
+    // subreaper/PID1 runner the killed orphan reparents to
+    // the suite as a zombie — stat alone would time out).
     let _ = kill_tick_gated(orphan, otick);
     let end = Instant::now() + Duration::from_secs(10);
     loop {
+        waitpid_assist_verified(orphan, otick);
         if task_starttime_checked(orphan) != Ok(Some(otick)) {
             break;
         }
@@ -5048,6 +5076,12 @@ fn probe_staging_failures_retire_before_report() {
     let _ = kill_tick_gated(sh, shtick);
     let end = Instant::now() + Duration::from_secs(10);
     loop {
+        // R18-006: reap tick-verified zombies (adopted or
+        // owned) so the poll below observes them gone (a
+        // killed stranger whose shell died first reparents to
+        // the suite — stat alone would time out).
+        waitpid_assist_verified(stranger, stick);
+        waitpid_assist_verified(sh, shtick);
         let down = task_starttime_checked(stranger) != Ok(Some(stick))
             && task_starttime_checked(sh) != Ok(Some(shtick));
         if down {
