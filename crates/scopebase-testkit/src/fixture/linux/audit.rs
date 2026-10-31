@@ -2177,7 +2177,7 @@ mod tests {
     /// R20-015: stage the R19-007 ≥5000 high-fd control
     /// (leak copy inherited despite CLOEXEC-marking).
     /// Capacity gate: a constrained runner (ambient soft
-    /// NOFILE < 5000 — ordinary containers at 1024) cannot
+    /// NOFILE ≤ 5000 — ordinary containers at 1024) cannot
     /// stage the control — skip loud (R20-014-skip
     /// precedent), never assert-fail. Overlap serial: the
     /// gate-read + fcntl run under the confinement-state
@@ -2220,10 +2220,12 @@ mod tests {
                 rlim_max: 0,
             };
             let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
-            if rc != 0 || rlim.rlim_cur < 5000 {
+            // R21-015: the boundary is exclusive — fd 5000
+            // needs soft > 5000 (valid fds run below soft).
+            if rc != 0 || rlim.rlim_cur <= 5000 {
                 let soft = if rc == 0 { rlim.rlim_cur } else { 0 };
                 eprintln!(
-                    "skip: soft NOFILE {soft} < 5000 (high-fd control unstageable on a constrained runner)"
+                    "skip: soft NOFILE {soft} ≤ 5000 (high-fd control unstageable on a constrained runner)"
                 );
                 return None;
             }
@@ -22697,7 +22699,10 @@ time.sleep(30)
     /// Arm 3 (constrained runner): the shedding test
     /// fresh-image with ambient soft 1024 skips loud
     /// (pre-fix RED: `high leak copy staged (fd -1)`
-    /// panic, proven at baseline). The 200ms arm-2 hold
+    /// panic, proven at baseline). R21-014: ambient ≤ 5000
+    /// runs ONLY arm 3 (arms 1–2 skip loud — the
+    /// regression itself failed on constrained runners).
+    /// The 200ms arm-2 hold
     /// sits inside the accepted FLAKE01 envelope (frame
     /// tests confine for seconds; siblings' ≥5000 staging
     /// now waits rather than fails).
@@ -22705,34 +22710,54 @@ time.sleep(30)
     #[cfg(target_arch = "x86_64")]
     fn high_fd_staging_gated_and_serialized() {
         use std::os::unix::io::AsRawFd as _;
-        let (read, write) = std::io::pipe().expect("staging pipe");
-        // Arm 1: unconstrained → immediate stage.
-        let staged = stage_high_leak_copy(write.as_raw_fd());
-        let owned = staged.expect("control stages where capacity allows");
-        assert!(
-            owned.as_raw_fd() >= 5000,
-            "staged control must sit at fd ≥ 5000"
-        );
-        drop(owned);
-        // Arm 2: a sibling confinement held across the
-        // call waits out, then stages.
-        let (htx, hrx) = std::sync::mpsc::channel::<()>();
-        let holder = std::thread::spawn(move || {
-            let _guard = confine_fd_table_for_exhaustion();
-            htx.send(()).expect("confinement staged");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        });
-        hrx.recv().expect("holder confined first");
-        let staged = stage_high_leak_copy(write.as_raw_fd());
-        let owned = staged.expect("staging waits out a sibling confinement, never skips");
-        assert!(
-            owned.as_raw_fd() >= 5000,
-            "post-wait control must sit at fd ≥ 5000"
-        );
-        drop(owned);
-        drop(read);
-        drop(write);
-        holder.join().expect("holder rejoins");
+        // R21-014: ambient-capacity branch FIRST — arms 1–2
+        // stage unconditionally and panic on a constrained
+        // runner; below the gate only the constrained arm
+        // runs (the regression itself must skip cleanly
+        // where it claims support).
+        let ambient_stageable = {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: getrlimit on self only.
+            let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
+            rc == 0 && rlim.rlim_cur > 5000
+        };
+        if ambient_stageable {
+            let (read, write) = std::io::pipe().expect("staging pipe");
+            // Arm 1: unconstrained → immediate stage.
+            let staged = stage_high_leak_copy(write.as_raw_fd());
+            let owned = staged.expect("control stages where capacity allows");
+            assert!(
+                owned.as_raw_fd() >= 5000,
+                "staged control must sit at fd ≥ 5000"
+            );
+            drop(owned);
+            // Arm 2: a sibling confinement held across the
+            // call waits out, then stages.
+            let (htx, hrx) = std::sync::mpsc::channel::<()>();
+            let holder = std::thread::spawn(move || {
+                let _guard = confine_fd_table_for_exhaustion();
+                htx.send(()).expect("confinement staged");
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            });
+            hrx.recv().expect("holder confined first");
+            let staged = stage_high_leak_copy(write.as_raw_fd());
+            let owned = staged.expect("staging waits out a sibling confinement, never skips");
+            assert!(
+                owned.as_raw_fd() >= 5000,
+                "post-wait control must sit at fd ≥ 5000"
+            );
+            drop(owned);
+            drop(read);
+            drop(write);
+            holder.join().expect("holder rejoins");
+        } else {
+            eprintln!(
+                "skip: ambient soft ≤ 5000 (staging arms need capacity; constrained arm runs)"
+            );
+        }
         // Arm 3: ambient-1024 runner → the shedding test
         // skips loud (pre_exec clamp — the probe's whole
         // image runs constrained).
@@ -22768,6 +22793,76 @@ time.sleep(30)
             stderr.contains("high-fd control unstageable"),
             "constrained probe must take the capacity skip\n{stderr}"
         );
+    }
+
+    /// R21-015: the gate boundary is exclusive — fd 5000
+    /// needs soft > 5000 (valid fds run below soft), so
+    /// exactly-5000 must skip, not proceed to a failing
+    /// fcntl. Fresh-image probes clamped to 4999 / 5000 /
+    /// 6000. RED: the 5000 probe panics in the fcntl
+    /// assert. GREEN: 4999 and 5000 cite the skip, 6000
+    /// stages fd ≥ 5000.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn high_fd_gate_boundary_5000_skips() {
+        use std::os::unix::process::CommandExt as _;
+        if let Ok(clamp) = std::env::var("SCOPEBASE_R21015_CLAMP") {
+            // Probe body: stage (or skip) under the
+            // wrapper's clamp.
+            let (_read, write) = std::io::pipe().expect("staging pipe");
+            use std::os::unix::io::AsRawFd as _;
+            match stage_high_leak_copy(write.as_raw_fd()) {
+                Some(owned) => eprintln!("R21015-STAGED fd={}", owned.as_raw_fd()),
+                None => eprintln!("R21015-SKIPPED clamp={clamp}"),
+            }
+            return;
+        }
+        for (clamp, staged) in [(4999u64, false), (5000, false), (6000, true)] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("--exact")
+                .arg("fixture::linux::audit::tests::high_fd_gate_boundary_5000_skips")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R21015_CLAMP", clamp.to_string())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            // SAFETY: setrlimit on the child pre-exec, no userspace state.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let lim = libc::rlimit {
+                        rlim_cur: clamp,
+                        rlim_max: clamp,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let out = cmd.output().expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "boundary probe must complete (clamp {clamp})\n{stderr}"
+            );
+            if staged {
+                let marker = "R21015-STAGED fd=";
+                let at = stderr.find(marker).expect("staged citation");
+                let fd: libc::c_int = stderr[at + marker.len()..]
+                    .split_whitespace()
+                    .next()
+                    .expect("fd cited")
+                    .parse()
+                    .expect("fd parses");
+                assert!(fd >= 5000, "clamp {clamp} must stage fd ≥ 5000, got {fd}");
+            } else {
+                assert!(
+                    stderr.contains("R21015-SKIPPED"),
+                    "clamp {clamp} must skip, not stage\n{stderr}"
+                );
+            }
+        }
     }
 
     /// R19-007: a fork-only inheritor must not be murdered at
