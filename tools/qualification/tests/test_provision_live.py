@@ -295,6 +295,53 @@ def snapshot_entry_record(pidfile):
         return _ENTRY_SNAPSHOT_UNREADABLE
 
 
+def resolve_limit_setup(specified_soft, specified_hard,
+                        inherited_hard, require_infinity):
+    """R15-009: adaptive rlimit setup decision (pure — no syscalls).
+
+    The soft-limit cases and the IR-006 pin used to call
+    setrlimit((., inf)) unconditionally; under a viable finite
+    inherited hard limit the raise is forbidden (ValueError),
+    the middleman exited nonzero in setup, and the tests FAILED
+    in an environment R14-013 explicitly supports. Setup now
+    adapts: try the specified pair, fall back to
+    (finite-soft, inherited-hard) when infinity is unraisable
+    (same soft-clamp path, same assertions), and skip explicitly
+    when the case budget exceeds hard or infinity is required
+    but unavailable (the pin).
+
+    Only the inherited HARD gates applicability: raising soft
+    within hard is permitted, so the inherited soft is not an
+    input. Returns ("apply", (soft, hard)) or ("skip", reason).
+    The middleman reports skips through the queue with exit 0;
+    the parent skips explicitly.
+    """
+    inf = resource.RLIM_INFINITY
+
+    def effective(value):
+        return float("inf") if value == inf else value
+
+    if effective(specified_soft) > effective(specified_hard):
+        raise AssertionError(
+            "invalid specified pair: soft %r exceeds hard %r"
+            % (specified_soft, specified_hard))
+    if require_infinity and effective(inherited_hard) != float("inf"):
+        return ("skip",
+                "infinity required but inherited hard is finite (%r)"
+                % (inherited_hard,))
+    # Specified applicable as-is when it raises nothing above
+    # the inherited hard.
+    if effective(specified_hard) <= effective(inherited_hard):
+        return ("apply", (specified_soft, specified_hard))
+    # Infinity (or a finite raise) is unraisable: fall back to
+    # (finite-soft, inherited-hard) — same soft-clamp path.
+    if effective(specified_soft) > effective(inherited_hard):
+        return ("skip",
+                "case budget %r exceeds inherited hard %r"
+                % (specified_soft, inherited_hard))
+    return ("apply", (specified_soft, inherited_hard))
+
+
 def run_bounded_reader_case(reader, timeout=10):
     """Run a record reader in a reaped child process. (R12-013)
 
@@ -4157,7 +4204,26 @@ class AdoptReplacementTests(unittest.TestCase):
                 return ("alloc-capped", reached)
 
         def middleman(queue, soft, hard, kind):
-            resource.setrlimit(resource.RLIMIT_AS, (soft, hard))
+            # R15-009: adaptive setup — resolve against the
+            # inherited hard (never raise it); a skip verdict
+            # exits 3 (R14-011 precedent) with the reason
+            # best-effort through the queue — the report channel
+            # itself may OOM under tight VM (the feeder thread
+            # needs stack), so the CODE carries the verdict and
+            # os._exit skips teardown roulette.
+            inherited_hard = resource.getrlimit(
+                resource.RLIMIT_AS)[1]
+            verdict, payload = resolve_limit_setup(
+                soft, hard, inherited_hard, False)
+            if verdict == "skip":
+                try:
+                    queue.put(("setup-skipped", payload, None))
+                    queue.close()
+                    queue.join_thread()
+                except Exception:
+                    pass
+                os._exit(3)
+            resource.setrlimit(resource.RLIMIT_AS, payload)
             if kind == "ordinary":
                 outcome = run_bounded_reader_case(
                     ordinary_reader, timeout=10)
@@ -4196,10 +4262,24 @@ class AdoptReplacementTests(unittest.TestCase):
                     if middle.is_alive():
                         middle.kill()
                         middle.join(5)
-                self.assertEqual(
-                    middle.exitcode, 0,
-                    "%s: middleman must exit cleanly" % (tag,))
+                self.assertIn(
+                    middle.exitcode, (0, 3),
+                    "%s: middleman must exit cleanly or skip" % (tag,))
                 import queue as _queue
+                if middle.exitcode == 3:
+                    # Skip verdict: the reason travels best-effort
+                    # (get_nowait — the child is dead, so no more
+                    # data will ever arrive).
+                    try:
+                        finished, outcome, _ = queue.get_nowait()
+                        reason = (outcome
+                                  if finished == "setup-skipped"
+                                  else "setup skipped")
+                    except _queue.Empty:
+                        reason = ("setup skipped (report channel "
+                                  "OOMed under tight VM)")
+                    self.skipTest(
+                        "%s: cannot stage (%s)" % (tag, reason))
                 try:
                     finished, outcome, exitcode = queue.get(timeout=10)
                 except _queue.Empty:
@@ -4259,7 +4339,22 @@ class AdoptReplacementTests(unittest.TestCase):
 
         def middleman(queue):
             inf = resource.RLIM_INFINITY
-            resource.setrlimit(resource.RLIMIT_AS, (inf, inf))
+            # R15-009: infinity is required here (the pin tests
+            # infinite inheritance) — skip (exit 3, reason
+            # best-effort) when unraisable.
+            inherited_hard = resource.getrlimit(
+                resource.RLIMIT_AS)[1]
+            verdict, payload = resolve_limit_setup(
+                inf, inf, inherited_hard, True)
+            if verdict == "skip":
+                try:
+                    queue.put(("setup-skipped", payload, None))
+                    queue.close()
+                    queue.join_thread()
+                except Exception:
+                    pass
+                os._exit(3)
+            resource.setrlimit(resource.RLIMIT_AS, payload)
             outcome = run_bounded_reader_case(
                 report_rlimit, timeout=10)
             queue.put(outcome)
@@ -4275,9 +4370,21 @@ class AdoptReplacementTests(unittest.TestCase):
             if middle.is_alive():
                 middle.kill()
                 middle.join(5)
-        self.assertEqual(
-            middle.exitcode, 0, "middleman must exit cleanly")
+        self.assertIn(
+            middle.exitcode, (0, 3),
+            "middleman must exit cleanly or skip")
         import queue as _queue
+        if middle.exitcode == 3:
+            try:
+                finished, outcome, _ = queue.get_nowait()
+                reason = (outcome
+                          if finished == "setup-skipped"
+                          else "setup skipped")
+            except _queue.Empty:
+                reason = ("setup skipped (report channel "
+                          "OOMed under tight VM)")
+            self.skipTest(
+                "cannot stage infinite inheritance (%s)" % (reason,))
         try:
             finished, outcome, exitcode = queue.get(timeout=10)
         except _queue.Empty:
@@ -4293,6 +4400,150 @@ class AdoptReplacementTests(unittest.TestCase):
             soft, resource.RLIM_INFINITY,
             "infinite inheritance must not leak through as unlimited")
         self.assertGreaterEqual(soft, 512 * 1024 * 1024)
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
+                         "needs RLIMIT_AS worker budgets")
+    def test_limit_setup_decision_matrix(self):
+        # R15-009: pure decision matrix (no syscalls — the fork
+        # test below stages real finite hard). The resolver
+        # returns ("apply", (soft, hard)) or ("skip", reason).
+        inf = resource.RLIM_INFINITY
+        resolve = resolve_limit_setup
+        # Specified applicable as-is (nothing raised).
+        self.assertEqual(
+            resolve(100, 200, 400, False),
+            ("apply", (100, 200)))
+        self.assertEqual(
+            resolve(100, inf, inf, False),
+            ("apply", (100, inf)))
+        # Infinity unraisable under finite hard: fall back to
+        # (finite-soft, inherited-hard).
+        self.assertEqual(
+            resolve(100, inf, 400, False),
+            ("apply", (100, 400)))
+        # Case budget exceeds finite hard: explicit skip.
+        verdict, reason = resolve(500, inf, 400, False)
+        self.assertEqual(verdict, "skip")
+        self.assertIn("budget", reason)
+        # Infinity required (the pin) but unavailable: skip.
+        verdict, reason = resolve(inf, inf, 400, True)
+        self.assertEqual(verdict, "skip")
+        self.assertIn("infinity", reason)
+        # Infinity required and available: apply.
+        self.assertEqual(
+            resolve(inf, inf, inf, True),
+            ("apply", (inf, inf)))
+        # Finite raise within hard: apply (soft may rise to
+        # hard; only the hard raise is forbidden).
+        self.assertEqual(
+            resolve(300, 400, 400, False),
+            ("apply", (300, 400)))
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
+                         "needs RLIMIT_AS worker budgets")
+    def test_limit_setup_under_staged_finite_hard(self):
+        # R15-009: fork-based — the CHILD lowers ITS hard to a
+        # staged finite value (lowering is always allowed; the
+        # suite's own hard is never touched — asserted below),
+        # then runs the real setup path (resolve + setrlimit)
+        # and reports verdicts.
+        import multiprocessing as _mp
+        suite_hard = resource.getrlimit(resource.RLIMIT_AS)[1]
+        inf = resource.RLIM_INFINITY
+
+        def child(queue):
+            # Stage BELOW the inherited hard (never raise it):
+            # the suite hard when finite, else 512MiB. The soft
+            # budget sits 64MiB above the child's own VmSize
+            # (R14-013's formula); when even that exceeds the
+            # staged hard the environment is too tight to stage
+            # in — report unstageable (the parent skips).
+            staged = (suite_hard if suite_hard != inf
+                      else 512 * 1024 * 1024)
+            resource.setrlimit(resource.RLIMIT_AS, (staged, staged))
+            with open("/proc/self/status") as handle:
+                vm_kb = None
+                for line in handle:
+                    if line.startswith("VmSize:"):
+                        vm_kb = int(line.split()[1])
+                        break
+            soft = (vm_kb // 1024 + 64) * 1024 * 1024
+            over = staged + 100 * 1024 * 1024
+            if soft > staged:
+                # Too tight to stage in — skip (exit 3, reason
+                # best-effort: the report channel itself may OOM
+                # here, so the CODE carries the verdict).
+                try:
+                    queue.put([("unstageable",
+                                "soft %d exceeds staged hard %d"
+                                % (soft, staged))])
+                    queue.close()
+                    queue.join_thread()
+                except Exception:
+                    pass
+                os._exit(3)
+            inherited = resource.getrlimit(resource.RLIMIT_AS)
+            out = []
+            verdict, payload = resolve_limit_setup(
+                soft, inf, inherited[1], False)
+            out.append(("fallback", verdict, payload, soft, staged))
+            if verdict == "apply":
+                # Must not raise (the setup path applies it).
+                resource.setrlimit(resource.RLIMIT_AS, payload)
+                out.append(
+                    ("applied", resource.getrlimit(resource.RLIMIT_AS)))
+            out.append(
+                ("over",) + resolve_limit_setup(
+                    over, inf, inherited[1], False))
+            out.append(
+                ("pin",) + resolve_limit_setup(
+                    inf, inf, inherited[1], True))
+            try:
+                queue.put(out)
+            except Exception:
+                # Verdicts unreportable under tight VM: skip
+                # (cannot prove anything without the report).
+                os._exit(3)
+
+        ctx = _mp.get_context("fork")
+        queue = ctx.Queue()
+        proc = ctx.Process(target=child, args=(queue,))
+        proc.start()
+        proc.join(60)
+        self.assertIn(
+            proc.exitcode, (0, 3),
+            "setup child must exit cleanly or skip")
+        import queue as _queue
+        if proc.exitcode == 3:
+            try:
+                out = queue.get_nowait()
+            except _queue.Empty:
+                out = [("unstageable", "report channel OOMed")]
+            by_tag = {}
+            for tag, *rest in out:
+                by_tag[tag] = rest
+            self.skipTest(
+                "suite hard too tight to stage (%s)"
+                % (by_tag.get("unstageable", ["no reason"])[0],))
+        try:
+            out = queue.get(timeout=10)
+        except _queue.Empty:
+            self.fail("setup child must report")
+        by_tag = {}
+        for tag, *rest in out:
+            by_tag[tag] = rest
+        soft = by_tag["fallback"][2]
+        staged = by_tag["fallback"][3]
+        self.assertEqual(by_tag["fallback"][0], "apply")
+        self.assertEqual(by_tag["fallback"][1], (soft, staged))
+        self.assertEqual(by_tag["applied"][0], (soft, staged))
+        self.assertEqual(by_tag["over"][0], "skip")
+        self.assertIn("budget", by_tag["over"][1])
+        self.assertEqual(by_tag["pin"][0], "skip")
+        self.assertIn("infinity", by_tag["pin"][1])
+        # The suite's own hard is untouched by the staging.
+        self.assertEqual(
+            resource.getrlimit(resource.RLIMIT_AS)[1], suite_hard)
 
     @unittest.skipUnless(hasattr(resource, "RLIMIT_AS"),
                          "needs RLIMIT_AS worker budgets")
