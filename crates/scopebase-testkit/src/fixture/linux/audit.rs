@@ -3392,6 +3392,13 @@ mod tests {
     /// sibling probe inheriting it would inject too).
     #[cfg(target_arch = "x86_64")]
     const IR003_INJECT_ENV: &str = "SCOPEBASE_IR003_FIRSTBORN_STAT_ERR";
+    /// R16-001: birth-publication suppressor (fresh-image probe
+    /// only — set solely on the probe child's command). Stages
+    /// the death-before-publication hole deterministically: the
+    /// runner's birth watch stays disarmed, so the pidfile is
+    /// guaranteed empty no matter when the parent stops/kills.
+    #[cfg(target_arch = "x86_64")]
+    const R16001_NOPUBLISH_ENV: &str = "SCOPEBASE_R16001_NOPUBLISH";
     /// IR-003: rendezvous — the verdict file (`pgid` line,
     /// middleman-tick line (R15-003: 0 when already gone), then
     /// the panic message) the probe writes for the parent.
@@ -3655,6 +3662,51 @@ mod tests {
     /// R14-010: only a MISSING file means "unpublished" — every
     /// other read failure fails closed (an empty strays list
     /// over a published writer would strand it silently).
+    /// R16-001: union the pidfile-published strays with the
+    /// parent's independently observed tree (last-seen
+    /// middleman/writer tuples). The pidfile misses births the
+    /// probe died before publishing; the parent's /proc poll
+    /// sees them while the probe lives. Pure (no reads): the
+    /// caller owns discovery cadence and read-failure semantics.
+    /// Published first, observed appended deduplicated — expiry
+    /// retires each with its own tick gate, so a stale observed
+    /// tuple is refused, never a stranger-kill.
+    #[cfg(target_arch = "x86_64")]
+    fn union_parent_observed_strays(
+        published: &[(libc::pid_t, u64)],
+        observed: &[(libc::pid_t, u64)],
+    ) -> Vec<(libc::pid_t, u64)> {
+        let mut strays = published.to_vec();
+        for candidate in observed {
+            if !strays.contains(candidate) {
+                strays.push(*candidate);
+            }
+        }
+        strays
+    }
+    /// R16-001: one /proc discovery slice over a probe's tree —
+    /// the middleman and its firstborn with ticks, whatever is
+    /// visible NOW (missing reads contribute nothing, never fail).
+    /// Post-exit wait loops poll this per slice and union the
+    /// last-seen tuples into the expiry strays, so a death between
+    /// birth and publication still retires. (The timeout body's
+    /// forensics snapshot stays inline until the R16-002 rework
+    /// unifies it here.)
+    #[cfg(target_arch = "x86_64")]
+    fn snapshot_probe_tree(id: libc::pid_t) -> Vec<(libc::pid_t, u64)> {
+        let mut seen = Vec::new();
+        if let Some(mid) = middleman_first_child(id) {
+            if let Ok(Some(mtick)) = proc_starttime(mid) {
+                seen.push((mid, mtick));
+                if let Some(born) = middleman_first_child(mid) {
+                    if let Ok(Some(tick)) = proc_starttime(born) {
+                        seen.push((born, tick));
+                    }
+                }
+            }
+        }
+        seen
+    }
     #[cfg(target_arch = "x86_64")]
     fn read_published_grandchild_strays(path: &std::path::Path) -> Vec<(libc::pid_t, u64)> {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -5377,9 +5429,13 @@ mod tests {
         // presence via var_os (a set-but-non-UTF-8 value still
         // arms — the first birth publish then fails loud there,
         // never silently suppressed here).
+        // R16-001: NOPUBLISH injection disarms the watch (the
+        // death-before-publication stage — deterministic empty
+        // pidfile regardless of stop/kill timing).
         let birth_watch = std::env::var_os(GRANDCHILD_PIDFILE_ENV).is_some()
             && (std::env::var(SUBREAPER_PROBE_ENV).is_ok()
-                || std::env::var(GUARD_PROBE_ENV).is_ok());
+                || std::env::var(GUARD_PROBE_ENV).is_ok())
+            && std::env::var_os(R16001_NOPUBLISH_ENV).is_none();
         let mut birth_published: Option<(libc::pid_t, u64)> = None;
         // Bounded newline-framed report read: the probe writes one
         // line (even on setup refusal) and a parked grandchild
@@ -9332,6 +9388,10 @@ mod tests {
         let staged = proc_starttime(child.id() as libc::pid_t)
             .expect("probe stat readable")
             .expect("probe visible");
+        let id = child.id() as libc::pid_t;
+        // R16-001: last-seen tree for the expiry union (a probe
+        // death between birth and publication still retires).
+        let mut observed: Vec<(libc::pid_t, u64)> = Vec::new();
         let end = Instant::now() + Duration::from_secs(150);
         loop {
             match child.try_wait().expect("probe wait") {
@@ -9343,7 +9403,11 @@ mod tests {
                     // R13-005: the probe's published grandchild (if
                     // any) rides as expiry strays — a writer the
                     // probe died without retiring still retires.
-                    let strays = read_published_grandchild_strays(&pidfile);
+                    let published = read_published_grandchild_strays(&pidfile);
+                    // R16-001: the parent-observed tree rides with
+                    // the record (death before publication still
+                    // retires through the expiry).
+                    let strays = union_parent_observed_strays(&published, &observed);
                     match collect_probe_output_bounded(&mut child, end, staged, &strays) {
                         Some((stdout, stderr)) => {
                             assert!(
@@ -9364,7 +9428,9 @@ mod tests {
                     let _ = std::fs::remove_file(&pidfile);
                     return;
                 }
-                None => {}
+                None => {
+                    observed.extend(snapshot_probe_tree(id));
+                }
             }
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
@@ -10322,6 +10388,9 @@ mod tests {
         let staged = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
+        // R16-001: last-seen tree for the expiry union (a probe
+        // death between birth and publication still retires).
+        let mut observed: Vec<(libc::pid_t, u64)> = Vec::new();
         let end = Instant::now() + Duration::from_secs(60);
         let status = loop {
             if let Some(status) = child.try_wait().expect("probe wait") {
@@ -10332,6 +10401,7 @@ mod tests {
                 // group + probe, retires published strays).
                 timeout_retire_hung_probe(&mut child, &pidfile, "abandoning probe hung past 60s");
             }
+            observed.extend(snapshot_probe_tree(id));
             std::thread::sleep(Duration::from_millis(20));
         };
         // Skip path first: without seccomp the probe refuses
@@ -10382,8 +10452,11 @@ mod tests {
         // pipes — dead fixture, not a passing test). A short
         // collection budget — the 60s above covered the spawn.
         // The published writer rides as expiry strays (the fix).
+        // R16-001: unioned with the parent-observed tree (death
+        // before publication still retires through the expiry).
+        let collect_strays = union_parent_observed_strays(&strays, &observed);
         let end = Instant::now() + Duration::from_secs(3);
-        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &collect_strays);
         assert!(
             got.is_none(),
             "writer-held collection must expire (dead fixture otherwise)"
@@ -10472,7 +10545,7 @@ mod tests {
         // both via /proc task-children — never via the pidfile
         // (that would assume the publication under test).
         let end = Instant::now() + Duration::from_secs(60);
-        let (writer, writer_tick) = loop {
+        let (mid, mid_tick, writer, writer_tick) = loop {
             if let Some(status) = child.try_wait().expect("probe wait") {
                 // Exited before any birth: the seccomp skip
                 // path (mirrors the abandon regression), or a
@@ -10516,8 +10589,12 @@ mod tests {
             }
             if let Some(mid) = middleman_first_child(id) {
                 if let Some(born) = middleman_first_child(mid) {
-                    if let Ok(Some(tick)) = proc_starttime(born) {
-                        break (born, tick);
+                    // R16-001: capture the middleman too (both ride
+                    // the expiry union below).
+                    if let (Ok(Some(tick)), Ok(Some(mtick))) =
+                        (proc_starttime(born), proc_starttime(mid))
+                    {
+                        break (mid, mtick, born, tick);
                     }
                 }
             }
@@ -10632,8 +10709,12 @@ mod tests {
         // expire (an EOF here means the writer never held the
         // pipes — dead fixture, not a passing test). The birth
         // record rides as expiry strays (the fix).
+        // R16-001: unioned with the parent-observed tree (death
+        // before publication still retires through the expiry).
+        let collect_strays =
+            union_parent_observed_strays(&strays, &[(mid, mid_tick), (writer, writer_tick)]);
         let end = Instant::now() + Duration::from_secs(3);
-        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &collect_strays);
         assert!(
             got.is_none(),
             "writer-held collection must expire (dead fixture otherwise)"
@@ -11306,6 +11387,131 @@ mod tests {
         );
     }
 
+    /// R16-001: death before publication — a probe killed before
+    /// its birth publish leaves an empty pidfile, and the ordinary
+    /// post-exit collection must still retire the parent-observed
+    /// writer. Staged deterministically: the NOPUBLISH injection
+    /// disarms the runner's birth watch (empty record regardless
+    /// of timing), the parent observes middleman+writer via /proc,
+    /// freezes the tree with SIGSTOP, kills+reaps the outer, then
+    /// runs REAL collection over the empty record.
+    /// RED: pidfile-only strays strand the writer (expiry retires
+    /// nothing outside the probe group); GREEN: parent-observed
+    /// strays union into the expiry and both retire.
+    /// R16-011: every staged fixture rides a guard from birth —
+    /// any staging failure unwinds through retirement, never a
+    /// leak (probe guard disarmed at reap, mid/writer guards at
+    /// proven-gone).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn unpublished_writer_retires_by_parent_observed_strays() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r16001-unpublished-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(R16001_NOPUBLISH_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn unpublished subreaper probe");
+        let id = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(id);
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // Independent observation: middleman, then (after the
+        // freeze) the writer.
+        let end = Instant::now() + Duration::from_secs(60);
+        let mid = loop {
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before middleman birth (fixture broken)"
+            );
+            assert!(Instant::now() < end, "middleman never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                break mid;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut mid_guard = FixtureGuard::new(mid);
+        // SAFETY: SIGSTOP to our own probe child (freezes the
+        // runner; the middleman runs on and forks the writer).
+        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
+        let end = Instant::now() + Duration::from_secs(60);
+        let (writer, writer_tick) = loop {
+            if let Some(born) = middleman_first_child(mid) {
+                if let Ok(Some(tick)) = proc_starttime(born) {
+                    break (born, tick);
+                }
+            }
+            assert!(Instant::now() < end, "writer never born (60s)");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut writer_guard = FixtureGuard::new(writer);
+        let mid_tick = proc_starttime(mid)
+            .expect("middleman stat readable")
+            .expect("middleman visible");
+        // The hole staged: NOTHING published (injection, not timing).
+        let record = std::fs::read_to_string(&pidfile).expect("pidfile readable");
+        assert!(
+            record.trim().is_empty(),
+            "unpublished probe must publish nothing, got: {record:?}"
+        );
+        // Kill and reap the outer BEFORE collection (the R16-001 shape).
+        // SAFETY: SIGKILL to our own stopped probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGKILL) }, 0, "probe kill");
+        let _ = child.wait();
+        probe_guard.disarm();
+        // GREEN: the empty pidfile unions with the parent-observed
+        // tree — the expiry retires what publication missed.
+        let published = read_published_grandchild_strays(&pidfile);
+        assert!(
+            published.is_empty(),
+            "stage must be unpublished, got: {published:?}"
+        );
+        let strays =
+            union_parent_observed_strays(&published, &[(mid, mid_tick), (writer, writer_tick)]);
+        let end = Instant::now() + Duration::from_secs(3);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        // Observe before cleanup (R12-014): capture the evidence,
+        // retire remainders so RED runs stay clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        let mid_gone = await_proc_gone_reaping(mid, mid_tick, Duration::from_secs(2));
+        if !writer_gone {
+            let _ = retire_known_stray_best_effort(writer, writer_tick);
+        } else {
+            writer_guard.disarm();
+        }
+        if !mid_gone {
+            let _ = retire_known_stray_best_effort(mid, mid_tick);
+        } else {
+            mid_guard.disarm();
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            writer_gone,
+            "parent expiry must retire the unpublished writer"
+        );
+        assert!(
+            mid_gone,
+            "parent expiry must retire the unpublished middleman"
+        );
+    }
+
     /// R11-005: starttime of the CURRENT holder of `pid`
     /// (field 22 of /proc/PID/stat). Ok(None) is proven
     /// absence (ENOENT only); Err is unreadable-or-unparseable
@@ -11906,6 +12112,10 @@ mod tests {
         let staged = proc_starttime(child.id() as libc::pid_t)
             .expect("probe stat readable")
             .expect("probe visible");
+        let id = child.id() as libc::pid_t;
+        // R16-001: last-seen tree for the expiry union (a probe
+        // death between birth and publication still retires).
+        let mut observed: Vec<(libc::pid_t, u64)> = Vec::new();
         let end = Instant::now() + Duration::from_secs(60);
         loop {
             match child.try_wait().expect("probe wait") {
@@ -11917,7 +12127,11 @@ mod tests {
                     // R13-005: the probe's published grandchild (if
                     // any) rides as expiry strays — a writer the
                     // probe died without retiring still retires.
-                    let strays = read_published_grandchild_strays(&pidfile);
+                    let published = read_published_grandchild_strays(&pidfile);
+                    // R16-001: the parent-observed tree rides with
+                    // the record (death before publication still
+                    // retires through the expiry).
+                    let strays = union_parent_observed_strays(&published, &observed);
                     match collect_probe_output_bounded(&mut child, end, staged, &strays) {
                         Some((stdout, stderr)) => {
                             assert!(
@@ -11938,7 +12152,9 @@ mod tests {
                     let _ = std::fs::remove_file(&pidfile);
                     return;
                 }
-                None => {}
+                None => {
+                    observed.extend(snapshot_probe_tree(id));
+                }
             }
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
