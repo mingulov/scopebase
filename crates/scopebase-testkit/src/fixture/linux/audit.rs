@@ -7046,12 +7046,19 @@ mod tests {
     /// budget (bounded total, tighter per member than
     /// the single path's 5 s each).
     #[cfg(target_arch = "x86_64")]
+    /// R21-003: `want` is the wanted pipe set for the
+    /// post-snapshot shed-screen (empty skips the screen —
+    /// generic callers retire non-pipe strays with no
+    /// holdership authority to check; the expiry passes its
+    /// pipe ids).
+    #[cfg(target_arch = "x86_64")]
     fn retire_stray_tree_frame_with(
         pid: libc::pid_t,
         started: u64,
         deadline: std::time::Instant,
         depth: u32,
         snapshot: &impl Fn(libc::pid_t) -> (Vec<(libc::pid_t, u64)>, bool),
+        want: &[(u64, u64)],
     ) -> bool {
         if depth > 16 {
             return false;
@@ -7066,6 +7073,46 @@ mod tests {
             Err(_) => return false,
         }
         let (mut kids, mut unresolved) = snapshot(pid);
+        // R21-003: shed-screen adjacent to pin/kill — the
+        // snapshot above cost ms of /proc walking, and the
+        // frame-level reverify is stale now; a shed inside
+        // the snapshot must not be killed (bounds the shed
+        // window to µs — the accepted adjacent residual).
+        // Fresh default budget (the population just proved
+        // scannable under it at the frame reverify —
+        // completes in practice, truncates safe in
+        // pathology; NOT shared with that budget — sharing
+        // a spent remainder would skip every genuine
+        // retire). Holds proceeds; Shed/Unverifiable skip
+        // the kill (fail-closed — killing needs positive
+        // CURRENT evidence) but still retire the snapshotted
+        // kids below (each re-verified independently);
+        // NotOurs falls through to the existing gone/recycle
+        // logic (which handles those correctly).
+        let mut shed_skipped = false;
+        if !want.is_empty() {
+            let mut re_spent = 0;
+            match reverify_pipe_holdership(
+                pid,
+                started,
+                want,
+                &PipeScanBudget::default(),
+                &mut re_spent,
+            ) {
+                HoldVerdict::Holds => {}
+                HoldVerdict::Shed => {
+                    eprintln!("retire skips stray {pid} (shed during snapshot — survives)");
+                    shed_skipped = true;
+                }
+                HoldVerdict::Unverifiable => {
+                    eprintln!(
+                        "retire skips stray {pid} (holdership unverifiable — needs evidence)"
+                    );
+                    shed_skipped = true;
+                }
+                HoldVerdict::NotOurs => {}
+            }
+        }
         // Kill ONLY the stray (mirrors the single path's
         // pin + re-gate + pidfd kill; the await below
         // unions births while the death lands).
@@ -7128,7 +7175,12 @@ mod tests {
                 -1
             }
         };
-        if pin >= 0 {
+        // R21-003: a shed-screen skip bypasses the kill
+        // (the `!pid_gone` arm below still retires the
+        // snapshotted kids — each re-verified independently
+        // — and reports false: the shedder survives, so
+        // disappearance is honestly uncertified).
+        if pin >= 0 && !shed_skipped {
             match proc_starttime(pid) {
                 Ok(Some(now)) if now == started => {
                     // SAFETY: pidfd_send_signal(pidfd,
@@ -7159,6 +7211,12 @@ mod tests {
                     kids.clear();
                 }
             }
+            // SAFETY: pin owned by this scope.
+            unsafe { libc::close(pin) };
+        } else if shed_skipped && pin >= 0 {
+            // R21-003: the skip path bypassed the kill but
+            // still owns the pin — close it (fd leak
+            // otherwise).
             // SAFETY: pin owned by this scope.
             unsafe { libc::close(pin) };
         }
@@ -7238,12 +7296,19 @@ mod tests {
             // unresolved — still retire the children so a
             // loud failure never strands what we know.
             for (child, tick) in &kids {
-                let _ = retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot);
+                let _ = retire_stray_tree_frame_with(
+                    *child,
+                    *tick,
+                    deadline,
+                    depth + 1,
+                    snapshot,
+                    want,
+                );
             }
             return false;
         }
         for (child, tick) in &kids {
-            if !retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot) {
+            if !retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot, want) {
                 return false;
             }
         }
@@ -7256,13 +7321,16 @@ mod tests {
     /// with the stray instead of parking). One shared
     /// 5 s tree budget. Never panics.
     #[cfg(target_arch = "x86_64")]
-    fn retire_stray_tree_best_effort(pid: libc::pid_t, started: u64) -> bool {
+    /// R21-003: `want` is the wanted pipe set for the
+    /// frame's post-snapshot shed-screen (empty skips it).
+    fn retire_stray_tree_best_effort(pid: libc::pid_t, started: u64, want: &[(u64, u64)]) -> bool {
         retire_stray_tree_frame_with(
             pid,
             started,
             std::time::Instant::now() + std::time::Duration::from_secs(5),
             0,
             &snapshot_stray_children,
+            want,
         )
     }
 
@@ -8144,7 +8212,17 @@ mod tests {
                     }
                 }
             }
-            let gone = retire_stray_tree_best_effort(*pid, *started);
+            // R21-003: recorded strays re-verify
+            // holdership adjacent to the kill (a shed inside
+            // the snapshot window must not be killed); the
+            // union prefix (index < boundary) retires
+            // unconditionally — its members were never
+            // holdership-gated (nothing stale to refresh)
+            // and a never-holder would false-Shed the
+            // screen, so it passes empty want (same gate as
+            // the frame-level reverify above).
+            let want: &[(u64, u64)] = if index >= boundary { pipe_ids } else { &[] };
+            let gone = retire_stray_tree_best_effort(*pid, *started, want);
             eprintln!("expiry retired stray {pid} (gone: {gone})");
         }
         // No Child-handle wait here by design (not even a
@@ -21358,6 +21436,7 @@ mod tests {
                 Instant::now() + Duration::from_secs(5),
                 0,
                 &snapshot,
+                &[],
             )
         });
         // Wait for the stall, then recycle the number under
@@ -21665,70 +21744,74 @@ mod tests {
         // frame).
         let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let result = retire_stray_tree_frame_with(pub1pid, pub1tick, deadline, 0, &|_pid| -> (
-            Vec<(libc::pid_t, u64)>,
-            bool,
-        ) {
-            let mut state = state.borrow_mut();
-            state.calls += 1;
-            if state.calls == 1 {
-                // In-window recycle (models a genuine
-                // recycle between the frame's gate and its
-                // initial snapshot): retire pub1, steer pub2
-                // onto its number, THEN exhaust across the
-                // pin (spawn + pair read need fds first).
-                let mut pub1 = state.pub1.take().expect("pub1 staged");
-                assert!(kill_tick_gated(pub1pid, pub1tick), "victim parent signaled");
-                let _ = pub1.wait();
-                assert_eq!(proc_starttime(pub1pid), Ok(None), "victim number must free");
-                // R20-011: forced placement-failure injection
-                // (regression steering — post-parent-death
-                // shapes only; c1 is orphaned-live here in
-                // both modes). "pre-steer" returns at once
-                // (steer-failure shape); "post-spawn" spawns
-                // + parks pub2 first (miss shape — placement
-                // unchecked, so contention cannot flake it).
-                if let Ok(mode) = std::env::var("SCOPEBASE_R20011_FORCE_MISS") {
-                    if mode == "post-spawn" {
-                        if audit_steer_next_pid_unlocked(pub1pid) {
-                            let mut pub2 = spawn_publisher("913");
-                            let (cprime, cptick) = read_pair(&mut pub2);
-                            let _ = kill_tick_gated(cprime, cptick);
-                            let _ = pub2.kill();
-                            let _ = pub2.wait();
+        let result = retire_stray_tree_frame_with(
+            pub1pid,
+            pub1tick,
+            deadline,
+            0,
+            &|_pid| -> (Vec<(libc::pid_t, u64)>, bool) {
+                let mut state = state.borrow_mut();
+                state.calls += 1;
+                if state.calls == 1 {
+                    // In-window recycle (models a genuine
+                    // recycle between the frame's gate and its
+                    // initial snapshot): retire pub1, steer pub2
+                    // onto its number, THEN exhaust across the
+                    // pin (spawn + pair read need fds first).
+                    let mut pub1 = state.pub1.take().expect("pub1 staged");
+                    assert!(kill_tick_gated(pub1pid, pub1tick), "victim parent signaled");
+                    let _ = pub1.wait();
+                    assert_eq!(proc_starttime(pub1pid), Ok(None), "victim number must free");
+                    // R20-011: forced placement-failure injection
+                    // (regression steering — post-parent-death
+                    // shapes only; c1 is orphaned-live here in
+                    // both modes). "pre-steer" returns at once
+                    // (steer-failure shape); "post-spawn" spawns
+                    // + parks pub2 first (miss shape — placement
+                    // unchecked, so contention cannot flake it).
+                    if let Ok(mode) = std::env::var("SCOPEBASE_R20011_FORCE_MISS") {
+                        if mode == "post-spawn" {
+                            if audit_steer_next_pid_unlocked(pub1pid) {
+                                let mut pub2 = spawn_publisher("913");
+                                let (cprime, cptick) = read_pair(&mut pub2);
+                                let _ = kill_tick_gated(cprime, cptick);
+                                let _ = pub2.kill();
+                                let _ = pub2.wait();
+                            }
                         }
+                        return (Vec::new(), true);
                     }
-                    return (Vec::new(), true);
+                    if !audit_steer_next_pid_unlocked(pub1pid) {
+                        return (Vec::new(), true);
+                    }
+                    let mut pub2 = spawn_publisher("913");
+                    let pub2pid = pub2.id() as libc::pid_t;
+                    let (cprime, cptick) = read_pair(&mut pub2);
+                    if pub2pid != pub1pid {
+                        // Steering miss (placement contention):
+                        // park cleanly; the caller skips.
+                        let _ = kill_tick_gated(cprime, cptick);
+                        let _ = pub2.kill();
+                        let _ = pub2.wait();
+                        return (Vec::new(), true);
+                    }
+                    state.pub2 = Some(pub2);
+                    state.cprime = Some((cprime, cptick));
+                    // Exhaust across the pin (the frame's
+                    // pidfd_open + re-read run next).
+                    while let Ok(file) = std::fs::File::open("/dev/null") {
+                        state.held.push(file);
+                    }
+                    assert!(!state.held.is_empty(), "exhaustion must consume fds");
+                    return (vec![(cprime, cptick)], false);
                 }
-                if !audit_steer_next_pid_unlocked(pub1pid) {
-                    return (Vec::new(), true);
-                }
-                let mut pub2 = spawn_publisher("913");
-                let pub2pid = pub2.id() as libc::pid_t;
-                let (cprime, cptick) = read_pair(&mut pub2);
-                if pub2pid != pub1pid {
-                    // Steering miss (placement contention):
-                    // park cleanly; the caller skips.
-                    let _ = kill_tick_gated(cprime, cptick);
-                    let _ = pub2.kill();
-                    let _ = pub2.wait();
-                    return (Vec::new(), true);
-                }
-                state.pub2 = Some(pub2);
-                state.cprime = Some((cprime, cptick));
-                // Exhaust across the pin (the frame's
-                // pidfd_open + re-read run next).
-                while let Ok(file) = std::fs::File::open("/dev/null") {
-                    state.held.push(file);
-                }
-                assert!(!state.held.is_empty(), "exhaustion must consume fds");
-                return (vec![(cprime, cptick)], false);
-            }
-            // Later polls: restore (idempotent) and report
-            // no fresh children.
-            state.held.clear();
-            (Vec::new(), false)
-        });
+                // Later polls: restore (idempotent) and report
+                // no fresh children.
+                state.held.clear();
+                (Vec::new(), false)
+            },
+            &[],
+        );
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
         let mut state = state.borrow_mut();
@@ -22076,25 +22159,29 @@ mod tests {
         // design (2 s, then unresolved); pre-fix the frame
         // certifies instantly.
         let deadline = Instant::now() + Duration::from_secs(2);
-        let result = retire_stray_tree_frame_with(pid, tick, deadline, 0, &|_stray| -> (
-            Vec<(libc::pid_t, u64)>,
-            bool,
-        ) {
-            let mut state = state.borrow_mut();
-            state.calls += 1;
-            if state.calls == 1 {
-                // Free the number inside the snapshot: dead
-                // at pin (denied), gone at re-read.
-                let mut victim = state.victim.take().expect("victim staged");
-                assert!(kill_tick_gated(pid, tick), "stray signaled");
-                let _ = victim.wait();
-                assert_eq!(proc_starttime(pid), Ok(None), "number must free");
-                // The frame treats the listed pair as P's
-                // child (the frame_unreadable model).
-                return (vec![(cpid, ctick)], false);
-            }
-            (Vec::new(), false)
-        });
+        let result = retire_stray_tree_frame_with(
+            pid,
+            tick,
+            deadline,
+            0,
+            &|_stray| -> (Vec<(libc::pid_t, u64)>, bool) {
+                let mut state = state.borrow_mut();
+                state.calls += 1;
+                if state.calls == 1 {
+                    // Free the number inside the snapshot: dead
+                    // at pin (denied), gone at re-read.
+                    let mut victim = state.victim.take().expect("victim staged");
+                    assert!(kill_tick_gated(pid, tick), "stray signaled");
+                    let _ = victim.wait();
+                    assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+                    // The frame treats the listed pair as P's
+                    // child (the frame_unreadable model).
+                    return (vec![(cpid, ctick)], false);
+                }
+                (Vec::new(), false)
+            },
+            &[],
+        );
         // The orphan must be live (kept, never murdered —
         // true in both shapes; the discriminator is the
         // verdict below).
@@ -22357,40 +22444,44 @@ mod tests {
         let rpair_out = std::cell::Cell::new(None::<(libc::pid_t, u64)>);
         let cshared = shared.clone();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let result = retire_stray_tree_frame_with(pid, tick, deadline, 0, &|_stray| -> (
-            Vec<(libc::pid_t, u64)>,
-            bool,
-        ) {
-            let call = calls.get();
-            calls.set(call + 1);
-            if call == 0 {
-                // Relay one serving request to the helper
-                // (death-then-recycle lands here, inside the
-                // snapshot: free at pin — denied — reused at
-                // re-read). Bounded and loud both ways.
-                {
-                    let mut s = cshared.lock().unwrap_or_else(|p| p.into_inner());
-                    s.req = true;
-                }
-                let end = Instant::now() + Duration::from_secs(30);
-                let (hit, rpid, rtick) = loop {
+        let result = retire_stray_tree_frame_with(
+            pid,
+            tick,
+            deadline,
+            0,
+            &|_stray| -> (Vec<(libc::pid_t, u64)>, bool) {
+                let call = calls.get();
+                calls.set(call + 1);
+                if call == 0 {
+                    // Relay one serving request to the helper
+                    // (death-then-recycle lands here, inside the
+                    // snapshot: free at pin — denied — reused at
+                    // re-read). Bounded and loud both ways.
                     {
-                        let s = cshared.lock().unwrap_or_else(|p| p.into_inner());
-                        if s.ack {
-                            break s.outcome.expect("helper served");
-                        }
+                        let mut s = cshared.lock().unwrap_or_else(|p| p.into_inner());
+                        s.req = true;
                     }
-                    assert!(Instant::now() < end, "helper serving never acked");
-                    std::thread::sleep(Duration::from_millis(1));
-                };
-                if !hit {
-                    return (Vec::new(), true);
+                    let end = Instant::now() + Duration::from_secs(30);
+                    let (hit, rpid, rtick) = loop {
+                        {
+                            let s = cshared.lock().unwrap_or_else(|p| p.into_inner());
+                            if s.ack {
+                                break s.outcome.expect("helper served");
+                            }
+                        }
+                        assert!(Instant::now() < end, "helper serving never acked");
+                        std::thread::sleep(Duration::from_millis(1));
+                    };
+                    if !hit {
+                        return (Vec::new(), true);
+                    }
+                    rpair_out.set(Some((rpid, rtick)));
+                    return (vec![(cpid, ctick)], false);
                 }
-                rpair_out.set(Some((rpid, rtick)));
-                return (vec![(cpid, ctick)], false);
-            }
-            (Vec::new(), false)
-        });
+                (Vec::new(), false)
+            },
+            &[],
+        );
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
         // Steering-miss skip (placement contention in the
@@ -22572,32 +22663,36 @@ mod tests {
         // pin-failure twin — same in-process seam).
         let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let result = retire_stray_tree_frame_with(pid, started, deadline, 0, &|_pid| -> (
-            Vec<(libc::pid_t, u64)>,
-            bool,
-        ) {
-            let mut state = state.borrow_mut();
-            state.calls += 1;
-            if state.calls == 1 {
-                // Initial snapshot: no children yet.
-                return (Vec::new(), false);
-            }
-            if state.calls == 2 {
-                // First poll: a genuine fresh child under
-                // a transient read failure (the gate read
-                // that follows this snapshot fails).
-                while let Ok(file) = std::fs::File::open("/dev/null") {
-                    state.held.push(file);
+        let result = retire_stray_tree_frame_with(
+            pid,
+            started,
+            deadline,
+            0,
+            &|_pid| -> (Vec<(libc::pid_t, u64)>, bool) {
+                let mut state = state.borrow_mut();
+                state.calls += 1;
+                if state.calls == 1 {
+                    // Initial snapshot: no children yet.
+                    return (Vec::new(), false);
                 }
-                assert!(!state.held.is_empty(), "exhaustion must consume fds");
-                return (vec![(cpid, ctick)], false);
-            }
-            // Later polls: restored, nothing fresh (the
-            // parent is dying/dead from the frame's
-            // pidfd kill).
-            state.held.clear();
-            (Vec::new(), false)
-        });
+                if state.calls == 2 {
+                    // First poll: a genuine fresh child under
+                    // a transient read failure (the gate read
+                    // that follows this snapshot fails).
+                    while let Ok(file) = std::fs::File::open("/dev/null") {
+                        state.held.push(file);
+                    }
+                    assert!(!state.held.is_empty(), "exhaustion must consume fds");
+                    return (vec![(cpid, ctick)], false);
+                }
+                // Later polls: restored, nothing fresh (the
+                // parent is dying/dead from the frame's
+                // pidfd kill).
+                state.held.clear();
+                (Vec::new(), false)
+            },
+            &[],
+        );
         // Never successful certification over the survivor.
         assert!(
             !result,
@@ -23101,7 +23196,7 @@ else:
         // genuine tick validates and it dies here).
         for (pid, tick) in &found {
             assert!(
-                retire_stray_tree_best_effort(*pid, *tick),
+                retire_stray_tree_best_effort(*pid, *tick, &[]),
                 "production retire of the attributed holder must succeed (run-proof)"
             );
         }
@@ -23570,7 +23665,7 @@ time.sleep(30)
         // fresh flags attribute and the victim dies here —
         // gratuitously, since it already released the pipe).
         for (pid, tick) in &found {
-            let _ = retire_stray_tree_best_effort(*pid, *tick);
+            let _ = retire_stray_tree_best_effort(*pid, *tick, &[]);
         }
         // The victim survives with its status retained.
         assert_proc_settled_live(
@@ -23774,7 +23869,7 @@ time.sleep(30)
         // the victim dies here — gratuitously, since it
         // holds only the read end now).
         for (pid, tick) in &found {
-            let _ = retire_stray_tree_best_effort(*pid, *tick);
+            let _ = retire_stray_tree_best_effort(*pid, *tick, &[]);
         }
         // The victim survives with its status retained.
         assert_proc_settled_live(
@@ -24576,6 +24671,153 @@ time.sleep(30)
         // Cleanup: the writer is already reaped (discharged
         // above); drop the handle.
         let _ = writer;
+    }
+
+    /// R21-003: a stray that sheds the wanted write ends
+    /// DURING the retire frame's snapshot window must
+    /// survive the frame — the frame re-verifies
+    /// holdership adjacent to its kill (the expiry's
+    /// pre-snapshot reverify is stale by then: the
+    /// snapshot costs ms of /proc walking). The shed
+    /// lands deterministically inside the FIRST snapshot
+    /// call (control byte in, status byte out — the close
+    /// precedes the status write in program order, so the
+    /// shed certainly precedes the kill gate). RED:
+    /// pre-fix code kills the shedder (the live-assert
+    /// fails); GREEN: the frame skips the kill and
+    /// honestly reports uncertified (false — the shedder
+    /// survives, so disappearance is uncertifiable).
+    /// Second cell: an UNSHED holder retires normally
+    /// through the production wrapper with its pipe ids
+    /// (the screen must not spare genuine holders —
+    /// Holds proceeds to the kill; also covers the
+    /// wrapper's want-threading).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_frame_shed_during_snapshot_survives() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        // Cell 1: the shedder. sh holds the target write
+        // end on fd 1; the first snapshot call hands it a
+        // control byte, it closes fd 1 (the shed), echoes
+        // status on fd 2, then lives on as sleep.
+        let (target_read, target_write) = std::io::pipe().expect("target pipe");
+        let target_fd = target_read.as_raw_fd();
+        let (ctl_read, ctl_write) = std::io::pipe().expect("control pipe");
+        let (status_read, status_write) = std::io::pipe().expect("status pipe");
+        let mut shedder = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("read x; exec 1>&-; echo s >&2; exec sleep 60")
+            .stdin(std::process::Stdio::from(ctl_read))
+            .stdout(std::process::Stdio::from(target_write))
+            .stderr(std::process::Stdio::from(status_write))
+            .spawn()
+            .expect("shedder spawns");
+        let spid = shedder.id() as libc::pid_t;
+        let _sguard = FixtureGuard::new(spid);
+        let stick = proc_starttime(spid)
+            .expect("shedder stat readable")
+            .expect("shedder visible");
+        let want = collection_pipe_ids(Some(target_fd), None);
+        assert!(!want.is_empty(), "target pipe must identify");
+        // Pre-prove Holds (the shedder genuinely holds at
+        // frame entry — without this the survival assert
+        // would be vacuous: a never-holder survives any
+        // frame trivially).
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(spid, stick, &want, &ample, &mut spent),
+            HoldVerdict::Holds,
+            "shedder must hold the target at frame entry"
+        );
+        // The choreographed snapshot: the first call sheds
+        // (control byte in, status byte out — the close
+        // landed before the status write, so the shed
+        // precedes the kill gate); later calls are plain
+        // snapshots. RefCells: the frame takes `&impl Fn`
+        // (no FnMut), so the pipe writes need interior
+        // mutability.
+        let shed = std::cell::Cell::new(false);
+        let ctl_write = std::cell::RefCell::new(ctl_write);
+        let status_read = std::cell::RefCell::new(status_read);
+        let snapshot = |pid: libc::pid_t| -> (Vec<(libc::pid_t, u64)>, bool) {
+            if !shed.get() {
+                shed.set(true);
+                ctl_write
+                    .borrow_mut()
+                    .write_all(b"x\n")
+                    .expect("control byte lands");
+                let mut status = [0u8; 2];
+                status_read
+                    .borrow_mut()
+                    .read_exact(&mut status)
+                    .expect("status byte proves the shed landed");
+                assert_eq!(status, *b"s\n", "status byte shape");
+            }
+            snapshot_stray_children(pid)
+        };
+        // Short deadline: post-fix the frame skips the
+        // kill and burns to the deadline by design (live
+        // stray, nothing to await — same shape as the
+        // pin-failure twin); pre-fix it kills and
+        // certifies instantly.
+        let result = retire_stray_tree_frame_with(
+            spid,
+            stick,
+            Instant::now() + Duration::from_secs(2),
+            0,
+            &snapshot,
+            &want,
+        );
+        // The shedder must be live (kept, never murdered —
+        // asserted BEFORE cleanup like the pin-failure
+        // twin; RED-run hygiene rides the FixtureGuard
+        // drop).
+        assert_proc_settled_live(spid, stick, 1, "shedder must survive the frame");
+        // Cleanup before the verdict (RED runs stay clean).
+        assert!(
+            retire_tick_gated_audit_child(spid, stick),
+            "shedder retire readable"
+        );
+        assert!(
+            await_proc_gone_reaping(spid, stick, Duration::from_secs(5)),
+            "shedder must drain"
+        );
+        let _ = shedder;
+        assert!(!result, "shedder survival must stay uncertified (false)");
+        // Cell 2: an unshed holder retires normally through
+        // the production wrapper (Holds proceeds to the
+        // kill — the screen must not spare genuine
+        // holders).
+        let (hread, hwrite) = std::io::pipe().expect("holder pipe");
+        let holder = std::process::Command::new("/bin/sleep")
+            .arg("956")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(hwrite))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let _hguard = FixtureGuard::new(hpid);
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        let hwant = collection_pipe_ids(Some(hread.as_raw_fd()), None);
+        assert!(!hwant.is_empty(), "holder pipe must identify");
+        assert!(
+            retire_stray_tree_best_effort(hpid, htick, &hwant),
+            "unshed holder must retire through the screen"
+        );
+        assert!(
+            await_proc_gone_reaping(hpid, htick, Duration::from_secs(5)),
+            "holder must drain"
+        );
+        let _ = holder;
     }
 
     /// R19-009 (end-to-end): a collection expiry beside a
@@ -25712,7 +25954,7 @@ time.sleep(30)
         // survives while holders die.
         for (pid, tick) in &found {
             assert!(
-                retire_stray_tree_best_effort(*pid, *tick),
+                retire_stray_tree_best_effort(*pid, *tick, &[]),
                 "production retire of the attributed holder must succeed (run-proof)"
             );
         }
@@ -27449,7 +27691,7 @@ time.sleep(30)
         );
         // The frame on the dead leader: group arm retires
         // the orphan and proves the group empty.
-        let retired = retire_stray_tree_best_effort(mid_pid, mtick);
+        let retired = retire_stray_tree_best_effort(mid_pid, mtick, &[]);
         let orphan_gone = await_proc_gone_reaping(child, ctick, Duration::from_secs(5));
         if !orphan_gone {
             let _ = kill_tick_gated(child, ctick);
@@ -27717,6 +27959,7 @@ time.sleep(30)
             Instant::now() + Duration::from_secs(5),
             0,
             &blind_first,
+            &[],
         );
         // Observe before cleanup (R12-014): capture the evidence,
         // retire remainders so RED runs stay clean, then assert.
