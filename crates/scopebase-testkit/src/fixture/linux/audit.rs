@@ -3480,6 +3480,16 @@ mod tests {
     /// record, never the truncate-then-write tear), and presence
     /// is `var_os` (a set-but-non-UTF-8 path retires the known
     /// writer, then fails loud — never a silent skip).
+    /// R15-008: the writer-evidence suffix appended to every
+    /// publish/guard/hygiene failure message that retires a
+    /// known writer — (pid, starttime, retired) travels with
+    /// the report, never stranded in locals while the writer
+    /// strands live.
+    #[cfg(target_arch = "x86_64")]
+    fn writer_retire_note(pid: libc::pid_t, started: u64, retired: bool) -> String {
+        format!(" (writer pid={pid} starttime={started} retired={retired})")
+    }
+
     #[cfg(target_arch = "x86_64")]
     fn publish_reported_grandchild(state: &GrandchildState) {
         // R14-010: presence via var_os — a set-but-non-UTF-8
@@ -3511,16 +3521,22 @@ mod tests {
         let path = match path_os.to_str() {
             Some(path) => path,
             None => {
-                let _ = retire_known_stray_best_effort(pid, started);
-                panic!("grandchild rendezvous path not UTF-8: {path_os:?}");
+                let retired = retire_known_stray_best_effort(pid, started);
+                panic!(
+                    "grandchild rendezvous path not UTF-8: {path_os:?}{}",
+                    writer_retire_note(pid, started, retired)
+                );
             }
         };
         // R14-003: writability probe (plain O_WRONLY — no create,
         // no truncate, closed at once): a set-but-unwritable
         // pidfile retires the known writer, then fails loud.
         if let Err(error) = std::fs::OpenOptions::new().write(true).open(path) {
-            let _ = retire_known_stray_best_effort(pid, started);
-            panic!("grandchild publish to {path:?} failed: {error}");
+            let retired = retire_known_stray_best_effort(pid, started);
+            panic!(
+                "grandchild publish to {path:?} failed: {error}{}",
+                writer_retire_note(pid, started, retired)
+            );
         }
         // R14-010: atomic publish (tmp 600 + rename) — readers
         // see the old complete record or the new complete
@@ -3559,8 +3575,11 @@ mod tests {
             // R14-003: retire the known writer BEFORE failing
             // loud — a panic that skips retirement strands it
             // while the parent trusts a stale record.
-            let _ = retire_known_stray_best_effort(pid, started);
-            panic!("grandchild publish to {path:?} failed: {error}");
+            let retired = retire_known_stray_best_effort(pid, started);
+            panic!(
+                "grandchild publish to {path:?} failed: {error}{}",
+                writer_retire_note(pid, started, retired)
+            );
         }
     }
 
@@ -4067,6 +4086,389 @@ mod tests {
         unsafe { libc::_exit(if certified { 21 } else { 20 }) };
     }
 
+    /// R15-008: run one denial mode in a FRESH process image (the
+    /// test binary re-executed with SCOPEBASE_R15008_MODE set):
+    /// the seccomp pidfd-deny filter stays contained in the
+    /// child, and the parent only reads its stderr. Returns the
+    /// child's stderr after asserting a clean exit plus the
+    /// completion marker (a filter miss fails loud, never
+    /// vacuous). A SKIP marker (seccomp unavailable) passes with
+    /// a loud note — same precedent as R14-011's exit-3 skip.
+    #[cfg(target_arch = "x86_64")]
+    fn r15008_probe_spawn(mode: &str, test: &str) -> String {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test)
+            .arg("--nocapture")
+            .env("SCOPEBASE_R15008_MODE", mode)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "{mode}: probe child must exit 0\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("R15008-CHILD-DONE mode={mode}")),
+            "{mode}: completion marker missing\n{stderr}"
+        );
+        stderr
+    }
+
+    /// R15-008: parse the child's `R15008-PINNED pid=N tick=M`
+    /// line (the identity the messages must cite).
+    #[cfg(target_arch = "x86_64")]
+    fn r15008_probe_pinned(stderr: &str, mode: &str) -> (libc::pid_t, u64) {
+        for line in stderr.lines() {
+            if let Some(rest) = line.strip_prefix("R15008-PINNED ") {
+                let mut pid = None;
+                let mut tick = None;
+                for word in rest.split_whitespace() {
+                    if let Some(value) = word.strip_prefix("pid=") {
+                        pid = value.parse::<libc::pid_t>().ok();
+                    }
+                    if let Some(value) = word.strip_prefix("tick=") {
+                        tick = value.parse::<u64>().ok();
+                    }
+                }
+                if let (Some(pid), Some(tick)) = (pid, tick) {
+                    return (pid, tick);
+                }
+            }
+        }
+        panic!("{mode}: no parsable R15008-PINNED line\n{stderr}");
+    }
+
+    /// R15-008: the probe-child body — stage a live writer (+ a
+    /// self-grouped probe stand-in for the timeout mode), print
+    /// R15008-PINNED, optionally install the pidfd-deny filter
+    /// (denial: pidfd_open fails EPERM while file reads work —
+    /// R14-011's mechanism), drive the timeout body or a publish
+    /// failure under catch, assert the (pid, starttime) evidence
+    /// shape, prove denial took (writer survived) or success
+    /// (writer gone), clean up loud, print DONE.
+    #[cfg(target_arch = "x86_64")]
+    fn r15008_probe_child(mode: &str) {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let denied = mode != "publish-ok";
+        // Stage the live writer (sleep 49: unique to this probe
+        // family).
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("49")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        // Timeout mode also stages a self-grouped probe
+        // stand-in (sleep 48: the body killpgs ITS group — it
+        // must never be ours).
+        let mut probe = if mode == "timeout" {
+            let mut probe = std::process::Command::new("/bin/sleep");
+            probe
+                .arg("48")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid on self pre-exec, no userspace state.
+            unsafe {
+                probe.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            Some(probe.spawn().expect("probe stand-in spawns"))
+        } else {
+            None
+        };
+        // Pidfile setup per mode (publish modes drive the
+        // rendezvous publish through GRANDCHILD_PIDFILE_ENV).
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r15008-{mode}-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        match mode {
+            "timeout" => {
+                std::fs::write(&pidfile, format!("{wpid}:{wtick}")).expect("stray record written");
+            }
+            "publish-unwritable" | "publish-ok" => {
+                // A directory fails the O_WRONLY writability
+                // probe (EISDIR) — no chmod games.
+                std::env::set_var(GRANDCHILD_PIDFILE_ENV, std::env::temp_dir().as_os_str());
+            }
+            "publish-nonutf8" => {
+                use std::os::unix::ffi::OsStrExt as _;
+                let raw = b"/tmp/scopebase-r15008-\xff-nonutf8.pid";
+                std::env::set_var(GRANDCHILD_PIDFILE_ENV, std::ffi::OsStr::from_bytes(raw));
+            }
+            "publish-atomic" => {
+                claim_pidfile(&pidfile).expect("pidfile claimed");
+                std::fs::create_dir(format!("{}.tmp", pidfile.display())).expect("tmp dir planted");
+                std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
+            }
+            _ => panic!("unknown probe mode {mode}"),
+        }
+        eprintln!("R15008-PINNED pid={wpid} tick={wtick}");
+        // Deny pidfd_open (file reads keep working): retire
+        // calls fail EPERM while the writer stays live.
+        if denied && !install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_ok() {
+            // Seccomp unavailable: clean up (no filter — plain
+            // paths work) and SKIP loud, R14-011-style.
+            let _ = writer.kill();
+            let _ = writer.wait();
+            if let Some(mut probe) = probe.take() {
+                let _ = probe.kill();
+                let _ = probe.wait();
+            }
+            let _ = std::fs::remove_file(&pidfile);
+            let _ = std::fs::remove_dir(format!("{}.tmp", pidfile.display()));
+            eprintln!("R15008-SKIP mode={mode} (seccomp unavailable)");
+            eprintln!("R15008-CHILD-DONE mode={mode}");
+            return;
+        }
+        // Drive the failing path under catch, then assert the
+        // evidence shape on the caught message.
+        let text = match mode {
+            "timeout" => {
+                let probe = probe.as_mut().expect("probe staged");
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    timeout_retire_hung_probe(probe, &pidfile, "R15008 timeout");
+                }));
+                match outcome {
+                    Err(payload) => payload
+                        .downcast::<String>()
+                        .map(|boxed| *boxed)
+                        .unwrap_or_else(|_| String::from("<non-string panic>")),
+                    Ok(_) => panic!("timeout body must diverge"),
+                }
+            }
+            _ => {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    publish_reported_grandchild(&GrandchildState::Live(wpid, wtick));
+                }));
+                match outcome {
+                    Err(payload) => payload
+                        .downcast::<String>()
+                        .map(|boxed| *boxed)
+                        .unwrap_or_else(|_| String::from("<non-string panic>")),
+                    Ok(_) => panic!("{mode}: publish must fail"),
+                }
+            }
+        };
+        eprintln!("R15008-MSG {text}");
+        if mode == "timeout" {
+            assert!(
+                text.contains(&format!("({wpid}, {wtick})")),
+                "timeout must cite the unresolved tuple, got: {text}"
+            );
+        } else {
+            let retired = mode == "publish-ok";
+            assert!(
+                text.contains(&format!(
+                    "(writer pid={wpid} starttime={wtick} retired={retired})"
+                )),
+                "{mode}: publish must cite the writer tuple, got: {text}"
+            );
+        }
+        // Anti-vacuity: denial took (writer survived the
+        // failing path) or success certified (writer gone).
+        if denied {
+            assert_eq!(
+                proc_starttime(wpid),
+                Ok(Some(wtick)),
+                "denied writer must survive (else the denial never took)"
+            );
+        } else {
+            // The ok arm retires before reporting: gone now
+            // (falls out of the publish before any wait — reap
+            // via the handle first so the read below is final).
+            let _ = writer.wait();
+            assert_eq!(
+                proc_starttime(wpid),
+                Ok(None),
+                "retired writer must be gone"
+            );
+        }
+        // Loud cleanup (plain kill+wait need no pidfd — the
+        // filter only denied pidfd_open).
+        if denied {
+            // SAFETY: signal-only to our own staged writer.
+            unsafe {
+                libc::kill(wpid, libc::SIGKILL);
+            }
+            let _ = writer.wait();
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if proc_starttime(wpid) != Ok(Some(wtick)) {
+                    break;
+                }
+                assert!(Instant::now() < end, "writer cleanup must retire");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if mode == "timeout" {
+            let probe = probe.as_mut().expect("probe staged");
+            assert!(
+                probe.try_wait().expect("probe wait").is_some(),
+                "timeout body must reap the probe"
+            );
+            assert!(
+                std::fs::metadata(&pidfile).is_err(),
+                "timeout body must remove the pidfile (IR-004)"
+            );
+        }
+        if mode == "publish-atomic" {
+            let _ = std::fs::remove_file(&pidfile);
+            let _ = std::fs::remove_dir(format!("{}.tmp", pidfile.display()));
+        }
+        eprintln!("R15008-CHILD-DONE mode={mode}");
+    }
+
+    /// R15-008: timeout retirement denied (pidfd EPERM) against a
+    /// live published writer must preserve the explicit
+    /// unresolved (pid, starttime) tuple in the timeout message
+    /// (the pidfile — the only other record — is still
+    /// removed). Guards R15-002's append (mutant-checked: drop
+    /// the note and this fails).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn timeout_denial_reports_unresolved_writer() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let stderr = r15008_probe_spawn(
+            "timeout",
+            "fixture::linux::audit::tests::timeout_denial_reports_unresolved_writer",
+        );
+        if stderr.contains("R15008-SKIP") {
+            eprintln!("skip: seccomp unavailable for the denial probe");
+            return;
+        }
+        let (pid, tick) = r15008_probe_pinned(&stderr, "timeout");
+        assert!(
+            stderr.contains(&format!("({pid}, {tick})")),
+            "timeout stderr must cite the tuple\n{stderr}"
+        );
+    }
+
+    /// R15-008: non-UTF-8 publish path denied must name the
+    /// writer tuple + retired=false. Pre-fix the message names
+    /// only the path (RED); post-fix it appends the tuple
+    /// (GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_nonutf8_denial_names_writer() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let stderr = r15008_probe_spawn(
+            "publish-nonutf8",
+            "fixture::linux::audit::tests::publish_nonutf8_denial_names_writer",
+        );
+        if stderr.contains("R15008-SKIP") {
+            eprintln!("skip: seccomp unavailable for the denial probe");
+            return;
+        }
+        let (pid, tick) = r15008_probe_pinned(&stderr, "publish-nonutf8");
+        assert!(
+            stderr.contains(&format!(
+                "(writer pid={pid} starttime={tick} retired=false)"
+            )),
+            "publish stderr must cite the tuple\n{stderr}"
+        );
+    }
+
+    /// R15-008: unwritable publish path denied must name the
+    /// writer tuple + retired=false (same RED/GREEN as above).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_unwritable_denial_names_writer() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let stderr = r15008_probe_spawn(
+            "publish-unwritable",
+            "fixture::linux::audit::tests::publish_unwritable_denial_names_writer",
+        );
+        if stderr.contains("R15008-SKIP") {
+            eprintln!("skip: seccomp unavailable for the denial probe");
+            return;
+        }
+        let (pid, tick) = r15008_probe_pinned(&stderr, "publish-unwritable");
+        assert!(
+            stderr.contains(&format!(
+                "(writer pid={pid} starttime={tick} retired=false)"
+            )),
+            "publish stderr must cite the tuple\n{stderr}"
+        );
+    }
+
+    /// R15-008: atomic-publish failure denied must name the
+    /// writer tuple + retired=false (same RED/GREEN).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_atomic_denial_names_writer() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let stderr = r15008_probe_spawn(
+            "publish-atomic",
+            "fixture::linux::audit::tests::publish_atomic_denial_names_writer",
+        );
+        if stderr.contains("R15008-SKIP") {
+            eprintln!("skip: seccomp unavailable for the denial probe");
+            return;
+        }
+        let (pid, tick) = r15008_probe_pinned(&stderr, "publish-atomic");
+        assert!(
+            stderr.contains(&format!(
+                "(writer pid={pid} starttime={tick} retired=false)"
+            )),
+            "publish stderr must cite the tuple\n{stderr}"
+        );
+    }
+
+    /// R15-008: unwritable publish path with retirement
+    /// SUCCEEDING names the tuple + retired=true (the ok arm of
+    /// the same append — pre-fix the message names only the
+    /// path).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_unwritable_success_names_writer() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let stderr = r15008_probe_spawn(
+            "publish-ok",
+            "fixture::linux::audit::tests::publish_unwritable_success_names_writer",
+        );
+        if stderr.contains("R15008-SKIP") {
+            eprintln!("skip: seccomp unavailable for the denial probe");
+            return;
+        }
+        let (pid, tick) = r15008_probe_pinned(&stderr, "publish-ok");
+        assert!(
+            stderr.contains(&format!("(writer pid={pid} starttime={tick} retired=true)")),
+            "publish stderr must cite the tuple\n{stderr}"
+        );
+    }
+
     /// S140-round9: the re-exec'd denial probe (see
     /// [`run_preflight_middleman`]). Under a normal suite run (no
     /// rendezvous variables) this passes silently; the middleman
@@ -4377,12 +4779,16 @@ mod tests {
                 // evidence below) before the intended panic.
                 Ok(reported) => {
                     publish_reported_grandchild(&reported.grandchild);
+                    // R15-008: the lost race retires best-effort —
+                    // the outcome travels with the report.
+                    let mut note = String::new();
                     if let GrandchildState::Live(pid, started) = reported.grandchild {
-                        retire_known_stray_best_effort(pid, started);
+                        let retired = retire_known_stray_best_effort(pid, started);
+                        note = writer_retire_note(pid, started, retired);
                     }
                     panic!(
-                        "2s guard must fire mid-EINTR-spin, got exit {}",
-                        reported.code
+                        "2s guard must fire mid-EINTR-spin, got exit {}{}",
+                        reported.code, note
                     )
                 }
             }
@@ -7103,7 +7509,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn audit_late_pin_spares_second_replacement() {
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
         let _serial = AUDIT_STEER_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -9921,13 +10327,18 @@ mod tests {
         // (R12-014): capture the evidence first, retire any
         // remainder so even RED runs stay clean, then assert.
         let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
-        if !writer_gone {
-            retire_known_stray_best_effort(writer, writer_tick);
-        }
+        // R15-008: the hygiene outcome travels with the report
+        // (a denied-but-live writer must not strand nameless).
+        let note = if !writer_gone {
+            let hygiene = retire_known_stray_best_effort(writer, writer_tick);
+            writer_retire_note(writer, writer_tick, hygiene)
+        } else {
+            String::new()
+        };
         let _ = std::fs::remove_file(&pidfile);
         assert!(
             writer_gone,
-            "parent expiry must retire the abandoned writer"
+            "parent expiry must retire the abandoned writer{note}"
         );
         let group_end = Instant::now() + Duration::from_secs(2);
         loop {
@@ -10126,12 +10537,13 @@ mod tests {
         // clean), then fail loud on the missing publication.
         let strays = read_published_grandchild_strays(&pidfile);
         if strays.len() != 1 {
-            retire_known_stray_best_effort(writer, writer_tick);
+            let hygiene = retire_known_stray_best_effort(writer, writer_tick);
             let _ = std::fs::remove_file(&pidfile);
             assert_eq!(
                 strays.len(),
                 1,
-                "mid-flight kill must still publish the birth (R14-008)"
+                "mid-flight kill must still publish the birth (R14-008){}",
+                writer_retire_note(writer, writer_tick, hygiene)
             );
         }
         assert_eq!(
@@ -10165,13 +10577,17 @@ mod tests {
         // first, retire any remainder so even RED runs stay
         // clean, then assert.
         let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
-        if !writer_gone {
-            retire_known_stray_best_effort(writer, writer_tick);
-        }
+        // R15-008: the hygiene outcome travels with the report.
+        let note = if !writer_gone {
+            let hygiene = retire_known_stray_best_effort(writer, writer_tick);
+            writer_retire_note(writer, writer_tick, hygiene)
+        } else {
+            String::new()
+        };
         let _ = std::fs::remove_file(&pidfile);
         assert!(
             writer_gone,
-            "parent expiry must retire the mid-flight writer"
+            "parent expiry must retire the mid-flight writer{note}"
         );
         let group_end = Instant::now() + Duration::from_secs(2);
         loop {
@@ -10516,12 +10932,16 @@ mod tests {
         // retire any remainder so even RED runs stay clean, then
         // assert.
         let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
-        if !writer_gone {
-            retire_known_stray_best_effort(writer, writer_tick);
-        }
+        // R15-008: the hygiene outcome travels with the report.
+        let note = if !writer_gone {
+            let hygiene = retire_known_stray_best_effort(writer, writer_tick);
+            writer_retire_note(writer, writer_tick, hygiene)
+        } else {
+            String::new()
+        };
         assert!(
             writer_gone,
-            "parent timeout must retire the published writer ({tag})"
+            "parent timeout must retire the published writer ({tag}){note}"
         );
         // Hygiene (not the requirement): the orphaned middleman is
         // mid-preflight when the probe dies and self-terminates on
@@ -10536,6 +10956,9 @@ mod tests {
                 break;
             }
             if Instant::now() >= mid_end {
+                // R15-008: audited, unchanged — the assert below
+                // names {mid} and fires only on proven survival,
+                // so no stranded fixture goes nameless here.
                 retire_known_stray_best_effort(mid, mid_tick);
                 assert!(
                     proc_starttime(mid) != Ok(Some(mid_tick)),
