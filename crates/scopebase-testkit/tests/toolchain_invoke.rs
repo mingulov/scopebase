@@ -3367,6 +3367,38 @@ fn pin_birth_tick(pid: i32) -> Option<u64> {
     pin_birth_tick_with(pid, task_starttime_checked)
 }
 
+/// R17-008: expected-identity pin with transient retry
+/// (toolchain twin of the audit helper — same contract):
+/// pins ONLY while the live tick matches `expected`.
+/// Transient read ERRORS retry within the budget; a PROVEN
+/// mismatch (Ok(Some(other))) or proven gone (Ok(None))
+/// refuses immediately (None — retrying would pin whatever
+/// arrives next).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn pin_expected_tick_with(
+    pid: i32,
+    expected: u64,
+    read: impl Fn(i32) -> Result<Option<u64>, String>,
+) -> Option<u64> {
+    let end = Instant::now() + Duration::from_millis(100);
+    loop {
+        match read(pid) {
+            Ok(Some(tick)) if tick == expected => return Some(tick),
+            Ok(_) => return None,
+            Err(_) if Instant::now() < end => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// R17-008: the production expected-identity pin reader.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn pin_expected_tick(pid: i32, expected: u64) -> Option<u64> {
+    pin_expected_tick_with(pid, expected, task_starttime_checked)
+}
+
 /// R13-008: Drop guard retiring an owned fixture child on every
 /// exit (early return or panic). Covers pausers (retire) and
 /// zombies (discharge status — the kill also reaches a child hung
@@ -3392,8 +3424,37 @@ impl SilentChildGuard {
     /// a reaped zombie is discharged) and signals only a live
     /// owned child. Never panics: construction itself must not
     /// be a staging failure (the birth→read window it closes).
+    /// R17-008 RESERVATION CONTRACT: the bare constructor
+    /// authenticates WHATEVER birth currently occupies `pid`
+    /// (first pin). Sound ONLY while the caller holds the
+    /// unreaped-child reservation (own child, never reaped —
+    /// the number cannot have recycled) or pins a birth
+    /// sighted-live in the immediately preceding statement
+    /// with no intervening pause, kill, expiry, or
+    /// publication gap. Received pids (pidfile/pipe) resumed
+    /// after any lifecycle gap MUST use `new_expected`
+    /// (refuses on mismatch) — auto-pinning a replacement
+    /// grants the drop kill authority over a task never owned.
     fn new(pid: i32) -> Self {
         let tick = pin_birth_tick(pid);
+        SilentChildGuard {
+            pid,
+            tick,
+            disarmed: false,
+        }
+    }
+    /// R17-008: expected-identity construction for NON-CHILD
+    /// targets (received pids — the caller lacks the
+    /// unreaped-child reservation the bare constructor
+    /// assumes). Pins ONLY while the live birth matches
+    /// `expected`; mismatch, gone, or unreadable-after-budget
+    /// refuses (None — the drop will not signal). Never
+    /// panics. Caller obligation: `expected` must name the
+    /// intended birth (a transmitted pair, or a tick sighted
+    /// while the target was known-live — never a post-retire
+    /// re-read, which could name a squatter).
+    fn new_expected(pid: i32, expected: u64) -> Self {
+        let tick = pin_expected_tick(pid, expected);
         SilentChildGuard {
             pid,
             tick,
@@ -4077,6 +4138,161 @@ fn nonchild_recovered_pin_retires_on_drop() {
     );
 }
 
+/// R17-008: toolchain twin — the first pin on a received pid
+/// must not authenticate a replacement birth. Transmit (pid,
+/// tick), run the pause-scale lifecycle, steer a
+/// different-birth non-child onto the freed number, resume
+/// construction + drop: the replacement survives
+/// settled-live. RED (bare constructor): the first pin
+/// authenticates the replacement and the pinned drop murders
+/// it. GREEN (expected-identity): refusal, silent drop.
+/// Duration 46 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn child_expected_pin_refuses_recycled_non_child() {
+    use std::io::BufRead as _;
+    // R12-002: serialize steerers (whole-test hold).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let spawn_sh = || {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 46 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns")
+    };
+    let read_sleep = |sh: &mut std::process::Child| -> i32 {
+        let mut line = String::new();
+        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("sleep pid readable");
+        line.trim().parse::<i32>().expect("pid parses")
+    };
+    // TRANSMIT: stage sh1's sleeper, learn (pid, tick).
+    let mut sh1 = spawn_sh();
+    let want = read_sleep(&mut sh1);
+    let orig_tick = task_starttime_checked(want)
+        .expect("transmitted stat readable")
+        .expect("transmitted visible");
+    // Pause-scale lifecycle: the sleeper dies, the shell
+    // reaps it and exits, the number frees.
+    assert!(
+        kill_tick_gated(want, orig_tick),
+        "transmitted sleeper signaled"
+    );
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if sh1.try_wait().expect("sh1 wait").is_some() {
+            break;
+        }
+        assert!(Instant::now() < end, "publishing shell must exit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(task_starttime_checked(want), Ok(None), "number must free");
+    // REPLACE: steer sh2's sleeper (a non-child) onto the
+    // freed number (hint want-2: sh takes want-1, its
+    // sleeper takes want).
+    let _nsflock = ns_last_pid_flock();
+    let mut placed = None;
+    for _ in 0..100 {
+        if !steer_next_pid_unlocked(want - 1) {
+            break;
+        }
+        let mut sh2 = spawn_sh();
+        let sleep = read_sleep(&mut sh2);
+        if sleep == want {
+            match task_starttime_checked(want) {
+                Ok(Some(t)) if t != orig_tick => {
+                    placed = Some((sh2, t));
+                    break;
+                }
+                Ok(Some(_)) => {
+                    // Same-tick retake (S100): retire,
+                    // restore, skip loud below.
+                    let _ = kill_tick_gated(want, orig_tick);
+                    let _ = sh2.kill();
+                    let _ = sh2.wait();
+                    drop(_nsflock);
+                    locked_restore_hint(&last_before);
+                    eprintln!("skip: same-tick retake (S100 — untestable this run)");
+                    return;
+                }
+                _ => {
+                    let _ = sh2.kill();
+                    let _ = sh2.wait();
+                    continue;
+                }
+            }
+        }
+        // Miss: retire the known sleep, then its shell (no
+        // leak on any path).
+        if let Ok(Some(t)) = task_starttime_checked(sleep) {
+            let _ = kill_tick_gated(sleep, t);
+        }
+        let _ = sh2.kill();
+        let _ = sh2.wait();
+    }
+    // R17-006: custody across the restore (fresh, live,
+    // microsecond window — bare construction is sound here
+    // per the reservation contract).
+    let mut restore_guard = placed.as_ref().map(|_| SilentChildGuard::new(want));
+    drop(_nsflock);
+    locked_restore_hint(&last_before);
+    if let Some(guard) = restore_guard.as_mut() {
+        guard.disarm();
+    }
+    let (mut sh2, replacetick) = match placed {
+        Some(placed) => placed,
+        None => {
+            eprintln!("skip: replacement retake contended");
+            return;
+        }
+    };
+    // RESUME (GREEN: expected-identity refuses the
+    // recycled number — the live birth is not the
+    // transmitted one).
+    {
+        let guard = SilentChildGuard::new_expected(want, orig_tick);
+        assert!(
+            guard.tick.is_none(),
+            "constructor must refuse the recycled number"
+        );
+    } // Drop fires here (unpinned: silent).
+    assert_task_settled_live(
+        want,
+        replacetick,
+        2,
+        "replacement must survive resumed construction",
+    );
+    // Cleanup: retire the replacement, reap sh2.
+    let _ = kill_tick_gated(want, replacetick);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if task_starttime_checked(want) != Ok(Some(replacetick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "replacement must die in cleanup");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = sh2.wait();
+}
+
 /// R16-011: probe-staging failure custody — every staged birth
 /// across the EMFILE/late-pin/gated-kill shapes must disappear
 /// with its status discharged when an injected failure reports.
@@ -4191,7 +4407,9 @@ fn probe_staging_failures_retire_before_report() {
         .expect("sh present");
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _sh_guard = SilentChildGuard::new(sh);
-        let _stranger_guard = SilentChildGuard::new(stranger);
+        // R17-008: expected-identity — the stranger's tick
+        // was read just above (refuse a recycled number).
+        let _stranger_guard = SilentChildGuard::new_expected(stranger, stick);
         panic!("R16011 injected stranger-staging failure");
     }));
     let sstate = task_starttime_checked(stranger);
@@ -5348,6 +5566,82 @@ fn birth_pin_retries_transient_errors() {
     };
     assert_eq!(pin_birth_tick_with(1, gone), None, "gone pins None");
     assert_eq!(*gone_calls.borrow(), 1, "gone must not retry");
+}
+
+/// R17-008: expected-identity pin refuses on mismatch
+/// (scripted reads — toolchain twin of the audit unit
+/// test). Match pins; mismatch and gone refuse WITHOUT
+/// retry (retrying would pin whatever arrives next);
+/// transient errors retry then pin on recovery; persistent
+/// errors exhaust to None.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn expected_pin_refuses_mismatch() {
+    use std::cell::RefCell;
+    // Match pins (single read).
+    let calls = RefCell::new(0);
+    let matched = |_: i32| -> Result<Option<u64>, String> {
+        *calls.borrow_mut() += 1;
+        Ok(Some(42))
+    };
+    assert_eq!(
+        pin_expected_tick_with(1, 42, matched),
+        Some(42),
+        "matching tick must pin"
+    );
+    assert_eq!(*calls.borrow(), 1, "match pins on the first read");
+    // Mismatch refuses without retry.
+    let calls = RefCell::new(0);
+    let mismatched = |_: i32| -> Result<Option<u64>, String> {
+        *calls.borrow_mut() += 1;
+        Ok(Some(43))
+    };
+    assert_eq!(
+        pin_expected_tick_with(1, 42, mismatched),
+        None,
+        "mismatched tick must refuse"
+    );
+    assert_eq!(*calls.borrow(), 1, "mismatch must not retry");
+    // Gone refuses without retry.
+    let calls = RefCell::new(0);
+    let gone = |_: i32| -> Result<Option<u64>, String> {
+        *calls.borrow_mut() += 1;
+        Ok(None)
+    };
+    assert_eq!(
+        pin_expected_tick_with(1, 42, gone),
+        None,
+        "gone must refuse"
+    );
+    assert_eq!(*calls.borrow(), 1, "gone must not retry");
+    // Transient errors retry, then pin on recovery.
+    let script = RefCell::new(vec![
+        Err("blip1".to_string()),
+        Err("blip2".to_string()),
+        Ok(Some(42u64)),
+    ]);
+    let calls = RefCell::new(0);
+    let read = |_: i32| {
+        *calls.borrow_mut() += 1;
+        let mut script = script.borrow_mut();
+        if script.is_empty() {
+            return Ok(Some(42u64));
+        }
+        script.remove(0)
+    };
+    assert_eq!(
+        pin_expected_tick_with(1, 42, read),
+        Some(42),
+        "transient blips must heal by retry"
+    );
+    assert_eq!(*calls.borrow(), 3, "two blips then the pin");
+    // Persistent errors exhaust to None.
+    let persistent = |_: i32| -> Result<Option<u64>, String> { Err("stuck".to_string()) };
+    assert_eq!(
+        pin_expected_tick_with(1, 42, persistent),
+        None,
+        "persistent errors exhaust to None"
+    );
 }
 
 /// R13-006: settle P's Child handle after the ancestry run. When
