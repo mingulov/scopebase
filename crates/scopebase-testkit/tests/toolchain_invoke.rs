@@ -4035,12 +4035,19 @@ fn child_guard_drop_retires_verified_non_child() {
         .read_line(&mut line)
         .expect("grandchild pid readable");
     let grand = line.trim().parse::<i32>().expect("pid parses");
-    // R16-011: custody before the sanity reads (the drop under
-    // test moves this guard into its own scope below).
-    let pinned = SilentChildGuard::new(grand);
+    // R18-004: TRANSMIT at parse — the tick read here is
+    // bound to the published birth (the publisher holds
+    // its child unreaped in `wait` and the sleeper
+    // outlives staging, so no recycle can interpose).
+    // R16-011: custody before the sanity reads (the drop
+    // under test moves this guard into its own scope
+    // below) — expected-identity, so a reap + recycle
+    // between publication and acquisition refuses instead
+    // of authenticating the replacement.
     let tick = task_starttime_checked(grand)
         .expect("grandchild stat readable")
         .expect("grandchild present");
+    let pinned = SilentChildGuard::new_expected(grand, tick);
     // Sanity: live, and not our child (the ECHILD the old
     // path hid behind).
     assert!(
@@ -4141,14 +4148,17 @@ fn adopted_kill_discharges_through_init() {
         let got = unsafe { libc::waitpid(orphan, &mut status, libc::WNOHANG) };
         assert!(got < 0, "adopted sleeper must not be our child");
     }
-    // Pinned drop kills (bare construction: fresh sighting,
-    // contract-sound; R17-007 late-pin covers unreadable
-    // construction).
+    // Pinned drop kills (R18-004: expected-identity
+    // over the transmitted birth — a reap + recycle
+    // between publication and acquisition refuses instead
+    // of authenticating the replacement; a refusal stands
+    // down and the discharge verdict below fails loud).
     {
-        let mut fired = SilentChildGuard::new(orphan);
-        if fired.tick.is_none() {
-            fired.pin(otick);
-        }
+        let fired = SilentChildGuard::new_expected(orphan, otick);
+        assert!(
+            fired.tick.is_some(),
+            "acquisition must pin the transmitted birth"
+        );
     } // Drop fires here.
       // Verdict: DISCHARGED (gone) — init reaps promptly.
       // R17-010: strict evidence — unreadable samples keep
@@ -4452,6 +4462,157 @@ fn child_expected_pin_refuses_recycled_non_child() {
     let _ = sh2.wait();
 }
 
+/// R18-004 (toolchain twin): pausing an actual pipe-pid
+/// caller between publication and acquisition must not grant
+/// authority over a replacement. Stage sh1's sleeper,
+/// transmit (pid, tick), run the pause-scale lifecycle,
+/// steer a DIFFERENT-birth non-child onto the freed number,
+/// then resume the caller-shaped acquisition + drop: the
+/// replacement must survive settled-live. RED (bare
+/// acquisition, the original caller): the first pin
+/// authenticates the replacement and the drop murders it.
+/// GREEN (expected-identity over the transmitted pair): the
+/// constructor refuses and the drop stays silent. Duration
+/// 903 is unique to this test.
+#[test]
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn pipe_acquisition_refuses_recycled_publication() {
+    use std::io::BufRead as _;
+    let _serial = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    let spawn_sh = || {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 903 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns")
+    };
+    let read_sleep = |sh: &mut std::process::Child| -> i32 {
+        let mut line = String::new();
+        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("sleep pid readable");
+        line.trim().parse::<i32>().expect("pid parses")
+    };
+    // TRANSMIT: stage sh1's sleeper, learn (pid, tick).
+    let mut sh1 = spawn_sh();
+    let want = read_sleep(&mut sh1);
+    let orig_tick = task_starttime_checked(want)
+        .expect("transmitted stat readable")
+        .expect("transmitted visible");
+    // Pause-scale lifecycle: the sleeper dies, the shell
+    // reaps it and exits, the number frees.
+    assert!(
+        kill_tick_gated(want, orig_tick),
+        "transmitted sleeper signaled"
+    );
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if sh1.try_wait().expect("sh1 wait").is_some() {
+            break;
+        }
+        assert!(Instant::now() < end, "publishing shell must exit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(task_starttime_checked(want), Ok(None), "number must free");
+    // REPLACE: steer sh2's sleeper (a non-child) onto the
+    // freed number (hint want-1: sh takes want-1, its
+    // sleeper takes want).
+    let _nsflock = ns_last_pid_flock();
+    let mut placed = None;
+    for _ in 0..100 {
+        if !steer_next_pid_unlocked(want - 1) {
+            break;
+        }
+        let mut sh2 = spawn_sh();
+        let sleep = read_sleep(&mut sh2);
+        if sleep == want {
+            match task_starttime_checked(want) {
+                Ok(Some(t)) if t != orig_tick => {
+                    placed = Some((sh2, t));
+                    break;
+                }
+                Ok(Some(_)) => {
+                    let _ = kill_tick_gated(want, orig_tick);
+                    let _ = sh2.kill();
+                    let _ = sh2.wait();
+                    drop(_nsflock);
+                    locked_restore_hint(&last_before);
+                    eprintln!("skip: same-tick retake (S100 — untestable this run)");
+                    return;
+                }
+                _ => {
+                    let _ = sh2.kill();
+                    let _ = sh2.wait();
+                    continue;
+                }
+            }
+        }
+        if let Ok(Some(t)) = task_starttime_checked(sleep) {
+            let _ = kill_tick_gated(sleep, t);
+        }
+        let _ = sh2.kill();
+        let _ = sh2.wait();
+    }
+    drop(_nsflock);
+    locked_restore_hint(&last_before);
+    let (mut sh2, replacetick) = match placed {
+        Some(placed) => placed,
+        None => {
+            eprintln!("skip: replacement retake contended");
+            return;
+        }
+    };
+    assert_ne!(
+        replacetick, orig_tick,
+        "steered replacement must be a different birth (non-vacuity)"
+    );
+    // RESUME (GREEN: expected-identity refuses the
+    // recycled number — the live birth is not the
+    // transmitted one; RED was bare acquisition here,
+    // which pinned the replacement and murdered it).
+    {
+        let acquired = SilentChildGuard::new_expected(want, orig_tick);
+        assert!(
+            acquired.tick.is_none(),
+            "resumed acquisition must refuse the recycled number"
+        );
+    } // Drop fires here (refused: silent).
+    assert_task_settled_live(
+        want,
+        replacetick,
+        2,
+        "replacement must survive resumed acquisition",
+    );
+    // Cleanup: retire the replacement, reap sh2.
+    let _ = kill_tick_gated(want, replacetick);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if task_starttime_checked(want) != Ok(Some(replacetick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "replacement must die in cleanup");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = sh2.wait();
+}
+
 /// R18-003 (toolchain twin): an expected-identity REFUSAL must
 /// stand down — the drop must not run child cleanup over a
 /// number positively known to host another birth. Live owned
@@ -4641,10 +4802,15 @@ fn probe_staging_failures_retire_before_report() {
         .read_line(&mut line)
         .expect("grandchild pid readable");
     let stranger = line.trim().parse::<i32>().expect("pid parses");
-    let mut outer_stranger = SilentChildGuard::new(stranger);
+    // R18-004: TRANSMIT at parse (bound: the publisher
+    // holds its child in `wait`), then expected-identity
+    // custody (a reap + recycle between publication and
+    // acquisition refuses instead of authenticating the
+    // replacement).
     let stick = task_starttime_checked(stranger)
         .expect("stranger stat readable")
         .expect("stranger present");
+    let mut outer_stranger = SilentChildGuard::new_expected(stranger, stick);
     let shtick = task_starttime_checked(sh)
         .expect("sh stat readable")
         .expect("sh present");
@@ -5063,7 +5229,12 @@ fn emfile_probe_child(mode: &str) {
                 .read_line(&mut line)
                 .expect("grandchild pid readable");
             let stranger = line.trim().parse::<i32>().expect("pid parses");
-            _stranger_guard = Some(SilentChildGuard::new(stranger));
+            // R18-004: TRANSMIT at parse (bound: the
+            // publisher holds its child in `wait`).
+            let stranger_tick = task_starttime_checked(stranger)
+                .expect("stranger stat readable")
+                .expect("stranger present");
+            _stranger_guard = Some(SilentChildGuard::new_expected(stranger, stranger_tick));
             assert!(
                 matches!(task_state(stranger), Some(state) if state != 'Z'),
                 "staged stranger must be live"
@@ -5079,26 +5250,27 @@ fn emfile_probe_child(mode: &str) {
         }
         _ => panic!("unknown probe mode {mode}"),
     };
-    // R16-011: staging custody for every mode (covers the
-    // pin reads below plus every later assert — the drop test
-    // moves only the mode guard, so this one still backstops
-    // the tails; all verify silent on happy paths).
-    let _staging_guard = SilentChildGuard::new(pid);
-    // Pin BEFORE any mode-specific pre-step (gone retires
-    // pre-exhaust; the pin must cite the live fixture).
-    let mut guard = SilentChildGuard::new(pid);
+    // R18-004: TRANSMIT before custody — the tick read
+    // here is bound (staging runs pre-exhaustion with
+    // working reads; owned modes hold the reservation
+    // and the stranger mode's publisher holds its child
+    // in `wait`). Expected-identity custody (a reap +
+    // recycle between publication and acquisition refuses
+    // instead of authenticating the replacement; the
+    // R17-007 late-pin below is replaced by refusal, which
+    // stands down per R18-003 — the dedicated recovery
+    // probes keep pin() covered).
     let tick = task_starttime_checked(pid)
         .expect("fixture stat readable")
         .expect("fixture present");
-    // R17-007: pin-before-panic — if construction exhausted
-    // its budget (None) while the explicit read recovered the
-    // tick, late-pin the recovered identity (a bare assert
-    // would unwind through two unpinned guards and ECHILD
-    // past a non-child fixture).
-    if guard.tick.is_none() {
-        eprintln!("R17007 construction pin missed; late-pinning recovered tick");
-        guard.pin(tick);
-    }
+    // R16-011: staging custody for every mode (covers
+    // every later assert — the drop test moves only the
+    // mode guard, so this one still backstops the tails;
+    // all verify silent on happy paths).
+    let _staging_guard = SilentChildGuard::new_expected(pid, tick);
+    // Pin BEFORE any mode-specific pre-step (gone retires
+    // pre-exhaust; the pin must cite the live fixture).
+    let guard = SilentChildGuard::new_expected(pid, tick);
     eprintln!("R15005-PINNED pid={pid} tick={tick}");
     // R16-004: retire+reap A (guard stale-armed), steer B onto
     // the number, zombify B unreaped (the sibling-owned zombie
