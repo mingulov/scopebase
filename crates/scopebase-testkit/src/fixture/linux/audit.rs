@@ -6588,11 +6588,19 @@ mod tests {
                 // ESRCH means free AT PIN TIME, but a recycle
                 // between the snapshot and the pin would leave
                 // replacement children unioned. Re-read: only
-                // a still-free number keeps the union (a live
-                // non-expected holder discards it — the listed
-                // children may be the replacement's).
+                // a still-free number keeps the union (death
+                // orphans genuine children that stay ours).
+                // R20-006: a live non-expected holder reports
+                // unresolved (the re-read cannot tell
+                // death-then-recycle orphans, ours, from
+                // post-install snapshots, strangers —
+                // silent-clear loses the former, keep would
+                // murder the latter).
                 match proc_starttime(pid) {
-                    Ok(Some(now)) if now != started => kids.clear(),
+                    Ok(Some(now)) if now != started => {
+                        unresolved = true;
+                        kids.clear();
+                    }
                     Err(_) => {
                         unresolved = true;
                         kids.clear();
@@ -6609,10 +6617,19 @@ mod tests {
                 // verdict below truncates only subsequent
                 // additions, and the recursion would validate
                 // the strangers' genuine ticks and kill them).
-                // Only a still-expected number keeps the union.
+                // R20-006: a still-expected number keeps the
+                // union, and so does a gone one (death orphans
+                // genuine children that stay ours — Arm 1's
+                // own logic); a reused number reports
+                // unresolved (indistinguishable orphans vs
+                // strangers, as above).
                 match proc_starttime(pid) {
                     Ok(Some(now)) if now == started => {}
-                    Ok(_) => kids.clear(),
+                    Ok(None) => {}
+                    Ok(Some(_)) => {
+                        unresolved = true;
+                        kids.clear();
+                    }
                     Err(_) => {
                         unresolved = true;
                         kids.clear();
@@ -19568,6 +19585,502 @@ mod tests {
         }
         assert!(
             stderr.contains("R19003-PINFAIL-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R20-006: a denied pin over a gone number must KEEP
+    /// the initial union (death orphans genuine children
+    /// that stay ours — Arm 1's own R18-002 logic), never
+    /// silently clear it. Seccomp-denied pidfd_open (EPERM)
+    /// with readable procfs; P killed+reaped inside the
+    /// initial snapshot so the re-read sees gone. RED (this
+    /// shape): the denied arm clears and the frame certifies
+    /// `true` over the live survivor. GREEN: the union is
+    /// kept, the recursion cannot retire without a pidfd,
+    /// and the frame reports unresolved (`false`) with the
+    /// orphan live (no murder, no false proof). Durations
+    /// 101 (stray) / 102 (orphan) are unique to this test.
+    /// Fresh-image probe body — the pidfd-deny filter is
+    /// irreversible and must never be shared with the suite.
+    #[cfg(target_arch = "x86_64")]
+    fn frame_denied_pin_gone_keeps_union_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::time::{Duration, Instant};
+        // Deny pidfd_open FIRST (nothing staged on skip).
+        if install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_err() {
+            eprintln!("skip: seccomp unavailable (no pin denial)");
+            return;
+        }
+        let stray = std::process::Command::new("/bin/sleep")
+            .arg("101")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("stray spawns");
+        let pid = stray.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("stray stat readable")
+            .expect("stray visible");
+        let mut orphan = std::process::Command::new("/bin/sleep")
+            .arg("102")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("orphan spawns");
+        let cpid = orphan.id() as libc::pid_t;
+        let ctick = proc_starttime(cpid)
+            .expect("orphan stat readable")
+            .expect("orphan visible");
+        struct Steer {
+            calls: u32,
+            victim: Option<std::process::Child>,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            calls: 0,
+            victim: Some(stray),
+        });
+        // Short deadline: post-fix the recursion cannot kill
+        // without a pidfd and burns to the deadline by
+        // design (2 s, then unresolved); pre-fix the frame
+        // certifies instantly.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let result = retire_stray_tree_frame_with(pid, tick, deadline, 0, &|_stray| -> (
+            Vec<(libc::pid_t, u64)>,
+            bool,
+        ) {
+            let mut state = state.borrow_mut();
+            state.calls += 1;
+            if state.calls == 1 {
+                // Free the number inside the snapshot: dead
+                // at pin (denied), gone at re-read.
+                let mut victim = state.victim.take().expect("victim staged");
+                assert!(kill_tick_gated(pid, tick), "stray signaled");
+                let _ = victim.wait();
+                assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+                // The frame treats the listed pair as P's
+                // child (the frame_unreadable model).
+                return (vec![(cpid, ctick)], false);
+            }
+            (Vec::new(), false)
+        });
+        // The orphan must be live (kept, never murdered —
+        // true in both shapes; the discriminator is the
+        // verdict below).
+        assert_proc_settled_live(cpid, ctick, 2, "orphan must survive the denied frame");
+        // Cleanup before the verdict (RED runs stay clean).
+        let _ = kill_tick_gated(cpid, ctick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG assist only — our own child.
+            unsafe {
+                libc::waitpid(cpid, &mut status, libc::WNOHANG);
+            }
+            if proc_starttime(cpid) != Ok(Some(ctick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "orphan must die in cleanup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = orphan.wait();
+        assert!(
+            !result,
+            "denied pin over gone must not certify (union kept, orphan unretired)"
+        );
+        eprintln!("R20006-DENIED-GONE-DONE");
+    }
+
+    /// R20-006 wrapper: the denied-gone probe runs
+    /// fresh-image (its pidfd-deny filter must not share the
+    /// suite's threads). In-probe skips propagate as skips.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_denied_pin_gone_keeps_union() {
+        if std::env::var("SCOPEBASE_R20006_DENIED_GONE").is_ok() {
+            frame_denied_pin_gone_keeps_union_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::frame_denied_pin_gone_keeps_union")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R20006_DENIED_GONE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the denied-gone case\n{stderr}"
+        );
+        if let Some(skipped) = stderr.lines().find(|line| line.contains("skip:")) {
+            eprintln!("skip (probe): {skipped}");
+            return;
+        }
+        assert!(
+            stderr.contains("R20006-DENIED-GONE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R20-006: a denied pin over a REUSED number must report
+    /// unresolved, never certify. The re-read cannot tell
+    /// death-then-recycle orphans (ours — the snapshot
+    /// predates death) from post-install snapshots
+    /// (strangers): silent-clear loses the former, keep would
+    /// murder the latter — so unresolved+clear. P killed and
+    /// its number steered-retaken inside the initial
+    /// snapshot; the union names our orphaned child. RED
+    /// (this shape): the denied arm clears without marking
+    /// and the frame certifies `true`. GREEN: `false`, with
+    /// both the orphan and the replacement live (nothing
+    /// signaled). Durations 103 (stray) / 104 (orphan) /
+    /// 106 (replacement) are unique to this test.
+    /// Fresh-image probe body (pidfd-deny filter; steering
+    /// exclusion rides the placement flock).
+    #[cfg(target_arch = "x86_64")]
+    fn frame_denied_pin_reused_reports_unresolved_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        // The retake (kill + steer + spawn) runs on an
+        // UNFILTERED helper thread: steering needs privilege
+        // (direct write is EPERM for uid 1000 despite the
+        // 0666 mode), and the sudo fallback cannot run under
+        // the filter — NO_NEW_PRIVS neuters setuid-sudo
+        // ("no new privileges" refusal, observed). The frame
+        // runs on this thread under the pidfd-deny filter;
+        // the initial snapshot relays one serving request.
+        // Parenthood is per-process, so either thread reaps.
+        struct Shared {
+            ready: bool,
+            req: bool,
+            ack: bool,
+            shutdown: bool,
+            p: Option<(libc::pid_t, u64)>,
+            c: Option<(libc::pid_t, u64)>,
+            outcome: Option<(bool, libc::pid_t, u64)>,
+            orphan_handle: Option<std::process::Child>,
+            retake_handle: Option<std::process::Child>,
+        }
+        let shared = Arc::new(Mutex::new(Shared {
+            ready: false,
+            req: false,
+            ack: false,
+            shutdown: false,
+            p: None,
+            c: None,
+            outcome: None,
+            orphan_handle: None,
+            retake_handle: None,
+        }));
+        // Placement exclusion across the frame AND the
+        // helper's steer+spawn (POSIX locks are per-process:
+        // this held guard covers the helper's unlocked
+        // steer — the helper must never take its own).
+        let _nsflock = ns_last_pid_flock();
+        let hshared = shared.clone();
+        let helper = std::thread::spawn(move || {
+            // On the shutdown path this handle is dropped
+            // unwaited BY DESIGN (the probe reaps the pair
+            // via waitpid — same process, either thread).
+            #[allow(clippy::zombie_processes)]
+            let mut stray = std::process::Command::new("/bin/sleep")
+                .arg("103")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("stray spawns");
+            let pid = stray.id() as libc::pid_t;
+            let tick = proc_starttime(pid)
+                .expect("stray stat readable")
+                .expect("stray visible");
+            let orphan = std::process::Command::new("/bin/sleep")
+                .arg("104")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("orphan spawns");
+            let cpid = orphan.id() as libc::pid_t;
+            let ctick = proc_starttime(cpid)
+                .expect("orphan stat readable")
+                .expect("orphan visible");
+            {
+                let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
+                s.p = Some((pid, tick));
+                s.c = Some((cpid, ctick));
+                s.orphan_handle = Some(orphan);
+                s.ready = true;
+            }
+            // Serve one request (or shut down for the skip
+            // path — never strand the probe past the bound).
+            let end = Instant::now() + Duration::from_secs(30);
+            loop {
+                {
+                    let s = hshared.lock().unwrap_or_else(|p| p.into_inner());
+                    if s.req || s.shutdown {
+                        break;
+                    }
+                }
+                assert!(Instant::now() < end, "helper request never came");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let shutdown = hshared.lock().unwrap_or_else(|p| p.into_inner()).shutdown;
+            if shutdown {
+                return;
+            }
+            // Death-then-recycle, adjacent on this thread
+            // (the µs steer→spawn placement window).
+            assert!(kill_tick_gated(pid, tick), "stray signaled");
+            let _ = stray.wait();
+            assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+            let outcome = if !audit_steer_next_pid_unlocked(pid) {
+                (false, -1, 0)
+            } else {
+                let mut retake = std::process::Command::new("/bin/sleep")
+                    .arg("106")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("replacement spawns");
+                if retake.id() as libc::pid_t != pid {
+                    let _ = retake.kill();
+                    let _ = retake.wait();
+                    (false, -1, 0)
+                } else {
+                    let rtick = proc_starttime(pid)
+                        .expect("replacement stat readable")
+                        .expect("replacement visible");
+                    let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
+                    s.retake_handle = Some(retake);
+                    (true, pid, rtick)
+                }
+            };
+            {
+                let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
+                s.outcome = Some(outcome);
+                s.ack = true;
+            }
+        });
+        // Wait for staging (bounded, loud).
+        let end = Instant::now() + Duration::from_secs(30);
+        let ((pid, tick), (cpid, ctick)) = loop {
+            {
+                let s = shared.lock().unwrap_or_else(|p| p.into_inner());
+                if s.ready {
+                    break (s.p.expect("stray staged"), s.c.expect("orphan staged"));
+                }
+            }
+            assert!(Instant::now() < end, "helper staging never readied");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        // Deny pidfd_open on THIS thread only (the helper
+        // stays unfiltered for its sudo steer).
+        if install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_err() {
+            // Skip WITHOUT stranding: shut the helper down,
+            // take the staged handles, retire the pair.
+            {
+                let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+                s.shutdown = true;
+            }
+            let _ = helper.join();
+            // Staged handles stay parked in shared (dropped at
+            // return): kill by pair + reap via waitpid (same
+            // process — any thread reaps).
+            let _ = kill_tick_gated(pid, tick);
+            let _ = kill_tick_gated(cpid, ctick);
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG assist only — our own children.
+                unsafe {
+                    libc::waitpid(pid, &mut status, libc::WNOHANG);
+                    libc::waitpid(cpid, &mut status, libc::WNOHANG);
+                }
+                if proc_starttime(pid) != Ok(Some(tick)) && proc_starttime(cpid) != Ok(Some(ctick))
+                {
+                    break;
+                }
+                assert!(Instant::now() < end, "staged pair must die in skip cleanup");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            eprintln!("skip: seccomp unavailable (no pin denial)");
+            return;
+        }
+        let calls = std::cell::Cell::new(0u32);
+        let rpair_out = std::cell::Cell::new(None::<(libc::pid_t, u64)>);
+        let cshared = shared.clone();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = retire_stray_tree_frame_with(pid, tick, deadline, 0, &|_stray| -> (
+            Vec<(libc::pid_t, u64)>,
+            bool,
+        ) {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call == 0 {
+                // Relay one serving request to the helper
+                // (death-then-recycle lands here, inside the
+                // snapshot: free at pin — denied — reused at
+                // re-read). Bounded and loud both ways.
+                {
+                    let mut s = cshared.lock().unwrap_or_else(|p| p.into_inner());
+                    s.req = true;
+                }
+                let end = Instant::now() + Duration::from_secs(30);
+                let (hit, rpid, rtick) = loop {
+                    {
+                        let s = cshared.lock().unwrap_or_else(|p| p.into_inner());
+                        if s.ack {
+                            break s.outcome.expect("helper served");
+                        }
+                    }
+                    assert!(Instant::now() < end, "helper serving never acked");
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                if !hit {
+                    return (Vec::new(), true);
+                }
+                rpair_out.set(Some((rpid, rtick)));
+                return (vec![(cpid, ctick)], false);
+            }
+            (Vec::new(), false)
+        });
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        // Steering-miss skip (placement contention in the
+        // helper above — the helper already parked R).
+        let (rpid, rtick) = match rpair_out.get() {
+            Some(pair) => pair,
+            None => {
+                // P is dead (helper killed it); retire live C
+                // before skipping (no strand on the miss).
+                let _ = kill_tick_gated(cpid, ctick);
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let mut status = 0;
+                    // SAFETY: WNOHANG assist only — our own child.
+                    unsafe {
+                        libc::waitpid(cpid, &mut status, libc::WNOHANG);
+                    }
+                    if proc_starttime(cpid) != Ok(Some(ctick)) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "orphan must die in miss cleanup");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let _ = helper.join();
+                eprintln!("skip: replacement steering missed");
+                return;
+            }
+        };
+        if rtick == tick {
+            // Same-tick retake (S100): untestable this run.
+            let _ = kill_tick_gated(cpid, ctick);
+            let _ = kill_tick_gated(rpid, rtick);
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG assist only — our own children.
+                unsafe {
+                    libc::waitpid(cpid, &mut status, libc::WNOHANG);
+                    libc::waitpid(rpid, &mut status, libc::WNOHANG);
+                }
+                if proc_starttime(cpid) != Ok(Some(ctick))
+                    && proc_starttime(rpid) != Ok(Some(rtick))
+                {
+                    break;
+                }
+                assert!(Instant::now() < end, "pair must die in S100 cleanup");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = helper.join();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // Both our orphan and the replacement survive (the
+        // union was discarded, nothing signaled).
+        assert_proc_settled_live(cpid, ctick, 2, "orphan must survive the denied frame");
+        assert_proc_settled_live(rpid, rtick, 2, "replacement must survive the denied frame");
+        // Cleanup before the verdict (RED runs stay clean):
+        // kill by pair + reap (handles stay parked in
+        // shared, dropped at return).
+        let _ = kill_tick_gated(cpid, ctick);
+        let _ = kill_tick_gated(rpid, rtick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG assist only — our own children.
+            unsafe {
+                libc::waitpid(cpid, &mut status, libc::WNOHANG);
+                libc::waitpid(rpid, &mut status, libc::WNOHANG);
+            }
+            if proc_starttime(cpid) != Ok(Some(ctick)) && proc_starttime(rpid) != Ok(Some(rtick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "pair must die in cleanup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = helper.join();
+        assert!(
+            !result,
+            "denied pin over reuse must not certify (unresolved, never true)"
+        );
+        eprintln!("R20006-DENIED-REUSED-DONE");
+    }
+
+    /// R20-006 wrapper: the denied-reused probe runs
+    /// fresh-image (its pidfd-deny filter must not share the
+    /// suite's threads). In-probe skips propagate as skips.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_denied_pin_reused_reports_unresolved() {
+        if std::env::var("SCOPEBASE_R20006_DENIED_REUSED").is_ok() {
+            frame_denied_pin_reused_reports_unresolved_probe();
+            return;
+        }
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::frame_denied_pin_reused_reports_unresolved")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R20006_DENIED_REUSED", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must complete the denied-reused case\n{stderr}"
+        );
+        if let Some(skipped) = stderr.lines().find(|line| line.contains("skip:")) {
+            eprintln!("skip (probe): {skipped}");
+            return;
+        }
+        assert!(
+            stderr.contains("R20006-DENIED-REUSED-DONE"),
             "probe must cite completion\n{stderr}"
         );
     }
