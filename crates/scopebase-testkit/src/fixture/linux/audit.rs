@@ -3525,8 +3525,9 @@ mod tests {
         // see the old complete record or the new complete
         // record, never the truncate-then-write tear (an
         // empty-after-truncate file reads back as silent
-        // unpublished over a live writer). The tmp is removed on
-        // every failure path (no litter).
+        // unpublished over a live writer). A tmp WE created is
+        // removed on every failure below (no litter); a refused
+        // claim removes nothing (R15-001).
         // IR-001: the tmp is claimed through the same O_EXCL
         // helper as the pidfile — a planted symlink/fifo
         // refuses or reclaims before any byte is written (the
@@ -3537,13 +3538,23 @@ mod tests {
             use std::io::Write as _;
             let mut file = claim_excl_file(std::path::Path::new(&tmp), "publish tmp")
                 .map_err(std::io::Error::other)?;
-            file.write_all(format!("{pid}:{started}").as_bytes())?;
-            drop(file);
-            std::fs::rename(&tmp, path)?;
-            Ok(())
+            // R15-001: the claim above created (or reclaimed-then-
+            // created) the tmp — it is OURS from here, so only
+            // failures below clean it. A claim refusal (foreign
+            // plant, reclaim-race re-plant) returns before this
+            // point and must never unlink what it refused.
+            let inner = (|| -> std::io::Result<()> {
+                file.write_all(format!("{pid}:{started}").as_bytes())?;
+                drop(file);
+                std::fs::rename(&tmp, path)?;
+                Ok(())
+            })();
+            if inner.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            inner
         })();
         if let Err(error) = published {
-            let _ = std::fs::remove_file(&tmp);
             // R14-003: retire the known writer BEFORE failing
             // loud — a panic that skips retirement strands it
             // while the parent trusts a stale record.
@@ -8219,6 +8230,96 @@ mod tests {
             content, b"ir001-sentinel",
             "publish must write no byte through a planted tmp symlink"
         );
+    }
+
+    /// R15-001: refusing a foreign-owned tmp must not delete it.
+    /// The claim helper refuses foreign plants, but the publish
+    /// error handler unconditionally removes the tmp path — a
+    /// privileged runner (or any runner in a non-sticky
+    /// directory) deletes the foreign file it just refused.
+    /// Staged in an owned non-sticky directory (no sticky-bit
+    /// rescue): a root-owned tmp plant with known content.
+    /// Pre-fix the refusal still unlinks it (RED: inode gone);
+    /// post-fix the plant survives with inode and content
+    /// intact while the owned writer still retires (GREEN).
+    /// Sudo-gated (the plant); skips as root (the plant would
+    /// be own-uid, taking the reclaim path instead of refusal).
+    /// Duration 56 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_tmp_foreign_refusal_deletes_nothing() {
+        use std::os::unix::fs::MetadataExt as _;
+        struct EnvGuard;
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                std::env::remove_var(GRANDCHILD_PIDFILE_ENV);
+            }
+        }
+        // IR-007 discipline: as root the sudo plant is own-uid
+        // (no foreign discriminator) — skip before staging.
+        if running_as_root() {
+            eprintln!("skip: root-owned plant is not foreign to root");
+            return;
+        }
+        let stem = format!("scopebase-grandchild-r15001a-{}", std::process::id());
+        let dir = std::env::temp_dir().join(format!("{stem}.dir"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("rendezvous dir created");
+        let pidfile = dir.join("writer.pid");
+        let tmp = std::path::PathBuf::from(format!("{}.tmp", pidfile.display()));
+        claim_pidfile(&pidfile).expect("rendezvous claimed");
+        let planted = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("sh")
+            .arg("-c")
+            .arg(format!("echo r15001-foreign > {}", tmp.display()))
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !planted {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("skip: passwordless sudo unavailable (no foreign plant)");
+            return;
+        }
+        let before = std::fs::symlink_metadata(&tmp).expect("plant statted");
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("56")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let _lock = RENDEZVOUS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(GRANDCHILD_PIDFILE_ENV, &pidfile);
+        let _env_guard = EnvGuard;
+        let failed = std::panic::catch_unwind(|| {
+            publish_reported_grandchild(&GrandchildState::Live(wpid, wtick))
+        });
+        // Observe before cleanup: foreign inode + content, and
+        // writer retirement.
+        let after = std::fs::symlink_metadata(&tmp).ok();
+        let content = std::fs::read_to_string(&tmp).unwrap_or_default();
+        let retired = proc_starttime(wpid) != Ok(Some(wtick));
+        unsafe { libc::kill(wpid, libc::SIGKILL) };
+        let _ = writer.wait();
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(failed.is_err(), "foreign tmp plant must refuse loud");
+        assert!(
+            after.is_some_and(|meta| meta.ino() == before.ino()),
+            "refusal must not delete the foreign plant"
+        );
+        assert!(
+            content.contains("r15001-foreign"),
+            "foreign plant content must survive refusal, got: {content:?}"
+        );
+        assert!(retired, "writer must retire before the loud refusal");
     }
 
     /// IR-003: an unreadable firstborn stat must retire the
