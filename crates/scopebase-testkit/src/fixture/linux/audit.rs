@@ -4600,7 +4600,7 @@ mod tests {
         use super::super::seccomp::{DenyAction, install_deny_one};
         use std::os::unix::process::CommandExt as _;
         use std::time::{Duration, Instant};
-        let denied = mode != "publish-ok";
+        let denied = mode != "publish-ok" && mode != "publish-lying";
         // Stage the live writer (sleep 49: unique to this probe
         // family).
         let mut writer = std::process::Command::new("/bin/sleep")
@@ -4659,6 +4659,10 @@ mod tests {
                 // probe (EISDIR) — no chmod games.
                 std::env::set_var(GRANDCHILD_PIDFILE_ENV, std::env::temp_dir().as_os_str());
             }
+            // R19-016: lying mode never publishes (no pidfile
+            // setup — it reports retired=true over a live
+            // writer to test the verdict order).
+            "publish-lying" => {}
             "publish-nonutf8" => {
                 use std::os::unix::ffi::OsStrExt as _;
                 let raw = b"/tmp/scopebase-r15008-\xff-nonutf8.pid";
@@ -4709,6 +4713,13 @@ mod tests {
                     Ok(_) => panic!("timeout body must diverge"),
                 }
             }
+            // R19-016: lying mode — report retired=true
+            // over the LIVE writer (never published, never
+            // retired): the verdict below must fail on the
+            // live writer BEFORE any teardown repairs it.
+            "publish-lying" => {
+                format!("(writer pid={wpid} starttime={wtick} retired=true)")
+            }
             _ => {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     publish_reported_grandchild(&GrandchildState::Live(wpid, wtick));
@@ -4729,7 +4740,7 @@ mod tests {
                 "timeout must cite the unresolved tuple, got: {text}"
             );
         } else {
-            let retired = mode == "publish-ok";
+            let retired = mode == "publish-ok" || mode == "publish-lying";
             assert!(
                 text.contains(&format!(
                     "(writer pid={wpid} starttime={wtick} retired={retired})"
@@ -4749,17 +4760,21 @@ mod tests {
                 "denied writer must survive (else the denial never took)",
             );
         } else {
-            // The ok arm retires before reporting: gone now
-            // (publish's retire already raw-reaped through the
-            // gone-await — the handle is stale: a handle wait
-            // ECHILDs on the normal path and blocks on a live
-            // writer if the retire timed out. Tick-gated
-            // teardown only — never touch a recycled number).
-            let _ = retire_tick_gated_audit_child(wpid, wtick);
+            // R19-016: observe-before-cleanup (R12-014) —
+            // assert-gone on PUBLISH's work alone FIRST: a
+            // publisher reporting retired=true over a live
+            // writer must fail HERE (the teardown below must
+            // not manufacture the oracle's result).
             // Original-gone (not number-free — suite activity
             // may recycle the freed number between retire and
             // this read; a different-tick holder is not ours).
             assert_audit_child_gone(wpid, wtick, "retired writer");
+            // Tick-gated teardown after the verdict (never
+            // touch a recycled number; the handle is stale:
+            // publish's retire already raw-reaped through the
+            // gone-await). RED paths ride the armed guard
+            // drop above (same tick-gated retire).
+            let _ = retire_tick_gated_audit_child(wpid, wtick);
             writer_guard.disarm();
         }
         // Loud cleanup (plain kill+wait need no pidfd — the
@@ -4933,6 +4948,49 @@ mod tests {
             stderr.contains(&format!("(writer pid={pid} starttime={tick} retired=true)")),
             "publish stderr must cite the tuple\n{stderr}"
         );
+    }
+
+    /// R19-016: regression — a publisher that falsely reports
+    /// retirement with the writer preserved: the named
+    /// gone-assertion must fail BEFORE any cleanup repairs it
+    /// (observe-before-cleanup (R12-014)). Child-must-fail
+    /// shape: the probe panics at the verdict over the live
+    /// writer, and its unwind-drop guard retires the
+    /// preserved writer (no stray — asserted below via the
+    /// pinned identity).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publish_false_retirement_fails_before_cleanup() {
+        if let Ok(mode) = std::env::var("SCOPEBASE_R15008_MODE") {
+            r15008_probe_child(&mode);
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::publish_false_retirement_fails_before_cleanup")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R15008_MODE", "publish-lying")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "lying publisher must fail the verdict\n{stderr}"
+        );
+        assert!(
+            stderr.contains("survived retirement"),
+            "must fail at the named gone-assert\n{stderr}"
+        );
+        // No stray: the probe's unwind-drop guard retired the
+        // preserved writer (owned child: killed+reaped
+        // in-probe; the number is non-frontier by exit-delay
+        // (probe exited), so birth-gone is sound here).
+        let (pid, tick) = r15008_probe_pinned(&stderr, "publish-lying");
+        assert_audit_child_gone(pid, tick, "lying-mode writer");
     }
 
     /// S140-round9: the re-exec'd denial probe (see
