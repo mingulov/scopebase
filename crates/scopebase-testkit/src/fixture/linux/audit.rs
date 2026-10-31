@@ -5954,6 +5954,253 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     const PROBE_OUTPUT_CAP: usize = 1 << 20;
 
+    /// R17-001: snapshot the live direct children of a
+    /// verified-live stray as (pid, starttime) pairs. Each
+    /// number listed in the stray's `children` files is
+    /// read TWICE (parenthood + tick per read); the pair
+    /// is recorded only when both reads agree AND name
+    /// the stray as parent. Agreement binds the pair to
+    /// one stable holder (a recycle between the reads
+    /// shows as a changed tick and skips quiet — the
+    /// 1 ms union re-captures a flapped child on the
+    /// next poll); parenthood binds it to OUR child (a
+    /// number recycled between listing and reading names
+    /// a stranger, which the check skips — never
+    /// recorded, never signaled). Returns the pairs plus
+    /// an unresolved flag: true when any listing or read
+    /// failed on a live-or-unknown holder (R11-005:
+    /// unreadable is never absence). A listing failure
+    /// on a now-DEAD `pid` reads as EMPTY (death
+    /// reparented the children away — nothing to
+    /// expand), and a listed child that died-or-recycled
+    /// before its own reads skips QUIET (its holder is
+    /// gone — a recycled number could not host another
+    /// birth otherwise). Never panics; never signals.
+    #[cfg(target_arch = "x86_64")]
+    fn snapshot_stray_children(pid: libc::pid_t) -> (Vec<(libc::pid_t, u64)>, bool) {
+        let mut kids = Vec::new();
+        let mut unresolved = false;
+        if pid <= 1 {
+            return (kids, unresolved);
+        }
+        let tasks = format!("/proc/{pid}/task");
+        let entries = match std::fs::read_dir(&tasks) {
+            Ok(entries) => entries,
+            Err(_) => {
+                // Listing failed: empty when `pid` died
+                // (children reparented away — nothing to
+                // expand), unresolved when live (a live
+                // stray's children are knowable) or
+                // unknown.
+                match proc_starttime(pid) {
+                    Ok(None) => {}
+                    Ok(Some(_)) | Err(_) => unresolved = true,
+                }
+                return (kids, unresolved);
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path().join("children");
+            let list = match std::fs::read_to_string(&path) {
+                Ok(list) => list,
+                Err(_) => {
+                    unresolved = true;
+                    continue;
+                }
+            };
+            for word in list.split_whitespace() {
+                let child = match word.parse::<libc::pid_t>() {
+                    Ok(child) => child,
+                    Err(_) => continue,
+                };
+                // Two agreeing parenthood+tick reads, or
+                // nothing: disagreement is an observed
+                // recycle (skip quiet — the union heals);
+                // death is gone-quiet; only unreadable
+                // is unresolved-loud.
+                let first = proc_ppid_and_starttime(child);
+                let second = proc_ppid_and_starttime(child);
+                match (first, second) {
+                    (Ok(Some((ppid, tick))), Ok(Some((ppid2, tick2))))
+                        if ppid == pid && ppid2 == pid && tick == tick2 =>
+                    {
+                        kids.push((child, tick));
+                    }
+                    (Ok(_), Ok(_)) => {}
+                    _ => unresolved = true,
+                }
+            }
+        }
+        // Dedup: one pair per number (threads' children
+        // files union; the same child may repeat).
+        kids.sort();
+        kids.dedup();
+        (kids, unresolved)
+    }
+
+    /// R17-001: one frame of the stray-tree retirement.
+    /// `snapshot` names the frame's children source (the
+    /// `_with` seam models a blind observer — IR1
+    /// precedent); production passes
+    /// [`snapshot_stray_children`]. The frame verifies
+    /// (pid, started), snapshots the live children,
+    /// kills ONLY the stray (pin + tick re-gate +
+    /// pidfd SIGKILL, mirroring
+    /// [`retire_known_stray_best_effort`]), then awaits
+    /// the stray's death while UNIONING a fresh snapshot
+    /// every millisecond (births between the snapshot
+    /// and the cleanup land in the retire set — a birth
+    /// that also reparents inside one final poll gap
+    /// still escapes, S100-µs-class), and finally
+    /// retires every unioned child through its own
+    /// frame (fresh pin + tick gate per child — the
+    /// recorded tick is the independent expectation,
+    /// exactly like a staged union stray). Death before
+    /// the frame reads as gone (same outcomes as the
+    /// single path: absent-or-recycled certifies, only
+    /// unreadable is unresolved). Returns true only
+    /// when the stray is proven gone, every unioned
+    /// child retired, and nothing read unreadable.
+    /// Residuals: same-jiffy recycle onto a snapshotted
+    /// number (S100 — the already-accepted R11-014
+    /// class); depth cap 16 (anti-forkbomb loud-false;
+    /// fixture trees are depth 2); one shared 5 s tree
+    /// budget (bounded total, tighter per member than
+    /// the single path's 5 s each).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stray_tree_frame_with(
+        pid: libc::pid_t,
+        started: u64,
+        deadline: std::time::Instant,
+        depth: u32,
+        snapshot: &impl Fn(libc::pid_t) -> (Vec<(libc::pid_t, u64)>, bool),
+    ) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match proc_starttime(pid) {
+            Ok(Some(now)) if now == started => {}
+            Ok(_) => return true,
+            Err(_) => return false,
+        }
+        let (mut kids, mut unresolved) = snapshot(pid);
+        // Kill ONLY the stray (mirrors the single path's
+        // pin + re-gate + pidfd kill; the await below
+        // unions births while the death lands).
+        let mut pid_gone = false;
+        let pin = match super::super::seccomp::pidfd_open_raw(pid) {
+            Ok(pin) => pin,
+            Err(errno) if errno == libc::ESRCH => {
+                pid_gone = true;
+                -1
+            }
+            Err(_) => {
+                unresolved = true;
+                -1
+            }
+        };
+        if pin >= 0 {
+            match proc_starttime(pid) {
+                Ok(Some(now)) if now == started => {
+                    // SAFETY: pidfd_send_signal(pidfd,
+                    // SIGKILL, NULL, 0).
+                    unsafe {
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            pin as libc::c_long,
+                            libc::SIGKILL as libc::c_long,
+                            0 as libc::c_long,
+                            0 as libc::c_long,
+                        );
+                    }
+                }
+                Ok(_) => pid_gone = true,
+                Err(_) => unresolved = true,
+            }
+            // SAFETY: pin owned by this scope.
+            unsafe { libc::close(pin) };
+        }
+        // Await the stray's death, unioning a fresh
+        // snapshot per poll (IR1 gate shape: absence
+        // and reuse certify WITHOUT waiting; unreadable
+        // keeps polling, never claimed gone).
+        if !pid_gone {
+            loop {
+                // Union FIRST, gate second: a birth that
+                // landed between the kill and this poll
+                // must join the retire set even when the
+                // gate already reads gone (a gate-first
+                // order skips the union on instant death
+                // — the flake that failed the blind-seam
+                // test under full-suite load).
+                let (fresh, fresh_unresolved) = snapshot(pid);
+                unresolved |= fresh_unresolved;
+                for pair in fresh {
+                    if !kids.contains(&pair) {
+                        kids.push(pair);
+                    }
+                }
+                match proc_starttime(pid) {
+                    Ok(None) => {
+                        pid_gone = true;
+                        break;
+                    }
+                    Ok(Some(now)) if now != started => {
+                        pid_gone = true;
+                        break;
+                    }
+                    Ok(Some(_)) => {
+                        // SAFETY: waitpid on the verified
+                        // holder; reaps an adopted
+                        // zombie, ECHILD otherwise —
+                        // always ignored.
+                        let mut status = 0;
+                        unsafe {
+                            libc::waitpid(pid, &mut status, libc::WNOHANG);
+                        }
+                    }
+                    Err(_) => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        if !pid_gone || unresolved {
+            // Best effort continues below (kill what the
+            // union captured) but the outcome is already
+            // unresolved — still retire the children so a
+            // loud failure never strands what we know.
+            for (child, tick) in &kids {
+                let _ = retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot);
+            }
+            return false;
+        }
+        for (child, tick) in &kids {
+            if !retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// R17-001: best-effort retirement of one stray AND
+    /// the live subtree born under it (births between
+    /// the observation snapshot and the cleanup retire
+    /// with the stray instead of parking). One shared
+    /// 5 s tree budget. Never panics.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stray_tree_best_effort(pid: libc::pid_t, started: u64) -> bool {
+        retire_stray_tree_frame_with(
+            pid,
+            started,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            0,
+            &snapshot_stray_children,
+        )
+    }
+
     /// R12-005: best-effort retirement of one KNOWN stray
     /// (a task the caller knows holds the probe's pipes from
     /// OUTSIDE the probe group, where the group signal cannot
@@ -6039,7 +6286,9 @@ mod tests {
     /// still reaps; anything else skips without waiting);
     /// (c) each known stray (a pipe-holder OUTSIDE the probe
     /// group, where killpg cannot reach) is retired by (pin,
-    /// starttime) identity.
+    /// starttime) identity — R17-001: with its live
+    /// subtree (births between the observation snapshot
+    /// and the cleanup retire with the stray).
     /// Residuals: a regroup in the µs anchor-read→signal window
     /// (no atomic check-and-killpg exists); a same-tick number
     /// recycle still kills+reaps as ours (S100-class); a mixed
@@ -6241,7 +6490,7 @@ mod tests {
         // disappearance proof (an expiry that leaves a stray
         // alive must say so, never claim a clean group).
         for (pid, started) in strays {
-            let gone = retire_known_stray_best_effort(*pid, *started);
+            let gone = retire_stray_tree_best_effort(*pid, *started);
             eprintln!("expiry retired stray {pid} (gone: {gone})");
         }
         // No Child-handle wait here by design (not even a
@@ -13120,6 +13369,255 @@ mod tests {
         );
     }
 
+    /// R17-001-RED-1: mid-only observed union. The
+    /// R16-001 NOPUBLISH staging is mirrored exactly,
+    /// but the parent-observed list names ONLY the
+    /// middleman: the writer's birth was never observed
+    /// (observer gap, not death). The union is therefore
+    /// just the mid; the writer is a live, unlisted
+    /// child of the retired stray. RED: the expiry loop
+    /// retires the mid alone and parks the writer.
+    /// GREEN requires re-expanding each retired stray
+    /// into its live children.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn mid_only_union_retires_unobserved_writer() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r17001-mid-only-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(R16001_NOPUBLISH_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn mid-only subreaper probe");
+        let id = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(id);
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        let end = Instant::now() + Duration::from_secs(60);
+        let mid = loop {
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before middleman birth (fixture broken)"
+            );
+            assert!(Instant::now() < end, "middleman never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                break mid;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut mid_guard = FixtureGuard::new(mid);
+        // SAFETY: SIGSTOP to our own probe child (freezes the
+        // runner; the middleman runs on and forks the writer).
+        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
+        let end = Instant::now() + Duration::from_secs(60);
+        let (writer, writer_tick) = loop {
+            if let Some(born) = middleman_first_child(mid) {
+                if let Ok(Some(tick)) = proc_starttime(born) {
+                    break (born, tick);
+                }
+            }
+            assert!(Instant::now() < end, "writer never born (60s)");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut writer_guard = FixtureGuard::new(writer);
+        let mid_tick = proc_starttime(mid)
+            .expect("middleman stat readable")
+            .expect("middleman visible");
+        // The hole staged: NOTHING published, and the
+        // parent observed ONLY the middleman.
+        let record = std::fs::read_to_string(&pidfile).expect("pidfile readable");
+        assert!(
+            record.trim().is_empty(),
+            "mid-only probe must publish nothing, got: {record:?}"
+        );
+        // SAFETY: SIGKILL to our own stopped probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGKILL) }, 0, "probe kill");
+        let _ = child.wait();
+        probe_guard.disarm();
+        let published = read_published_grandchild_strays(&pidfile);
+        assert!(
+            published.is_empty(),
+            "stage must be unpublished, got: {published:?}"
+        );
+        // R17-001: the observed union is MID-ONLY (the
+        // writer birth was never observed). The expiry
+        // must still retire the writer by re-expansion.
+        let strays = union_parent_observed_strays(&published, &[(mid, mid_tick)]);
+        let end = Instant::now() + Duration::from_secs(3);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        // Observe before cleanup (R12-014): capture the evidence,
+        // retire remainders so RED runs stay clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        let mid_gone = await_proc_gone_reaping(mid, mid_tick, Duration::from_secs(2));
+        if !writer_gone {
+            let _ = retire_known_stray_best_effort(writer, writer_tick);
+        } else {
+            writer_guard.disarm();
+        }
+        if !mid_gone {
+            let _ = retire_known_stray_best_effort(mid, mid_tick);
+        } else {
+            mid_guard.disarm();
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            writer_gone,
+            "mid-only union must retire the never-observed writer"
+        );
+        assert!(
+            mid_gone,
+            "mid-only union must retire the observed middleman"
+        );
+    }
+
+    /// R17-001: a blind first snapshot heals through the
+    /// union. The seam models "birth between the
+    /// snapshot and the cleanup" by INJECTION (not
+    /// timing): the FIRST snapshot call reports empty
+    /// (the writer's birth never observed), the SECOND
+    /// reports the writer's pair (the observer learns
+    /// the birth during cleanup), and every later call
+    /// reads the live tree. Call order is deterministic
+    /// (the frame is single-threaded: pre-kill snapshot,
+    /// then one union per death-await poll, union-first
+    /// so the learning poll always runs). The frame
+    /// kills the learned pair through its real pin +
+    /// tick gate and retires both generations. The test
+    /// asserts independently observed disappearance
+    /// (not just the return — a merge-disabled mutant
+    /// returns true with the writer live, the exact
+    /// silent-strand class). The production snapshot's
+    /// own parenthood gate rides RED-1, not this seam.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn blind_first_snapshot_heals_through_union() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("probe test binary path");
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r17001-blind-union-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        let mut child = std::process::Command::new(exe)
+            .arg(SUBREAPER_PROBE_PATH)
+            .arg("--exact")
+            .env(SUBREAPER_PROBE_ENV, "1")
+            .env(R16001_NOPUBLISH_ENV, "1")
+            .env(GRANDCHILD_PIDFILE_ENV, &pidfile)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn blind-union subreaper probe");
+        let id = child.id() as libc::pid_t;
+        let mut probe_guard = FixtureGuard::new(id);
+        let end = Instant::now() + Duration::from_secs(60);
+        let mid = loop {
+            assert!(
+                child.try_wait().expect("probe wait").is_none(),
+                "probe completed before middleman birth (fixture broken)"
+            );
+            assert!(Instant::now() < end, "middleman never born (60s)");
+            if let Some(mid) = middleman_first_child(id) {
+                break mid;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut mid_guard = FixtureGuard::new(mid);
+        // SAFETY: SIGSTOP to our own probe child (freezes the
+        // runner; the middleman runs on and forks the writer).
+        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
+        let end = Instant::now() + Duration::from_secs(60);
+        let (writer, writer_tick) = loop {
+            if let Some(born) = middleman_first_child(mid) {
+                if let Ok(Some(tick)) = proc_starttime(born) {
+                    break (born, tick);
+                }
+            }
+            assert!(Instant::now() < end, "writer never born (60s)");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let mut writer_guard = FixtureGuard::new(writer);
+        let mid_tick = proc_starttime(mid)
+            .expect("middleman stat readable")
+            .expect("middleman visible");
+        // Kill and reap the outer BEFORE the frame (the
+        // R16-001 shape — orphans reparent to init, which
+        // reaps, so disappearance is provable).
+        // SAFETY: SIGKILL to our own stopped probe child.
+        assert_eq!(unsafe { libc::kill(id, libc::SIGKILL) }, 0, "probe kill");
+        let _ = child.wait();
+        probe_guard.disarm();
+        // The blind observer: first snapshot call sees
+        // nothing (unobserved birth); the second learns
+        // the writer's pair (birth observed during
+        // cleanup); every later call reads the live
+        // tree. Count-keyed (the frame's call order is
+        // deterministic), so mid's death speed cannot
+        // flake the capture.
+        let calls = std::cell::Cell::new(0u32);
+        let blind_first = |stray: libc::pid_t| {
+            let call = calls.get();
+            calls.set(call + 1);
+            if stray == mid && call == 0 {
+                (Vec::new(), false)
+            } else if stray == mid && call == 1 {
+                (vec![(writer, writer_tick)], false)
+            } else {
+                snapshot_stray_children(stray)
+            }
+        };
+        let retired = retire_stray_tree_frame_with(
+            mid,
+            mid_tick,
+            Instant::now() + Duration::from_secs(5),
+            0,
+            &blind_first,
+        );
+        // Observe before cleanup (R12-014): capture the evidence,
+        // retire remainders so RED runs stay clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, writer_tick, Duration::from_secs(2));
+        let mid_gone = await_proc_gone_reaping(mid, mid_tick, Duration::from_secs(2));
+        if !writer_gone {
+            let _ = retire_known_stray_best_effort(writer, writer_tick);
+        } else {
+            writer_guard.disarm();
+        }
+        if !mid_gone {
+            let _ = retire_known_stray_best_effort(mid, mid_tick);
+        } else {
+            mid_guard.disarm();
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            retired,
+            "blind-first frame must report both generations retired"
+        );
+        assert!(
+            writer_gone,
+            "blind-first union must retire the unobserved writer"
+        );
+        assert!(mid_gone, "blind-first union must retire the middleman");
+    }
+
     /// R11-005: starttime of the CURRENT holder of `pid`
     /// (field 22 of /proc/PID/stat). Ok(None) is proven
     /// absence (ENOENT only); Err is unreadable-or-unparseable
@@ -13141,6 +13639,56 @@ mod tests {
             Some(starttime) => Ok(Some(starttime)),
             None => Err(format!("task {pid} stat unparseable")),
         }
+    }
+
+    /// R17-001: (parent pid, starttime) of the CURRENT
+    /// holder of `pid` (fields 4 and 22 of one
+    /// /proc/PID/stat read — a single read names a
+    /// single holder, so the pair is consistent). Same
+    /// absence contract as [`proc_starttime`]: Ok(None)
+    /// is proven absence (ENOENT only); Err is
+    /// unreadable-or-unparseable (never absence). The
+    /// stray snapshot's parenthood gate shares this one
+    /// parser.
+    #[cfg(target_arch = "x86_64")]
+    fn proc_ppid_and_starttime(pid: libc::pid_t) -> Result<Option<(libc::pid_t, u64)>, String> {
+        let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(row) => row,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("task {pid} stat unreadable: {error}")),
+        };
+        match (|| {
+            let after_comm = row.rsplit_once(") ")?.1;
+            let mut fields = after_comm.split_whitespace();
+            let ppid = fields.nth(1)?.parse().ok()?;
+            let starttime = fields.nth(17)?.parse().ok()?;
+            Some((ppid, starttime))
+        })() {
+            Some(pair) => Ok(Some(pair)),
+            None => Err(format!("task {pid} stat unparseable")),
+        }
+    }
+
+    /// R17-001: the (ppid, starttime) reader names our
+    /// own parent and agrees with the starttime reader
+    /// (deterministic field-index pin — an off-by-one
+    /// here would silently mis-bind every snapshot
+    /// pair; the death arms ride the integration
+    /// paths, where frames meet dead tasks constantly).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stat_pair_names_own_parent() {
+        let me = std::process::id() as libc::pid_t;
+        // SAFETY: getppid takes no pointers.
+        let parent = unsafe { libc::getppid() };
+        let (ppid, tick) = proc_ppid_and_starttime(me)
+            .expect("own stat readable")
+            .expect("own task visible");
+        assert_eq!(ppid, parent, "ppid field must name our parent");
+        let tick2 = proc_starttime(me)
+            .expect("own stat readable")
+            .expect("own task visible");
+        assert_eq!(tick, tick2, "starttime must match the starttime reader");
     }
 
     /// R11-005: a zombie stand-in holding the awaited number
