@@ -5715,41 +5715,12 @@ fn retire_unparsed_publisher_group(
         libc::killpg(pubpid, libc::SIGKILL);
         libc::kill(pubpid, libc::SIGKILL);
     }
-    // Pinned drain (mirror of the lib drain): leader to
-    // ZOMBIE (pin STILL held — unreaped throughout) + every
-    // other member absent (watched touch-free — nothing
-    // here is ever waited on (R22-001 — waits steal)). A
-    // mid-drain pin release panics at once (never proceed
-    // unpinned); unreadable polls through (transient
-    // outage); a stuck drain panics with the member
-    // evidence at the bound.
-    let end = Instant::now() + Duration::from_secs(5);
-    loop {
-        match task_starttime_checked(pubpid) {
-            Ok(Some(now)) if now == pubtick => {}
-            Ok(_) => panic!(
-                "unparsed publisher {pubpid} pin released mid-drain \
-                 (reaped behind our back — refused to proceed unpinned)"
-            ),
-            Err(_) => {}
-        }
-        let zombie = task_state(pubpid) == Some('Z');
-        let members: Vec<i32> = enumerate_group_members(pubpid)
-            .iter()
-            .map(|member| member.pid)
-            .filter(|pid| *pid != pubpid)
-            .collect();
-        if zombie && members.is_empty() {
-            break;
-        }
-        if Instant::now() >= end {
-            panic!(
-                "unparsed publisher {pubpid} group drain stuck \
-                 (leader zombie: {zombie}; members: {members:?})"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    drain_pinned_group(
+        pubpid,
+        pubtick,
+        "unparsed publisher",
+        Duration::from_secs(5),
+    );
     // Reap the leader through its handle (status kept —
     // instant: already zombie).
     let start = Instant::now();
@@ -5773,6 +5744,141 @@ fn retire_unparsed_publisher_group(
         "unparsed publisher {pubpid} group survived the retire"
     );
     status
+}
+
+/// R22-002 (toolchain twin): pinned group drain shared by
+/// the unparsed retire and the publisher-cell branches —
+/// mirror of the lib helper (leader to ZOMBIE with the pin
+/// held throughout + every other member absent, watched
+/// touch-free; mid-drain pin release panics at once).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn drain_pinned_group(pubpid: i32, pubtick: u64, what: &str, timeout: std::time::Duration) {
+    use std::time::{Duration, Instant};
+    let end = Instant::now() + timeout;
+    loop {
+        match task_starttime_checked(pubpid) {
+            Ok(Some(now)) if now == pubtick => {}
+            Ok(_) => panic!(
+                "{what} {pubpid} pin released mid-drain \
+                 (reaped behind our back — refused to proceed unpinned)"
+            ),
+            Err(_) => {}
+        }
+        let zombie = task_state(pubpid) == Some('Z');
+        let members: Vec<i32> = enumerate_group_members(pubpid)
+            .iter()
+            .map(|member| member.pid)
+            .filter(|pid| *pid != pubpid)
+            .collect();
+        if zombie && members.is_empty() {
+            return;
+        }
+        if Instant::now() >= end {
+            panic!(
+                "{what} {pubpid} group drain stuck \
+                 (leader zombie: {zombie}; members: {members:?})"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// R22-002 (toolchain twin): retire a HUNG publisher group —
+/// mirror of the lib fn (re-pin first: reaped/recycled →
+/// panic WITHOUT killing; kill + killpg pinned → pinned
+/// settle → bounded WNOHANG-only handle reap). Returns the
+/// leader's exit status. Caller judges hung-ness.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_hung_publisher_group(
+    publisher: &mut std::process::Child,
+    pubpid: i32,
+    pubtick: u64,
+) -> std::process::ExitStatus {
+    use std::time::{Duration, Instant};
+    match task_starttime_checked(pubpid) {
+        Ok(Some(now)) if now == pubtick => {}
+        Ok(_) => panic!(
+            "hung publisher {pubpid} pin lost (reaped/recycled — killpg refused: unpinned murder-bait)"
+        ),
+        Err(error) => panic!(
+            "hung publisher {pubpid} tick unreadable ({error:?}) — group unverifiable"
+        ),
+    }
+    assert_no_subreaper_leak("retire_hung_publisher_group");
+    // SAFETY: SIGKILL to our own pinned child, then our
+    // own pinned group; errors ignored (a racing death
+    // answers ESRCH and the settle below still judges).
+    let _ = publisher.kill();
+    unsafe {
+        libc::killpg(pubpid, libc::SIGKILL);
+    }
+    drain_pinned_group(pubpid, pubtick, "hung publisher", Duration::from_secs(5));
+    let start = Instant::now();
+    loop {
+        match publisher.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    panic!("hung publisher {pubpid} unreapable after SIGKILL");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("hung publisher {pubpid} wait failed: {error:?}"),
+        }
+    }
+}
+
+/// R22-002 (toolchain twin): retire an EXITED publisher
+/// group — mirror of the lib fn (re-pin first; record
+/// stranded → killpg only when stranded (pinned) → pinned
+/// settle → bounded handle reap → touch-free ESRCH proof).
+/// Returns (status, stranded, post_empty).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_exited_publisher_group(
+    publisher: &mut std::process::Child,
+    pubpid: i32,
+    pubtick: u64,
+) -> (std::process::ExitStatus, bool, bool) {
+    use std::time::{Duration, Instant};
+    match task_starttime_checked(pubpid) {
+        Ok(Some(now)) if now == pubtick => {}
+        Ok(_) => panic!(
+            "exited publisher {pubpid} pin lost (reaped/recycled — killpg refused: unpinned murder-bait)"
+        ),
+        Err(error) => panic!(
+            "exited publisher {pubpid} tick unreadable ({error:?}) — group unverifiable"
+        ),
+    }
+    assert_no_subreaper_leak("retire_exited_publisher_group");
+    let stranded = enumerate_group_members(pubpid)
+        .iter()
+        .any(|member| member.pid != pubpid);
+    // SAFETY: SIGKILL to our own pinned child (zombie noop
+    // on real paths) and — only when stranded — our own
+    // pinned group; errors ignored (the settle below still
+    // judges).
+    let _ = publisher.kill();
+    if stranded {
+        unsafe {
+            libc::killpg(pubpid, libc::SIGKILL);
+        }
+    }
+    drain_pinned_group(pubpid, pubtick, "exited publisher", Duration::from_secs(5));
+    let start = Instant::now();
+    let status = loop {
+        match publisher.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    panic!("exited publisher {pubpid} unreapable after SIGKILL");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("exited publisher {pubpid} wait failed: {error:?}"),
+        }
+    };
+    let post_empty = await_group_empty(pubpid, Duration::from_secs(5));
+    (status, stranded, post_empty)
 }
 
 /// R19-001: pipe-publisher script — the publisher reads its
@@ -8409,45 +8515,64 @@ fn pair_setup_holistic_retirement() {
                 drop(publisher.stdout.take());
             }
             let pubpid = publisher.id() as i32;
+            // Birth tick at spawn (live-unreaped — nothing
+            // reaped yet — so this first read names OUR
+            // birth; every decision below re-verifies it).
+            // R22-002 (twin mirror): decide while pinned,
+            // reap after (the old shape reaped via try_wait
+            // FIRST and then killpg'd the unpinned number).
+            let pubtick = task_starttime_checked(pubpid)
+                .unwrap_or_else(|error| panic!("PUB-{step}: publisher stat readable: {error}"))
+                .unwrap_or_else(|| panic!("PUB-{step}: publisher visible"));
+            // Leader-state poll (pin-verified every poll —
+            // tick mismatch/gone is an invariant violation
+            // (nothing reaps yet); unreadable polls through
+            // (transient outage) and fails loud only when
+            // persistent (unverifiable — refuse to kill
+            // blindly).
             let start = Instant::now();
-            let status = loop {
-                match publisher.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) => {
-                        if start.elapsed() >= Duration::from_secs(10) {
-                            break None;
+            let hung = loop {
+                match task_starttime_checked(pubpid) {
+                    Ok(Some(now)) if now == pubtick => {
+                        if task_state(pubpid) == Some('Z') {
+                            break false;
                         }
-                        std::thread::sleep(Duration::from_millis(1));
                     }
-                    Err(_) => break None,
+                    Ok(_) => panic!(
+                        "PUB-{step}: leader reaped before observation \
+                         (pin violated — impossible: nothing reaps yet)"
+                    ),
+                    Err(_) => {}
                 }
+                if start.elapsed() >= Duration::from_secs(10) {
+                    match task_starttime_checked(pubpid) {
+                        Ok(Some(now)) if now == pubtick => break true,
+                        Ok(_) => panic!(
+                            "PUB-{step}: leader reaped before observation \
+                             (pin violated — impossible: nothing reaps yet)"
+                        ),
+                        Err(error) => panic!(
+                            "PUB-{step}: leader unobservable for 10s \
+                             (outage?): {error} — refusing to kill blindly"
+                        ),
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
             };
             let elapsed = start.elapsed();
-            let empty = await_group_empty(pubpid, Duration::from_millis(500));
-            if status.is_none() {
-                // Hung (fault ignored): kill OUR live unreaped
-                // child by handle (reservation-held — the number
-                // cannot have recycled), then its group
-                // (continuously nonempty since spawn — the sleep
-                // never died — so the killpg names only our
-                // staged pair).
-                let _ = publisher.kill();
-                // SAFETY: SIGKILL to our own staged group.
-                unsafe {
-                    libc::killpg(pubpid, libc::SIGKILL);
-                }
-                let _ = await_group_empty(pubpid, Duration::from_secs(5));
-                let _ = publisher.wait();
-            } else if !empty {
-                // Exited but stranded its sleeper (pre-fix fail
-                // path): group continuously nonempty — the
-                // killpg names only our orphan.
-                // SAFETY: SIGKILL to our own staged group.
-                unsafe {
-                    libc::killpg(pubpid, libc::SIGKILL);
-                }
-                let _ = await_group_empty(pubpid, Duration::from_secs(5));
-            }
+            // Both branches killpg with the leader unreaped
+            // (pin held — re-verified inside) and reap
+            // through the handle only after the decision.
+            let outcome = if hung {
+                let _ = retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
+                None
+            } else {
+                Some(retire_exited_publisher_group(
+                    &mut publisher,
+                    pubpid,
+                    pubtick,
+                ))
+            };
             // Post-cleanup stderr drain (all pipe writers dead
             // now — EOF prompt; proves WHICH step failed).
             let mut err = String::new();
@@ -8455,7 +8580,7 @@ fn pair_setup_holistic_retirement() {
                 use std::io::Read as _;
                 let _ = pipe.read_to_string(&mut err);
             }
-            let status = status.unwrap_or_else(|| {
+            let (status, stranded, post_empty) = outcome.unwrap_or_else(|| {
                 panic!(
                     "PUB-{step}: publisher hung (fault ignored?) after {elapsed:?}\nstderr: {err}"
                 )
@@ -8474,8 +8599,12 @@ fn pair_setup_holistic_retirement() {
                 "PUB-{step}: stderr must name the failed step ({marker:?}), got {err:?}"
             );
             assert!(
-                empty,
+                !stranded,
                 "PUB-{step}: group must be ESRCH-empty (stranded sleeper)\nstderr: {err}"
+            );
+            assert!(
+                post_empty,
+                "PUB-{step}: group must prove ESRCH-empty after retire (squatter?)\nstderr: {err}"
             );
         };
     // Real pause-timeout path (absent flag + short deadline
@@ -8531,18 +8660,18 @@ fn pair_setup_holistic_retirement() {
                     }
                 },
             ));
+        // R22-002 (twin mirror): the post-reap leftover
+        // killpg is DELETED (the leader is reaped — pin
+        // released — so custody of the group is unprovable
+        // and a killpg would be unpinned murder-bait; the
+        // pinned killpg already ran inside the retire).
+        // Anything still present fails the empty assert
+        // below — loud, never certified. RED/neuter runs may
+        // strand the unknown sleeper (unkillable-by-us
+        // post-reap) and leak the leader zombie to process
+        // exit (accepted — zombies auto-reap at exit; GREEN
+        // runs never reach here non-empty).
         let empty = await_group_empty(pubpid, Duration::from_millis(500));
-        if !empty {
-            // Retire leftovers (neuter/RED hygiene — the
-            // group never emptied, so the killpg names only
-            // our staged pair).
-            // SAFETY: SIGKILL to our own staged group.
-            unsafe {
-                libc::killpg(pubpid, libc::SIGKILL);
-            }
-            let _ = await_group_empty(pubpid, Duration::from_secs(5));
-            let _ = publisher.try_wait();
-        }
         let error = failed
             .err()
             .unwrap_or_else(|| panic!("RECV-{step}: must fail loud (the torn pair parsed?!)"));
@@ -9044,6 +9173,301 @@ fn group_observation_never_reaps_joined_mid_probe() {
         other => panic!("R22001-leg2: plant status stolen?! got {other:?}"),
     }
     pguard.disarm();
+}
+
+/// R22-002 working paths (toolchain twin, no steering —
+/// always runs): mirror of the lib regression (hung retires
+/// a live publisher; exited records stranded + retires a
+/// zombie sh-leader with a live sleep orphaned to init).
+/// RED (neuter — the fns postdate the bug; skipping the
+/// killpg strands and the settle times out). Duration 966
+/// (hung publisher) and 968 (stranded sleep) are unique to
+/// this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn hung_and_exited_branches_retire_while_pinned() {
+    use std::time::{Duration, Instant};
+    // Hung cell: live publisher, real bin.
+    {
+        let mut publisher = spawn_self_grouped_publisher("966", "wait", &[]);
+        let pubpid = publisher.id() as i32;
+        let pubtick = task_starttime_checked(pubpid)
+            .expect("publisher stat readable")
+            .expect("publisher visible");
+        let start = Instant::now();
+        let status = retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "R22002-hung: retire must be prompt"
+        );
+        assert!(!status.success(), "R22002-hung: leader must be SIGKILLed");
+        assert!(
+            await_group_empty(pubpid, Duration::from_secs(1)),
+            "R22002-hung: group must be ESRCH-empty"
+        );
+    }
+    // Exited cell: zombie sh-leader (pin held) + live sleep
+    // orphaned to init (stranded, not ours).
+    {
+        use std::os::unix::process::CommandExt as _;
+        let mut leader_cmd = std::process::Command::new("/bin/sh");
+        leader_cmd
+            .arg("-c")
+            .arg("sleep 968 & wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            leader_cmd.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut leader = leader_cmd.spawn().expect("leader spawns");
+        let lpid = leader.id() as i32;
+        let mut lguard = SilentChildGuard::new(lpid);
+        let ltick = task_starttime_checked(lpid)
+            .expect("leader stat readable")
+            .expect("leader visible");
+        assert!(
+            task_pgrp_matches(&lpid.to_string(), lpid),
+            "R22002-exited: leader must self-group"
+        );
+        // Discover the sleep (the non-leader member — only
+        // two members ever exist here).
+        let (spid, stick) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let others: Vec<(i32, u64)> = enumerate_group_members(lpid)
+                    .iter()
+                    .filter(|member| member.pid != lpid)
+                    .filter_map(|member| member.birth.map(|(_, tick)| (member.pid, tick)))
+                    .collect();
+                if others.len() == 1 {
+                    break others[0];
+                }
+                assert!(
+                    Instant::now() < end,
+                    "R22002-exited: staging broken (sleep never appeared)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        // Kill the leader to a zombie (pin HELD — unreaped);
+        // the sleep orphans to init (live, not ours —
+        // ECHILD for us, exactly like production).
+        assert!(
+            kill_tick_gated(lpid, ltick),
+            "R22002-exited: leader kill readable"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if task_state(lpid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "R22002-exited: staging broken (leader never zombified)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let start = Instant::now();
+        let (status, stranded, post_empty) =
+            retire_exited_publisher_group(&mut leader, lpid, ltick);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "R22002-exited: retire must be prompt"
+        );
+        assert!(stranded, "R22002-exited: stranding must be recorded");
+        assert!(!status.success(), "R22002-exited: leader must be SIGKILLed");
+        assert!(post_empty, "R22002-exited: group must prove ESRCH-empty");
+        assert!(
+            await_task_gone_reaping(spid, stick, Duration::from_secs(5)),
+            "R22002-exited: stranded sleep must drain"
+        );
+        lguard.disarm();
+    }
+}
+
+/// R22-002 refusal paths (toolchain twin, steered squatters —
+/// vacuous under contention): mirror of the lib regression
+/// (discharged number + live self-grouped squatter + stale
+/// tick → loud pin-lost refusal WITHOUT killing, squatter
+/// settled-spared, both branches). RED (neuter — skipping
+/// the re-pin murders the squatter). Duration 967
+/// (publisher staging) is unique to this test (the squatter
+/// is the steered sleep-31 standin).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn hung_and_exited_branches_refuse_discharged_numbers() {
+    use std::io::BufRead as _;
+    use std::time::{Duration, Instant};
+    // Stage per cell: spawn, retire OUR pair explicitly (pin
+    // RELEASED), steer a live self-grouped squatter onto
+    // the freed number.
+    macro_rules! stage_discharged {
+        ($cell:expr) => {{
+            let mut publisher = spawn_self_grouped_publisher("967", "wait", &[]);
+            let pubpid = publisher.id() as i32;
+            let mut line = String::new();
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (stranger, stick) = parse_published_pair(line.trim(), "r22002 publication");
+            let pubtick = task_starttime_checked(pubpid)
+                .expect("publisher stat readable")
+                .expect("publisher visible");
+            assert!(
+                retire_tick_gated_toolchain_child(stranger, stick),
+                "R22002-{}: stranger retire readable",
+                $cell
+            );
+            assert!(
+                await_task_gone_reaping(stranger, stick, Duration::from_secs(5)),
+                "R22002-{}: stranger must drain",
+                $cell
+            );
+            let start = Instant::now();
+            loop {
+                match publisher.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!("R22002-{}: publisher must exit", $cell);
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("R22002-{}: wait failed: {error:?}", $cell),
+                }
+            }
+            let mut squatter = match steer_sleep_onto(pubpid, true) {
+                Some(kid) => kid,
+                None => {
+                    eprintln!("R22002-{}: vacuous (squatter contended)", $cell);
+                    return;
+                }
+            };
+            let mut squatter_guard = SilentChildGuard::new(pubpid);
+            let squat_tick = match task_starttime_checked(pubpid) {
+                Ok(Some(tick)) => tick,
+                _ => {
+                    let _ = squatter.kill();
+                    let _ = squatter.wait();
+                    squatter_guard.disarm();
+                    eprintln!("R22002-{}: vacuous (squatter unreadable)", $cell);
+                    return;
+                }
+            };
+            if squat_tick == pubtick {
+                let _ = squatter.kill();
+                let _ = squatter.wait();
+                squatter_guard.disarm();
+                eprintln!("R22002-{}: vacuous (same-tick retake — S100)", $cell);
+                return;
+            }
+            assert!(
+                task_pgrp_matches(&pubpid.to_string(), pubpid),
+                "R22002-{}: squatter must self-group onto the recycled number",
+                $cell
+            );
+            (
+                publisher,
+                pubpid,
+                pubtick,
+                squatter,
+                squatter_guard,
+                squat_tick,
+            )
+        }};
+    }
+    let _hold = match steer_hold() {
+        Some(hold) => hold,
+        None => {
+            eprintln!("R22002-refuse: vacuous (no reuse control)");
+            return;
+        }
+    };
+    // Hung cell: stale handle + stale tick on a live
+    // squatter's number → refusal (no killpg).
+    {
+        let (mut publisher, pubpid, pubtick, mut squatter, mut squatter_guard, squat_tick) =
+            stage_discharged!("hung");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
+        }));
+        let error = match failed {
+            Ok(_) => panic!("R22002-hung: must refuse loud"),
+            Err(error) => error,
+        };
+        let message = error.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            message.contains("pin lost"),
+            "R22002-hung: refusal must name the lost pin, got {message:?}"
+        );
+        assert!(settle_spared(pubpid), "R22002-hung: squatter murdered?!");
+        assert_eq!(
+            task_starttime_checked(pubpid).expect("squatter readable"),
+            Some(squat_tick),
+            "R22002-hung: squatter birth must persist"
+        );
+        let _ = squatter.kill();
+        let start = Instant::now();
+        loop {
+            match squatter.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        panic!("R22002-hung: squatter must reap");
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("R22002-hung: squatter wait failed: {error:?}"),
+            }
+        }
+        squatter_guard.disarm();
+    }
+    // Exited cell: same staging, the exited branch.
+    {
+        let (mut publisher, pubpid, pubtick, mut squatter, mut squatter_guard, squat_tick) =
+            stage_discharged!("exited");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retire_exited_publisher_group(&mut publisher, pubpid, pubtick);
+        }));
+        let error = match failed {
+            Ok(_) => panic!("R22002-exited: must refuse loud"),
+            Err(error) => error,
+        };
+        let message = error.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            message.contains("pin lost"),
+            "R22002-exited: refusal must name the lost pin, got {message:?}"
+        );
+        assert!(settle_spared(pubpid), "R22002-exited: squatter murdered?!");
+        assert_eq!(
+            task_starttime_checked(pubpid).expect("squatter readable"),
+            Some(squat_tick),
+            "R22002-exited: squatter birth must persist"
+        );
+        let _ = squatter.kill();
+        let start = Instant::now();
+        loop {
+            match squatter.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        panic!("R22002-exited: squatter must reap");
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("R22002-exited: squatter wait failed: {error:?}"),
+            }
+        }
+        squatter_guard.disarm();
+    }
 }
 
 /// R19-014 (toolchain twin): sensitivity lock — the shared
