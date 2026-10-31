@@ -7530,7 +7530,10 @@ mod tests {
     /// cycle). `NotOurs`: birth mismatch or unreadable stat
     /// (retire anyway — the frame's own gates handle
     /// recycle/gone safely and never kill there).
+    /// R21-013: budget exhaustion also reports `Unverifiable`
+    /// (a truncated walk proves nothing — never partial-Shed).
     #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, PartialEq)]
     enum HoldVerdict {
         Holds,
         Shed,
@@ -7542,8 +7545,21 @@ mod tests {
     /// write end of one of `want` — the R19-005 birth
     /// bracket (tick before AND after the scan) around the
     /// shared per-fd predicate.
+    /// R21-013: the walk shares the expiry's scan budget —
+    /// `spent` counts visited fds across the whole reverify
+    /// loop (the remainder tightens per stray); cap or
+    /// deadline exhaustion truncates to `Unverifiable`
+    /// (never partial-Shed — only a COMPLETE walk without a
+    /// hit reports `Shed`, and a hit reports `Holds` at once
+    /// — positive evidence needs no completed walk).
     #[cfg(target_arch = "x86_64")]
-    fn reverify_pipe_holdership(pid: libc::pid_t, tick: u64, want: &[(u64, u64)]) -> HoldVerdict {
+    fn reverify_pipe_holdership(
+        pid: libc::pid_t,
+        tick: u64,
+        want: &[(u64, u64)],
+        budget: &PipeScanBudget,
+        spent: &mut usize,
+    ) -> HoldVerdict {
         match proc_starttime(pid) {
             Ok(Some(t)) if t == tick => {}
             _ => return HoldVerdict::NotOurs,
@@ -7553,7 +7569,20 @@ mod tests {
             Err(_) => return HoldVerdict::Unverifiable,
         };
         let mut holds = false;
+        let mut complete = true;
         for fd in fds.flatten() {
+            // R21-013: cap OR deadline exhaustion truncates
+            // the walk (checked before each fd — an expired
+            // or zero budget scans nothing). A truncated
+            // walk proves nothing: Unverifiable below, never
+            // partial-Shed. A hit still reports Holds at
+            // once (positive evidence needs no completed
+            // walk).
+            if *spent >= budget.max_visited_fds || std::time::Instant::now() >= budget.deadline {
+                complete = false;
+                break;
+            }
+            *spent += 1;
             if fd_holds_wanted_write_end(&fd, pid, want, None) {
                 holds = true;
                 break;
@@ -7565,8 +7594,10 @@ mod tests {
         }
         if holds {
             HoldVerdict::Holds
-        } else {
+        } else if complete {
             HoldVerdict::Shed
+        } else {
+            HoldVerdict::Unverifiable
         }
     }
 
@@ -7997,6 +8028,12 @@ mod tests {
                 strays.len()
             );
         }
+        // R21-013: ONE scan budget shared across the
+        // reverify loop (the remainder tightens per stray —
+        // N strays can never multiply the walk; exhaustion
+        // skips loud via Unverifiable, never partial-Sheds).
+        let scan_budget = PipeScanBudget::default();
+        let mut scan_spent: usize = 0;
         for (index, (pid, started)) in strays.iter().enumerate() {
             // R20-002: discovery's authority does not survive
             // shedding — a fork→shed inheritor recorded while
@@ -8007,7 +8044,13 @@ mod tests {
             // gates handle recycle/gone safely); unverifiable
             // skips loud (killing needs positive evidence).
             if index >= boundary && !pipe_ids.is_empty() {
-                match reverify_pipe_holdership(*pid, *started, pipe_ids) {
+                match reverify_pipe_holdership(
+                    *pid,
+                    *started,
+                    pipe_ids,
+                    &scan_budget,
+                    &mut scan_spent,
+                ) {
                     HoldVerdict::Holds | HoldVerdict::NotOurs => {}
                     HoldVerdict::Shed => {
                         eprintln!(
@@ -23951,6 +23994,280 @@ time.sleep(30)
         drop(holder);
         drop(writer);
         let _ = std::fs::remove_file(&flag_count);
+    }
+
+    /// R21-013: retire-time re-verification shares the
+    /// expiry's scan budget — a truncated walk reports
+    /// `Unverifiable` (never partial-Shed), a hit reports
+    /// `Holds` at once, and only a COMPLETE walk without a
+    /// hit reports `Shed`. Seven cells: Holds/Shed controls
+    /// (genuine verdicts under ample budget), tight cap
+    /// (truncation + exact spend), expired deadline and zero
+    /// cap (scan nothing — the deadline wins even over a
+    /// held end), enlarged table (150k + default budget →
+    /// Unverifiable at exactly the 100k cap), and
+    /// shared-spent (two calls, one counter — the second
+    /// truncates on the first's remainder, mirroring the
+    /// frame loop). A moved end is covered by the removed
+    /// shape (`want` names the pipe's (dev, ino), not the
+    /// slot — a dup keeps the identity, a close drops it).
+    /// Pre-fix RED: the uncapped walk returns Shed/Holds
+    /// and ignores the budget (cells 3-7 fail). Duration 953
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn reverify_budget_bounds_bigtable_and_reports() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        // Collection pipe: we keep the READ end; one KNOWN
+        // writer holds the write end.
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("953")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let _wguard = FixtureGuard::new(wpid);
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        // Fd-holders: best-effort rlimit raise, then N
+        // /dev/null fds, report the count, park (the R19-009
+        // script shape — report handle opened FIRST so a
+        // below-`want` limit still reports).
+        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\nreport = open(sys.argv[2], 'w')\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nreport.write(str(len(fds)))\nreport.flush()\ntime.sleep(60)\n";
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let stage_holder = |tag: &str, want: usize, bound_secs: u64| {
+            let flag = dir.join(format!("scopebase-r21013-{tag}-{me}"));
+            let _ = std::fs::remove_file(&flag);
+            let holder = std::process::Command::new("python3")
+                .arg("-c")
+                .arg(script)
+                .arg(want.to_string())
+                .arg(&flag)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("fd-holder spawns");
+            let hpid = holder.id() as libc::pid_t;
+            let _hguard = FixtureGuard::new(hpid);
+            let end = Instant::now() + Duration::from_secs(bound_secs);
+            let opened: usize = loop {
+                if let Ok(text) = std::fs::read_to_string(&flag) {
+                    if let Ok(parsed) = text.trim().parse() {
+                        break parsed;
+                    }
+                }
+                assert!(
+                    Instant::now() < end,
+                    "holder must report its fd count (stage broken otherwise)"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let htick = proc_starttime(hpid)
+                .expect("holder stat readable")
+                .expect("holder visible");
+            (holder, _hguard, hpid, htick, opened, flag)
+        };
+        let (holder20k, _guard20k, hpid, htick, opened, flag_count) =
+            stage_holder("count", 20_000, 30);
+        // Owned-child cleanup (kill gated, status drains to
+        // us — the R19-005/006 self-reap discipline).
+        let kill_and_reap = |pid: libc::pid_t, tick: u64, what: &str| {
+            let _ = kill_tick_gated(pid, tick);
+            let end = Instant::now() + Duration::from_secs(10);
+            let mut reaped = None;
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only — our child.
+                if unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) } == pid {
+                    reaped = Some(st);
+                }
+                if proc_starttime(pid) != Ok(Some(tick)) {
+                    break;
+                }
+                assert!(Instant::now() < end, "{what} must die");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let st = reaped.expect("status must drain to us (retained, never stolen)");
+            assert!(libc::WIFSIGNALED(st), "{what} must die by our signal");
+        };
+        if opened < 2000 {
+            kill_and_reap(hpid, htick, "fd-holder");
+            kill_and_reap(wpid, wtick, "writer");
+            drop(holder20k);
+            drop(writer);
+            let _ = std::fs::remove_file(&flag_count);
+            eprintln!("skip: fd table too small ({opened} < 2000 — no budget isolation)");
+            return;
+        }
+        let (holder150k, _guard150k, bpid, btick, bopened, flag_big) =
+            stage_holder("big", 150_000, 60);
+        if bopened < 120_000 {
+            kill_and_reap(hpid, htick, "fd-holder");
+            kill_and_reap(bpid, btick, "big-holder");
+            kill_and_reap(wpid, wtick, "writer");
+            drop(holder20k);
+            drop(holder150k);
+            drop(writer);
+            let _ = std::fs::remove_file(&flag_count);
+            let _ = std::fs::remove_file(&flag_big);
+            eprintln!("skip: big table too small ({bopened} < 120000 — default cap untrippable)");
+            return;
+        }
+        // Non-vacuity: the tables are really there (counted
+        // our way — flatten, the walk's own iterator shape).
+        let table20k = std::fs::read_dir(format!("/proc/{hpid}/fd"))
+            .expect("holder table readable")
+            .flatten()
+            .count();
+        assert!(
+            table20k >= opened,
+            "holder table must show the reported fds ({table20k} >= {opened})"
+        );
+        let table150k = std::fs::read_dir(format!("/proc/{bpid}/fd"))
+            .expect("big table readable")
+            .flatten()
+            .count();
+        assert!(
+            table150k >= bopened,
+            "big table must show the reported fds ({table150k} >= {bopened})"
+        );
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "collection pipe must identify");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        // Cell 1 (Holds control): the known writer holds a
+        // wanted end — positive evidence at once.
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(wpid, wtick, &want, &ample, &mut spent),
+            HoldVerdict::Holds,
+            "known writer must verify Holds"
+        );
+        // Cell 2 (Shed control): the 20k holder never held
+        // the end — a COMPLETE walk finds nothing (exact
+        // spend proves the walk ran to the end).
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &ample, &mut spent),
+            HoldVerdict::Shed,
+            "end-absent holder must verify Shed under ample budget"
+        );
+        assert_eq!(
+            spent, table20k,
+            "complete walk must visit every fd exactly once"
+        );
+        // Cell 3 (tight cap): truncation reports
+        // Unverifiable (never partial-Shed) with the spend
+        // stopping AT the cap. The trip is guaranteed: the
+        // table alone is quadruple the budget, whatever the
+        // walk order.
+        let tight = PipeScanBudget {
+            max_visited_fds: opened / 4,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &tight, &mut spent),
+            HoldVerdict::Unverifiable,
+            "tight budget must truncate to Unverifiable (never Shed)"
+        );
+        assert_eq!(
+            spent,
+            opened / 4,
+            "truncated walk must stop at the cap exactly"
+        );
+        // Cell 4 (expired deadline): scans nothing — the
+        // deadline wins even over a HELD end (fail-closed).
+        let spent_budget = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() - Duration::from_secs(1),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(wpid, wtick, &want, &spent_budget, &mut spent),
+            HoldVerdict::Unverifiable,
+            "expired deadline must truncate at once"
+        );
+        assert_eq!(spent, 0, "expired deadline must scan nothing");
+        // Cell 5 (zero cap): likewise scans nothing.
+        let zero = PipeScanBudget {
+            max_visited_fds: 0,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(wpid, wtick, &want, &zero, &mut spent),
+            HoldVerdict::Unverifiable,
+            "zero cap must truncate at once"
+        );
+        assert_eq!(spent, 0, "zero cap must scan nothing");
+        // Cell 6 (enlarged table): 150k fds under the shipped
+        // default budget — the walk truncates (cap or
+        // deadline, whichever bites first under load) to an
+        // explicitly-unresolved skip (the finding's headline:
+        // unbounded seconds become bounded). Cap-exactness is
+        // pinned deterministically by cell 3; here the bound
+        // (never over cap) is the assertion.
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(bpid, btick, &want, &PipeScanBudget::default(), &mut spent),
+            HoldVerdict::Unverifiable,
+            "default budget must truncate on a 150k table"
+        );
+        assert!(
+            spent <= 100_000,
+            "default walk must never exceed the 100k cap (spent {spent})"
+        );
+        if spent < 100_000 {
+            eprintln!("cell 6 truncated by deadline at {spent} (cap-trip needs <1s/100k)");
+        }
+        // Cell 7 (shared spent): two calls, one counter —
+        // the second truncates on the first's remainder
+        // (mirrors the frame loop; the remainder tightens).
+        let shared = PipeScanBudget {
+            max_visited_fds: table20k + 10,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &shared, &mut spent),
+            HoldVerdict::Shed,
+            "first shared call must complete (Shed)"
+        );
+        assert_eq!(spent, table20k, "first call must spend its table");
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &shared, &mut spent),
+            HoldVerdict::Unverifiable,
+            "second shared call must truncate on the remainder"
+        );
+        assert_eq!(
+            spent,
+            table20k + 10,
+            "shared counter must accumulate across calls"
+        );
+        // Cleanup: all owned children reaped by us.
+        kill_and_reap(hpid, htick, "fd-holder");
+        kill_and_reap(bpid, btick, "big-holder");
+        kill_and_reap(wpid, wtick, "writer");
+        drop(holder20k);
+        drop(holder150k);
+        drop(writer);
+        let _ = std::fs::remove_file(&flag_count);
+        let _ = std::fs::remove_file(&flag_big);
     }
 
     /// R19-009 (end-to-end): a collection expiry beside a
