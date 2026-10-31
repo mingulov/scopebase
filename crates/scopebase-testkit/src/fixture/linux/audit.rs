@@ -9784,14 +9784,29 @@ mod tests {
                                 err.contains("skip: seccomp unavailable"),
                                 "unexpected probe success must explain itself, got: {err}"
                             );
+                            // R15-006: the explainer assert above stays
+                            // bare (EOF'd output = tree down; the
+                            // skip removes the pidfile itself).
                             eprintln!("skip: seccomp unavailable for the mid-flight probe");
                             let _ = std::fs::remove_file(&pidfile);
                             return;
                         }
-                        None => panic!("skip-path probe must EOF its output, got expiry"),
+                        None => held_probe_staging_failure(
+                            &mut child,
+                            &pidfile,
+                            "midflight probe staging failure",
+                            "midflight-birth",
+                            "skip-path probe must EOF its output, got expiry",
+                        ),
                     }
                 }
-                panic!("probe exited {status} before grandchild birth (fixture broken)");
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    "midflight probe staging failure",
+                    "midflight-birth",
+                    &format!("probe exited {status} before grandchild birth"),
+                );
             }
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
@@ -9821,21 +9836,45 @@ mod tests {
             if filled || Instant::now() >= published {
                 break;
             }
-            assert!(
-                child.try_wait().expect("probe wait").is_none(),
-                "probe completed before the kill (fixture broken)"
-            );
+            if child.try_wait().expect("probe wait").is_some() {
+                // R15-006: staging failure via the timeout body
+                // (the completed probe is an unreaped zombie and
+                // the writer is live — a bare panic leaks both).
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    "midflight probe staging failure",
+                    "midflight-kill",
+                    "probe completed before the kill",
+                );
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
         // Mid-flight proof: still running, then dead by OUR
         // signal — never exit 42 (a completed probe would have
         // published post-return, voiding the window).
-        assert!(
-            child.try_wait().expect("probe wait").is_none(),
-            "probe must still run at kill time (mid-flight)"
-        );
+        if child.try_wait().expect("probe wait").is_some() {
+            // R15-006: staging failure via the timeout body (see
+            // the pre-kill check above).
+            held_probe_staging_failure(
+                &mut child,
+                &pidfile,
+                "midflight probe staging failure",
+                "midflight-kill",
+                "probe must still run at kill time",
+            );
+        }
         // SAFETY: SIGKILL to our own pinned probe child.
-        assert_eq!(unsafe { libc::kill(id, libc::SIGKILL) }, 0, "probe kill");
+        if unsafe { libc::kill(id, libc::SIGKILL) } != 0 {
+            let errno = std::io::Error::last_os_error();
+            held_probe_staging_failure(
+                &mut child,
+                &pidfile,
+                "midflight probe staging failure",
+                "midflight-kill",
+                &format!("probe SIGKILL refused ({errno})"),
+            );
+        }
         let end = Instant::now() + Duration::from_secs(60);
         let status = loop {
             if let Some(status) = child.try_wait().expect("probe reap") {
@@ -9931,6 +9970,104 @@ mod tests {
         }
     }
 
+    /// R15-006: per-stage staging timeouts for the held-probe
+    /// driver — a timeout PARAMETER (not env: process-global
+    /// env would cross-talk parallel driver runs). Production:
+    /// 60s birth / 5s publication / 2s stop; regressions inject
+    /// 0ns per stage.
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Clone, Copy)]
+    struct HoldStageTimeouts {
+        birth: std::time::Duration,
+        publication: std::time::Duration,
+        stop: std::time::Duration,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl HoldStageTimeouts {
+        const PRODUCTION: Self = Self {
+            birth: std::time::Duration::from_secs(60),
+            publication: std::time::Duration::from_secs(5),
+            stop: std::time::Duration::from_secs(2),
+        };
+    }
+
+    /// R15-006: staging-failure exit for the held-probe and
+    /// midflight drivers — staging failures report VIA the
+    /// timeout body (retire-all + loud), never bare asserts. Runs
+    /// the REAL timeout body under catch (probe kill + reap,
+    /// descendant forensics, published strays, pidfile removal),
+    /// VERIFIES the retirement (probe reaped, pidfile gone,
+    /// recorded strays/descendants retired — any gap panics as a
+    /// BUG, breaking the message shape below), then panics with
+    /// the STAGING detail chained to the body's `what` (proving
+    /// the body ran). Residuals: fixtures born between the
+    /// prestage scan and the body's own forensics snapshot, and
+    /// publications landing in that gap, are retired by the body
+    /// but unverified here (µs–ms windows); a same-tick recycle
+    /// inside the verify window misreads as survival (S100-µs —
+    /// never observed unsteered).
+    #[cfg(target_arch = "x86_64")]
+    fn held_probe_staging_failure(
+        child: &mut std::process::Child,
+        pidfile: &std::path::Path,
+        what: &str,
+        stage: &str,
+        detail: &str,
+    ) -> ! {
+        let id = child.id() as libc::pid_t;
+        // Prestage scan (best-effort record for post-body
+        // verification — the body re-discovers independently).
+        let mid = middleman_first_child(id)
+            .and_then(|mid| proc_starttime(mid).ok()?.map(|tick| (mid, tick)));
+        let writer = mid.and_then(|(mid, _)| {
+            middleman_first_child(mid)
+                .and_then(|born| proc_starttime(born).ok()?.map(|tick| (born, tick)))
+        });
+        // The published record may be corrupt (IR-004 fails the
+        // read loud) — record failure as empty here; the body
+        // surfaces it chained (its forensics still retire the
+        // writer via /proc discovery).
+        let strays = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_published_grandchild_strays(pidfile)
+        }))
+        .unwrap_or_default();
+        // The real timeout body, under catch (it diverges by
+        // design — a return is a retirement bug).
+        let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            timeout_retire_hung_probe(child, pidfile, what);
+        }));
+        let body_text = match body {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("staging {stage} failed ({detail}): timeout body returned (BUG)"),
+        };
+        assert!(
+            body_text.contains(what),
+            "staging {stage} failed ({detail}): timeout body must headline `what`, got: {body_text}"
+        );
+        // Verify the retirement (each gap breaks the message
+        // shape the injection tests require).
+        if let Ok(None) = child.try_wait() {
+            panic!("staging {stage} failed ({detail}): probe NOT reaped (BUG)");
+        }
+        assert!(
+            std::fs::metadata(pidfile).is_err(),
+            "staging {stage} failed ({detail}): pidfile NOT removed (BUG)"
+        );
+        for (pid, tick) in strays.iter().chain(mid.iter()).chain(writer.iter()) {
+            assert!(
+                proc_starttime(*pid) != Ok(Some(*tick)),
+                "staging {stage} failed ({detail}): recorded fixture {pid}:{tick} NOT retired (BUG)"
+            );
+        }
+        panic!(
+            "staging {stage} failed ({detail}); fixtures retired via timeout body ({body_text}); prestage scan: mid={mid:?} writer={writer:?} strays={strays:?}"
+        );
+    }
+
     /// R14-009: drive one parent's timeout branch against a probe
     /// HELD after publication, then prove the published writer
     /// retired. The probe is SIGSTOPed once the rendezvous fills
@@ -9943,6 +10080,11 @@ mod tests {
     /// independently via /proc; the publication wait afterwards
     /// proves the record exists BEFORE the hold (a hold without
     /// publication would test nothing).
+    /// R15-006: staging failures exit via
+    /// [`held_probe_staging_failure`] (retire-all through the
+    /// timeout body, then the staging detail — never a bare
+    /// assert with live fixtures); per-stage timeouts are a
+    /// parameter ([`HoldStageTimeouts`]).
     #[cfg(target_arch = "x86_64")]
     #[allow(clippy::too_many_arguments)]
     fn held_probe_timeout_retires_writer(
@@ -9951,6 +10093,7 @@ mod tests {
         abandon: bool,
         tag: &str,
         what: &str,
+        timeouts: HoldStageTimeouts,
     ) {
         use std::time::{Duration, Instant};
         let exe = std::env::current_exe().expect("probe test binary path");
@@ -9982,7 +10125,7 @@ mod tests {
         // Birth, observed independently (mirrors the mid-flight
         // regression): middleman, then its firstborn, via /proc
         // task-children — never via the pidfile.
-        let end = Instant::now() + Duration::from_secs(60);
+        let end = Instant::now() + timeouts.birth;
         let (mid, mid_tick, writer, writer_tick) = loop {
             if let Some(status) = child.try_wait().expect("probe wait") {
                 if status.success() {
@@ -9993,6 +10136,10 @@ mod tests {
                                 err.contains("skip: seccomp unavailable"),
                                 "unexpected probe success must explain itself, got: {err}"
                             );
+                            // R15-006: the explainer assert above stays
+                            // bare — it fires only when output EOF'd
+                            // (no live descendants hold the pipes),
+                            // and the skip removes the pidfile itself.
                             eprintln!("skip: seccomp unavailable for the held {tag} probe");
                             let _ = std::fs::remove_file(&pidfile);
                             return;
@@ -10000,9 +10147,23 @@ mod tests {
                         None => panic!("skip-path probe must EOF its output, got expiry"),
                     }
                 }
-                panic!("probe exited {status} before grandchild birth (fixture broken)");
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    what,
+                    "birth",
+                    &format!("probe exited {status} before grandchild birth"),
+                );
             }
-            assert!(Instant::now() < end, "grandchild never born (60s)");
+            if Instant::now() >= end {
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    what,
+                    "birth",
+                    &format!("grandchild never born ({:?})", timeouts.birth),
+                );
+            }
             if let Some(mid) = middleman_first_child(id) {
                 if let (Ok(Some(mtick)), Some(born)) =
                     (proc_starttime(mid), middleman_first_child(mid))
@@ -10017,22 +10178,36 @@ mod tests {
         // The birth record must land BEFORE the hold (a hold
         // without publication tests nothing): the runner's poll
         // slices publish within ~50ms of birth; 5s is generous.
-        let published = Instant::now() + Duration::from_secs(5);
+        let published = Instant::now() + timeouts.publication;
         loop {
+            // R15-006: the deadline binds BEFORE arrival (a fill
+            // landing exactly on expiry reports the timeout —
+            // deterministic under injection, equivalent under
+            // production bounds).
+            if Instant::now() >= published {
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    what,
+                    "publication",
+                    "birth never published before the hold",
+                );
+            }
+            if child.try_wait().expect("probe wait").is_some() {
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    what,
+                    "publication",
+                    "probe completed before the hold",
+                );
+            }
             let filled = std::fs::read_to_string(&pidfile)
                 .map(|text| !text.trim().is_empty())
                 .unwrap_or(false);
             if filled {
                 break;
             }
-            assert!(
-                Instant::now() < published,
-                "birth never published before the hold (fixture broken)"
-            );
-            assert!(
-                child.try_wait().expect("probe wait").is_none(),
-                "probe completed before the hold (fixture broken)"
-            );
             std::thread::sleep(Duration::from_millis(10));
         }
         let strays = read_published_grandchild_strays(&pidfile);
@@ -10045,9 +10220,30 @@ mod tests {
         // the stop landed (state T) — a running probe would race
         // the timeout instead of holding through it.
         // SAFETY: SIGSTOP to our own pinned probe child.
-        assert_eq!(unsafe { libc::kill(id, libc::SIGSTOP) }, 0, "probe stop");
-        let stopped = Instant::now() + Duration::from_secs(2);
+        if unsafe { libc::kill(id, libc::SIGSTOP) } != 0 {
+            let errno = std::io::Error::last_os_error();
+            held_probe_staging_failure(
+                &mut child,
+                &pidfile,
+                what,
+                "stop",
+                &format!("probe SIGSTOP refused ({errno})"),
+            );
+        }
+        let stopped = Instant::now() + timeouts.stop;
         loop {
+            // R15-006: the deadline binds BEFORE arrival (see
+            // the publication poll — deterministic under
+            // injection).
+            if Instant::now() >= stopped {
+                held_probe_staging_failure(
+                    &mut child,
+                    &pidfile,
+                    what,
+                    "stop",
+                    "probe never stopped after SIGSTOP",
+                );
+            }
             let state = std::fs::read_to_string(format!("/proc/{id}/stat"))
                 .ok()
                 .and_then(|row| {
@@ -10057,10 +10253,6 @@ mod tests {
             if state.as_deref() == Some("T") {
                 break;
             }
-            assert!(
-                Instant::now() < stopped,
-                "probe never stopped after SIGSTOP (fixture broken)"
-            );
             std::thread::sleep(Duration::from_millis(10));
         }
         // The parent's real timeout body, under catch_unwind: the
@@ -10142,6 +10334,7 @@ mod tests {
             false,
             "subreaper",
             "subreaper probe hung past 150s",
+            HoldStageTimeouts::PRODUCTION,
         );
     }
 
@@ -10156,6 +10349,7 @@ mod tests {
             true,
             "abandon",
             "abandoning probe hung past 60s",
+            HoldStageTimeouts::PRODUCTION,
         );
     }
 
@@ -10171,6 +10365,98 @@ mod tests {
             false,
             "guard",
             "adopting-guard probe hung past 60s",
+            HoldStageTimeouts::PRODUCTION,
+        );
+    }
+
+    /// R15-006: run the held-probe driver with injected staging
+    /// timeouts and require retirement-before-report: the panic
+    /// must name the forced stage, prove routing through the
+    /// timeout body, and chain the parent's timeout (the body's
+    /// own proof it ran — plus the helper's internal reaped/
+    /// removed/retired verification, whose failures break this
+    /// message shape).
+    #[cfg(target_arch = "x86_64")]
+    fn held_probe_staging_injection(timeouts: HoldStageTimeouts, tag: &str, stage: &str) {
+        let what = "subreaper probe hung past 150s";
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            held_probe_timeout_retires_writer(
+                SUBREAPER_PROBE_PATH,
+                SUBREAPER_PROBE_ENV,
+                false,
+                tag,
+                what,
+                timeouts,
+            );
+        }));
+        let text = match outcome {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("{tag}: injection must force the staging failure"),
+        };
+        assert!(
+            text.contains(stage),
+            "{tag}: stage discrimination, got: {text}"
+        );
+        assert!(
+            text.contains("retired via timeout"),
+            "{tag}: routing proof, got: {text}"
+        );
+        assert!(text.contains(what), "{tag}: body-ran proof, got: {text}");
+    }
+
+    /// R15-006: birth-stage injection — a 0ns birth deadline
+    /// forces the staging failure mid-staging (probe live, tree
+    /// unborn); retirement must precede the report.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_probe_birth_timeout_retires_before_report() {
+        use std::time::Duration;
+        held_probe_staging_injection(
+            HoldStageTimeouts {
+                birth: Duration::ZERO,
+                ..HoldStageTimeouts::PRODUCTION
+            },
+            "r15006-birth",
+            "grandchild never born",
+        );
+    }
+
+    /// R15-006: publication-stage injection — birth succeeds but
+    /// the 0ns publication deadline forces the staging failure
+    /// (probe + writer live); retirement must precede the
+    /// report.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_probe_publication_timeout_retires_before_report() {
+        use std::time::Duration;
+        held_probe_staging_injection(
+            HoldStageTimeouts {
+                publication: Duration::ZERO,
+                ..HoldStageTimeouts::PRODUCTION
+            },
+            "r15006-publish",
+            "birth never published before the hold",
+        );
+    }
+
+    /// R15-006: stop-stage injection — the probe SIGSTOPs, then
+    /// the 0ns stop deadline forces the staging failure (a stop
+    /// that never lands must not park the probe stopped
+    /// forever); retirement must precede the report.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_probe_stop_timeout_retires_before_report() {
+        use std::time::Duration;
+        held_probe_staging_injection(
+            HoldStageTimeouts {
+                stop: Duration::ZERO,
+                ..HoldStageTimeouts::PRODUCTION
+            },
+            "r15006-stop",
+            "probe never stopped after SIGSTOP",
         );
     }
 
