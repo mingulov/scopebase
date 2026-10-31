@@ -2669,12 +2669,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn retire_exited_child_proves_gone() {
         use std::time::{Duration, Instant};
-        // SAFETY: child calls _exit only (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(42) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(42) };
-        }
         let mut guard = ChildGuard::new(pid);
         if proc_state(pid).is_none() {
             eprintln!("skip: /proc unavailable for zombie observation");
@@ -2715,35 +2714,12 @@ mod tests {
         assert!(pid >= 0, "unit fork failed");
         if pid == 0 {
             unsafe {
-                // R12-008: shed inherited fds — this child never
-                // execs (cloexec cannot help) and lives up to 5s
-                // (the pin-less retirement burn), so any inherited
-                // sibling pipe write end would hold EOF past 2s
-                // guards. Keep only `w` (errno report) and stdio
-                // (0,1,2 — shared, EOF-safe). close_range is a
-                // single syscall (async-signal-safe, MT-fork
-                // sound). Any failure exits WITHOUT reporting: the
-                // parent's read then sees EOF (got == 0) and fails
-                // loud — never a silent hole.
-                if w > 3
-                    && libc::syscall(
-                        libc::SYS_close_range,
-                        3 as libc::c_long,
-                        (w - 1) as libc::c_long,
-                        0 as libc::c_long,
-                    ) != 0
-                {
-                    libc::_exit(127);
-                }
-                if libc::syscall(
-                    libc::SYS_close_range,
-                    (w + 1) as libc::c_long,
-                    u32::MAX as libc::c_long,
-                    0 as libc::c_long,
-                ) != 0
-                {
-                    libc::_exit(127);
-                }
+                // R12-008: shed inherited fds (keeps the errno
+                // report + stdio) — factored onto the R19-007
+                // helper (identical for all reachable w ≥ 3: an
+                // unreachable w < 3 now keeps stdio — strictly
+                // safer; fail-loud 127 unchanged).
+                super::super::fork::shed_inherited_fds(&[w]);
                 let traced = libc::ptrace(libc::PTRACE_TRACEME, 0, 0, 0);
                 let code: u8 = if traced == 0 {
                     0
@@ -2976,16 +2952,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn signal_without_pin_never_signals_replacement() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let guard = ChildGuard::new(pid);
         assert!(
             proc_state(pid).is_some(),
@@ -3023,16 +2994,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn disarmed_guard_drop_signals_nothing() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let mut guard = ChildGuard::new(pid);
         assert!(
             proc_state(pid).is_some(),
@@ -3058,16 +3024,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn armed_guard_drop_retires_child() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let guard = ChildGuard::new(pid);
         assert!(
             proc_state(pid).is_some(),
@@ -3114,12 +3075,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn r10_pinless_drop_after_reap_issues_no_second_wait() {
         let _serial = R10_SERIAL.lock().unwrap();
-        // SAFETY: child exits at once (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(41) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(41) };
-        }
         // R11-018: custody from birth (the failure arms below
         // retire explicitly; the guard backstops unforeseen
         // panics and is disarmed over the retired child).
@@ -3200,16 +3160,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn r12_denied_retire_drop_issues_no_wait() {
         let _serial = R10_SERIAL.lock().unwrap();
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         // Deliberately pin-less AND armed at drop (backstop
         // shape — a caller that forgot to disarm).
         let guard = ChildGuard {
@@ -3238,12 +3193,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn r10_pinned_drop_on_esrch_issues_no_second_wait() {
         let _serial = R10_SERIAL.lock().unwrap();
-        // SAFETY: child exits at once (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(42) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(42) };
-        }
         let guard = ChildGuard::new(pid);
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
@@ -3262,16 +3216,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn r10_pinned_kill_path_still_reaps() {
         let _serial = R10_SERIAL.lock().unwrap();
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let guard = ChildGuard::new(pid);
         assert!(
             proc_state(pid).is_some(),
@@ -3299,12 +3248,11 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn r10_pinned_drop_on_zombie_still_reaps() {
         let _serial = R10_SERIAL.lock().unwrap();
-        // SAFETY: child exits at once (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(43) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(43) };
-        }
         // R11-018: custody from birth (the failure arms below
         // retire explicitly; the guard backstops unforeseen
         // panics and no-ops over the retired child).
@@ -3340,16 +3288,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r11_retire_owned_unreaped_reaps_live_child() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         retire_owned_unreaped(pid);
         let mut status = 0;
         // SAFETY: valid status out-pointer for an owned child.
@@ -3365,12 +3308,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r11_retire_owned_unreaped_reaps_zombie() {
-        // SAFETY: child exits at once (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(44) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(44) };
-        }
         // R12-016: custody before the observing setup — an
         // expiry panic above retirement must not leak.
         let mut guard = ChildGuard::new(pid);
@@ -3401,16 +3343,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r11_observe_expiry_retires_in_isolation() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(50);
         assert!(matches!(
             observe_zombie_or_retire(pid, deadline, proc_state),
@@ -3433,16 +3370,11 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r11_observe_denied_retires_live_child_in_isolation() {
-        // SAFETY: child pauses forever (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then pauses (syscalls only).
+        // R19-007: shedding pauser (a bare fork here would
+        // inherit racing pipe write ends for life).
+        let pid = unsafe { super::super::fork::fork_shedding_pauser() };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe {
-                loop {
-                    libc::pause();
-                }
-            }
-        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         assert!(matches!(
             observe_zombie_or_retire(pid, deadline, |_| None),
@@ -3471,12 +3403,11 @@ mod tests {
         use std::sync::atomic::{AtomicI32, Ordering};
         let slot = AtomicI32::new(-1);
         let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: child exits at once (async-signal-safe).
-            let pid = unsafe { libc::fork() };
+            // SAFETY: child sheds then exits (syscalls only).
+            // R19-007: shedding exiter (even a microsecond-lived
+            // bare child is discovery-visible on a racing end).
+            let pid = unsafe { super::super::fork::fork_shedding_exiter(46) };
             assert!(pid >= 0, "unit fork failed");
-            if pid == 0 {
-                unsafe { libc::_exit(46) };
-            }
             slot.store(pid, Ordering::SeqCst);
             // R12-016: custody at fork — the guard drops during
             // the unwind below and reaps.
@@ -8040,6 +7971,10 @@ mod tests {
                 libc::setpgid(0, 0);
                 let name = b"\xff\xfeforeign\x00";
                 libc::prctl(libc::PR_SET_NAME, name.as_ptr() as libc::c_ulong, 0, 0, 0);
+                // R19-007: shed inherited fds (keeps nothing —
+                // a bare pause here would inherit racing pipe
+                // write ends for life).
+                super::super::fork::shed_inherited_fds(&[]);
                 loop {
                     libc::pause();
                 }
@@ -18863,6 +18798,212 @@ time.sleep(30)
         let _ = std::fs::remove_file(&flag_count);
     }
 
+    /// R19-007: a fork-only inheritor must not be murdered at
+    /// another collection's expiry — fork copies every fd
+    /// regardless of CLOEXEC, so a bare pauser landing in a
+    /// spawn window keeps the write end for life, blocks EOF,
+    /// and is discovered + retired as a stray (brief
+    /// EOF-retention acceptance never authorized destruction).
+    /// The fix sheds inherited fds in every fork-only child
+    /// (close_range minus report fds); discovery needs no
+    /// ancestry check (R18-001's writer is orphaned and
+    /// middleman-grouped while R19-005's holders live in the
+    /// harness group — neither separates inheritors from
+    /// holders). This stages the leak deterministically: a
+    /// shedding pauser (the fixed artifact) + a bare pauser
+    /// (pre-fix shape, mechanism control) forked while the
+    /// parent holds the write end plus a high CLOEXEC-marked
+    /// dup (F_DUPFD_CLOEXEC ≥ 5000 — inherited despite the
+    /// mark, exactly like real racing ends; the PARTIAL-range
+    /// mutant keeps it), plus a genuine exec-based writer.
+    /// The bare control must attribute (leak genuine), the
+    /// shedder must stay invisible, and the expiry must kill
+    /// the control + writer while the shedder survives with
+    /// its status. STUB-RED (this shape): shed is a no-op and
+    /// the shed-proof poll fails. GREEN: exact attribution
+    /// set, selective retirement. Ample budget (neighbor-proof
+    /// — no population lock needed).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn shedding_inheritor_survives_expiry_while_holders_retire() {
+        use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
+        use std::time::{Duration, Instant};
+        // Unwind-safe owned-child cleanup (never panics —
+        // backstops RED runs; the explicit cleanup below runs
+        // first on GREEN and this turns into a gated no-op).
+        struct KillOnDrop {
+            pid: libc::pid_t,
+            tick: u64,
+        }
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = kill_tick_gated(self.pid, self.tick);
+                let mut st = 0;
+                // SAFETY: WNOHANG attempt only — our child.
+                let _ = unsafe { libc::waitpid(self.pid, &mut st, libc::WNOHANG) };
+            }
+        }
+        // Collection pipe: we keep the READ end.
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let write_fd = write.as_raw_fd();
+        let want_ino = pipe_dev_ino(read_fd).expect("collection pipe identified");
+        // High leak copy (inherited despite CLOEXEC-marking).
+        // SAFETY: duplicates an owned descriptor.
+        let high = unsafe { libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 5000) };
+        assert!(high >= 5000, "high leak copy staged (fd {high})");
+        // SAFETY: fcntl reported success — owned from here.
+        let _high_owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(high) };
+        // Inheritor: shedding pauser (the fixed artifact) —
+        // forks now, sheds, parks.
+        // SAFETY: child sheds then pauses (syscalls only).
+        let ipid = unsafe { super::super::fork::fork_shedding_pauser() };
+        assert!(ipid > 0, "inheritor fork failed");
+        // Control: BARE fork-only pauser (pre-fix shape) —
+        // inherits and keeps both copies, parks.
+        // SAFETY: child pauses forever (async-signal-safe).
+        let cpid = unsafe { libc::fork() };
+        assert!(cpid >= 0, "control fork failed");
+        if cpid == 0 {
+            unsafe {
+                loop {
+                    libc::pause();
+                }
+            }
+        }
+        let itick = proc_starttime(ipid)
+            .expect("inheritor stat readable")
+            .expect("inheritor visible");
+        let ctick = proc_starttime(cpid)
+            .expect("control stat readable")
+            .expect("control visible");
+        let _iguard = KillOnDrop {
+            pid: ipid,
+            tick: itick,
+        };
+        let _cguard = KillOnDrop {
+            pid: cpid,
+            tick: ctick,
+        };
+        // Descendant: genuine exec-based writer.
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("919")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let _wguard = KillOnDrop {
+            pid: wpid,
+            tick: wtick,
+        };
+        // Pipe-hold probe (our way — readlink scan, not trust).
+        let fd_holds_pipe = |pid: libc::pid_t, ino: u64| -> bool {
+            let want = format!("pipe:[{ino}]");
+            std::fs::read_dir(format!("/proc/{pid}/fd"))
+                .map(|entries| {
+                    entries.flatten().any(|entry| {
+                        std::fs::read_link(entry.path())
+                            .is_ok_and(|link| link.to_string_lossy() == want)
+                    })
+                })
+                .unwrap_or(false)
+        };
+        // Leak proof: the CONTROL holds write copies (single
+        // read — inheritance is synchronous at fork).
+        assert!(
+            fd_holds_pipe(cpid, want_ino.1),
+            "control must inherit the write end (mechanism non-vacuity)"
+        );
+        // Shed proof: poll the INHERITOR until no write copy
+        // remains (shed lands in µs; bounded poll — and the
+        // inheritor must stay LIVE throughout, else the
+        // absence is vacuous).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            assert_eq!(
+                proc_starttime(ipid),
+                Ok(Some(itick)),
+                "inheritor must live while shedding"
+            );
+            if !fd_holds_pipe(ipid, want_ino.1) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "inheritor must shed inherited write ends"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Discovery (ample — neighbor-proof): the bare control
+        // + the genuine writer attribute; the shedder stays
+        // invisible.
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let (mut found, truncated) =
+            extend_strays_with_pipe_writers_with(&[], Some(read_fd), None, None, &ample);
+        assert!(!truncated, "ample budget must scan fully");
+        found.sort();
+        let mut expected = vec![(cpid, ctick), (wpid, wtick)];
+        expected.sort();
+        assert_eq!(
+            found, expected,
+            "only the bare control + genuine writer attribute"
+        );
+        // Expiry: retire the discovered; the inheritor
+        // survives while holders die.
+        for (pid, tick) in &found {
+            assert!(
+                retire_stray_tree_best_effort(*pid, *tick),
+                "production retire of the attributed holder must succeed (run-proof)"
+            );
+        }
+        assert_proc_settled_live(
+            ipid,
+            itick,
+            2,
+            "shedding inheritor must survive discovery + retire",
+        );
+        // The retired holders were OUR children, killed AND
+        // reaped by the production frames (R19-005 precedent:
+        // post-retire waitpid deterministically sees ECHILD).
+        for (pid, what) in [(cpid, "control"), (wpid, "writer")] {
+            let mut st = 0;
+            // SAFETY: WNOHANG probe only — our (former) children.
+            let got = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
+            assert!(
+                got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+                "{what} status must already be drained by the production frame, got {got}"
+            );
+        }
+        drop(writer);
+        // Cleanup: the surviving inheritor (gated kill,
+        // status drains to us).
+        let _ = kill_tick_gated(ipid, itick);
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only — our child.
+            if unsafe { libc::waitpid(ipid, &mut st, libc::WNOHANG) } == ipid {
+                reaped = Some(st);
+            }
+            if proc_starttime(ipid) != Ok(Some(itick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "inheritor must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let st = reaped.expect("inheritor status must drain to us (retained, never stolen)");
+        assert!(libc::WIFSIGNALED(st), "inheritor must die by our signal");
+    }
+
     /// R18-001 staging: probe → mid (own group) → writer
     /// (mid's group, holding the probe's pipes), with an
     /// immediate-exit outer filler and mid exiting at once
@@ -19627,12 +19768,11 @@ time.sleep(30)
     fn awaited_err_arm_never_waits() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
-        // SAFETY: child exits at once (async-signal-safe).
-        let pid = unsafe { libc::fork() };
+        // SAFETY: child sheds then exits (syscalls only).
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(45) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(45) };
-        }
         // R12-016: custody before the observing setup — a
         // setup panic must not leak the zombie.
         let mut guard = ChildGuard::new(pid);
@@ -20263,13 +20403,12 @@ time.sleep(30)
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn group_drain_steals_no_foreign_child() {
-        // SAFETY: the child exits at once; the parent below
+        // SAFETY: the child sheds then exits; the parent below
         // reaps it.
-        let pid = unsafe { libc::fork() };
+        // R19-007: shedding exiter (even a microsecond-lived
+        // bare child is discovery-visible on a racing end).
+        let pid = unsafe { super::super::fork::fork_shedding_exiter(0) };
         assert!(pid >= 0, "unit fork failed");
-        if pid == 0 {
-            unsafe { libc::_exit(0) };
-        }
         assert!(
             retire_hung_middleman_group(libc::pid_t::MAX),
             "empty foreign pgid must probe retired"
@@ -20302,6 +20441,11 @@ time.sleep(30)
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0, "unit fork failed");
         if pid == 0 {
+            // R19-007: shed inherited fds first (keeps nothing —
+            // the filter install + self-guard below need none).
+            // SAFETY: forked child that never returns to managed
+            // code on any path below.
+            unsafe { super::super::fork::shed_inherited_fds(&[]) };
             if install_deny_one(libc::SYS_wait4, DenyAction::Eperm).is_err() {
                 unsafe { libc::_exit(3) };
             }
