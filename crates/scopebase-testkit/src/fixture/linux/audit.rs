@@ -11580,19 +11580,22 @@ mod tests {
     /// spawn to stat (every `;` past the kill is a reap
     /// point). Slow inline script — the fast historical
     /// bytes above cannot express the settle window: spawn,
-    /// print P, self-kill, cross boundaries (an external
-    /// `sleep 0.2` included), then stat P. REAPED is the
-    /// pinned behavior. If a future shell stops reaping,
-    /// this fails and the bin rationale must be revisited —
-    /// that failure is the pin doing its job. Duration 83
-    /// is unique to this test.
+    /// print P, self-kill, then poll for disappearance
+    /// across command boundaries (10 x 1s — each `[` and
+    /// `sleep` is itself a reap opportunity). REAPED is the
+    /// pinned behavior. The poll absorbs SCHEDULING delay
+    /// (a fixed sleep flaked under full-suite load: victim
+    /// slow to die, shell slow to reap); the pin trips only
+    /// if reaping STOPS (poll exhausts → HELD → fail), which
+    /// is when the bin rationale must be revisited. Duration
+    /// 83 is unique to this test.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn shell_publisher_reaps_at_command_boundaries() {
         use std::io::BufRead as _;
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 83 & P=$!; echo $P; kill -9 $P; sleep 0.2; if [ -e /proc/$P/stat ]; then echo HELD; else echo REAPED; fi; wait 2>/dev/null; echo DONE")
+            .arg("sleep 83 & P=$!; echo $P; kill -9 $P; for i in 1 2 3 4 5 6 7 8 9 10; do if [ ! -e /proc/$P/stat ]; then break; fi; sleep 1; done; if [ -e /proc/$P/stat ]; then echo HELD; else echo REAPED; fi; wait 2>/dev/null; echo DONE")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -12162,6 +12165,17 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("publisher spawns");
+        let pubpid = publisher.id() as libc::pid_t;
+        // Staging custody (R18-008 pattern — a staging panic
+        // must not strand the pair; the drops below stay
+        // silent once the verdict retires it). R20-010:
+        // custody immediately after spawn (the read/parse/
+        // stat below must never run unguarded).
+        let mut publisher_guard = FixtureGuard::new(pubpid);
+        assert!(
+            publisher_guard.tick.is_some(),
+            "publisher custody must pin (stage broken otherwise)"
+        );
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
