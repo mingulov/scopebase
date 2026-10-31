@@ -6591,7 +6591,10 @@ mod tests {
     /// acting). A total listing failure returns empty (the
     /// caller logs loud and retires the union alone).
     #[cfg(target_arch = "x86_64")]
-    fn discover_pipe_writers(want: &[(u64, u64)]) -> Vec<(libc::pid_t, u64)> {
+    fn discover_pipe_writers(
+        want: &[(u64, u64)],
+        verify_hook: Option<&dyn Fn(libc::pid_t)>,
+    ) -> Vec<(libc::pid_t, u64)> {
         use std::os::unix::fs::OpenOptionsExt as _;
         let mut found = Vec::new();
         if want.is_empty() {
@@ -6618,6 +6621,22 @@ mod tests {
                 Ok(fds) => fds,
                 Err(_) => continue,
             };
+            // R19-005: pin the birth BEFORE examining evidence
+            // (a recycle between evidence and pin would record
+            // the replacement's tick against the original's
+            // hold — holding the opened pipe preserves the
+            // pipe, not the task). Unverifiable skips.
+            let t0 = match proc_starttime(pid) {
+                Ok(Some(t)) => t,
+                _ => continue,
+            };
+            let read_fdinfo = |fd: &std::fs::DirEntry| -> Option<String> {
+                std::fs::read_to_string(format!(
+                    "/proc/{pid}/fdinfo/{}",
+                    fd.file_name().to_string_lossy()
+                ))
+                .ok()
+            };
             let mut holds = false;
             for fd in fds.flatten() {
                 let text = match std::fs::read_link(fd.path()) {
@@ -6641,6 +6660,16 @@ mod tests {
                 if !want.iter().any(|(_, wanted)| *wanted == ino) {
                     continue;
                 }
+                // Direction first (cheap filter for read-end
+                // copies — our own forks spare): only WRITE
+                // holders block EOF.
+                let info1 = match read_fdinfo(&fd) {
+                    Some(info) => info,
+                    None => continue,
+                };
+                if !fdinfo_flags_grant_write(&info1) {
+                    continue;
+                }
                 // Ino match: fully identify (ino alone could
                 // collide across pipefs instances) — open
                 // NONBLOCK (a stale readlink must never hang
@@ -6653,35 +6682,55 @@ mod tests {
                     Ok(file) => file,
                     Err(_) => continue,
                 };
+                use std::os::unix::fs::MetadataExt as _;
                 use std::os::unix::io::AsRawFd as _;
-                let matched = match pipe_dev_ino(file.as_raw_fd()) {
-                    Some(id) => want.contains(&id),
-                    None => false,
+                let opened_id = match pipe_dev_ino(file.as_raw_fd()) {
+                    Some(id) if want.contains(&id) => id,
+                    _ => continue,
                 };
-                if !matched {
+                // R19-005/R19-006: verification hook (regression
+                // steering only — production passes None). Fires
+                // after the identity match, before the trailing
+                // mode + slot + birth verification, modeling an
+                // adversary inside the evidence window (recycle
+                // or slot swap).
+                if let Some(hook) = verify_hook {
+                    hook(pid);
+                }
+                // R19-006: identity and mode must describe the
+                // SAME descriptor — the target slot may have
+                // swapped between the open above and this read
+                // (merging the old identity with new flags).
+                // Re-read the mode (a swap to a non-writer
+                // fails here, even a same-pipe end-swap) and
+                // re-stat the slot THROUGH the path (a swap to
+                // another writable file fails the equality).
+                let info2 = match read_fdinfo(&fd) {
+                    Some(info) => info,
+                    None => continue,
+                };
+                if !fdinfo_flags_grant_write(&info2) {
                     continue;
                 }
-                // Direction: only WRITE holders block EOF
-                // (read-end copies — our own forks — spare).
-                let info = match std::fs::read_to_string(format!(
-                    "/proc/{pid}/fdinfo/{}",
-                    fd.file_name().to_string_lossy()
-                )) {
-                    Ok(info) => info,
+                let path_id = match std::fs::metadata(fd.path()) {
+                    Ok(meta) => (meta.dev(), meta.ino()),
                     Err(_) => continue,
                 };
-                if fdinfo_flags_grant_write(&info) {
-                    holds = true;
-                    break;
+                if path_id != opened_id {
+                    continue;
                 }
+                holds = true;
+                break;
             }
             if !holds {
                 continue;
             }
-            // Pin identity: only a live verified birth joins
-            // (dead/unverifiable skips — never by number).
-            if let Ok(Some(tick)) = proc_starttime(pid) {
-                found.push((pid, tick));
+            // R19-005: re-verify AFTER the evidence — only the
+            // same birth across the whole window joins (a
+            // recycle inside it skips — never by number).
+            match proc_starttime(pid) {
+                Ok(Some(t)) if t == t0 => found.push((pid, t0)),
+                _ => {}
             }
         }
         found
@@ -6699,6 +6748,19 @@ mod tests {
         out_fd: Option<i32>,
         err_fd: Option<i32>,
     ) -> Vec<(libc::pid_t, u64)> {
+        extend_strays_with_pipe_writers_with(strays, out_fd, err_fd, None)
+    }
+
+    /// R19-005/R19-006: `verify_hook` fires after each
+    /// candidate's identity match, before mode + birth
+    /// verification (regression steering only).
+    #[cfg(target_arch = "x86_64")]
+    fn extend_strays_with_pipe_writers_with(
+        strays: &[(libc::pid_t, u64)],
+        out_fd: Option<i32>,
+        err_fd: Option<i32>,
+        verify_hook: Option<&dyn Fn(libc::pid_t)>,
+    ) -> Vec<(libc::pid_t, u64)> {
         let mut want = Vec::new();
         for fd in [out_fd, err_fd].into_iter().flatten() {
             if let Some(id) = pipe_dev_ino(fd) {
@@ -6710,7 +6772,7 @@ mod tests {
             return strays.to_vec();
         }
         let mut all = strays.to_vec();
-        for pair in discover_pipe_writers(&want) {
+        for pair in discover_pipe_writers(&want, verify_hook) {
             if !all.contains(&pair) {
                 eprintln!("expiry discovered pipe-holder stray {}", pair.0);
                 all.push(pair);
@@ -17637,6 +17699,682 @@ mod tests {
         let _ = kill_tick_gated(cpid, ctick);
         let _ = child.wait();
         let _ = parent.wait();
+    }
+
+    /// R19-005: pipe discovery must pin the birth BEFORE
+    /// (and re-verify AFTER) examining pipe evidence —
+    /// pinning after the evidence lets a recycle in between
+    /// record the replacement's tick against the original's
+    /// pipe hold, and the downstream gates validate the
+    /// genuine-for-stranger tick and kill it (holding the
+    /// opened pipe preserves the pipe, not the task). The
+    /// verification hook steers a genuine recycle between
+    /// identity match and birth pin, and the replacement
+    /// holds the SAME pipe (forked from a holder onto the
+    /// freed number, then orphaned by the forker's exit —
+    /// the slot re-check passes, so ONLY the birth bracket
+    /// can skip it); the discovered pairs then run through
+    /// the production stray retire. RED (this shape): the
+    /// replacement's tick is pinned and the retire murders
+    /// it. GREEN: pin-before/after mismatch skips it while
+    /// the legitimate holder IS attributed and retired
+    /// (proving the retire ran — survival alone would not).
+    /// Durations 916 (victim) / 917 (legitimate holder) are
+    /// unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn discovery_pins_birth_across_pipe_evidence() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // Collection pipe: we keep the READ end; the victim,
+        // the forker, and the legitimate holder each inherit
+        // the WRITE end at slot 1 (cloned pre-spawn).
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let want_ino = pipe_dev_ino(read_fd).expect("collection pipe identified");
+        let write_forker = write.try_clone().expect("write end clones");
+        let write_legit = write.try_clone().expect("write end clones");
+        let victim = std::process::Command::new("/bin/sleep")
+            .arg("916")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("victim holder spawns");
+        let vpid = victim.id() as libc::pid_t;
+        let vtick = proc_starttime(vpid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        // A legitimate holder (parks holding the pipe —
+        // discovery must attribute it and the retire must
+        // take it, proving the retire ran).
+        let mut legit = std::process::Command::new("/bin/sleep")
+            .arg("917")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write_legit))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("legitimate holder spawns");
+        let lpid = legit.id() as libc::pid_t;
+        let ltick = proc_starttime(lpid)
+            .expect("legit stat readable")
+            .expect("legit visible");
+        // Fork choreography files (pid-unique).
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let flag_fork = dir.join(format!("scopebase-r19005-fork-{me}"));
+        let flag_forked = dir.join(format!("scopebase-r19005-forked-{me}"));
+        let _ = std::fs::remove_file(&flag_fork);
+        let _ = std::fs::remove_file(&flag_forked);
+        // Forker: keeps the write end at slot 1, forks one
+        // child on the fork flag (the child inherits the
+        // write end and parks), reports the child pid, then
+        // EXITS (orphaning the fork to init — the fork must
+        // not be anyone's attributed child, or the
+        // production TREE retire would legitimately take it
+        // with its parent).
+        let script = "import os, sys
+while not os.path.exists(sys.argv[1]):
+    import time
+    time.sleep(0.001)
+c = os.fork()
+if c == 0:
+    import time
+    time.sleep(30)
+else:
+    open(sys.argv[2], 'w').write(str(c))
+    os._exit(0)
+";
+        let forker = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&flag_fork)
+            .arg(&flag_forked)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write_forker))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("forker spawns");
+        let fpid = forker.id() as libc::pid_t;
+        // Non-vacuity: all three genuinely hold the
+        // collection write end at slot 1.
+        for (who, pid) in [("victim", vpid), ("legit", lpid), ("forker", fpid)] {
+            let slot =
+                std::fs::read_link(format!("/proc/{pid}/fd/1")).expect("holder slot readable");
+            assert_eq!(
+                slot.to_string_lossy().into_owned(),
+                format!("pipe:[{}]", want_ino.1),
+                "{who} must hold the collection write end (non-vacuity)"
+            );
+        }
+        // Steering state (the hook runs on this thread).
+        struct Steer {
+            fired: bool,
+            victim: Option<std::process::Child>,
+            forker: Option<std::process::Child>,
+            rtick: Option<u64>,
+            stray: Option<(libc::pid_t, Option<u64>)>,
+            missed: bool,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            fired: false,
+            victim: Some(victim),
+            forker: Some(forker),
+            rtick: None,
+            stray: None,
+            missed: false,
+        });
+        let _nsflock = ns_last_pid_flock();
+        let found = extend_strays_with_pipe_writers_with(
+            &[],
+            Some(read_fd),
+            None,
+            Some(&|pid| {
+                // Other holders match too (legitimate) —
+                // steer only the victim's number, once.
+                if pid != vpid {
+                    return;
+                }
+                let mut state = state.borrow_mut();
+                if state.fired {
+                    return;
+                }
+                state.fired = true;
+                // In-window recycle: retire the victim, steer
+                // the forker's fork (same pipe!) onto its
+                // number, reap the exiter forker.
+                let mut victim = state.victim.take().expect("victim staged");
+                assert!(kill_tick_gated(vpid, vtick), "victim signaled");
+                let _ = victim.wait();
+                assert_eq!(proc_starttime(vpid), Ok(None), "victim number must free");
+                if !audit_steer_next_pid_unlocked(vpid) {
+                    state.missed = true;
+                    return;
+                }
+                std::fs::write(&flag_fork, "fork\n").expect("fork flag raises");
+                let end = Instant::now() + Duration::from_secs(10);
+                let child_pid: libc::pid_t = loop {
+                    if let Ok(text) = std::fs::read_to_string(&flag_forked) {
+                        if let Ok(parsed) = text.trim().parse() {
+                            break parsed;
+                        }
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "forker must report its fork (stage broken otherwise)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                let mut forker = state.forker.take().expect("forker staged");
+                let _ = forker.wait();
+                if child_pid != vpid {
+                    // Steering miss: the fork landed
+                    // elsewhere (placement contention); the
+                    // caller skips (a miss cannot exercise
+                    // the gap). The stray fork is orphaned
+                    // (forker exited) — record for parking.
+                    let stray_tick = proc_starttime(child_pid).ok().flatten();
+                    state.stray = Some((child_pid, stray_tick));
+                    state.missed = true;
+                    return;
+                }
+                let rtick = proc_starttime(vpid)
+                    .expect("replacement stat readable")
+                    .expect("replacement visible");
+                state.rtick = Some(rtick);
+            }),
+        );
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        // Park-a-stray helper (orphaned forks: kill gated,
+        // waitpid-assist for suite adoption, bounded).
+        let park_stray = |spid: libc::pid_t, stick: Option<u64>| {
+            if let Some(t) = stick {
+                let _ = kill_tick_gated(spid, t);
+            }
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only.
+                unsafe {
+                    libc::waitpid(spid, &mut st, libc::WNOHANG);
+                }
+                if proc_starttime(spid) != Ok(stick) {
+                    break;
+                }
+                if Instant::now() >= end {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let mut guard = state.borrow_mut();
+        if guard.missed || !guard.fired {
+            // Steering miss (or hook never fired — stage
+            // broken either way): park the stray + legit and
+            // skip loud.
+            let stray = guard.stray.take();
+            drop(guard);
+            if let Some((spid, stick)) = stray {
+                park_stray(spid, stick);
+            }
+            let _ = kill_tick_gated(lpid, ltick);
+            let _ = legit.wait();
+            eprintln!("skip: replacement steering missed");
+            return;
+        }
+        let rtick = guard.rtick.expect("replacement tick recorded");
+        drop(guard);
+        // Non-vacuity: the replacement is a different birth
+        // (else the recycle never staged).
+        if rtick == vtick {
+            // Same-tick retake (S100): park and skip loud.
+            park_stray(vpid, Some(rtick));
+            let _ = kill_tick_gated(lpid, ltick);
+            let _ = legit.wait();
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // End-to-end: run the discovered pairs through the
+        // production stray retire (RED: the replacement's
+        // genuine tick validates and it dies here).
+        for (pid, tick) in &found {
+            assert!(
+                retire_stray_tree_best_effort(*pid, *tick),
+                "production retire of the attributed holder must succeed (run-proof)"
+            );
+        }
+        // The gap replacement survives (its slot evidence is
+        // genuine — same pipe! — but its birth never crossed
+        // the window intact).
+        assert_proc_settled_live(
+            vpid,
+            rtick,
+            2,
+            "gap replacement must survive discovery + retire",
+        );
+        // Attribution precision: exactly the legitimate
+        // holder (no more — the replacement is excluded; no
+        // less — the retire below must have run).
+        assert_eq!(
+            found,
+            vec![(lpid, ltick)],
+            "discovery must attribute exactly the legitimate holder"
+        );
+        // The legitimate holder died by the production
+        // retire, which killed AND reaped it: the frame's
+        // death-await waitpids the verified holder every
+        // millisecond (targeted — the opposite of R19-008's
+        // group-drain theft), and an owned child shows
+        // gone only once reaped, so a successful retire
+        // deterministically leaves ECHILD for us.
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(lpid) != Ok(Some(ltick)) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "legitimate holder must die by the retire"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut st = 0;
+        // SAFETY: WNOHANG probe only — our (former) child.
+        let got = unsafe { libc::waitpid(lpid, &mut st, libc::WNOHANG) };
+        assert!(
+            got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+            "holder status must already be drained by the production frame, got {got}"
+        );
+        drop(legit);
+        // Cleanup: park the orphaned replacement (gone is
+        // the proof — init or a suite subreaper owns it).
+        park_stray(vpid, Some(rtick));
+        let _ = std::fs::remove_file(&flag_fork);
+        let _ = std::fs::remove_file(&flag_forked);
+    }
+
+    /// R19-006: pipe discovery must verify identity and mode
+    /// against the SAME descriptor — identity comes from our
+    /// opened fd while the write-mode comes from the
+    /// target's mutable slot, so a slot swap between the two
+    /// merges the old identity with new flags and
+    /// misclassifies (no PID reuse needed). The victim holds
+    /// the collection write end, then swaps its slot to an
+    /// unrelated writable file exactly inside the evidence
+    /// window (hook-driven handshake — no timing); the
+    /// discovered pairs then run through the production
+    /// stray retire. RED (this shape): the stale identity +
+    /// fresh flags attribute and the retire murders a task
+    /// that already released the pipe. GREEN: the trailing
+    /// slot re-check (fstat-path vs fstat-opened) plus the
+    /// second mode read skip it, nothing retires, the
+    /// victim survives with its status.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn discovery_verifies_slot_across_mode_read() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        // Collection pipe: we keep the READ end; the victim
+        // inherits the WRITE end at slot 1.
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let want_ino = pipe_dev_ino(read_fd).expect("collection pipe identified");
+        // Swap choreography files (pid-unique).
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let unrelated = dir.join(format!("scopebase-r19006-unrelated-{me}"));
+        let flag_swap = dir.join(format!("scopebase-r19006-swap-{me}"));
+        let flag_done = dir.join(format!("scopebase-r19006-done-{me}"));
+        let _ = std::fs::remove_file(&flag_swap);
+        let _ = std::fs::remove_file(&flag_done);
+        let _ = std::fs::remove_file(&unrelated);
+        // Victim: holds the write end at slot 1, waits for
+        // the swap flag, dup2s an unrelated writable file
+        // onto the slot, raises done, parks.
+        let script = "import os, sys, time
+u = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+while not os.path.exists(sys.argv[2]):
+    time.sleep(0.001)
+os.dup2(u, 1)
+os.close(u)
+open(sys.argv[3], 'w').write('swapped\\n')
+time.sleep(30)
+";
+        let victim = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&unrelated)
+            .arg(&flag_swap)
+            .arg(&flag_done)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("victim holder spawns");
+        let vpid = victim.id() as libc::pid_t;
+        let vtick = proc_starttime(vpid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        // Non-vacuity: the victim genuinely holds the
+        // collection write end at slot 1 (pre-swap).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let slot =
+                std::fs::read_link(format!("/proc/{vpid}/fd/1")).expect("victim slot readable");
+            if slot.to_string_lossy().into_owned() == format!("pipe:[{}]", want_ino.1) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "victim must hold the collection write end (non-vacuity)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Steering state (the hook runs on this thread).
+        struct Steer {
+            fired: bool,
+        }
+        let state = std::cell::RefCell::new(Steer { fired: false });
+        let found = extend_strays_with_pipe_writers_with(
+            &[],
+            Some(read_fd),
+            None,
+            Some(&|pid| {
+                let mut state = state.borrow_mut();
+                if state.fired {
+                    return;
+                }
+                state.fired = true;
+                assert_eq!(pid, vpid, "hook must fire for the victim only");
+                // In-window slot swap: raise the swap flag,
+                // wait for the victim's done (bounded).
+                std::fs::write(&flag_swap, "swap\n").expect("swap flag raises");
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if flag_done.exists() {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "victim must complete the slot swap (stage broken otherwise)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }),
+        );
+        assert!(
+            state.borrow().fired,
+            "hook must fire (victim must match identity)"
+        );
+        // End-to-end: run the discovered pairs through the
+        // production stray retire (RED: the stale identity +
+        // fresh flags attribute and the victim dies here —
+        // gratuitously, since it already released the pipe).
+        for (pid, tick) in &found {
+            let _ = retire_stray_tree_best_effort(*pid, *tick);
+        }
+        // The victim survives with its status retained.
+        assert_proc_settled_live(
+            vpid,
+            vtick,
+            2,
+            "swapped holder must survive discovery + retire",
+        );
+        // Cleanup: retire the victim ourselves and record
+        // its status HERE (a sibling waitpid(-1) sweep would
+        // otherwise steal it — the F16 hazard — and a bare
+        // stat poll spins on our own unreaped zombie, whose
+        // starttime persists until WE reap).
+        let _ = kill_tick_gated(vpid, vtick);
+        drop(victim);
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only — our child (the
+            // number cannot recycle while we hold it).
+            if unsafe { libc::waitpid(vpid, &mut st, libc::WNOHANG) } == vpid {
+                reaped = Some(st);
+            }
+            if proc_starttime(vpid) != Ok(Some(vtick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "victim must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let st = reaped.expect("victim status must drain to us (retained, never stolen)");
+        assert!(
+            libc::WIFSIGNALED(st),
+            "victim must die by our signal"
+        );
+        let _ = std::fs::remove_file(&flag_swap);
+        let _ = std::fs::remove_file(&flag_done);
+        let _ = std::fs::remove_file(&unrelated);
+    }
+
+    /// R19-006 (second half): the second mode read is
+    /// load-bearing on its own — a same-pipe END swap
+    /// (write end → read end of the SAME collection pipe)
+    /// keeps fstat-opened == fstat-path == want (same pipe —
+    /// the slot re-check cannot exclude it), so only the
+    /// fdinfo2 flags (read-only now) skip it. The victim
+    /// holds the collection write end at slot 1 plus the
+    /// read end at slot 3 (pre_exec dup, cloexec cleared),
+    /// then dup2s the read end onto slot 1 exactly inside
+    /// the evidence window (hook-driven handshake — no
+    /// timing); the discovered pairs then run through the
+    /// production stray retire. NOFDINFO2 (this shape): the
+    /// stale write identity + same-pipe slot equality
+    /// attribute and the retire murders a task holding only
+    /// the read end. GREEN: fdinfo2 skips it, nothing
+    /// retires, the victim survives with its status.
+    /// Complement of
+    /// `discovery_verifies_slot_across_mode_read` (which
+    /// isolates fstat-path with an unrelated swap).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn discovery_mode_reread_excludes_same_pipe_end_swap() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        // Collection pipe: we keep the READ end; the victim
+        // inherits the WRITE end at slot 1 and the READ end
+        // at slot 3 (for the same-pipe end swap).
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let want_ino = pipe_dev_ino(read_fd).expect("collection pipe identified");
+        // Swap choreography files (pid-unique).
+        let me = std::process::id();
+        let dir = std::env::temp_dir();
+        let flag_swap = dir.join(format!("scopebase-r19006s-swap-{me}"));
+        let flag_done = dir.join(format!("scopebase-r19006s-done-{me}"));
+        let _ = std::fs::remove_file(&flag_swap);
+        let _ = std::fs::remove_file(&flag_done);
+        // Victim: holds the write end at slot 1, waits for
+        // the swap flag, dup2s the read end (slot 3) onto
+        // the slot, raises done, parks.
+        let script = "import os, sys, time\nwhile not os.path.exists(sys.argv[1]):\n    time.sleep(0.001)\nos.dup2(3, 1)\nopen(sys.argv[2], 'w').write('swapped\\\\n')\ntime.sleep(30)\n";
+        let mut command = std::process::Command::new("python3");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg(&flag_swap)
+            .arg(&flag_done)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null());
+        // SAFETY: dup2 + cloexec-clear pre-exec, no
+        // userspace state touched.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(read_fd, 3) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let flags = libc::fcntl(3, libc::F_GETFD);
+                if flags < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let victim = command.spawn().expect("victim holder spawns");
+        let vpid = victim.id() as libc::pid_t;
+        let vtick = proc_starttime(vpid)
+            .expect("victim stat readable")
+            .expect("victim visible");
+        // Non-vacuity: the victim genuinely holds the
+        // collection write end at slot 1 (pre-swap) and the
+        // read end at slot 3 (both ends of the same pipe —
+        // the links agree, only the flags differ).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let slot1 =
+                std::fs::read_link(format!("/proc/{vpid}/fd/1")).expect("victim slot readable");
+            let slot3 = std::fs::read_link(format!("/proc/{vpid}/fd/3")).ok();
+            let info1 = std::fs::read_to_string(format!("/proc/{vpid}/fdinfo/1")).ok();
+            let info3 = std::fs::read_to_string(format!("/proc/{vpid}/fdinfo/3")).ok();
+            let want = format!("pipe:[{}]", want_ino.1);
+            if slot1.to_string_lossy() == want
+                && slot3.is_some_and(|link| link.to_string_lossy() == want)
+                && info1.is_some_and(|text| fdinfo_flags_grant_write(&text))
+                && info3.is_some_and(|text| !fdinfo_flags_grant_write(&text))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "victim must hold write end at 1 + read end at 3 (non-vacuity)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Steering state (the hook runs on this thread).
+        struct Steer {
+            fired: bool,
+        }
+        let state = std::cell::RefCell::new(Steer { fired: false });
+        let found = extend_strays_with_pipe_writers_with(
+            &[],
+            Some(read_fd),
+            None,
+            Some(&|pid| {
+                let mut state = state.borrow_mut();
+                if state.fired {
+                    return;
+                }
+                state.fired = true;
+                assert_eq!(pid, vpid, "hook must fire for the victim only");
+                // In-window end swap: raise the swap flag,
+                // wait for the victim's done (bounded).
+                std::fs::write(&flag_swap, "swap\n").expect("swap flag raises");
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if flag_done.exists() {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "victim must complete the end swap (stage broken otherwise)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                // Stage proof: the slot still names the SAME
+                // pipe (fstat-path cannot exclude this swap)
+                // but its flags are read-only now (only
+                // fdinfo2 can).
+                let slot = std::fs::read_link(format!("/proc/{vpid}/fd/1"))
+                    .expect("swapped slot readable");
+                assert_eq!(
+                    slot.to_string_lossy().into_owned(),
+                    format!("pipe:[{}]", want_ino.1),
+                    "swap must stay on the same pipe"
+                );
+                let info = std::fs::read_to_string(format!("/proc/{vpid}/fdinfo/1"))
+                    .expect("swapped fdinfo readable");
+                assert!(
+                    !fdinfo_flags_grant_write(&info),
+                    "swapped slot must be read-only now"
+                );
+            }),
+        );
+        assert!(
+            state.borrow().fired,
+            "hook must fire (victim must match identity)"
+        );
+        // End-to-end: run the discovered pairs through the
+        // production stray retire (NOFDINFO2: the stale write
+        // identity + same-pipe slot equality attribute and
+        // the victim dies here — gratuitously, since it
+        // holds only the read end now).
+        for (pid, tick) in &found {
+            let _ = retire_stray_tree_best_effort(*pid, *tick);
+        }
+        // The victim survives with its status retained.
+        assert_proc_settled_live(
+            vpid,
+            vtick,
+            2,
+            "end-swapped holder must survive discovery + retire",
+        );
+        // Cleanup: retire the victim ourselves and record
+        // its status HERE (a sibling waitpid(-1) sweep would
+        // otherwise steal it — the F16 hazard — and a bare
+        // stat poll spins on our own unreaped zombie, whose
+        // starttime persists until WE reap).
+        let _ = kill_tick_gated(vpid, vtick);
+        drop(victim);
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only — our child (the
+            // number cannot recycle while we hold it).
+            if unsafe { libc::waitpid(vpid, &mut st, libc::WNOHANG) } == vpid {
+                reaped = Some(st);
+            }
+            if proc_starttime(vpid) != Ok(Some(vtick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "victim must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let st = reaped.expect("victim status must drain to us (retained, never stolen)");
+        assert!(
+            libc::WIFSIGNALED(st),
+            "victim must die by our signal"
+        );
+        let _ = std::fs::remove_file(&flag_swap);
+        let _ = std::fs::remove_file(&flag_done);
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
