@@ -4341,6 +4341,56 @@ fn steer_pauser_onto(want: i32, last_before: &str) -> Option<i32> {
     placed
 }
 
+/// R16-008: toolchain twin of the audit `steer_sleep_onto` —
+/// steer a fresh `sleep 31` onto `want` (up to 100 tries under
+/// the cross-process flock; misses retired inline).
+/// `self_grouped` self-groupids the child pre-exec (group
+/// reform needs pgid == pid). The allocator hint is restored
+/// before returning either way. None when contended or
+/// unsteerable (caller skips). Caller holds STEER_SERIAL
+/// (in-process half) unless single-threaded (fresh-image
+/// probes — documented exemption at the call).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn steer_sleep_onto(want: i32, self_grouped: bool) -> Option<std::process::Child> {
+    use std::os::unix::process::CommandExt as _;
+    let last_before = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
+    let found = {
+        let _nsflock = ns_last_pid_flock();
+        let mut found = None;
+        for _ in 0..100 {
+            if !steer_next_pid_unlocked(want) {
+                break;
+            }
+            let mut command = std::process::Command::new("/bin/sleep");
+            command
+                .arg("31")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            if self_grouped {
+                // SAFETY: setpgid on self pre-exec, no userspace state.
+                unsafe {
+                    command.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+            }
+            let kid = command.spawn().expect("standin spawns");
+            if kid.id() as i32 == want {
+                found = Some(kid);
+                break;
+            }
+            let mut miss = kid;
+            let _ = miss.kill();
+            let _ = miss.wait();
+        }
+        found
+    };
+    locked_restore_hint(last_before.trim());
+    found
+}
+
 /// R15-003: toolchain twin of the audit steered-replacement
 /// test — the gated kill must spare a steered different-birth
 /// pauser on a released number. Staging mirrors drop_guard
@@ -6914,6 +6964,14 @@ impl KillGroupOnDrop {
         }
     }
 
+    /// R16-008: late-pin a recovered tick (mirror of
+    /// SilentChildGuard::pin — same caller obligation: only
+    /// ticks read while the leader is known-ours and alive,
+    /// never a post-retire re-read).
+    fn pin(&mut self, tick: u64) {
+        self.tick = Some(tick);
+    }
+
     fn disarm(&mut self) {
         self.disarmed = true;
     }
@@ -6931,14 +6989,61 @@ impl Drop for KillGroupOnDrop {
                 // retired, a stranger may have reformed the
                 // group (self-grouped onto the freed pgid); fire
                 // only while the decision still allows it.
-                // Best-effort (never panics).
-                if !probe_group_kill_allowed(self.group, tick) {
-                    return;
-                }
-                // SAFETY: signal-only to the test's own group;
-                // best-effort (failure paths must not panic).
-                unsafe {
-                    libc::killpg(self.group, libc::SIGKILL);
+                // R16-007: tri-state (was: gate-bool — the
+                // unreadable arm returned silently). Best-effort
+                // (never panics).
+                match task_starttime_checked(self.group) {
+                    Ok(Some(now)) if now == tick => {
+                        // Proven ours: kill the group, discharge
+                        // the leader (a zombie must not leak to
+                        // process exit), verify the group gone
+                        // (bounded — members die async).
+                        // SAFETY: signal-only to the test's own
+                        // group; best-effort (never panics).
+                        unsafe {
+                            libc::killpg(self.group, libc::SIGKILL);
+                        }
+                        retire_child_silent(self.group);
+                        let end = Instant::now() + Duration::from_secs(5);
+                        loop {
+                            // SAFETY: signal 0 probes existence only.
+                            let probed = unsafe { libc::killpg(self.group, 0) };
+                            // SAFETY: errno location for this thread.
+                            let errno = unsafe { libc::__errno_location().read() };
+                            if probed != 0 && errno == libc::ESRCH {
+                                return; // Proven dead: silent.
+                            }
+                            if Instant::now() >= end {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        // Members survived killpg: loud with the
+                        // pinned identity cited.
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "scopebase unresolved-group pgid={} tick={tick} members=survived",
+                            self.group
+                        );
+                    }
+                    Ok(_) => {
+                        // Gone or recycled: nothing of ours — silent.
+                    }
+                    Err(read_err) => {
+                        // R16-007: unreadable (persistent EMFILE)
+                        // — no signal without identity (R15-003),
+                        // no waitpid without identity (R16-004) —
+                        // loud unresolved with the pinned
+                        // identity cited (the owner retires
+                        // through it post-restore).
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "scopebase unresolved-group pgid={} tick={tick} read_err={read_err} leader=unverified",
+                            self.group
+                        );
+                    }
                 }
             }
             // R15-006: unpinned (the construction read failed) —
@@ -6951,9 +7056,11 @@ impl Drop for KillGroupOnDrop {
             // a pin the group is unverified (a stranger may have
             // self-grouped onto the number); the staged
             // sleeper's own clock bounds the leak (31s in the
-            // canonical stage). Residual: leader-number recycle
-            // by our own fork (R14-001-class, same as the
-            // silent-guard None arm).
+            // canonical stage). R16-008: reachable only when
+            // unwind precedes the staged late-pin with
+            // persistent failure (a recovered read pins Some) —
+            // residual: leader-number recycle by our own fork
+            // (R14-001-class, same as the silent-guard None arm).
             None => {
                 retire_child_silent(self.group);
                 // Re-probe: discharged (reaped/ECHILD) or
@@ -7048,6 +7155,11 @@ fn probe_tree_retirement_kills_stranded_group() {
     let staged = task_starttime_checked(child.id() as i32)
         .expect("stage stat readable")
         .expect("stage visible");
+    // R16-008: late-pin the recovered tick (construction may
+    // have failed while this read succeeded — without it the
+    // drop takes the unpinned fallback against a possibly
+    // reformed number).
+    guard.pin(staged);
     let status = child.wait().expect("stage exit");
     assert!(!status.success());
     assert_eq!(status.code(), Some(3));
@@ -7156,6 +7268,347 @@ fn stranded_group_read_failure_retires_before_report() {
         assert!(Instant::now() < end, "caveat group {pgid} must die");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// R16-007: a pinned guard dropped with working reads must
+/// discharge the leader (not just killpg the group) — the shell
+/// zombie must not leak to process exit, and the group must be
+/// proven dead. RED: the drop killpgs but never reaps (leader
+/// try_wait stays Some); GREEN: the drop reaps and the owner
+/// observes ECHILD, with the group ESRCH-dead as retirement
+/// evidence.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn pinned_group_drop_discharges_leader() {
+    use std::os::unix::process::CommandExt as _;
+    // Parked stage: self-grouped sh (leader LIVE) + sleepers.
+    let mut stage = std::process::Command::new("/bin/sh");
+    stage
+        .arg("-c")
+        .arg("sleep 31 & sleep 31")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stage.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut leader = stage.spawn().expect("spawn parked stage");
+    let group = leader.id() as libc::pid_t;
+    // Injected staging failure AFTER successful pin: the guard
+    // drops during unwinding with reads working (recovered arm).
+    let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = KillGroupOnDrop::new(group);
+        assert!(
+            guard.tick.is_some(),
+            "construction must pin (stage broken otherwise)"
+        );
+        panic!("r16007 injected staging failure");
+    }));
+    assert!(fired.is_err(), "injection must unwind");
+    // Leader discharged: our handle observes ECHILD (reaped by
+    // the guard — RED: zombie, Some).
+    assert!(
+        leader.try_wait().is_err(),
+        "leader must be discharged by the pinned drop"
+    );
+    // Retirement evidence: group ESRCH-dead.
+    // SAFETY: signal 0 probes existence only.
+    let probed = unsafe { libc::killpg(group, 0) };
+    // SAFETY: errno location for this thread.
+    let errno = unsafe { libc::__errno_location().read() };
+    assert_eq!(probed, -1, "group must be gone after the pinned drop");
+    assert_eq!(errno, libc::ESRCH, "group probe must fail ESRCH-only");
+}
+
+/// R16-007: probe body (fresh image, SCOPEBASE_R16007_EMFILE) —
+/// pin the guard with working reads, exhaust, force unwind so
+/// the guard drops under EMFILE (persistent arm), restore,
+/// verify-cleanup in-probe (no leak, no parent coupling), then
+/// re-panic to fail the child.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn group_guard_persistent_probe() {
+    use std::os::unix::process::CommandExt as _;
+    let mut stage = std::process::Command::new("/bin/sh");
+    stage
+        .arg("-c")
+        .arg("sleep 31 & sleep 31")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stage.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut leader = stage.spawn().expect("spawn parked stage");
+    let group = leader.id() as libc::pid_t;
+    let staged = task_starttime_checked(group)
+        .expect("stage stat readable")
+        .expect("stage visible");
+    let guard = KillGroupOnDrop::new(group);
+    assert!(
+        guard.tick.is_some(),
+        "construction must pin (stage broken otherwise)"
+    );
+    eprintln!("R16007-PINNED group={group} tick={staged}");
+    let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Declared FIRST inside: unwind drops the guard first
+        // (still exhausted → loud), restoring fds only after.
+        let mut held = Vec::new();
+        let mut guard = guard;
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let _ = &mut guard;
+        panic!("r16007 injected staging failure");
+    }));
+    assert!(fired.is_err(), "injection must unwind");
+    // Post-restore verified cleanup (tick-verified, fds fine —
+    // the loud arm retires nothing itself).
+    retire_probe_tree(&mut leader, staged);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "cleanup group {group} must die post-restore"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("r16007 injected staging failure (verified)");
+}
+
+/// R16-007: a pinned guard dropped with persistently failing
+/// reads must report explicit unresolved group custody (never
+/// silent, never a signal without identity). RED: the gate
+/// returns false and the drop returns silently; GREEN: the loud
+/// line cites the pinned identity.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_persistent_drop_reports_unresolved() {
+    if std::env::var("SCOPEBASE_R16007_EMFILE").is_ok() {
+        group_guard_persistent_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_persistent_drop_reports_unresolved")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R16007_EMFILE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "child must fail at the injected staging panic\n{stderr}"
+    );
+    assert!(
+        stderr.contains("r16007 injected"),
+        "panic must name the injection\n{stderr}"
+    );
+    let mut pinned = None;
+    let mut cited = None;
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix("R16007-PINNED ") {
+            let mut group = None;
+            let mut tick = None;
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("group=") {
+                    group = value.parse::<i32>().ok();
+                }
+                if let Some(value) = word.strip_prefix("tick=") {
+                    tick = value.parse::<u64>().ok();
+                }
+            }
+            pinned = group.zip(tick);
+        }
+        if let Some(rest) = line.strip_prefix("scopebase unresolved-group ") {
+            let mut pgid = None;
+            let mut tick = None;
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("pgid=") {
+                    pgid = value.parse::<i32>().ok();
+                }
+                if let Some(value) = word.strip_prefix("tick=") {
+                    tick = value.parse::<u64>().ok();
+                }
+            }
+            cited = pgid.zip(tick);
+        }
+    }
+    let pinned = pinned.expect("probe must print the pinned identity");
+    let cited = cited.expect("drop must print unresolved-group custody");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R16-008: probe body (fresh image, SCOPEBASE_R16008_REFORM) —
+/// fail construction reads (EMFILE through construction), let
+/// the explicit read succeed, retire the original, reform the
+/// number with another owned group, drop the guard: the reformed
+/// group must survive. RED (no pin call): the unpinned fallback
+/// waitpid-probes the live reformed leader and SIGKILLs it;
+/// GREEN (late pin): the tick mismatch stands down.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn group_guard_reform_probe() {
+    use std::os::unix::process::CommandExt as _;
+    let mut stage = std::process::Command::new("/bin/sh");
+    stage
+        .arg("-c")
+        .arg("sleep 31 & sleep 31")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stage.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut leader = stage.spawn().expect("spawn parked stage");
+    let group = leader.id() as libc::pid_t;
+    // Fail construction reads: exhaust through construction.
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "exhaustion must consume fds");
+    let mut guard = KillGroupOnDrop::new(group);
+    assert!(
+        guard.tick.is_none(),
+        "construction must fail under EMFILE (stage broken otherwise)"
+    );
+    drop(held);
+    // The explicit read SUCCEEDS (recovered identity).
+    let staged = task_starttime_checked(group)
+        .expect("stage stat readable")
+        .expect("stage visible");
+    // GREEN: the recovered tick reaches the guard (RED had no
+    // pin call — the unpinned fallback murdered the reform).
+    guard.pin(staged);
+    // Retire the original (verified, fds fine).
+    retire_probe_tree(&mut leader, staged);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "original group {group} must die before reform"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Reform the number with another owned group.
+    // Single-threaded probe: serial exemption (see helper doc).
+    let mut reformed = match steer_sleep_onto(group, true) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("R16008-SKIP reform contended");
+            eprintln!("R16008-DONE");
+            return;
+        }
+    };
+    let rtick = task_starttime_checked(group)
+        .expect("reformed stat readable")
+        .expect("reformed visible");
+    if rtick == staged {
+        let _ = reformed.kill();
+        let _ = reformed.wait();
+        eprintln!("R16008-SKIP same-tick retake (S100 — untestable this run)");
+        eprintln!("R16008-DONE");
+        return;
+    }
+    // R16-011: unwind safety — a failure below must retire the
+    // reformed sleeper, never leak it.
+    let mut reform_guard = SilentChildGuard::new(group);
+    drop(guard);
+    // SAFETY: signal 0 probes existence only.
+    assert_eq!(
+        unsafe { libc::killpg(group, 0) },
+        0,
+        "reformed group must survive guard drop"
+    );
+    assert_eq!(
+        task_starttime_checked(group),
+        Ok(Some(rtick)),
+        "reformed tick unchanged"
+    );
+    eprintln!("R16008-SURVIVED group={group}");
+    // Loud cleanup (verified, ours).
+    // SAFETY: signal-only to the staged reformed group.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    let _ = reformed.wait();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "reformed group {group} must die in cleanup"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    reform_guard.disarm();
+    eprintln!("R16008-DONE");
+}
+
+/// R16-008: a recovered explicit read must reach the guard —
+/// after the original retires and another owned group reforms
+/// the number, guard drop must spare it. RED: without the pin
+/// the unpinned fallback murders the reformed leader; GREEN:
+/// the late pin's tick mismatch stands down.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_recovered_pin_spares_reformed_group() {
+    if std::env::var("SCOPEBASE_R16008_REFORM").is_ok() {
+        group_guard_reform_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_recovered_pin_spares_reformed_group")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R16008_REFORM", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "probe child must exit 0\n{stderr}");
+    assert!(
+        stderr.contains("R16008-DONE"),
+        "completion marker missing\n{stderr}"
+    );
+    if stderr.contains("R16008-SKIP") {
+        eprintln!("skip: reform stage contended (see probe stderr)");
+        return;
+    }
+    assert!(
+        stderr.contains("R16008-SURVIVED"),
+        "reformed group must survive guard drop\n{stderr}"
+    );
 }
 
 /// R14-006: an armed group guard must not signal a reformed
