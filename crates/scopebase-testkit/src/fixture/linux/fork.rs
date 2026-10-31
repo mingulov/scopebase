@@ -152,6 +152,59 @@ pub unsafe fn fork_shedding_pauser() -> libc::pid_t {
     pid
 }
 
+/// R20-002: fork a pausing child that sheds inherited fds
+/// only after `gate` (a `CStr` path) appears — the parent
+/// holds the child pre-shed through discovery (attributed
+/// while holding, deterministically), then releases it.
+/// Parent gets the pid (<0 on fork failure, like fork); the
+/// child polls the gate (1ms cadence, 30s bound — timeout
+/// `_exit(1)`s loud), sheds (nothing to keep), and pauses
+/// forever.
+///
+/// # Safety
+///
+/// Fork in a multithreaded context: the child runs syscalls
+/// only (access + clock_gettime + nanosleep + shed + pause)
+/// plus read-only inherited stack memory (`gate`), and never
+/// returns; the parent must retire the child (it pauses until
+/// signaled) and must create the gate (else the child exits 1
+/// past the bound and the liveness asserts fail loud).
+#[cfg(test)]
+pub unsafe fn fork_gated_shedding_pauser(gate: &std::ffi::CStr) -> libc::pid_t {
+    // SAFETY: fork itself is always safe; the child upholds
+    // the syscall-only contract documented above.
+    let pid = unsafe { libc::fork() };
+    if pid == 0 {
+        unsafe {
+            let start = {
+                let mut now: libc::timespec = std::mem::zeroed();
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+                now.tv_sec
+            };
+            let nap = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 1_000_000,
+            };
+            loop {
+                if libc::access(gate.as_ptr(), libc::F_OK) == 0 {
+                    break;
+                }
+                let mut now: libc::timespec = std::mem::zeroed();
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+                if now.tv_sec - start > 30 {
+                    libc::_exit(1);
+                }
+                libc::nanosleep(&nap, std::ptr::null_mut());
+            }
+            shed_inherited_fds(&[]);
+            loop {
+                libc::pause();
+            }
+        }
+    }
+    pid
+}
+
 /// R19-007: fork a child that sheds inherited fds, then exits
 /// with `code` — the sound replacement for bare
 /// `fork(); _exit(N)` (even a microsecond-lived bare child is
