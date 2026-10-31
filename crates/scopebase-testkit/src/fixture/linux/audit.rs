@@ -7403,6 +7403,14 @@ mod tests {
     /// Missing/unparseable flags answer false (fail-closed:
     /// an unverifiable holder is never treated as a writer).
     #[cfg(target_arch = "x86_64")]
+    /// R21-004: direction predicate shared by the fdinfo
+    /// text parse (below) and the pidfd-pinned F_GETFL read
+    /// (same predicate, different source — an open file
+    /// description's access mode either way).
+    fn open_flags_grant_write(mode: u32) -> bool {
+        mode & 0o3 != 0
+    }
+
     fn fdinfo_flags_grant_write(text: &str) -> bool {
         for line in text.lines() {
             let rest = match line.strip_prefix("flags:") {
@@ -7411,7 +7419,7 @@ mod tests {
             };
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if let Ok(mode) = u32::from_str_radix(&digits, 8) {
-                return mode & 0o3 != 0;
+                return open_flags_grant_write(mode);
             }
             return false;
         }
@@ -7495,15 +7503,28 @@ mod tests {
     /// R21-002: strict per-fd holdership probe —
     /// `Some(true)` holds a wanted write end, `Some(false)`
     /// provably does not (content verdicts only), `None`
-    /// means UNOBSERVABLE (a read/open/stat failed — the fd
-    /// may or may not be a wanted end). Observation-error
-    /// sites (readlink, fdinfo × 2, fd open, fstat, slot
-    /// metadata) report `None`; content sites (non-pipe
-    /// target, non-UTF8 target — kernel pipe targets are
-    /// always `pipe:` + digits so anything else proves
-    /// non-membership — unparsable ino, ino miss, read-end
-    /// mode, post-hook mode loss, identity mismatch) report
-    /// `Some(false)`.
+    /// means UNOBSERVABLE (the fd may or may not be a
+    /// wanted end). R21-004 replaced the 4-read shape
+    /// (readlink/fdinfo/open-hook-fdinfo/metadata — forged
+    /// under A/B/A/B slot alternation, the R20-003
+    /// residual) with a pidfd-pinned grab: duplicate the
+    /// target slot through a pidfd (the SAME open file
+    /// description), then fstat + F_GETFL OUR dup —
+    /// identity+mode of ONE description, atomically. A
+    /// path-open cannot do this (our requested mode
+    /// overwrites the target's — the true-dup is the
+    /// point). Slot swaps between enumerate and grab only
+    /// change WHICH consistent description we inspect,
+    /// never mixing old identity with new flags.
+    /// Observation-error sites (readlink, pidfd_open,
+    /// pidfd_getfd, fstat, F_GETFL) report `None` —
+    /// pidfd-unavailable (denial/old kernel/permissions)
+    /// is unobservable, never the racy grant and never a
+    /// false non-holder; content sites (non-pipe target,
+    /// non-UTF8 target — kernel pipe targets are always
+    /// `pipe:` + digits so anything else proves
+    /// non-membership — unparsable ino, ino miss, identity
+    /// mismatch, read-end mode) report `Some(false)`.
     #[cfg(target_arch = "x86_64")]
     fn fd_holds_wanted_write_end_strict(
         fd: &std::fs::DirEntry,
@@ -7511,16 +7532,7 @@ mod tests {
         want: &[(u64, u64)],
         verify_hook: Option<&dyn Fn(libc::pid_t)>,
     ) -> Option<bool> {
-        use std::os::unix::fs::MetadataExt as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
-        use std::os::unix::io::AsRawFd as _;
-        let read_fdinfo = |fd: &std::fs::DirEntry| -> Option<String> {
-            std::fs::read_to_string(format!(
-                "/proc/{pid}/fdinfo/{}",
-                fd.file_name().to_string_lossy()
-            ))
-            .ok()
-        };
+        use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
         let text = match std::fs::read_link(fd.path()) {
             Ok(target) => match target.into_os_string().into_string() {
                 Ok(text) => text,
@@ -7539,59 +7551,60 @@ mod tests {
             Ok(ino) => ino,
             Err(_) => return Some(false),
         };
+        // Ino pre-filter (cheap — spares the pidfd
+        // syscalls for non-pipes and foreign pipes).
+        // Fail-closed under alternation: a filter miss
+        // only ever skips attribution, never grants.
         if !want.iter().any(|(_, wanted)| *wanted == ino) {
             return Some(false);
         }
-        // Direction first (cheap filter for read-end
-        // copies — our own forks spare): only WRITE
-        // holders block EOF.
-        let info1 = read_fdinfo(fd)?;
-        if !fdinfo_flags_grant_write(&info1) {
-            return Some(false);
-        }
-        // Ino match: fully identify (ino alone could
-        // collide across pipefs instances) — open
-        // NONBLOCK (a stale readlink must never hang
-        // the scan) and fstat.
-        let file = match std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(fd.path())
-        {
-            Ok(file) => file,
+        // Pin the PROCESS (recycle past this point grabs
+        // the original's slot, never the replacement's —
+        // and a dead target fails the grab below).
+        // Unavailable ⟹ None (denial/old kernel/
+        // permissions/gone — never the racy read).
+        let pidfd = match super::super::seccomp::pidfd_open_raw(pid) {
+            Ok(fd) => fd,
             Err(_) => return None,
         };
-        let opened_id = match pipe_dev_ino(file.as_raw_fd()) {
-            Some(id) if want.contains(&id) => id,
-            None => return None,
-            Some(_) => return Some(false),
-        };
+        // SAFETY: pidfd owned by this scope (auto-closed on
+        // every path below).
+        let pidfd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(pidfd) };
         // R19-005/R19-006: verification hook (regression
         // steering only — production passes None). Fires
-        // after the identity match, before the trailing
-        // mode + slot + birth verification, modeling an
-        // adversary inside the evidence window (recycle
-        // or slot swap).
+        // after the process pin, before the fd grab,
+        // modeling an adversary inside the evidence window
+        // (slot swap or death — a swap only changes WHICH
+        // consistent description the grab sees, never
+        // forging; death fails the grab).
         if let Some(hook) = verify_hook {
             hook(pid);
         }
-        // R19-006: identity and mode must describe the
-        // SAME descriptor — the target slot may have
-        // swapped between the open above and this read
-        // (merging the old identity with new flags).
-        // Re-read the mode (a swap to a non-writer
-        // fails here, even a same-pipe end-swap) and
-        // re-stat the slot THROUGH the path (a swap to
-        // another writable file fails the equality).
-        let info2 = read_fdinfo(fd)?;
-        if !fdinfo_flags_grant_write(&info2) {
-            return Some(false);
-        }
-        let path_id = match std::fs::metadata(fd.path()) {
-            Ok(meta) => (meta.dev(), meta.ino()),
+        // Grab the slot THROUGH the pin (true-dup — the
+        // same open file description the target holds).
+        let nr: libc::c_int = match fd.file_name().to_string_lossy().parse() {
+            Ok(nr) => nr,
             Err(_) => return None,
         };
-        Some(path_id == opened_id)
+        let dup = match super::super::seccomp::pidfd_getfd_raw(pidfd.as_raw_fd(), nr) {
+            Ok(dup) => dup,
+            Err(_) => return None,
+        };
+        // SAFETY: dup owned by this scope (auto-closed).
+        let dup = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(dup) };
+        // Identity AND mode of OUR dup — one description,
+        // atomic pair (no slot involved past the grab).
+        match pipe_dev_ino(dup.as_raw_fd()) {
+            Some(id) if want.contains(&id) => {}
+            None => return None,
+            Some(_) => return Some(false),
+        }
+        // SAFETY: F_GETFL on our own live dup.
+        let flags = unsafe { libc::fcntl(dup.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 {
+            return None;
+        }
+        Some(open_flags_grant_write(flags as u32))
     }
 
     /// R21-002: bool holdership probe for discovery —
@@ -7877,8 +7890,9 @@ mod tests {
     }
 
     /// R19-005/R19-006: `verify_hook` fires after each
-    /// candidate's identity match, before mode + birth
-    /// verification (regression steering only).
+    /// candidate's process pin + ino pre-filter, before
+    /// the pinned fd grab (R21-004 firing point —
+    /// regression steering only).
     /// R19-009: returns the truncation flag alongside the
     /// union (a budgeted scan reports, never silently
     /// certifies a partial set).
@@ -23904,6 +23918,309 @@ time.sleep(30)
         assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
         let _ = std::fs::remove_file(&flag_done);
+    }
+
+    /// R21-004 (alternation leg): an alternating slot NEVER
+    /// grants — mode+identity must describe ONE open file
+    /// description. The alternator's slot 2 flips between
+    /// the READ end of the WANTED pipe and the WRITE end of
+    /// an unrelated pipe (free-running, no handshake — a
+    /// write-grant on the wanted identity NEVER coincides
+    /// in one description), while the strict probe samples
+    /// the slot 500 times. RED (the 4-read shape): some
+    /// sample forges (info1 mode from one phase, opened
+    /// identity from the other — overwhelming over 500
+    /// iterations). GREEN (pidfd-pinned grab): every grab
+    /// is one consistent description — never a grant,
+    /// structurally. Non-vacuity: both phases must be
+    /// observed during the run (a static slot would never
+    /// forge under EITHER shape), and the alternator must
+    /// be alive at the end (a dead alternator is a static
+    /// slot).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn alternating_slot_never_grants_write() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        // Wanted pipe (we keep the read end — the `want`
+        // set; the write end is dropped — NOBODY holds a
+        // wanted write end anywhere, so any grant is
+        // doubly impossible) + unrelated pipe (its write
+        // end is the alternating mode donor).
+        let (read, write) = std::io::pipe().expect("wanted pipe");
+        drop(write);
+        let read_fd = read.as_raw_fd();
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "wanted pipe must identify");
+        let wanted_ino = want[0].1;
+        let (other_read, other_write) = std::io::pipe().expect("other pipe");
+        let other_ino = pipe_dev_ino(other_read.as_raw_fd())
+            .expect("other pipe identified")
+            .1;
+        assert_ne!(
+            other_ino, wanted_ino,
+            "pipes must be distinct (else the alternation is vacuous)"
+        );
+        // Alternator: slot 2 flips between fd 1 (read end
+        // of the WANTED pipe — identity match, read-only)
+        // and fd 0 (write end of the OTHER pipe — writable,
+        // identity miss). Stdin/stdout carry the donors;
+        // stderr starts null (clobbered by the first dup2).
+        // Prebound dup2 + tight loop (fastest phase rate —
+        // the RED forge needs phase flips inside the probe
+        // window).
+        let r_dup = read
+            .try_clone()
+            .expect("wanted read end clones for the alternator");
+        let script = "import os\nd = os.dup2\nwhile True:\n    d(0, 2)\n    d(1, 2)\n";
+        let alternator = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::from(other_write))
+            .stdout(std::process::Stdio::from(r_dup))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("alternator spawns");
+        let apid = alternator.id() as libc::pid_t;
+        let _aguard = FixtureGuard::new(apid);
+        let atick = proc_starttime(apid)
+            .expect("alternator stat readable")
+            .expect("alternator visible");
+        // Settle: slot 2 must be a PIPE before sampling
+        // (stderr starts as /dev/null — mere existence
+        // would settle before python starts; the first
+        // dup2 lands in ms; bounded).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(target) = std::fs::read_link(format!("/proc/{apid}/fd/2")) {
+                if target.to_string_lossy().starts_with("pipe:[") {
+                    break;
+                }
+            }
+            assert!(Instant::now() < end, "alternator must reach its loop");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Sample the slot 500 times (fresh readdir per
+        // sample — production-shaped enumeration); record
+        // every phase observed for the non-vacuity proof.
+        let mut phases = std::collections::HashSet::new();
+        for i in 0..500 {
+            let fds = std::fs::read_dir(format!("/proc/{apid}/fd"))
+                .expect("alternator fd table readable");
+            let mut slot = None;
+            for entry in fds.flatten() {
+                if entry.file_name().to_string_lossy() == "2" {
+                    slot = Some(entry);
+                    break;
+                }
+            }
+            let slot = slot.expect("slot 2 present every sample");
+            // Phase sample (independent readlink — the
+            // non-vacuity witness, not the verdict).
+            if let Ok(target) = std::fs::read_link(slot.path()) {
+                phases.insert(target.to_string_lossy().into_owned());
+            }
+            assert_eq!(
+                fd_holds_wanted_write_end_strict(&slot, apid, &want, None),
+                Some(false),
+                "alternating slot must never grant (sample {i})"
+            );
+        }
+        assert!(
+            phases.contains(&format!("pipe:[{wanted_ino}]")),
+            "non-vacuity: wanted phase observed ({phases:?})"
+        );
+        assert!(
+            phases.contains(&format!("pipe:[{other_ino}]")),
+            "non-vacuity: other phase observed ({phases:?})"
+        );
+        // The alternator must be alive (a dead alternator
+        // is a static slot — vacuous).
+        assert_proc_settled_live(apid, atick, 1, "alternator must survive sampling");
+        // Cleanup: kill + reap (loud), drop the handle.
+        assert!(
+            retire_tick_gated_audit_child(apid, atick),
+            "alternator retire readable"
+        );
+        assert!(
+            await_proc_gone_reaping(apid, atick, Duration::from_secs(5)),
+            "alternator must drain"
+        );
+        let _ = alternator;
+        drop(other_read);
+    }
+
+    /// R21-004 (unavailability leg): a pidfd-unavailable
+    /// probe stays UNRESOLVED — never the racy grant, never
+    /// a false non-holder. A genuine holder (sleep + write
+    /// end, duration 959) probes `Some(true)` unfiltered
+    /// (baseline non-vacuity), `None` under a pidfd_open
+    /// denial on this thread (skip loud when seccomp is
+    /// unavailable), `Some(true)` again on an unfiltered
+    /// helper thread (the hold persists — the `None` was
+    /// unavailability, not non-holdership), and `None` on
+    /// a pidfd_getfd-only-denied helper thread (the
+    /// Yama/permission shape: open succeeds, grab fails).
+    /// The bool discovery form folds `None` to `false`
+    /// (unattributed — never killed by number).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pidfd_unavailable_probe_stays_unresolved() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        // The seccomp-skip early return below retires via
+        // the FixtureGuard drop (the skip means NO filter
+        // was installed — the thread is unfiltered, so the
+        // guard's pidfd-based drop works); every other
+        // path reaps inline.
+        #[allow(clippy::zombie_processes)]
+        let holder = std::process::Command::new("/bin/sleep")
+            .arg("959")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let mut hguard = FixtureGuard::new(hpid);
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "collection pipe must identify");
+        // Each thread re-enumerates (no DirEntry crosses
+        // threads).
+        let probe_slot = |pid: libc::pid_t| -> Option<bool> {
+            let fds =
+                std::fs::read_dir(format!("/proc/{pid}/fd")).expect("holder fd table readable");
+            for entry in fds.flatten() {
+                if entry.file_name().to_string_lossy() == "1" {
+                    return fd_holds_wanted_write_end_strict(&entry, pid, &want, None);
+                }
+            }
+            panic!("holder slot 1 present");
+        };
+        // Baseline (unfiltered): genuine hold grants.
+        assert_eq!(
+            probe_slot(hpid),
+            Some(true),
+            "baseline: genuine holder must grant unfiltered"
+        );
+        // Legs 2+3 run BEFORE the denial install below
+        // (seccomp filters inherit at clone — a helper
+        // spawned after the install would inherit the
+        // open-deny and could never be unfiltered or
+        // getfd-only-denied).
+        // Leg 2: unfiltered helper — the hold persists
+        // (the denied `None` later is unavailability, not
+        // non-holdership). Scoped (borrows `want`).
+        let confirmed = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let fds = std::fs::read_dir(format!("/proc/{hpid}/fd"))
+                        .expect("holder fd table readable");
+                    for entry in fds.flatten() {
+                        if entry.file_name().to_string_lossy() == "1" {
+                            return fd_holds_wanted_write_end_strict(&entry, hpid, &want, None);
+                        }
+                    }
+                    panic!("holder slot 1 present");
+                })
+                .join()
+                .expect("helper joins")
+        });
+        assert_eq!(
+            confirmed,
+            Some(true),
+            "hold must persist (denied-None was unavailability)"
+        );
+        // Leg 3: getfd-only denial (the Yama/permission
+        // shape — open succeeds, grab fails EPERM). Scoped
+        // (borrows `want`).
+        let grabbed = std::thread::scope(|scope| {
+            scope
+                .spawn(|| -> Option<Option<bool>> {
+                    use super::super::seccomp::{install_deny_one, DenyAction};
+                    if install_deny_one(libc::SYS_pidfd_getfd, DenyAction::Eperm).is_err() {
+                        eprintln!("skip: seccomp unavailable (no getfd denial)");
+                        return None;
+                    }
+                    let fds = std::fs::read_dir(format!("/proc/{hpid}/fd"))
+                        .expect("holder fd table readable");
+                    for entry in fds.flatten() {
+                        if entry.file_name().to_string_lossy() == "1" {
+                            return Some(fd_holds_wanted_write_end_strict(
+                                &entry, hpid, &want, None,
+                            ));
+                        }
+                    }
+                    panic!("holder slot 1 present");
+                })
+                .join()
+                .expect("helper joins")
+        });
+        // `None` = filter unavailable (skip loud above —
+        // leg vacuous this run); `Some(v)` = denied, must
+        // stay unresolved.
+        match grabbed {
+            None => eprintln!("note: getfd-deny filter unavailable (leg 3 vacuous this run)"),
+            Some(verdict) => assert_eq!(
+                verdict, None,
+                "RED: getfd-denied probe must stay unresolved"
+            ),
+        }
+        // Leg 1: pidfd_open denied on THIS thread (seccomp
+        // is per-thread permanent — installed last, after
+        // the helpers joined; skip loud when unavailable —
+        // the guard below still retires the holder).
+        {
+            use super::super::seccomp::{install_deny_one, DenyAction};
+            if install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_err() {
+                eprintln!("skip: seccomp unavailable (no pidfd denial)");
+                return;
+            }
+        }
+        assert_eq!(
+            probe_slot(hpid),
+            None,
+            "RED: pidfd_open-denied probe must stay unresolved (never grant, never false-deny)"
+        );
+        // Cleanup under the pidfd_open denial: the suite's
+        // tick-gated retires need pidfd (fail EPERM here),
+        // so kill + reap by number — reservation-sound
+        // (hpid is our unreaped child — the number cannot
+        // recycle while we hold it). Then disarm (the
+        // guard's pidfd-based drop must not run denied).
+        // SAFETY: SIGKILL to our own unreaped child.
+        assert_eq!(
+            unsafe { libc::kill(hpid, libc::SIGKILL) },
+            0,
+            "holder signaled"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG reap of our own killed child.
+            if unsafe { libc::waitpid(hpid, &mut st, libc::WNOHANG) } == hpid {
+                reaped = Some(st);
+            }
+            if proc_starttime(hpid) != Ok(Some(htick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "holder must drain");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let st = reaped.expect("holder status must drain to us");
+        assert!(libc::WIFSIGNALED(st), "holder must die by our signal");
+        hguard.disarm();
+        let _ = holder;
     }
 
     /// R19-009: pipe-holder discovery is budgeted — the walk

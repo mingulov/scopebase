@@ -259,3 +259,31 @@ pub fn pidfd_open_raw(pid: libc::pid_t) -> Result<RawFd, i32> {
         Ok(fd as RawFd)
     }
 }
+
+/// R21-004: raw `pidfd_getfd` — duplicate the target's fd
+/// `target` through its pidfd (the SAME open file
+/// description: identity+mode observed on our dup are one
+/// description's, atomically — slot swaps only change
+/// WHICH description the grab sees). Returns the new dup
+/// or the exact errno observed (EBADF: slot closed
+/// mid-scan; EPERM: Yama/permission/denial; ENOSYS: old
+/// kernel — all mean unobservable to the caller, never a
+/// fallback to racy slot reads).
+pub fn pidfd_getfd_raw(pidfd: RawFd, target: libc::c_int) -> Result<RawFd, i32> {
+    // SAFETY: direct syscall with owned pidfd, target fd,
+    // zero flags; returns a new owned fd or -1 with errno
+    // set.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_getfd,
+            pidfd as libc::c_long,
+            target as libc::c_long,
+            0 as libc::c_long,
+        )
+    };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(-1))
+    } else {
+        Ok(fd as RawFd)
+    }
+}
