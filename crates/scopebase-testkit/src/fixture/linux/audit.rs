@@ -7051,6 +7051,11 @@ mod tests {
     /// generic callers retire non-pipe strays with no
     /// holdership authority to check; the expiry passes its
     /// pipe ids).
+    /// R22-011: `screen_budget` + `screen_spent` are the
+    /// family's ONE shared screen budget (top frame
+    /// creates both; every frame threads them through
+    /// unchanged — siblings share the remainder, which
+    /// bounds the family total to a single budget).
     #[cfg(target_arch = "x86_64")]
     fn retire_stray_tree_frame_with(
         pid: libc::pid_t,
@@ -7059,8 +7064,18 @@ mod tests {
         depth: u32,
         snapshot: &impl Fn(libc::pid_t) -> (Vec<(libc::pid_t, u64)>, bool),
         want: &[(u64, u64)],
+        screen_budget: &PipeScanBudget,
+        screen_spent: &mut usize,
     ) -> bool {
         if depth > 16 {
+            return false;
+        }
+        // R22-011: an expired tree deadline fail-closes at
+        // entry — false WITHOUT killing (a shed root may
+        // have burned the whole shared deadline; killing
+        // on stale evidence after unbounded delay is the
+        // original hole wider).
+        if std::time::Instant::now() >= deadline {
             return false;
         }
         match proc_starttime(pid) {
@@ -7078,27 +7093,24 @@ mod tests {
         // frame-level reverify is stale now; a shed inside
         // the snapshot must not be killed (bounds the shed
         // window to µs — the accepted adjacent residual).
-        // Fresh default budget (the population just proved
-        // scannable under it at the frame reverify —
-        // completes in practice, truncates safe in
-        // pathology; NOT shared with that budget — sharing
-        // a spent remainder would skip every genuine
-        // retire). Holds proceeds; Shed/Unverifiable skip
-        // the kill (fail-closed — killing needs positive
-        // CURRENT evidence) but still retire the snapshotted
-        // kids below (each re-verified independently);
+        // R22-011: ONE screen budget for the whole family,
+        // created at the top frame and SHARED down the
+        // recursion (siblings share the remainder — this
+        // bounds the family total to a single budget
+        // instead of one fresh 100k scan per member). The
+        // R21-003 "don't share" rationale still holds for
+        // the EXPIRY loop's remainder (a spent remainder
+        // there would skip every genuine retire) — that is
+        // a different remainder from this family's. Holds
+        // proceeds; Shed/Unverifiable skip the kill
+        // (fail-closed — killing needs positive CURRENT
+        // evidence) but still retire the snapshotted kids
+        // below (each re-verified independently);
         // NotOurs falls through to the existing gone/recycle
         // logic (which handles those correctly).
         let mut shed_skipped = false;
         if !want.is_empty() {
-            let mut re_spent = 0;
-            match reverify_pipe_holdership(
-                pid,
-                started,
-                want,
-                &PipeScanBudget::default(),
-                &mut re_spent,
-            ) {
+            match reverify_pipe_holdership(pid, started, want, screen_budget, screen_spent) {
                 HoldVerdict::Holds => {}
                 HoldVerdict::Shed => {
                     eprintln!("retire skips stray {pid} (shed during snapshot — survives)");
@@ -7303,16 +7315,33 @@ mod tests {
                     depth + 1,
                     snapshot,
                     want,
+                    screen_budget,
+                    screen_spent,
                 );
             }
             return false;
         }
+        // R22-010: visit ALL kids, return the
+        // conjunction (matches the gone arm's existing
+        // best-effort shape) — a fail-fast here strands
+        // later captured kids, incl. genuine writers born
+        // after discovery, behind one shed-skipped child.
+        let mut all_retired = true;
         for (child, tick) in &kids {
-            if !retire_stray_tree_frame_with(*child, *tick, deadline, depth + 1, snapshot, want) {
-                return false;
+            if !retire_stray_tree_frame_with(
+                *child,
+                *tick,
+                deadline,
+                depth + 1,
+                snapshot,
+                want,
+                screen_budget,
+                screen_spent,
+            ) {
+                all_retired = false;
             }
         }
-        true
+        all_retired
     }
 
     /// R17-001: best-effort retirement of one stray AND
@@ -7323,7 +7352,12 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     /// R21-003: `want` is the wanted pipe set for the
     /// frame's post-snapshot shed-screen (empty skips it).
+    /// R22-011: creates the family's ONE shared screen
+    /// budget here (top frame) — the recursion below
+    /// shares its remainder.
     fn retire_stray_tree_best_effort(pid: libc::pid_t, started: u64, want: &[(u64, u64)]) -> bool {
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         retire_stray_tree_frame_with(
             pid,
             started,
@@ -7331,6 +7365,8 @@ mod tests {
             0,
             &snapshot_stray_children,
             want,
+            &screen_budget,
+            &mut screen_spent,
         )
     }
 
@@ -21444,6 +21480,10 @@ mod tests {
             snapshot_stray_children(observed)
         };
         let worker = std::thread::spawn(move || {
+            // R22-011: the family's ONE shared screen
+            // budget (top frame creates it).
+            let screen_budget = PipeScanBudget::default();
+            let mut screen_spent = 0;
             retire_stray_tree_frame_with(
                 pid,
                 tick,
@@ -21451,6 +21491,8 @@ mod tests {
                 0,
                 &snapshot,
                 &[],
+                &screen_budget,
+                &mut screen_spent,
             )
         });
         // Wait for the stall, then recycle the number under
@@ -21758,6 +21800,10 @@ mod tests {
         // frame).
         let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let result = retire_stray_tree_frame_with(
             pub1pid,
             pub1tick,
@@ -21825,6 +21871,8 @@ mod tests {
                 (Vec::new(), false)
             },
             &[],
+            &screen_budget,
+            &mut screen_spent,
         );
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
@@ -22173,6 +22221,10 @@ mod tests {
         // design (2 s, then unresolved); pre-fix the frame
         // certifies instantly.
         let deadline = Instant::now() + Duration::from_secs(2);
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let result = retire_stray_tree_frame_with(
             pid,
             tick,
@@ -22195,6 +22247,8 @@ mod tests {
                 (Vec::new(), false)
             },
             &[],
+            &screen_budget,
+            &mut screen_spent,
         );
         // The orphan must be live (kept, never murdered —
         // true in both shapes; the discriminator is the
@@ -22457,6 +22511,10 @@ mod tests {
         let calls = std::cell::Cell::new(0u32);
         let rpair_out = std::cell::Cell::new(None::<(libc::pid_t, u64)>);
         let cshared = shared.clone();
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let deadline = Instant::now() + Duration::from_secs(10);
         let result = retire_stray_tree_frame_with(
             pid,
@@ -22495,6 +22553,8 @@ mod tests {
                 (Vec::new(), false)
             },
             &[],
+            &screen_budget,
+            &mut screen_spent,
         );
         drop(_nsflock);
         audit_locked_restore_hint(&last_before);
@@ -22677,6 +22737,10 @@ mod tests {
         // pin-failure twin — same in-process seam).
         let _confined = confine_fd_table_for_exhaustion();
         let deadline = Instant::now() + Duration::from_secs(10);
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let result = retire_stray_tree_frame_with(
             pid,
             started,
@@ -22706,6 +22770,8 @@ mod tests {
                 (Vec::new(), false)
             },
             &[],
+            &screen_budget,
+            &mut screen_spent,
         );
         // Never successful certification over the survivor.
         assert!(
@@ -25023,7 +25089,7 @@ time.sleep(30)
         let target_fd = target_read.as_raw_fd();
         let (ctl_read, ctl_write) = std::io::pipe().expect("control pipe");
         let (status_read, status_write) = std::io::pipe().expect("status pipe");
-        let mut shedder = std::process::Command::new("/bin/sh")
+        let shedder = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg("read x; exec 1>&-; echo s >&2; exec sleep 60")
             .stdin(std::process::Stdio::from(ctl_read))
@@ -25083,6 +25149,10 @@ time.sleep(30)
         // stray, nothing to await — same shape as the
         // pin-failure twin); pre-fix it kills and
         // certifies instantly.
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let result = retire_stray_tree_frame_with(
             spid,
             stick,
@@ -25090,6 +25160,8 @@ time.sleep(30)
             0,
             &snapshot,
             &want,
+            &screen_budget,
+            &mut screen_spent,
         );
         // The shedder must be live (kept, never murdered —
         // asserted BEFORE cleanup like the pin-failure
@@ -25135,6 +25207,444 @@ time.sleep(30)
             "holder must drain"
         );
         let _ = holder;
+    }
+
+    /// R22-010: the kids loop must visit ALL captured
+    /// children and return the conjunction — a
+    /// false-returning FIRST child must not abort the
+    /// loop and strand a genuine writer captured after
+    /// it. Staging: the root holds (killed, fast gone —
+    /// reaches the kids loop, the fail-fast arm, not the
+    /// best-effort arm); the fabricated snapshot returns
+    /// [shedder, writer] for the root (deterministic
+    /// shed-first ordering — capture order is what the
+    /// `&impl Fn` seam models). The shedder sheds on its
+    /// first snapshot call (control byte in, status byte
+    /// out — the shed certainly landed), then EXITS
+    /// promptly: shed real, death real, and its frame
+    /// returns false WITHOUT burning the shared deadline
+    /// (via modeled observation trouble — the bool the
+    /// real snapshot returns when /proc reads fail; a
+    /// shed + prompt death would otherwise certify true,
+    /// and a LIVE shedder would burn the whole deadline
+    /// by the accepted R21-003 design, after which
+    /// R22-011 fail-closes every later frame — that
+    /// combination is honestly unretired, not this
+    /// test). RED: pre-fix the loop fail-fasts on the
+    /// shedder and the writer survives; GREEN: the
+    /// writer retires and the conjunction stays false
+    /// (the shedder is uncertified).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_frame_shed_first_writer_second_retires_writer() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        let (target_read, target_write) = std::io::pipe().expect("target pipe");
+        let target_fd = target_read.as_raw_fd();
+        let root_out = target_write.try_clone().expect("root clone");
+        let shed_out = target_write.try_clone().expect("shedder clone");
+        let write_out = target_write.try_clone().expect("writer clone");
+        drop(target_write);
+        let (ctl_read, ctl_write) = std::io::pipe().expect("control pipe");
+        let (status_read, status_write) = std::io::pipe().expect("status pipe");
+        let root = std::process::Command::new("/bin/sleep")
+            .arg("947")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(root_out))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("root spawns");
+        let rpid = root.id() as libc::pid_t;
+        let _rguard = FixtureGuard::new(rpid);
+        // The shedder sheds on the control byte, echoes
+        // status, then EXITS (prompt death — no burn).
+        let shedder = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("read x; exec 1>&-; echo s >&2; exit 0")
+            .stdin(std::process::Stdio::from(ctl_read))
+            .stdout(std::process::Stdio::from(shed_out))
+            .stderr(std::process::Stdio::from(status_write))
+            .spawn()
+            .expect("shedder spawns");
+        let spid = shedder.id() as libc::pid_t;
+        let _sguard = FixtureGuard::new(spid);
+        let writer = std::process::Command::new("/bin/sleep")
+            .arg("948")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write_out))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer spawns");
+        let wpid = writer.id() as libc::pid_t;
+        let _wguard = FixtureGuard::new(wpid);
+        let rtick = proc_starttime(rpid)
+            .expect("root stat readable")
+            .expect("root visible");
+        let stick = proc_starttime(spid)
+            .expect("shedder stat readable")
+            .expect("shedder visible");
+        let wtick = proc_starttime(wpid)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        let want = collection_pipe_ids(Some(target_fd), None);
+        assert!(!want.is_empty(), "target pipe must identify");
+        // Pre-prove Holds for all three (without this the
+        // retire/survive asserts would be vacuous).
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        for (pid, tick, who) in [
+            (rpid, rtick, "root"),
+            (spid, stick, "shedder"),
+            (wpid, wtick, "writer"),
+        ] {
+            let mut spent = 0;
+            assert_eq!(
+                reverify_pipe_holdership(pid, tick, &want, &ample, &mut spent),
+                HoldVerdict::Holds,
+                "{who} must hold the target at frame entry"
+            );
+        }
+        // The choreographed snapshot: shed-first ordering
+        // for the root; the shedder's first call sheds
+        // and models observation trouble (see doc);
+        // later calls are plain.
+        let shed = std::cell::Cell::new(false);
+        let ctl_write = std::cell::RefCell::new(ctl_write);
+        let status_read = std::cell::RefCell::new(status_read);
+        let snapshot = |pid: libc::pid_t| -> (Vec<(libc::pid_t, u64)>, bool) {
+            if pid == spid && !shed.get() {
+                shed.set(true);
+                ctl_write
+                    .borrow_mut()
+                    .write_all(b"x\n")
+                    .expect("control byte lands");
+                let mut status = [0u8; 2];
+                status_read
+                    .borrow_mut()
+                    .read_exact(&mut status)
+                    .expect("status byte proves the shed landed");
+                assert_eq!(status, *b"s\n", "status byte shape");
+                return (vec![], true);
+            }
+            if pid == rpid {
+                return (vec![(spid, stick), (wpid, wtick)], false);
+            }
+            (vec![], false)
+        };
+        // Generous deadline: no burn is expected (all
+        // deaths prompt) — a burn here is a loud-slow
+        // regression signal, not a timeout flake.
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
+        let result = retire_stray_tree_frame_with(
+            rpid,
+            rtick,
+            Instant::now() + Duration::from_secs(10),
+            0,
+            &snapshot,
+            &want,
+            &screen_budget,
+            &mut screen_spent,
+        );
+        assert!(shed.get(), "shedder must have been screened (shed ran)");
+        assert!(
+            !result,
+            "shedder survival-uncertainty must stay uncertified (false)"
+        );
+        // The writer MUST retire (RED pre-fix: stranded
+        // live by the fail-fast; the reaping await is
+        // both evidence and cleanup — RED runs stay clean
+        // via the FixtureGuard drop).
+        assert!(
+            await_proc_gone_reaping(wpid, wtick, Duration::from_secs(5)),
+            "writer must retire after the shed-first child (fail-fast strands it)"
+        );
+        assert!(
+            await_proc_gone_reaping(rpid, rtick, Duration::from_secs(5)),
+            "root must drain"
+        );
+        assert!(
+            await_proc_gone_reaping(spid, stick, Duration::from_secs(5)),
+            "shedder must drain (self-exit)"
+        );
+        let _ = root;
+        let _ = writer;
+        let _ = shedder;
+    }
+
+    /// R22-011 cell A: a frame entered with an EXPIRED
+    /// tree deadline must return false WITHOUT killing —
+    /// killing on stale evidence after unbounded delay is
+    /// the original hole wider. RED: pre-fix no entry
+    /// check exists, the holder is killed; GREEN: the
+    /// holder survives and the outcome stays uncertified.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_frame_expired_deadline_entry_kills_nothing() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        let (target_read, target_write) = std::io::pipe().expect("target pipe");
+        let target_fd = target_read.as_raw_fd();
+        let holder = std::process::Command::new("/bin/sleep")
+            .arg("949")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(target_write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let _hguard = FixtureGuard::new(hpid);
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        let want = collection_pipe_ids(Some(target_fd), None);
+        assert!(!want.is_empty(), "target pipe must identify");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &ample, &mut spent),
+            HoldVerdict::Holds,
+            "holder must hold the target at frame entry"
+        );
+        // Expired BEFORE entry (uptime exceeds 1 s on any
+        // machine that runs this suite).
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
+        let result = retire_stray_tree_frame_with(
+            hpid,
+            htick,
+            Instant::now() - Duration::from_secs(1),
+            0,
+            &snapshot_stray_children,
+            &want,
+            &screen_budget,
+            &mut screen_spent,
+        );
+        assert!(!result, "expired entry must stay uncertified (false)");
+        // Asserted BEFORE cleanup (cleanup destroys the
+        // evidence; RED-run hygiene rides the
+        // FixtureGuard drop).
+        assert_proc_settled_live(hpid, htick, 1, "holder must survive expired entry");
+        assert!(
+            retire_tick_gated_audit_child(hpid, htick),
+            "holder retire readable"
+        );
+        assert!(
+            await_proc_gone_reaping(hpid, htick, Duration::from_secs(5)),
+            "holder must drain"
+        );
+        let _ = holder;
+    }
+
+    /// R22-011 cell B1: a frame entered with an EXHAUSTED
+    /// shared screen remainder must truncate its scan
+    /// (Unverifiable) and skip the kill — fail-closed,
+    /// never partial evidence. RED (via neuter — the
+    /// signature postdates the bug, so pre-fix code does
+    /// not compile this test; resetting the remainder at
+    /// entry restores fresh-budget behavior and the
+    /// holder is killed); GREEN: the holder survives and
+    /// the outcome stays uncertified. Zero-room
+    /// exhaustion (spent == max) truncates before the
+    /// first fd — enumeration-order independent.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_frame_exhausted_screen_remainder_kills_nothing() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        let (target_read, target_write) = std::io::pipe().expect("target pipe");
+        let target_fd = target_read.as_raw_fd();
+        let holder = std::process::Command::new("/bin/sleep")
+            .arg("950")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(target_write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let _hguard = FixtureGuard::new(hpid);
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        let want = collection_pipe_ids(Some(target_fd), None);
+        assert!(!want.is_empty(), "target pipe must identify");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        let mut spent = 0;
+        assert_eq!(
+            reverify_pipe_holdership(hpid, htick, &want, &ample, &mut spent),
+            HoldVerdict::Holds,
+            "holder must hold the target at frame entry"
+        );
+        // Exhausted remainder (read from the budget — no
+        // literal duplication of the cap); budget created
+        // adjacent to the call (fresh deadline, though
+        // the count truncation fires first regardless).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = screen_budget.max_visited_fds;
+        // Short deadline: post-fix the frame skips the
+        // kill and burns to the deadline by design (live
+        // stray, nothing to await — the accepted R21-003
+        // shape).
+        let result = retire_stray_tree_frame_with(
+            hpid,
+            htick,
+            Instant::now() + Duration::from_secs(2),
+            0,
+            &snapshot_stray_children,
+            &want,
+            &screen_budget,
+            &mut screen_spent,
+        );
+        assert!(!result, "exhausted entry must stay uncertified (false)");
+        assert_proc_settled_live(hpid, htick, 1, "holder must survive exhausted entry");
+        assert!(
+            retire_tick_gated_audit_child(hpid, htick),
+            "holder retire readable"
+        );
+        assert!(
+            await_proc_gone_reaping(hpid, htick, Duration::from_secs(5)),
+            "holder must drain"
+        );
+        let _ = holder;
+    }
+
+    /// R22-011 cell B2: the family's screen spends must
+    /// AGGREGATE into the ONE shared remainder — the
+    /// parent frame's visits are visible to the child
+    /// frame (this is what bounds the family total to a
+    /// single budget instead of one fresh 100k scan per
+    /// member). Two genuine holders (both killed, prompt
+    /// deaths — no burn): the post-call remainder must
+    /// EXACTLY equal the parent's visits-to-hit plus the
+    /// child's visits-to-hit (hit positions measured at
+    /// runtime — enumeration-order independent; any entry
+    /// error or unobservable fd breaks the exactness
+    /// LOUD, never silent). RED (via neuter — same
+    /// signature note as B1; resetting the remainder at
+    /// entry leaves only the last frame's visits and the
+    /// exactness assert fails); GREEN: exact aggregate.
+    /// Giant-table end-to-end staging was considered and
+    /// rejected: the shared 1 s budget deadline makes
+    /// count-vs-time truncation timing-dependent (slow
+    /// machines would go GREEN pre-fix) — exact small
+    /// counts prove the same sharing deterministically.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn retire_frame_screen_spends_aggregate_across_family() {
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        fn hit_position(pid: libc::pid_t, target: &str) -> Option<usize> {
+            for (position, entry) in std::fs::read_dir(format!("/proc/{pid}/fd"))
+                .ok()?
+                .enumerate()
+            {
+                let entry = entry.ok()?;
+                let link = std::fs::read_link(entry.path()).ok()?;
+                if link.to_str() == Some(target) {
+                    return Some(position);
+                }
+            }
+            None
+        }
+        let (target_read, target_write) = std::io::pipe().expect("target pipe");
+        let target_fd = target_read.as_raw_fd();
+        let parent_out = target_write.try_clone().expect("parent clone");
+        let child_out = target_write.try_clone().expect("child clone");
+        drop(target_write);
+        let parent = std::process::Command::new("/bin/sleep")
+            .arg("952")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(parent_out))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("parent spawns");
+        let ppid = parent.id() as libc::pid_t;
+        let _pguard = FixtureGuard::new(ppid);
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("944")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(child_out))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("child spawns");
+        let cpid = child.id() as libc::pid_t;
+        let _cguard = FixtureGuard::new(cpid);
+        let ptick = proc_starttime(ppid)
+            .expect("parent stat readable")
+            .expect("parent visible");
+        let ctick = proc_starttime(cpid)
+            .expect("child stat readable")
+            .expect("child visible");
+        let want = collection_pipe_ids(Some(target_fd), None);
+        assert!(!want.is_empty(), "target pipe must identify");
+        let ample = PipeScanBudget {
+            max_visited_fds: usize::MAX,
+            deadline: Instant::now() + Duration::from_secs(60),
+        };
+        for (pid, tick, who) in [(ppid, ptick, "parent"), (cpid, ctick, "child")] {
+            let mut spent = 0;
+            assert_eq!(
+                reverify_pipe_holdership(pid, tick, &want, &ample, &mut spent),
+                HoldVerdict::Holds,
+                "{who} must hold the target at frame entry"
+            );
+        }
+        // Hit positions measured on the quiescent tables
+        // (no fd activity between here and the frame —
+        // sleeps; the frame's own scan order matches this
+        // enumeration deterministically).
+        let target = format!("pipe:[{}]", want[0].1);
+        let hparent = hit_position(ppid, &target).expect("parent hit measurable");
+        let hchild = hit_position(cpid, &target).expect("child hit measurable");
+        let snapshot = |pid: libc::pid_t| -> (Vec<(libc::pid_t, u64)>, bool) {
+            if pid == ppid {
+                return (vec![(cpid, ctick)], false);
+            }
+            (vec![], false)
+        };
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
+        // Generous deadline: no burn expected (both
+        // holders die promptly).
+        let result = retire_stray_tree_frame_with(
+            ppid,
+            ptick,
+            Instant::now() + Duration::from_secs(10),
+            0,
+            &snapshot,
+            &want,
+            &screen_budget,
+            &mut screen_spent,
+        );
+        assert!(result, "both holders must retire (true)");
+        assert_eq!(
+            screen_spent,
+            (hparent + 1) + (hchild + 1),
+            "spends must aggregate across the family (fresh-per-frame leaves only the last frame's visits)"
+        );
+        assert!(
+            await_proc_gone_reaping(ppid, ptick, Duration::from_secs(5)),
+            "parent must drain"
+        );
+        assert!(
+            await_proc_gone_reaping(cpid, ctick, Duration::from_secs(5)),
+            "child must drain"
+        );
+        let _ = parent;
+        let _ = child;
     }
 
     /// R19-009 (end-to-end): a collection expiry beside a
@@ -28270,6 +28780,10 @@ time.sleep(30)
                 snapshot_stray_children(stray)
             }
         };
+        // R22-011: the family's ONE shared screen
+        // budget (top frame creates it).
+        let screen_budget = PipeScanBudget::default();
+        let mut screen_spent = 0;
         let retired = retire_stray_tree_frame_with(
             mid,
             mid_tick,
@@ -28277,6 +28791,8 @@ time.sleep(30)
             0,
             &blind_first,
             &[],
+            &screen_budget,
+            &mut screen_spent,
         );
         // Observe before cleanup (R12-014): capture the evidence,
         // retire remainders so RED runs stay clean, then assert.
