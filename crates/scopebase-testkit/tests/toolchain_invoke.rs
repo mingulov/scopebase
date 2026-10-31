@@ -3690,13 +3690,37 @@ unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
                 libc::_exit(127);
             }
             // Report the grandchild pid, then pause forever.
+            // R21-017 (toolchain twin): hand-rolled decimal —
+            // snprintf is NOT async-signal-safe after a
+            // multithreaded fork; digits reverse into the
+            // stack buffer (m2 > 0 here — failure and
+            // grandchild branches exited above).
             let mut buf = [0 as libc::c_char; 32];
-            let len = libc::snprintf(
-                buf.as_mut_ptr(),
-                buf.len(),
-                c"%d\n".as_ptr(),
-                m2 as libc::c_int,
-            );
+            let mut value = m2 as u32;
+            let mut digits = 0usize;
+            // Bounds exclude panic: u32 decimal ≤ 10 digits
+            // plus newline < 32 (no heap, no locks — the
+            // only failure mode would be an index panic on
+            // an unreachable bound).
+            loop {
+                buf[digits] = (b'0' + (value % 10) as u8) as libc::c_char;
+                digits += 1;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            {
+                let mut i = 0;
+                while i < digits / 2 {
+                    let other = digits - 1 - i;
+                    buf.swap(i, other);
+                    i += 1;
+                }
+            }
+            buf[digits] = b'\n' as libc::c_char;
+            digits += 1;
+            let len = digits as libc::c_int;
             if len > 0 {
                 let mut written = 0;
                 while written < len {
@@ -3844,6 +3868,73 @@ fn pausing_grandchild_sleep_reports_nonchild() {
     let mut mst = 0;
     let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
     assert_eq!(mgot, m1, "middleman status drains to us");
+}
+
+/// R21-017 (toolchain twin): behavioral companion — bounded
+/// grandchild reporting under concurrent libc activity
+/// (mirror of the audit witness; the deterministic pin is
+/// the audit's call-path test). Duration 914 is unique to
+/// this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn grandchild_reports_under_libc_contention() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let mut hammers = Vec::new();
+    for _ in 0..4 {
+        let stop = stop.clone();
+        hammers.push(std::thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                let v: Vec<u8> = (0..1000u32).map(|x| (x ^ n as u32) as u8).collect();
+                drop(format!("{:?}-{}", &v[..8], n));
+                n += 1;
+            }
+        }));
+    }
+    let retire = |m1: i32, m2: i32| {
+        assert_eq!(
+            unsafe { libc::kill(m2, libc::SIGKILL) },
+            0,
+            "sleeper signaled"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let dead = match std::fs::read_to_string(format!("/proc/{m2}/stat")) {
+                Err(_) => true,
+                Ok(text) => {
+                    text.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next())
+                        == Some("Z")
+                }
+            };
+            if dead {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "sleeper must die");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            unsafe { libc::kill(m1, libc::SIGKILL) },
+            0,
+            "middleman signaled"
+        );
+        let mut mst = 0;
+        let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
+        assert_eq!(mgot, m1, "middleman status drains to us");
+    };
+    for _ in 0..5 {
+        // SAFETY: multithreaded fork with a syscall-only
+        // child (audited by the call-path test).
+        let (m1, m2) =
+            unsafe { fork_pausing_grandchild_sleep("914") }.expect("report must arrive bounded");
+        assert!(m1 > 0 && m2 > 0 && m1 != m2, "pids must be valid");
+        retire(m1, m2);
+    }
+    stop.store(true, Ordering::Relaxed);
+    for hammer in hammers {
+        let _ = hammer.join();
+    }
 }
 
 /// R12-002: SIGKILL + bounded reap of an owned fork-pauser

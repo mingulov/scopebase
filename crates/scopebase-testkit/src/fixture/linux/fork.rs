@@ -242,7 +242,8 @@ pub unsafe fn fork_shedding_exiter(code: u8) -> libc::pid_t {
 /// prctl games). The middleman sheds everything but the
 /// report write end, nulls stdio (dup2 /dev/null — the
 /// grandchild must not inherit test stdio write ends),
-/// forks, reports via snprintf+write, and pauses forever.
+/// forks, reports via hand-rolled-decimal+write, and pauses
+/// forever.
 /// The grandchild execs /bin/sleep with an EMPTY env (no
 /// post-fork environ race). The report read is poll-bounded
 /// (5s) — a wedged middleman fails loud, never hangs the
@@ -251,11 +252,11 @@ pub unsafe fn fork_shedding_exiter(code: u8) -> libc::pid_t {
 /// # Safety
 ///
 /// Fork in a multithreaded context: the middleman runs
-/// syscalls only (shed + dup2 + fork + snprintf + write +
-/// pause) plus read-only inherited stack memory, and never
-/// returns; the parent must retire both children (the
-/// middleman pauses until signaled, the grandchild sleeps
-/// until signaled).
+/// syscalls only (shed + dup2 + fork + manual decimal +
+/// write + pause) plus read-only inherited stack memory,
+/// and never returns; the parent must retire both children
+/// (the middleman pauses until signaled, the grandchild
+/// sleeps until signaled).
 #[cfg(test)]
 pub unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(libc::pid_t, libc::pid_t)> {
     use std::os::unix::io::FromRawFd as _;
@@ -302,13 +303,37 @@ pub unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(libc::pid_t, l
                 libc::_exit(127);
             }
             // Report the grandchild pid, then pause forever.
+            // R21-017: hand-rolled decimal — snprintf is NOT
+            // async-signal-safe after a multithreaded fork
+            // (inherited libc locks can deadlock); digits
+            // reverse into the stack buffer (m2 > 0 here —
+            // failure and grandchild branches exited above).
             let mut buf = [0 as libc::c_char; 32];
-            let len = libc::snprintf(
-                buf.as_mut_ptr(),
-                buf.len(),
-                c"%d\n".as_ptr(),
-                m2 as libc::c_int,
-            );
+            let mut value = m2 as u32;
+            let mut digits = 0usize;
+            // Bounds exclude panic: u32 decimal ≤ 10 digits
+            // plus newline < 32 (no heap, no locks — the
+            // only failure mode would be an index panic on
+            // an unreachable bound).
+            loop {
+                buf[digits] = (b'0' + (value % 10) as u8) as libc::c_char;
+                digits += 1;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            {
+                let mut i = 0;
+                while i < digits / 2 {
+                    let other = digits - 1 - i;
+                    buf.swap(i, other);
+                    i += 1;
+                }
+            }
+            buf[digits] = b'\n' as libc::c_char;
+            digits += 1;
+            let len = digits as libc::c_int;
             if len > 0 {
                 let mut written = 0;
                 while written < len {
@@ -396,6 +421,157 @@ pub fn slots() -> (i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R21-017: call-path audit — no printf-family libc
+    /// call in post-fork code (none of it is
+    /// async-signal-safe after a multithreaded fork:
+    /// inherited libc locks can deadlock). fork.rs is
+    /// fork-path-dedicated: the ban covers everything
+    /// above this test module (code and docs — the audit
+    /// strings themselves live below, parent-side only).
+    /// The toolchain twin's fork helpers are pinned by
+    /// body extraction. Anti-vacuity: the checked regions
+    /// must contain their helpers (markers found), so a
+    /// refactor that moves the code fails instead of
+    /// passing silently. RED: `snprintf` in both
+    /// grandchild reporters. GREEN: hand-rolled decimal
+    /// everywhere. The behavioral companion
+    /// (`grandchild_reports_under_libc_contention`, both
+    /// files) witnesses bounded reporting under libc
+    /// hammering; THIS test is the deterministic pin (a
+    /// printf deadlock is only probabilistic, so behavior
+    /// alone cannot RED it). Full-line comments are
+    /// excluded from the scan (they may NAME the ban to
+    /// explain it); code lines and trailing remarks are
+    /// scanned.
+    #[test]
+    fn post_fork_code_uses_no_printf_calls() {
+        const BANNED: &[&str] = &[
+            "snprintf",
+            "sprintf(",
+            "vsnprintf",
+            "dprintf(",
+            "vfprintf(",
+            "fprintf(",
+        ];
+        let code_only = |text: &str| {
+            text.lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fork_rs = std::fs::read_to_string(root.join("src/fixture/linux/fork.rs"))
+            .expect("fork.rs readable");
+        let (pre_test, _) = fork_rs
+            .split_once("\nmod tests")
+            .expect("fork.rs test module marker found");
+        assert!(
+            pre_test.contains("fn fork_pausing_grandchild_sleep"),
+            "audited region must contain the grandchild reporter (anti-vacuity)"
+        );
+        let pre_test_code = code_only(pre_test);
+        for banned in BANNED {
+            assert!(
+                !pre_test_code.contains(banned),
+                "fork.rs post-fork code must not use {banned}"
+            );
+        }
+        let twin = std::fs::read_to_string(root.join("tests/toolchain_invoke.rs"))
+            .expect("toolchain twin readable");
+        for name in ["fn fork_pauser(", "fn fork_pausing_grandchild_sleep("] {
+            let start = twin
+                .find(name)
+                .unwrap_or_else(|| panic!("twin helper {name} must exist"));
+            let rest = &twin[start..];
+            let end = rest
+                .find("\n}\n")
+                .unwrap_or_else(|| panic!("twin helper {name} must end at column 0"));
+            let body = code_only(&rest[..end]);
+            assert!(
+                body.len() > 200 && body.contains("libc::"),
+                "twin {name} body must be substantial (anti-vacuity)"
+            );
+            for banned in BANNED {
+                assert!(
+                    !body.contains(banned),
+                    "twin {name} must not use {banned} post-fork"
+                );
+            }
+        }
+    }
+
+    /// R21-017: behavioral companion — bounded grandchild
+    /// reporting under concurrent libc activity. Four
+    /// threads hammer the allocator/formatter while five
+    /// pairs stage; every report must arrive with valid
+    /// pids (a printf-lock deadlock in the child would
+    /// surface as report timeouts → `None`). Witness, not
+    /// pin: a deadlock is probabilistic, so this passes
+    /// pre-fix too — `post_fork_code_uses_no_printf_calls`
+    /// is the deterministic pin. Duration 913 is unique to
+    /// this test. Cleanup retires every pair (sleeper
+    /// death-await, then middleman reaped).
+    #[test]
+    fn grandchild_reports_under_libc_contention() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let mut hammers = Vec::new();
+        for _ in 0..4 {
+            let stop = stop.clone();
+            hammers.push(std::thread::spawn(move || {
+                let mut n = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let v: Vec<u8> = (0..1000u32).map(|x| (x ^ n as u32) as u8).collect();
+                    drop(format!("{:?}-{}", &v[..8], n));
+                    n += 1;
+                }
+            }));
+        }
+        let retire = |m1: libc::pid_t, m2: libc::pid_t| {
+            assert_eq!(
+                unsafe { libc::kill(m2, libc::SIGKILL) },
+                0,
+                "sleeper signaled"
+            );
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let dead = match std::fs::read_to_string(format!("/proc/{m2}/stat")) {
+                    Err(_) => true,
+                    Ok(text) => {
+                        text.rsplit_once(") ")
+                            .and_then(|(_, after)| after.split_whitespace().next())
+                            == Some("Z")
+                    }
+                };
+                if dead {
+                    break;
+                }
+                assert!(std::time::Instant::now() < end, "sleeper must die");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(
+                unsafe { libc::kill(m1, libc::SIGKILL) },
+                0,
+                "middleman signaled"
+            );
+            let mut mst = 0;
+            let mgot = unsafe { libc::waitpid(m1, &mut mst, 0) };
+            assert_eq!(mgot, m1, "middleman status drains to us");
+        };
+        for _ in 0..5 {
+            // SAFETY: multithreaded fork with a
+            // syscall-only child (audited above).
+            let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("913") }
+                .expect("report must arrive bounded");
+            assert!(m1 > 0 && m2 > 0 && m1 != m2, "pids must be valid");
+            retire(m1, m2);
+        }
+        stop.store(true, Ordering::Relaxed);
+        for hammer in hammers {
+            let _ = hammer.join();
+        }
+    }
 
     /// R20-005: the grandchild helper reports the true
     /// grandchild pid; the grandchild is our non-child
