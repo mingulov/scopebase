@@ -10523,6 +10523,55 @@ mod tests {
         }
     }
 
+    /// R19-014: stranger-staging verdict (shared by the
+    /// staging arm and the forced-adoption probe — the probe
+    /// exercises this actual path): assist-then-sample —
+    /// reap-only assistance first (a suite-adopted zombie
+    /// would read Some and fail a sample-first verdict even
+    /// though it is retired), then sample the pair state and
+    /// assert retirement (no leak). Called pre-arms
+    /// (R18-010: unconditional — a contended placement must
+    /// SKIP only its arm, never suppress this). The sample is
+    /// the ns-anchored retirement proof (R19003-FLAKE02: no
+    /// trailing fresh-read absence assert follows it).
+    /// R18-010 sensitivity preserved: the assistance is
+    /// reap-only (never kills), so a live survivor still
+    /// reads Some and fails — only reaped zombies flip to
+    /// None. Silent budget expiry (the asserts below report).
+    #[cfg(target_arch = "x86_64")]
+    fn stranger_staging_verdict(
+        stranger: libc::pid_t,
+        stick: u64,
+        sh: libc::pid_t,
+        shtick: u64,
+        budget: std::time::Duration,
+    ) {
+        use std::time::Instant;
+        let end = Instant::now() + budget;
+        loop {
+            // R18-006: reap tick-verified zombies (adopted or
+            // owned) so the sample below observes them gone.
+            // Reap-only: a live survivor is never touched
+            // (R18-010 sensitivity).
+            waitpid_assist_verified(stranger, stick);
+            waitpid_assist_verified(sh, shtick);
+            let down = proc_starttime(stranger) != Ok(Some(stick))
+                && proc_starttime(sh) != Ok(Some(shtick));
+            if down || Instant::now() >= end {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let sstate = proc_starttime(stranger);
+        let hstate = proc_starttime(sh);
+        assert_eq!(
+            sstate,
+            Ok(None),
+            "stranger failure must not leak the grandchild"
+        );
+        assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
+    }
+
     /// Stranger-pair hygiene (shared by the staging test and
     /// the R18-006 adoption probe — the probe exercises this
     /// actual path): tick-gated stranger kill (the guards
@@ -11361,6 +11410,192 @@ mod tests {
         assert!(
             stderr.contains("R18006-ADOPTED retired=1"),
             "probe must cite the retirement\n{stderr}"
+        );
+    }
+
+    /// R19-014: probe body (fresh image,
+    /// SCOPEBASE_R19014_SUBREAPER) — forced-adoption schedule
+    /// (R18-006 pattern: STOP-freeze the shell, kill the
+    /// stranger, settle Z with the shell still T, SIGKILL the
+    /// shell WITHOUT reaping so the zombie adopts to the
+    /// probe), then the ACTUAL shared staging verdict. RED
+    /// (sample-first verdict): the sample catches the adopted
+    /// zombie (Some) and fails even though assistance would
+    /// reap it. GREEN (assist-then-sample): the verdict
+    /// assists first and reads None. Duration 79 is unique
+    /// to this test (both harnesses).
+    #[cfg(target_arch = "x86_64")]
+    fn stranger_verdict_adoption_probe() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // Confined subreaper (fresh image — the process-global
+        // mark stays inside the probe).
+        // SAFETY: prctl on self; marking a fresh probe process.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+            0,
+            "probe must become a child subreaper"
+        );
+        #[allow(clippy::zombie_processes)]
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(pair_publisher_script("79", "wait"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("stranger pid readable");
+        // R19-001: transmitted pair (no receiver
+        // first-read).
+        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
+        let shpid = sh.id() as libc::pid_t;
+        let shtick = proc_starttime(shpid)
+            .expect("shell stat readable")
+            .expect("shell visible");
+        // Staging custody (R18-008 pattern — a staging panic
+        // must not strand the pair; the drops below stay
+        // silent once the verdict retires it).
+        let mut stranger_guard = FixtureGuard::new_expected(stranger, stick);
+        assert!(
+            stranger_guard.tick.is_some(),
+            "stranger custody must pin (stage broken otherwise)"
+        );
+        let mut shell_guard = FixtureGuard::new(shpid);
+        assert!(
+            shell_guard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        // Freeze the shell: from here it cannot reap.
+        // SAFETY: SIGSTOP to our own staged shell.
+        assert_eq!(
+            unsafe { libc::kill(shpid, libc::SIGSTOP) },
+            0,
+            "shell freeze"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(shpid), Some(state) if state == 'T') {
+                break;
+            }
+            assert!(Instant::now() < end, "shell must stop");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Kill the stranger under the frozen shell.
+        assert!(
+            kill_tick_gated(stranger, stick),
+            "stranger kill must not fail unreadable (broken staging)"
+        );
+        // Non-vacuity: stranger Z while the shell is still T
+        // (the shell provably never reaped across the death).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if matches!(proc_state(stranger), Some(state) if state == 'Z') {
+                break;
+            }
+            assert!(Instant::now() < end, "stranger must zombify");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            matches!(proc_state(shpid), Some(state) if state == 'T'),
+            "shell still frozen at stranger death (else it may have reaped)"
+        );
+        // Kill the shell WITHOUT reaping: dies unreaped, so
+        // the stranger zombie adopts to the probe (nearest
+        // subreaper ancestor). A stopped task needs no CONT
+        // to die by SIGKILL.
+        // SAFETY: SIGKILL to our own frozen shell.
+        assert_eq!(
+            unsafe { libc::kill(shpid, libc::SIGKILL) },
+            0,
+            "shell kill must land on the frozen shell"
+        );
+        // The ACTUAL shared verdict (RED pre-fix: the sample
+        // catches the adopted zombie; GREEN post-fix: the
+        // verdict assists first). RED cleanup rides the
+        // guards (they reap the adoptee + shell on unwind).
+        stranger_staging_verdict(stranger, stick, shpid, shtick, Duration::from_secs(5));
+        stranger_guard.disarm();
+        shell_guard.disarm();
+        eprintln!("R19014-VERDICT retired=1");
+    }
+
+    /// R19-014: driver — the forced-adoption probe above runs
+    /// in a child with its own process identity (the prctl
+    /// mark must not leak into the suite).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stranger_staging_verdict_assists_adopted_zombie() {
+        if std::env::var("SCOPEBASE_R19014_SUBREAPER").is_ok() {
+            stranger_verdict_adoption_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::stranger_staging_verdict_assists_adopted_zombie")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19014_SUBREAPER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe verdict must pass under forced adoption\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R19014-VERDICT retired=1"),
+            "probe must cite the verdict\n{stderr}"
+        );
+    }
+
+    /// R19-014: sensitivity lock — the shared verdict must
+    /// FAIL on a live pair (missing retirement): the
+    /// assistance is reap-only (never kills), so survivors
+    /// read Some. In-process (no adoption involved); short
+    /// budget (a live-forever pair flips never — any budget
+    /// fails; 200ms keeps it fast). Cleanup rides the
+    /// guards (never disarmed here). Duration 77 is unique
+    /// to this test (both harnesses).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stranger_staging_verdict_fails_live_pair() {
+        use std::io::BufRead as _;
+        use std::time::Duration;
+        #[allow(clippy::zombie_processes)]
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(pair_publisher_script("77", "wait"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("stranger pid readable");
+        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
+        let shpid = sh.id() as libc::pid_t;
+        let shtick = proc_starttime(shpid)
+            .expect("shell stat readable")
+            .expect("shell visible");
+        // Own teardown (the verdict below must NOT retire —
+        // the drops here do).
+        let _stranger_guard = FixtureGuard::new_expected(stranger, stick);
+        let _shell_guard = FixtureGuard::new(shpid);
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stranger_staging_verdict(stranger, stick, shpid, shtick, Duration::from_millis(200));
+        }));
+        assert!(
+            failed.is_err(),
+            "verdict must fail a live pair (missing retirement)"
         );
     }
 
@@ -13036,8 +13271,8 @@ mod tests {
             let _stranger_guard = FixtureGuard::new_expected(stranger, stick);
             panic!("R16011 injected stranger-staging failure");
         }));
-        let sstate = proc_starttime(stranger);
-        let hstate = proc_starttime(sh);
+        // R19-014: verdict pre-arms (R18-010: unconditional).
+        stranger_staging_verdict(stranger, stick, sh, shtick, Duration::from_secs(5));
         // R18-007: tick-gated tail (shared helper — the
         // guards above already raw-reaped, so the owned
         // handle is stale and never touched again).
@@ -13084,15 +13319,8 @@ mod tests {
         stranger_pair_hygiene(stranger, stick, sh, shtick);
         outer_sh.disarm();
         outer_stranger.disarm();
-        assert_eq!(
-            sstate,
-            Ok(None),
-            "stranger failure must not leak the grandchild"
-        );
-        assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
-        // R19003-FLAKE02: no trailing fresh-read absence
-        // assert — `hstate` is the ns-anchored retirement
-        // proof (see helper docs).
+        // R19-014: retirement verdict ran pre-arms (shared
+        // helper above) — only the failure report remains.
         assert!(failed.is_err(), "stranger failure must report");
         // Arm DECISION (R17-006 site 1): sleeper birth, tick
         // read, INJECTED observation (unreadable reports
