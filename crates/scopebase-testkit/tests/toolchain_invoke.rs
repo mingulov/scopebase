@@ -7480,8 +7480,33 @@ impl Drop for KillGroupOnDrop {
                             self.group
                         );
                     }
-                    Ok(_) => {
-                        // Gone or recycled: nothing of ours — silent.
+                    Ok(leader) => {
+                        // R17-004: the leader is gone (None) or
+                        // recycled (Some(other)) — but the GROUP
+                        // may retain live members (a sleeper
+                        // survives its reaped shell). Silence here
+                        // leaks the group with no custody report
+                        // while the unpinned arm yells for live
+                        // groups — inconsistent. Probe the group
+                        // with the shared loudness decision: members
+                        // present yields loud unresolved custody
+                        // (NO signal — a stranger may have reformed
+                        // the group, R14-006); ESRCH-gone stays
+                        // silent.
+                        // SAFETY: signal 0 probes existence only.
+                        let probed = unsafe { libc::killpg(self.group, 0) };
+                        // SAFETY: errno location for this thread.
+                        let errno = unsafe { libc::__errno_location().read() };
+                        if !unpinned_group_drop_loud(probed, errno) {
+                            return; // Proven gone: silent.
+                        }
+                        let leader = if leader.is_none() { "gone" } else { "recycled" };
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "scopebase unresolved-group pgid={} tick={tick} leader={leader} members=present",
+                            self.group
+                        );
                     }
                     Err(read_err) => {
                         // R16-007: unreadable (persistent EMFILE)
@@ -7562,8 +7587,9 @@ fn unpinned_group_drop_decisions() {
 /// own group forks a 31s sleeper and exits 3 at once — the
 /// helper must leave the group ESRCH-dead (far ahead of the
 /// sleeper's own clock) and preserve the observed status.
-/// Idempotent: a second call over the empty group is a silent
-/// no-op (ESRCH/ECHILD, never a hang).
+/// R17-004: single call (the old benign double is deduped —
+/// repeat-call safety is covered with real asserts by the
+/// R12-005 skip-twice and R13-003 spare-twice shapes).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn probe_tree_retirement_kills_stranded_group() {
@@ -7616,7 +7642,6 @@ fn probe_tree_retirement_kills_stranded_group() {
     let status = child.wait().expect("stage exit");
     assert!(!status.success());
     assert_eq!(status.code(), Some(3));
-    retire_probe_tree(&mut child, staged);
     retire_probe_tree(&mut child, staged);
     let end = Instant::now() + Duration::from_secs(5);
     loop {
@@ -8191,6 +8216,227 @@ fn group_guard_persistent_drop_reports_unresolved() {
     let pinned = pinned.expect("probe must print the pinned identity");
     let cited = cited.expect("drop must print unresolved-group custody");
     assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+}
+
+/// R17-004: probe body (fresh image, SCOPEBASE_R17004_REAPED =
+/// stray|gone) — pin the guard, reap the leader via wait,
+/// unwind BEFORE explicit tree retirement without disarming.
+/// The pinned drop sees a reaped leader: with a stray member
+/// it must yell unresolved custody (never signal — the group
+/// may be stranger-reformed); with the group gone it stays
+/// silent. Post-drop the probe verifies no-signal (stray
+/// alive) and the owner retires through the custody line.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn group_guard_reaped_leader_probe(stray: bool) {
+    use std::os::unix::process::CommandExt as _;
+    let script = if stray {
+        "sleep 31 & echo $!; exit 3"
+    } else {
+        "exit 3"
+    };
+    let mut stage = std::process::Command::new("/bin/sh");
+    stage
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        stage.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut child = stage.spawn().expect("spawn exiting stage");
+    let group = child.id() as libc::pid_t;
+    let staged = task_starttime_checked(group)
+        .expect("stage stat readable")
+        .expect("stage visible");
+    let guard = KillGroupOnDrop::new(group);
+    assert_eq!(
+        guard.tick,
+        Some(staged),
+        "construction must pin (stage broken otherwise)"
+    );
+    eprintln!("R17004-PINNED group={group} tick={staged}");
+    let status = child.wait().expect("leader exit");
+    assert!(!status.success());
+    assert_eq!(status.code(), Some(3));
+    // Learn the stray's pid (bg job — the no-signal oracle
+    // needs a settled per-task verdict, not killpg-0: death
+    // lands in ms, and a lingering zombie answers 0).
+    let stray_pid = if stray {
+        // ONE line, never to-EOF: the live stray inherits
+        // the pipe, so read_to_string would block 31s.
+        use std::io::BufRead as _;
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().expect("stage stdout piped"))
+            .read_line(&mut line)
+            .expect("stage stdout readable");
+        Some(
+            line.trim()
+                .parse::<libc::pid_t>()
+                .expect("stray pid parses"),
+        )
+    } else {
+        None
+    };
+    let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = guard;
+        panic!("r17004 injected post-wait failure");
+    }));
+    assert!(fired.is_err(), "injection must unwind");
+    eprintln!("R17004-DROPPED");
+    if let Some(stray_pid) = stray_pid {
+        // Stranger protection: the drop must have sent NO
+        // signal — the orphaned sleeper stays live with an
+        // empty pending mask across the full settle window.
+        assert!(
+            settle_spared(stray_pid),
+            "stray {stray_pid} must survive the drop (no signal)"
+        );
+        eprintln!("R17004-SPARED spared=1");
+    }
+    // Owner retires through the custody line (verified
+    // cleanup — the loud arm retires nothing itself).
+    retire_probe_tree(&mut child, staged);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(group, 0) } < 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "cleanup group {group} must die post-drop"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("r17004 injected post-wait failure (verified)");
+}
+
+/// R17-004: a pinned guard dropped after its leader was
+/// reaped, with the group retaining a live member, must
+/// report explicit unresolved group custody (never silent —
+/// the unpinned arm yells for live groups) and must send NO
+/// signal (a stranger may have reformed the group, R14-006).
+/// RED: the Ok arm returns silently; GREEN: the loud line
+/// cites the pinned identity with leader=gone members=present.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_reaped_leader_reports_live_members() {
+    if std::env::var("SCOPEBASE_R17004_REAPED").as_deref() == Ok("stray") {
+        group_guard_reaped_leader_probe(true);
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_reaped_leader_reports_live_members")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R17004_REAPED", "stray")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "child must fail at the injected staging panic\n{stderr}"
+    );
+    assert!(
+        stderr.contains("r17004 injected"),
+        "panic must name the injection\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17004-DROPPED"),
+        "unwind must pass through the guard\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17004-SPARED spared=1"),
+        "stray must survive the drop (no signal)\n{stderr}"
+    );
+    let mut pinned = None;
+    let mut cited = None;
+    let mut words = String::new();
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix("R17004-PINNED ") {
+            let mut group = None;
+            let mut tick = None;
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("group=") {
+                    group = value.parse::<i32>().ok();
+                }
+                if let Some(value) = word.strip_prefix("tick=") {
+                    tick = value.parse::<u64>().ok();
+                }
+            }
+            pinned = group.zip(tick);
+        }
+        if let Some(rest) = line.strip_prefix("scopebase unresolved-group ") {
+            let mut pgid = None;
+            let mut tick = None;
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("pgid=") {
+                    pgid = value.parse::<i32>().ok();
+                }
+                if let Some(value) = word.strip_prefix("tick=") {
+                    tick = value.parse::<u64>().ok();
+                }
+            }
+            cited = pgid.zip(tick);
+            words = rest.to_owned();
+        }
+    }
+    let pinned = pinned.expect("probe must print the pinned identity");
+    let cited = cited.expect("drop must print unresolved-group custody");
+    assert_eq!(cited, pinned, "custody line must cite the pinned identity");
+    assert!(
+        words.contains("leader=gone"),
+        "custody line must name the reaped leader\n{stderr}"
+    );
+    assert!(
+        words.contains("members=present"),
+        "custody line must name the live members\n{stderr}"
+    );
+}
+
+/// R17-004: ESRCH twin — a pinned guard dropped after its
+/// leader was reaped, with the group fully gone, stays
+/// silent (guards the yell against always-loud mutants).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_guard_reaped_leader_silent_when_group_gone() {
+    if std::env::var("SCOPEBASE_R17004_REAPED").as_deref() == Ok("gone") {
+        group_guard_reaped_leader_probe(false);
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("group_guard_reaped_leader_silent_when_group_gone")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R17004_REAPED", "gone")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "child must fail at the injected staging panic\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17004-DROPPED"),
+        "unwind must pass through the guard\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("scopebase unresolved-group"),
+        "drop must stay silent on a gone group\n{stderr}"
+    );
 }
 
 /// R16-008: probe body (fresh image, SCOPEBASE_R16008_REFORM) —
