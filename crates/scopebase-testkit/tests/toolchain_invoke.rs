@@ -5533,34 +5533,92 @@ fn spawn_self_grouped_publisher(
     command.spawn().expect("self-grouped publisher spawns")
 }
 
+/// R22-001 (toolchain twin): one group member's triage
+/// evidence (mirror of the lib struct).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct GroupMember {
+    pid: i32,
+    birth: Option<(i32, u64)>,
+    state: Option<char>,
+}
+
+/// R22-001 (toolchain twin): enumerate the CURRENT members
+/// of process group `pgid` via /proc (mirror of the lib
+/// enumerator — evidence only; the ESRCH probe judges).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn enumerate_group_members(pgid: i32) -> Vec<GroupMember> {
+    let mut members = Vec::new();
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(_) => return members,
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let name = match entry.file_name().to_str() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let pid: i32 = match name.parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        if !task_pgrp_matches(&name, pgid) {
+            continue;
+        }
+        let birth = match (proc_ppid(pid), task_starttime_checked(pid)) {
+            (Some(ppid), Ok(Some(tick))) => Some((ppid, tick)),
+            _ => None,
+        };
+        members.push(GroupMember {
+            pid,
+            birth,
+            state: task_state(pid),
+        });
+    }
+    members
+}
+
+/// R22-001 (toolchain twin): fail-fast guard — mirror of
+/// the lib guard (all subreaper sets confined fresh-image;
+/// a set mark here is a leak — panic loud).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn assert_no_subreaper_leak(what: &str) {
+    // The get writes the flag through arg2 (a NULL arg2
+    // faults — pass a real slot, check the return too).
+    let mut marked: libc::c_int = -1;
+    // SAFETY: prctl get-only into a valid local slot.
+    let got = unsafe {
+        libc::prctl(
+            libc::PR_GET_CHILD_SUBREAPER,
+            &mut marked as *mut libc::c_int,
+            0,
+            0,
+            0,
+        )
+    };
+    assert_eq!(got, 0, "{what}: subreaper query failed");
+    assert_eq!(
+        marked, 0,
+        "{what}: child-subreaper marked in-process (leak — group drains cannot settle adopted zombies)"
+    );
+}
+
 /// R21-007/009/010 (holistic, twin mirror): await
-/// process-group `pgid` empty (bounded). Drain our adopted
-/// zombies in the group first (waitpid -pgid only touches
-/// OUR children — never steals), then signal-0 probe for
-/// ESRCH. True when empty. Never signals fatally (the probe
-/// is signal 0 — safe on an unpinned number; a recycled pgid
-/// fails loud here, never murders). Never panics.
+/// process-group `pgid` empty (bounded). R22-001: PURE
+/// OBSERVATION (mirror of the lib fix — the waitpid(-pgid)
+/// drain is deleted; no waits here at all; timeout fails
+/// loud with the enumerated member evidence). True only on
+/// ESRCH. Never signals fatally (signal 0 — safe on an
+/// unpinned number; a recycled pgid fails loud here, never
+/// murders). Never panics.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn await_group_empty(pgid: i32, timeout: std::time::Duration) -> bool {
     use std::time::{Duration, Instant};
     let end = Instant::now() + timeout;
     loop {
-        loop {
-            let mut status = 0;
-            // SAFETY: -pgid filters to our children in the
-            // group; WNOHANG never blocks.
-            let got = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
-            if got > 0 {
-                continue;
-            }
-            if got < 0 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-            }
-            break;
-        }
         // SAFETY: signal 0 probes existence only.
         let probed = unsafe { libc::killpg(pgid, 0) };
         if probed < 0 {
@@ -5571,6 +5629,25 @@ fn await_group_empty(pgid: i32, timeout: std::time::Duration) -> bool {
             }
         }
         if Instant::now() >= end {
+            // Loud evidence (WHO survived — with
+            // ppid/tick/state per member for triage).
+            let members = enumerate_group_members(pgid);
+            let detail: Vec<String> = members
+                .iter()
+                .map(|member| {
+                    format!(
+                        "pid={} ppid={:?} tick={:?} state={:?}",
+                        member.pid,
+                        member.birth.map(|birth| birth.0),
+                        member.birth.map(|birth| birth.1),
+                        member.state,
+                    )
+                })
+                .collect();
+            eprintln!(
+                "group {pgid} not empty after {timeout:?}: {}",
+                detail.join(", ")
+            );
             return false;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -5583,19 +5660,27 @@ fn await_group_empty(pgid: i32, timeout: std::time::Duration) -> bool {
 /// the leader is OUR child and NOTHING reaped it yet (no
 /// guard armed, no wait called — the number cannot have
 /// recycled, so the first tick read below names OUR birth
-/// and pgid == pid is certain). Order: pin + self-group
-/// check → killpg FIRST (while the pin holds) → leader
-/// kill → reap the leader through its handle (exit status
-/// preserved) → drain adoptees → ESRCH proof. Returns the
+/// and pgid == pid is certain). Order (R22-001, mirror of
+/// the lib reorder): pin + self-group check → killpg FIRST
+/// (while the pin holds) → leader kill → await
+/// leader-ZOMBIE (death proven, pin STILL held — unreaped)
+/// with members drained touch-free (pin re-verified every
+/// poll; a mid-drain release panics at once) → reap the
+/// leader through its handle (exit status preserved) →
+/// ESRCH proof (touch-free — the pin is gone; a recycled
+/// pgid fails loud here, never murders). Returns the
 /// leader's exit status. PANICS (loud — never silent, never
 /// murdering) when the leader is already reaped (reservation
-/// violated — a killpg would be unpinned), never
-/// self-grouped (the killpg would name a foreign group),
-/// unreadable (unverifiable), unreapable, or the group
-/// survives the bounded settle. The member set is closed
-/// (leader + /bin/sleep — neither forks), so one pinned
-/// killpg suffices (no post-reap second strike — that would
-/// be unpinned murder-bait).
+/// violated — a killpg would be unpinned), the pin releases
+/// mid-drain (someone reaped behind our back — refused to
+/// proceed unpinned), never self-grouped (the killpg would
+/// name a foreign group), unreadable (unverifiable),
+/// unreapable, or the group survives the bounded settle.
+/// The member set is closed (leader + /bin/sleep — neither
+/// forks), so one pinned killpg suffices (no post-reap
+/// second strike — that would be unpinned murder-bait).
+/// Members settle via init (adoption by us is impossible,
+/// asserted below).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn retire_unparsed_publisher_group(
     publisher: &mut std::process::Child,
@@ -5604,9 +5689,11 @@ fn retire_unparsed_publisher_group(
     let pubpid = publisher.id() as i32;
     // Pin (live or zombie both pin — a zombie IS the
     // unreaped reservation; gone means someone reaped
-    // behind our back).
-    match task_starttime_checked(pubpid) {
-        Ok(Some(_)) => {}
+    // behind our back). The birth tick is kept: every poll
+    // below re-verifies it (the pin must hold through the
+    // whole drain, not just at entry).
+    let pubtick = match task_starttime_checked(pubpid) {
+        Ok(Some(tick)) => tick,
         Ok(None) => panic!(
             "unparsed publisher {pubpid} already reaped (reservation violated — \
              group retire refused: unpinned killpg)"
@@ -5614,12 +5701,13 @@ fn retire_unparsed_publisher_group(
         Err(error) => {
             panic!("unparsed publisher {pubpid} tick unreadable ({error:?}) — group unverifiable")
         }
-    }
+    };
     assert!(
         task_pgrp_matches(&pubpid.to_string(), pubpid),
         "unparsed publisher {pubpid} never self-grouped — group retire refused \
          (killpg would name a foreign group)"
     );
+    assert_no_subreaper_leak("retire_unparsed_publisher_group");
     // SAFETY: SIGKILL to our own pinned group, then our
     // own pinned child; errors ignored (a racing death
     // answers ESRCH and the proof below still judges).
@@ -5627,7 +5715,43 @@ fn retire_unparsed_publisher_group(
         libc::killpg(pubpid, libc::SIGKILL);
         libc::kill(pubpid, libc::SIGKILL);
     }
-    // Reap the leader through its handle (status kept).
+    // Pinned drain (mirror of the lib drain): leader to
+    // ZOMBIE (pin STILL held — unreaped throughout) + every
+    // other member absent (watched touch-free — nothing
+    // here is ever waited on (R22-001 — waits steal)). A
+    // mid-drain pin release panics at once (never proceed
+    // unpinned); unreadable polls through (transient
+    // outage); a stuck drain panics with the member
+    // evidence at the bound.
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match task_starttime_checked(pubpid) {
+            Ok(Some(now)) if now == pubtick => {}
+            Ok(_) => panic!(
+                "unparsed publisher {pubpid} pin released mid-drain \
+                 (reaped behind our back — refused to proceed unpinned)"
+            ),
+            Err(_) => {}
+        }
+        let zombie = task_state(pubpid) == Some('Z');
+        let members: Vec<i32> = enumerate_group_members(pubpid)
+            .iter()
+            .map(|member| member.pid)
+            .filter(|pid| *pid != pubpid)
+            .collect();
+        if zombie && members.is_empty() {
+            break;
+        }
+        if Instant::now() >= end {
+            panic!(
+                "unparsed publisher {pubpid} group drain stuck \
+                 (leader zombie: {zombie}; members: {members:?})"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Reap the leader through its handle (status kept —
+    // instant: already zombie).
     let start = Instant::now();
     let status = loop {
         match publisher.try_wait() {
@@ -5641,9 +5765,9 @@ fn retire_unparsed_publisher_group(
             Err(error) => panic!("unparsed publisher {pubpid} wait failed: {error:?}"),
         }
     };
-    // Drain adoptees + prove ESRCH-empty (signal 0 only —
-    // safe now the pin is gone; a recycled pgid fails
-    // loud here, never murders).
+    // Prove ESRCH-empty (touch-free observation — safe
+    // now the pin is gone; a recycled pgid fails loud
+    // here with the member evidence, never murders).
     assert!(
         await_group_empty(pubpid, Duration::from_secs(5)),
         "unparsed publisher {pubpid} group survived the retire"
@@ -8672,6 +8796,254 @@ fn tail_zombie_plant_cell() {
         }
         plant_guard.disarm();
     }
+}
+
+/// R22-001 leg 1 (toolchain twin): replacement zombie
+/// squatting the discharged pgid number before entry —
+/// mirror of the lib regression (steered self-grouped
+/// retake; the observation must report non-empty and the
+/// owner must retain the status). RED (old -pgid drain):
+/// reaps the plant + reports empty. Duration 960 is unique
+/// to this test. Leg 2 (mid-probe release + join) is the
+/// sibling test below (no steering — always runs).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_observation_never_reaps_replacement_children() {
+    use std::io::BufRead as _;
+    use std::time::{Duration, Instant};
+    let _hold = match steer_hold() {
+        Some(hold) => hold,
+        None => {
+            eprintln!("R22001-leg1: vacuous (no reuse control)");
+            return;
+        }
+    };
+    let mut publisher = spawn_self_grouped_publisher("960", "wait", &[]);
+    let pubpid = publisher.id() as i32;
+    let mut line = String::new();
+    std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line)
+        .expect("pair readable");
+    let (stranger, stick) = parse_published_pair(line.trim(), "r22001 publication");
+    let pubtick = task_starttime_checked(pubpid)
+        .expect("publisher stat readable")
+        .expect("publisher visible");
+    // Retire OUR pair explicitly (leader reaped via its
+    // handle — pin RELEASED).
+    assert!(
+        retire_tick_gated_toolchain_child(stranger, stick),
+        "R22001-leg1: stranger retire readable"
+    );
+    assert!(
+        await_task_gone_reaping(stranger, stick, Duration::from_secs(5)),
+        "R22001-leg1: stranger must drain"
+    );
+    let start = Instant::now();
+    let status = loop {
+        match publisher.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    panic!("R22001-leg1: publisher must exit after its sleep dies");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("R22001-leg1: publisher wait failed: {error:?}"),
+        }
+    };
+    assert!(status.success(), "R22001-leg1: publisher must exit clean");
+    // Plant a SELF-GROUPED replacement on the freed pgid
+    // number (steered retake + S100-vacuity, as
+    // plant_replacement — with the group flag).
+    let mut kid = match steer_sleep_onto(pubpid, true) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("R22001-leg1: vacuous (plant contended)");
+            return;
+        }
+    };
+    let mut plant_guard = SilentChildGuard::new(pubpid);
+    let retick = match task_starttime_checked(pubpid) {
+        Ok(Some(tick)) => tick,
+        _ => {
+            let _ = kid.kill();
+            let _ = kid.wait();
+            plant_guard.disarm();
+            eprintln!("R22001-leg1: vacuous (plant unreadable)");
+            return;
+        }
+    };
+    if retick == pubtick {
+        let _ = kid.kill();
+        let _ = kid.wait();
+        plant_guard.disarm();
+        eprintln!("R22001-leg1: vacuous (same-tick retake — S100)");
+        return;
+    }
+    assert!(
+        task_pgrp_matches(&pubpid.to_string(), pubpid),
+        "R22001-leg1: plant must self-group onto the recycled number"
+    );
+    assert!(
+        settle_replacement_zombie(&mut kid, pubpid),
+        "R22001-leg1: staging broken (plant never zombified)"
+    );
+    // THE observation (pin released — the plant is a
+    // squatter, unreaped, owner handle held).
+    let empty = await_group_empty(pubpid, Duration::from_secs(1));
+    // Tail pattern: tick re-read first (mismatch = stolen
+    // (reaped) — disarm before asserting, the number is
+    // not-ours now).
+    if task_starttime_checked(pubpid) != Ok(Some(retick)) {
+        plant_guard.disarm();
+    }
+    assert!(
+        !empty,
+        "R22001-leg1: replacement group present — must not certify empty"
+    );
+    // Owner retains the status (reap proves no steal).
+    match kid.try_wait() {
+        Ok(Some(status)) => assert!(
+            !status.success(),
+            "R22001-leg1: plant must be our SIGKILLed zombie"
+        ),
+        other => panic!("R22001-leg1: status stolen?! got {other:?}"),
+    }
+    plant_guard.disarm();
+}
+
+/// R22-001 leg 2 (toolchain twin, after the last original
+/// drain — mid-probe release + join): mirror of the lib
+/// regression (no steering — a join, not a retake — always
+/// runs). RED (old -pgid drain): steals mid-probe +
+/// certifies empty. GREEN: false + intact statuses.
+/// Durations 961/962 are unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn group_observation_never_reaps_joined_mid_probe() {
+    use std::os::unix::process::CommandExt as _;
+    use std::time::Duration;
+    let mut leader_cmd = std::process::Command::new("/bin/sleep");
+    leader_cmd
+        .arg("961")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid on self pre-exec, no userspace state.
+    unsafe {
+        leader_cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut leader = leader_cmd.spawn().expect("leader spawns");
+    let lpid = leader.id() as i32;
+    let mut lguard = SilentChildGuard::new(lpid);
+    let ltick = task_starttime_checked(lpid)
+        .expect("leader stat readable")
+        .expect("leader visible");
+    assert!(
+        task_pgrp_matches(&lpid.to_string(), lpid),
+        "R22001-leg2: leader must self-group"
+    );
+    // The plant joins OUR group pre-exec (setpgid on an
+    // exec'd child is refused — the join must happen before
+    // the image loads).
+    let mut plant_cmd = std::process::Command::new("/bin/sleep");
+    plant_cmd
+        .arg("962")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: setpgid-join pre-exec, no userspace state.
+    unsafe {
+        plant_cmd.pre_exec(move || {
+            if libc::setpgid(0, lpid) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut plant = plant_cmd.spawn().expect("plant spawns");
+    let ppid = plant.id() as i32;
+    let mut pguard = SilentChildGuard::new(ppid);
+    let ptick = task_starttime_checked(ppid)
+        .expect("plant stat readable")
+        .expect("plant visible");
+    assert!(
+        task_pgrp_matches(&ppid.to_string(), lpid),
+        "R22001-leg2: plant grouped"
+    );
+    // Probe threaded (1 s window — every main action below
+    // lands inside with huge margins).
+    let probe = std::thread::spawn(move || await_group_empty(lpid, Duration::from_secs(1)));
+    std::thread::sleep(Duration::from_millis(50));
+    // Kill the leader (zombie, pin STILL held — the probe
+    // must not steal it: its status belongs to the handle).
+    assert!(
+        kill_tick_gated(lpid, ltick),
+        "R22001-leg2: leader kill readable"
+    );
+    // Settle window (the old drain certainly polled — 1 ms
+    // polls; a >100 ms scheduling stall is the only miss,
+    // and the plant leg below still REDs).
+    std::thread::sleep(Duration::from_millis(100));
+    // The last original drain (owner reaps — pin released
+    // mid-probe).
+    let leader_status = leader.try_wait();
+    if !matches!(leader_status, Ok(None)) {
+        lguard.disarm();
+    }
+    // Zombify the joined plant (owner holds).
+    // Settle accepts Z OR gone: on RED runs the old drain
+    // may reap the zombie before this poll sees Z (gone
+    // then is RED evidence, not broken staging); a plant
+    // still LIVE past the bound is broken staging (the kill
+    // failed).
+    let _ = plant.kill();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match task_state(ppid) {
+            Some('Z') | None => break,
+            Some(_) => {}
+        }
+        assert!(
+            std::time::Instant::now() < end,
+            "R22001-leg2: staging broken (plant never zombified)"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let empty = probe.join().expect("probe bounded");
+    if task_starttime_checked(ppid) != Ok(Some(ptick))
+        || !task_pgrp_matches(&ppid.to_string(), lpid)
+    {
+        // Occupant changed (stolen + recycled, or
+        // re-grouped) — disarm before asserting.
+        pguard.disarm();
+    }
+    assert!(
+        !empty,
+        "R22001-leg2: replacement zombie present — must not certify empty"
+    );
+    match leader_status {
+        Ok(Some(status)) => assert!(
+            !status.success(),
+            "R22001-leg2: leader must be our SIGKILLed zombie (status belongs to the handle)"
+        ),
+        other => panic!("R22001-leg2: leader status stolen?! got {other:?}"),
+    }
+    match plant.try_wait() {
+        Ok(Some(status)) => assert!(
+            !status.success(),
+            "R22001-leg2: plant must be our SIGKILLed zombie"
+        ),
+        other => panic!("R22001-leg2: plant status stolen?! got {other:?}"),
+    }
+    pguard.disarm();
 }
 
 /// R19-014 (toolchain twin): sensitivity lock — the shared

@@ -14517,7 +14517,7 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn group_observation_never_reaps_joined_mid_probe() {
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
         {
             use std::os::unix::process::CommandExt as _;
             let mut leader_cmd = std::process::Command::new("/bin/sleep");
@@ -14595,11 +14595,24 @@ mod tests {
                 lguard.disarm();
             }
             // Zombify the joined plant (owner holds).
+            // Settle accepts Z OR gone: on RED runs the old
+            // drain may reap the zombie before this poll sees
+            // Z (gone then is RED evidence, not broken
+            // staging); a plant still LIVE past the bound is
+            // broken staging (the kill failed).
             let _ = plant.kill();
-            assert!(
-                settle_replacement_zombie(&mut plant, ppid),
-                "R22001-leg2: staging broken (plant never zombified)"
-            );
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                match proc_state(ppid) {
+                    Some('Z') | None => break,
+                    Some(_) => {}
+                }
+                assert!(
+                    Instant::now() < end,
+                    "R22001-leg2: staging broken (plant never zombified)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
             let empty = probe.join().expect("probe bounded");
             if proc_starttime(ppid) != Ok(Some(ptick)) || proc_pgrp(ppid) != Some(lpid) {
                 // Occupant changed (stolen + recycled, or
