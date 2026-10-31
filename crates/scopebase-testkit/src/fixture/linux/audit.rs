@@ -8783,7 +8783,7 @@ mod tests {
             "stranger" => {
                 let mut parent = std::process::Command::new("/bin/sh")
                     .arg("-c")
-                    .arg("sleep 52 & echo $!; wait")
+                    .arg(pair_publisher_script("52", "wait"))
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::null())
@@ -8796,12 +8796,11 @@ mod tests {
                 std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
                     .read_line(&mut line)
                     .expect("grandchild pid readable");
-                let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
-                // R18-004: TRANSMIT at parse (bound: the
-                // publisher holds its child in `wait`).
-                let stranger_tick = proc_starttime(stranger)
-                    .expect("stranger stat readable")
-                    .expect("stranger present");
+                // R19-001: transmitted pair (no receiver
+                // first-read — a gap replacement would
+                // self-authenticate).
+                let (stranger, stranger_tick) =
+                    parse_published_pair(line.trim(), "stranger publication");
                 // R16-011: custody AT parse (the asserts below
                 // unwind through retirement, never an orphan) —
                 // expected-identity (refusal stands down).
@@ -10338,6 +10337,64 @@ mod tests {
         assert!(survived, "silent retire must not murder a live non-child");
     }
 
+    /// R19-001: pipe-publisher script — the publisher reads
+    /// its OWN unreaped child's starttime (field 22 of
+    /// /proc/PID/stat; robust to spaces in comm via the
+    /// last-") " strip; `${20}` — note braces, `$20` would
+    /// parse as `$2` + "0") and transmits "pid tick". The
+    /// publisher holds its child unreaped from birth (it
+    /// only waits at the end), so the number cannot recycle
+    /// between spawn and the stat — the transmitted tick
+    /// names the published birth certainly. Receivers parse
+    /// with [`parse_published_pair`] and must NEVER
+    /// first-read the tick (a gap replacement would
+    /// self-authenticate).
+    #[cfg(target_arch = "x86_64")]
+    fn pair_publisher_script(sleep_secs: &str, tail: &str) -> String {
+        format!(
+            "sleep {sleep_secs} & P=$!; IFS= read -r T < /proc/$P/stat; \
+             T=${{T##*) }}; set -- $T; echo \"$P ${{20}}\"; {tail}"
+        )
+    }
+
+    /// R19-001: parse a pipe-published birth pair ("pid
+    /// tick": exactly two fields, positive pid).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_published_pair(line: &str, what: &str) -> (libc::pid_t, u64) {
+        let mut parts = line.split_whitespace();
+        let pid: libc::pid_t = parts
+            .next()
+            .unwrap_or_else(|| panic!("{what}: published pair missing pid in {line:?}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{what}: published pid unparsable in {line:?}"));
+        let tick: u64 = parts
+            .next()
+            .unwrap_or_else(|| panic!("{what}: published pair missing tick in {line:?}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("{what}: published tick unparsable in {line:?}"));
+        assert!(
+            parts.next().is_none() && pid > 0,
+            "{what}: published pair malformed in {line:?}"
+        );
+        (pid, tick)
+    }
+
+    /// R19-001: the publisher script renders exactly (golden —
+    /// the `${20}` braces and greedy comm-strip are
+    /// load-bearing) and the pair parser accepts a golden
+    /// line.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pair_publisher_script_renders_golden() {
+        assert_eq!(
+            pair_publisher_script("58", "wait"),
+            "sleep 58 & P=$!; IFS= read -r T < /proc/$P/stat; \
+             T=${T##*) }; set -- $T; echo \"$P ${20}\"; wait"
+        );
+        let (pid, tick) = parse_published_pair("1234 5678", "golden");
+        assert_eq!((pid, tick), (1234, 5678));
+    }
+
     /// R16-010: the PINNED path is the twin of IR-002's unpinned
     /// one — a tick-verified live NON-child (a staged
     /// grandchild, never ours to waitpid) dropped through
@@ -10360,7 +10417,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 58 & echo $!; wait")
+            .arg(pair_publisher_script("58", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10370,19 +10427,14 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
-        // R18-004: TRANSMIT at parse — the tick read here is
-        // bound to the published birth (the publisher holds
-        // its child unreaped in `wait` and the sleeper
-        // outlives staging, so no recycle can interpose).
+        // R19-001: transmitted pair (the publisher's own
+        // stat — no receiver first-read).
         // R16-011: custody before the sanity reads (the drop
         // under test moves this guard into its own scope
         // below) — expected-identity, so a reap + recycle
         // between publication and acquisition refuses instead
         // of authenticating the replacement.
-        let tick = proc_starttime(grand)
-            .expect("grandchild stat readable")
-            .expect("grandchild present");
+        let (grand, tick) = parse_published_pair(line.trim(), "grandchild publication");
         let pinned = FixtureGuard::new_expected(grand, tick);
         // Sanity: live, and not our child (the ECHILD the old
         // path hid behind).
@@ -10459,7 +10511,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 40 & echo $!; exit 0")
+            .arg(pair_publisher_script("40", "exit 0"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10469,14 +10521,14 @@ mod tests {
         std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("orphan pid readable");
-        let orphan = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R19-001: transmitted pair (parsed before the
+        // shell is reaped — the tick crosses the publication,
+        // never a post-gap first-read).
+        let (orphan, otick) = parse_published_pair(line.trim(), "orphan publication");
         // Reap the shell: the sleeper is necessarily adopted
         // away (proven by construction — no ppid parse needed).
         let status = sh.wait().expect("shell exit");
         assert!(status.success(), "shell must exit clean");
-        let otick = proc_starttime(orphan)
-            .expect("orphan stat readable")
-            .expect("orphan visible");
         // Sanity: live, and not our child.
         assert!(
             matches!(proc_state(orphan), Some(state) if state != 'Z'),
@@ -10555,7 +10607,7 @@ mod tests {
         #[allow(clippy::zombie_processes)]
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 71 & echo $!; wait")
+            .arg(pair_publisher_script("71", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10565,11 +10617,10 @@ mod tests {
         std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("stranger pid readable");
-        let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R19-001: transmitted pair (no receiver
+        // first-read).
+        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
         let shpid = sh.id() as libc::pid_t;
-        let stick = proc_starttime(stranger)
-            .expect("stranger stat readable")
-            .expect("stranger visible");
         let shtick = proc_starttime(shpid)
             .expect("shell stat readable")
             .expect("shell visible");
@@ -10578,9 +10629,10 @@ mod tests {
         // tasks never self-clean — unlike running shells that
         // exit by sleep expiry). SIGKILL works on stopped
         // tasks; the tick-gated drops stay silent once gone.
-        // The stranger pid arrived via pipe (expected-identity
-        // over the sighted birth); the shell is our unreaped
-        // child (bare construction holds the reservation).
+        // The stranger pair arrived via pipe
+        // (expected-identity over the transmitted birth); the
+        // shell is our unreaped child (bare construction
+        // holds the reservation).
         let mut stranger_guard = FixtureGuard::new_expected(stranger, stick);
         assert!(
             stranger_guard.tick.is_some(),
@@ -10744,7 +10796,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 42 & echo $!; wait")
+            .arg(pair_publisher_script("42", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10754,7 +10806,11 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R19-001: transmitted pair (parsed pre-exhaustion —
+        // pipe reads need no new fd — so recovery never
+        // depends on a post-restore first-read, which would
+        // self-authenticate a gap replacement).
+        let (grand, tick) = parse_published_pair(line.trim(), "grandchild publication");
         // Fail the constructor reads: exhaust through
         // construction (the retry budget expires to None).
         let mut held = Vec::new();
@@ -10768,22 +10824,24 @@ mod tests {
             "construction must fail under EMFILE (stage broken otherwise)"
         );
         drop(held);
-        // The explicit birth read succeeds after restore.
-        let tick = proc_starttime(grand)
-            .expect("grandchild stat readable")
-            .expect("grandchild present");
         // R17-007: pin-before-panic — the constructor
-        // exhausted its budget (None) while the explicit read
-        // recovered the tick. R18-005: the recovered
-        // identity reaches the guard HERE, before every
-        // fallible check below (a panic anywhere below
+        // exhausted its budget (None); the transmitted tick
+        // reaches the guard HERE, before every fallible
+        // check below (R18-005: a panic anywhere below
         // unwinds through a PINNED guard that retires the
-        // known grandchild); the diagnostic follows the pin,
-        // never precedes it.
+        // known grandchild).
         if pinned.tick.is_none() {
             pinned.pin(tick);
-            eprintln!("R17007 construction pin missed; late-pinned recovered tick");
+            eprintln!("R17007 construction pin missed; late-pinned transmitted tick");
         }
+        // Post-restore verification (post-pin, so
+        // unwind-safe): the table works again and still
+        // observes the transmitted birth.
+        assert_eq!(
+            proc_starttime(grand),
+            Ok(Some(tick)),
+            "restored table must re-observe the transmitted birth"
+        );
         // Sanity: live, and not our child.
         assert!(
             matches!(proc_state(grand), Some(state) if state != 'Z'),
@@ -10879,7 +10937,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 44 & echo $!; wait")
+            .arg(pair_publisher_script("44", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10889,19 +10947,18 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R19-001: transmitted pair (no receiver
+        // first-read).
+        let (grand, pre_tick) = parse_published_pair(line.trim(), "grandchild publication");
         // R18-008: custody BEFORE the freeze — the grandchild
-        // pid arrives via pipe (received pid: expected-identity
-        // per the R17-008 contract), sighted-live in the
-        // immediately preceding read. Any later panic (T-poll,
+        // pair arrives via pipe (received pid:
+        // expected-identity per the R17-008 contract over the
+        // transmitted birth). Any later panic (T-poll,
         // exhaustion, construction) retires through this guard
         // instead of stranding a stopped task with its shell
         // waiting. The pin assert lands pre-stop: a staging
         // failure here leaks only RUNNING tasks (bounded
         // self-exit), never a stopped one.
-        let pre_tick = proc_starttime(grand)
-            .expect("grandchild stat readable")
-            .expect("grandchild present");
         let mut outer = FixtureGuard::new_expected(grand, pre_tick);
         assert!(
             outer.tick.is_some(),
@@ -11043,7 +11100,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 70 & echo $!; wait")
+            .arg(pair_publisher_script("70", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -11053,10 +11110,9 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
-        let pre_tick = proc_starttime(grand)
-            .expect("grandchild stat readable")
-            .expect("grandchild present");
+        // R19-001: transmitted pair (no receiver
+        // first-read).
+        let (grand, pre_tick) = parse_published_pair(line.trim(), "grandchild publication");
         let outer = FixtureGuard::new_expected(grand, pre_tick);
         assert!(
             outer.tick.is_some(),
@@ -11141,7 +11197,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 86 & echo $!; wait")
+            .arg(pair_publisher_script("86", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -11151,7 +11207,10 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R19-001: transmitted pair (parsed pre-exhaustion —
+        // pipe reads need no new fd — so recovery never
+        // depends on a post-restore first-read).
+        let (grand, tick) = parse_published_pair(line.trim(), "grandchild publication");
         // Fail the constructor reads: exhaust through
         // construction (the retry budget expires to None).
         let mut held = Vec::new();
@@ -11165,10 +11224,6 @@ mod tests {
             "construction must fail under EMFILE (stage broken otherwise)"
         );
         drop(held);
-        // The explicit birth read succeeds after restore.
-        let tick = proc_starttime(grand)
-            .expect("grandchild stat readable")
-            .expect("grandchild present");
         // Diagnostics file, opened read-only below (the
         // write fails for real — no suite-wide interference,
         // unlike closing stderr).
@@ -11578,6 +11633,150 @@ mod tests {
         let _ = sh2.wait();
     }
 
+    /// R19-001: pipe publication must transmit the birth — the
+    /// receiver's acquisition tick must cross the
+    /// publication gap WITHOUT a post-gap first-read (a
+    /// replacement installed in the gap self-authenticates a
+    /// first-read tick through `new_expected`, and the drop
+    /// murders it). RED (PID-only publisher + post-gap
+    /// first-read): the survival assert failed with the
+    /// replacement murdered. GREEN (this shape): pair
+    /// publishers + transmitted acquisition — refusal,
+    /// silence, survival. Duration 907 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pipe_publication_transmits_birth_across_replacement() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // Pair publishers (production post-fix shape).
+        let spawn_sh = || {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(pair_publisher_script("907", "wait"))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sh spawns")
+        };
+        let read_pair = |sh: &mut std::process::Child| -> (libc::pid_t, u64) {
+            let mut line = String::new();
+            std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+                .read_line(&mut line)
+                .expect("sleep pair readable");
+            parse_published_pair(line.trim(), "sleep publication")
+        };
+        let mut sh1 = spawn_sh();
+        let (want, transmitted) = read_pair(&mut sh1);
+        // Steering kill (choreography, using the transmitted
+        // birth — sh1 holds its child unreaped, so the number
+        // is stable): drives the pause-scale lifecycle below.
+        assert!(
+            kill_tick_gated(want, transmitted),
+            "published sleeper signaled"
+        );
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if sh1.try_wait().expect("sh1 wait").is_some() {
+                break;
+            }
+            assert!(Instant::now() < end, "publishing shell must exit");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(proc_starttime(want), Ok(None), "number must free");
+        // REPLACE: steer sh2's sleeper (a non-child) onto the
+        // freed number. sh2 transmits its own pair — the
+        // replacement's birth arrives without any receiver
+        // first-read (sh2 holds it unreaped throughout).
+        let _nsflock = ns_last_pid_flock();
+        let mut placed = None;
+        for _ in 0..100 {
+            if !audit_steer_next_pid_unlocked(want - 1) {
+                break;
+            }
+            let mut sh2 = spawn_sh();
+            let (sleep, sleep_tick) = read_pair(&mut sh2);
+            if sleep == want {
+                if sleep_tick != transmitted {
+                    placed = Some((sh2, sleep_tick));
+                    break;
+                }
+                let _ = kill_tick_gated(want, transmitted);
+                let _ = sh2.kill();
+                let _ = sh2.wait();
+                drop(_nsflock);
+                audit_locked_restore_hint(&last_before);
+                eprintln!("skip: same-tick retake (S100 — untestable this run)");
+                return;
+            }
+            // Miss: retire via the transmitted birth (sh2
+            // holds it unreaped), then its shell.
+            let _ = kill_tick_gated(sleep, sleep_tick);
+            let _ = sh2.kill();
+            let _ = sh2.wait();
+        }
+        let mut restore_guard = placed.as_ref().map(|_| FixtureGuard::new(want));
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        if let Some(guard) = restore_guard.as_mut() {
+            guard.disarm();
+        }
+        let (mut sh2, replacetick) = match placed {
+            Some(placed) => placed,
+            None => {
+                eprintln!("skip: replacement retake contended");
+                return;
+            }
+        };
+        assert_ne!(
+            replacetick, transmitted,
+            "steered replacement must be a different birth (non-vacuity)"
+        );
+        // RESUME (GREEN: transmitted acquisition — the tick
+        // crossed the gap in the publication, never via a
+        // post-gap first-read; the constructor refuses the
+        // recycled number and the drop stays silent).
+        {
+            let acquired = FixtureGuard::new_expected(want, transmitted);
+            assert!(
+                acquired.tick.is_none(),
+                "resumed acquisition must refuse the recycled number"
+            );
+        } // Drop fires here (refused: silent).
+        assert_proc_settled_live(
+            want,
+            replacetick,
+            2,
+            "replacement must survive resumed acquisition",
+        );
+        // Cleanup: retire the replacement, reap sh2.
+        let _ = kill_tick_gated(want, replacetick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(want) != Ok(Some(replacetick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "replacement must die in cleanup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = sh2.wait();
+    }
+
     /// R18-003: an expected-identity REFUSAL must stand down —
     /// the drop must not run child cleanup over a number
     /// positively known to host another birth. Live owned
@@ -11870,7 +12069,7 @@ mod tests {
         #[allow(clippy::zombie_processes)]
         let mut parent = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg("sleep 47 & echo $!; wait")
+            .arg(pair_publisher_script("47", "wait"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -11885,15 +12084,11 @@ mod tests {
         std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
             .read_line(&mut line)
             .expect("grandchild pid readable");
-        let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
-        // R18-004: TRANSMIT at parse (bound: the publisher
-        // holds its child in `wait`), then expected-identity
-        // custody (a reap + recycle between publication and
-        // acquisition refuses instead of authenticating the
-        // replacement).
-        let stick = proc_starttime(stranger)
-            .expect("stranger stat readable")
-            .expect("stranger present");
+        // R19-001: transmitted pair (no receiver
+        // first-read), then expected-identity custody (a reap
+        // + recycle between publication and acquisition
+        // refuses instead of authenticating the replacement).
+        let (stranger, stick) = parse_published_pair(line.trim(), "stranger publication");
         let mut outer_stranger = FixtureGuard::new_expected(stranger, stick);
         let shtick = proc_starttime(sh)
             .expect("sh stat readable")
