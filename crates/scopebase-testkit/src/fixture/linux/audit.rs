@@ -2174,12 +2174,81 @@ mod tests {
         }
     }
 
+    /// R20-015: stage the R19-007 ≥5000 high-fd control
+    /// (leak copy inherited despite CLOEXEC-marking).
+    /// Capacity gate: a constrained runner (ambient soft
+    /// NOFILE < 5000 — ordinary containers at 1024) cannot
+    /// stage the control — skip loud (R20-014-skip
+    /// precedent), never assert-fail. Overlap serial: the
+    /// gate-read + fcntl run under the confinement-state
+    /// leaf mutex (no other lock under it — no cycle),
+    /// atomic vs a sibling's confine-apply and
+    /// confine-restore — an ACTIVE sibling confinement
+    /// waits out (bounded 60s) instead of failing or
+    /// skipping; only an ambient (unconfined-yet-small)
+    /// ceiling skips. Returns None after printing the skip
+    /// reason (caller returns). The caller must hold no
+    /// confinement guard of its own (it would read as a
+    /// sibling's and stall the full bound).
+    #[cfg(target_arch = "x86_64")]
+    fn stage_high_leak_copy(
+        write_fd: std::os::unix::io::RawFd,
+    ) -> Option<std::os::unix::io::OwnedFd> {
+        use std::os::unix::io::FromRawFd as _;
+        use std::time::{Duration, Instant};
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            let slot = CONFINEMENT_STATE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if slot.is_some() {
+                // A sibling confines (soft 4096): wait it
+                // out — the control stages after release.
+                drop(slot);
+                if Instant::now() >= end {
+                    eprintln!(
+                        "skip: confinement held past 60s (stuck sibling — high-fd control unstageable)"
+                    );
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            // SAFETY: getrlimit on self only.
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
+            if rc != 0 || rlim.rlim_cur < 5000 {
+                let soft = if rc == 0 { rlim.rlim_cur } else { 0 };
+                eprintln!(
+                    "skip: soft NOFILE {soft} < 5000 (high-fd control unstageable on a constrained runner)"
+                );
+                return None;
+            }
+            // SAFETY: duplicates an owned descriptor; the
+            // serial holds the ceiling stable across the
+            // gate→fcntl window (no confine-apply or
+            // confine-restore can interleave).
+            let high = unsafe { libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 5000) };
+            assert!(high >= 5000, "high leak copy staged (fd {high})");
+            // SAFETY: fcntl reported success — owned from here.
+            let owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(high) };
+            drop(slot);
+            return Some(owned);
+        }
+    }
+
     /// R19003-FLAKE01: the confinement guard caps the soft
     /// ceiling at 4096 and restores on the last drop — in
     /// order and out of order (refcounted nesting). The
     /// final value allows a sibling holder (in-process
     /// confiners nest; the cap stays correct either way —
-    /// never garbage, never stuck).
+    /// never garbage, never stuck). R20-016: this tolerant
+    /// shape documents sibling-yield only — exactness is
+    /// proven by `fd_table_confinement_restores_ceiling_exact`
+    /// (this test is mutant-green without restoration).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn fd_table_confinement_restores_ceiling() {
@@ -2227,6 +2296,105 @@ mod tests {
         assert!(
             final_soft == before2 || final_soft == capped2 || final_soft == hard,
             "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+        );
+    }
+
+    /// R20-016: exact restoration in isolation — the
+    /// tolerant in-process test above accepts `final_soft
+    /// == capped` unconditionally, so deleting final
+    /// restoration passes (mutant-green) and its
+    /// reverse-order case then starts capped and goes
+    /// vacuous (`|| capped` conflates sibling-yield with
+    /// broken-restore). This probe runs fresh-image (no
+    /// siblings by construction, initial limit above the
+    /// cap) and asserts EXACT restoration both orders: a
+    /// disabled-restoration mutant fails here (proven
+    /// manually: final stays 4096 ≠ before). The tolerant
+    /// test stays (documents sibling-yield). A
+    /// ≤4096-ambient runner skips (exactness untestable —
+    /// nothing to cap).
+    #[cfg(target_arch = "x86_64")]
+    fn fd_table_confinement_restores_ceiling_exact_probe() {
+        // SAFETY: getrlimit on self only.
+        let limits_now = || {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            assert_eq!(
+                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+                0,
+                "own NOFILE limit must be readable"
+            );
+            rlim.rlim_cur
+        };
+        let before = limits_now();
+        if before <= 4096 {
+            eprintln!("skip: ambient soft {before} ≤ 4096 (exact restoration untestable)");
+            return;
+        }
+        let outer = confine_fd_table_for_exhaustion();
+        assert_eq!(limits_now(), 4096, "cap must apply");
+        let inner = confine_fd_table_for_exhaustion();
+        assert_eq!(limits_now(), 4096, "nested hold keeps the cap");
+        drop(inner);
+        assert_eq!(limits_now(), 4096, "inner drop must not restore early");
+        drop(outer);
+        assert_eq!(
+            limits_now(),
+            before,
+            "last drop must restore exactly (no siblings in fresh image)"
+        );
+        // Reverse order: dropping the outer hold first
+        // must not restore early either.
+        let outer = confine_fd_table_for_exhaustion();
+        assert_eq!(limits_now(), 4096, "cap must re-apply");
+        let inner = confine_fd_table_for_exhaustion();
+        drop(outer);
+        assert_eq!(
+            limits_now(),
+            4096,
+            "outer-first drop must not restore early"
+        );
+        drop(inner);
+        assert_eq!(
+            limits_now(),
+            before,
+            "reverse-order last drop must restore exactly"
+        );
+        eprintln!("R20016-EXACT-RESTORED");
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fd_table_confinement_restores_ceiling_exact() {
+        if std::env::var("SCOPEBASE_R20016_EXACT_PROBE").is_ok() {
+            fd_table_confinement_restores_ceiling_exact_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::fd_table_confinement_restores_ceiling_exact")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R20016_EXACT_PROBE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "exact-restoration probe must pass\n{stderr}"
+        );
+        if stderr.contains("≤ 4096 (exact restoration untestable)") {
+            eprintln!("skip (probe on a ≤4096-ambient runner)");
+            return;
+        }
+        assert!(
+            stderr.contains("R20016-EXACT-RESTORED"),
+            "probe must cite exact restoration\n{stderr}"
         );
     }
 
@@ -21564,6 +21732,7 @@ time.sleep(30)
     #[cfg(target_arch = "x86_64")]
     fn discovery_scan_budget_truncates_loud() {
         use std::os::unix::io::AsRawFd as _;
+        use std::os::unix::process::CommandExt as _;
         use std::time::{Duration, Instant};
         if !staged_probe_python3() {
             eprintln!("skip: python3 unavailable");
@@ -21588,24 +21757,62 @@ time.sleep(30)
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
+        // R20-014: unwind backstop (the RED panic stranded
+        // this writer — bare handle, no guard).
+        let _wguard = FixtureGuard::new(wpid);
+        assert!(
+            _wguard.tick.is_some(),
+            "writer custody must pin (stage broken otherwise)"
+        );
         // Fd-holder: best-effort rlimit raise, then N
         // /dev/null fds, report the count, park.
-        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nopen(sys.argv[2], 'w').write(str(len(fds)))\ntime.sleep(30)\n";
+        // R20-014: the report opens FIRST (held handle) —
+        // opening after the fill EMFILEs under a
+        // below-`want` limit (no report, no sleep, the
+        // harness loop panics); writes through the held
+        // handle need no new fd (explicit flush — the
+        // handle stays open across the park).
+        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\nreport = open(sys.argv[2], 'w')\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nreport.write(str(len(fds)))\nreport.flush()\ntime.sleep(30)\n";
         let me = std::process::id();
         let dir = std::env::temp_dir();
         let flag_count = dir.join(format!("scopebase-r19009-count-{me}"));
         let _ = std::fs::remove_file(&flag_count);
-        let holder = std::process::Command::new("python3")
+        let mut holder_cmd = std::process::Command::new("python3");
+        holder_cmd
             .arg("-c")
             .arg(script)
             .arg("20000")
             .arg(&flag_count)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("fd-holder spawns");
+            .stderr(std::process::Stdio::null());
+        // R20-014: confinement injection — clamp the
+        // holder to 1024 fds (soft AND hard, so the
+        // script's own raise-to-hard caps there too).
+        if std::env::var("SCOPEBASE_R20014_CONFINE").is_ok() {
+            // SAFETY: setrlimit on self pre-exec, no userspace state.
+            unsafe {
+                holder_cmd.pre_exec(|| {
+                    let lim = libc::rlimit {
+                        rlim_cur: 1024,
+                        rlim_max: 1024,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let holder = holder_cmd.spawn().expect("fd-holder spawns");
         let hpid = holder.id() as libc::pid_t;
+        // R20-014: unwind backstop (a report-loop panic
+        // must not strand the holder mid-fill).
+        let _hguard = FixtureGuard::new(hpid);
+        assert!(
+            _hguard.tick.is_some(),
+            "holder custody must pin (stage broken otherwise)"
+        );
         // Bounded count report; below 2000 the table cannot
         // isolate the tight budget (skip loud after cleanup).
         let end = Instant::now() + Duration::from_secs(30);
@@ -21775,23 +21982,49 @@ time.sleep(30)
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Fd-holder: 150k /dev/null fds (same staging as
-        // the budget cells).
-        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nopen(sys.argv[2], 'w').write(str(len(fds)))\ntime.sleep(30)\n";
+        // the budget cells). R20-014: report-first (see
+        // the budget-cells case — the held handle
+        // publishes under a below-`want` limit).
+        let script = "import os, resource, sys, time\nwant = int(sys.argv[1])\nreport = open(sys.argv[2], 'w')\ntry:\n    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]\n    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))\nexcept Exception:\n    pass\nfds = []\nfor _ in range(want):\n    try:\n        fds.append(os.open('/dev/null', os.O_RDONLY))\n    except OSError:\n        break\nreport.write(str(len(fds)))\nreport.flush()\ntime.sleep(30)\n";
         let me = std::process::id();
         let dir = std::env::temp_dir();
         let flag_count = dir.join(format!("scopebase-r19009e-count-{me}"));
         let _ = std::fs::remove_file(&flag_count);
-        let holder = std::process::Command::new("python3")
+        let mut holder_cmd = std::process::Command::new("python3");
+        holder_cmd
             .arg("-c")
             .arg(script)
             .arg("150000")
             .arg(&flag_count)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("fd-holder spawns");
+            .stderr(std::process::Stdio::null());
+        // R20-014: confinement injection (same 1024 clamp
+        // as the budget-cells case).
+        if std::env::var("SCOPEBASE_R20014_CONFINE").is_ok() {
+            // SAFETY: setrlimit on self pre-exec, no userspace state.
+            unsafe {
+                holder_cmd.pre_exec(|| {
+                    let lim = libc::rlimit {
+                        rlim_cur: 1024,
+                        rlim_max: 1024,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let holder = holder_cmd.spawn().expect("fd-holder spawns");
         let hpid = holder.id() as libc::pid_t;
+        // R20-014: unwind backstop (same strand risk as
+        // the budget-cells case).
+        let _hguard = FixtureGuard::new(hpid);
+        assert!(
+            _hguard.tick.is_some(),
+            "holder custody must pin (stage broken otherwise)"
+        );
         let end = Instant::now() + Duration::from_secs(60);
         let opened: usize = loop {
             if let Ok(text) = std::fs::read_to_string(&flag_count) {
@@ -21857,6 +22090,13 @@ time.sleep(30)
         let probe_tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
+        // R20-014: unwind backstop (post-staging asserts
+        // must not strand the probe).
+        let _pguard = FixtureGuard::new(id);
+        assert!(
+            _pguard.tick.is_some(),
+            "probe custody must pin (stage broken otherwise)"
+        );
         // SAFETY: getpgid queries only.
         assert_eq!(
             unsafe { libc::getpgid(id) },
@@ -21918,6 +22158,62 @@ time.sleep(30)
         kill_and_reap(hpid, htick, "fd-holder");
         drop(holder);
         let _ = std::fs::remove_file(&flag_count);
+    }
+
+    /// R20-014: a confined holder must still publish its
+    /// capacity — both holder scripts filled to OSError
+    /// THEN opened the count report, so under a
+    /// below-`want` limit the report open EMFILEd, python
+    /// traceback-exited with no report and no sleep, and
+    /// the 30s/60s harness loops PANICKED (the intended
+    /// low-capacity skip unreachable; case one also
+    /// stranded its unguarded sleep-918 writer). Runs both
+    /// holder tests fresh-image with the holder clamped to
+    /// 1024 fds and requires the bounded capacity
+    /// report + skip each time. RED (this shape): the
+    /// probe panics in the report loop (30s/60s) and the
+    /// writer strands. GREEN: report-first scripting
+    /// publishes the small count through the held handle,
+    /// the skip path retires every fixture (its
+    /// kill_and_reap asserts — WIFSIGNALED + retained
+    /// status — are the discharge proof; probe success
+    /// carries it). Environmental probe skips propagate.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn confined_holder_reports_capacity_and_skips() {
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable");
+            return;
+        }
+        for probe in [
+            "fixture::linux::audit::tests::discovery_scan_budget_truncates_loud",
+            "fixture::linux::audit::tests::expiry_beside_bigtable_stays_bounded_and_loud",
+        ] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg(probe)
+                .arg("--nocapture")
+                .env("SCOPEBASE_R20014_CONFINE", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "confined probe must report + skip, not panic ({probe})\n{stderr}"
+            );
+            if stderr.contains("skip: python3 unavailable") {
+                eprintln!("skip (probe environmental: {probe})");
+                continue;
+            }
+            assert!(
+                stderr.contains("skip: fd table too small"),
+                "confined probe must take the capacity skip ({probe})\n{stderr}"
+            );
+        }
     }
 
     /// R20-013(a): the shedding guard must never steal a
@@ -22281,6 +22577,95 @@ time.sleep(30)
         drop(probe);
     }
 
+    /// R20-015: the ≥5000 high-fd control must stage
+    /// where stageable and skip where not. A constrained
+    /// runner (soft NOFILE ≤ 5000 — ordinary containers at
+    /// 1024) failed the bare `F_DUPFD_CLOEXEC ≥ 5000`
+    /// assert DETERMINISTICALLY (fd -1); a sibling's
+    /// in-process 4096 confinement landing in the µs
+    /// gate→fcntl window fails it rarely. Arm 1 (control
+    /// preserved): unconstrained staging returns a live fd
+    /// ≥ 5000 at once. Arm 2 (overlap): a 200ms sibling
+    /// confinement held across the call waits out, then
+    /// stages. RED (gate-only shape): the gate sees
+    /// 4096 and skips (`None`); GREEN: the serial retries
+    /// into `Some` after release.
+    /// Arm 3 (constrained runner): the shedding test
+    /// fresh-image with ambient soft 1024 skips loud
+    /// (pre-fix RED: `high leak copy staged (fd -1)`
+    /// panic, proven at baseline). The 200ms arm-2 hold
+    /// sits inside the accepted FLAKE01 envelope (frame
+    /// tests confine for seconds; siblings' ≥5000 staging
+    /// now waits rather than fails).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn high_fd_staging_gated_and_serialized() {
+        use std::os::unix::io::AsRawFd as _;
+        let (read, write) = std::io::pipe().expect("staging pipe");
+        // Arm 1: unconstrained → immediate stage.
+        let staged = stage_high_leak_copy(write.as_raw_fd());
+        let owned = staged.expect("control stages where capacity allows");
+        assert!(
+            owned.as_raw_fd() >= 5000,
+            "staged control must sit at fd ≥ 5000"
+        );
+        drop(owned);
+        // Arm 2: a sibling confinement held across the
+        // call waits out, then stages.
+        let (htx, hrx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = confine_fd_table_for_exhaustion();
+            htx.send(()).expect("confinement staged");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+        hrx.recv().expect("holder confined first");
+        let staged = stage_high_leak_copy(write.as_raw_fd());
+        let owned = staged.expect("staging waits out a sibling confinement, never skips");
+        assert!(
+            owned.as_raw_fd() >= 5000,
+            "post-wait control must sit at fd ≥ 5000"
+        );
+        drop(owned);
+        drop(read);
+        drop(write);
+        holder.join().expect("holder rejoins");
+        // Arm 3: ambient-1024 runner → the shedding test
+        // skips loud (pre_exec clamp — the probe's whole
+        // image runs constrained).
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--exact")
+            .arg("fixture::linux::audit::tests::shedding_inheritor_survives_expiry_while_holders_retire")
+            .arg("--nocapture")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setrlimit on the child pre-exec, no userspace state.
+        use std::os::unix::process::CommandExt as _;
+        unsafe {
+            cmd.pre_exec(|| {
+                let lim = libc::rlimit {
+                    rlim_cur: 1024,
+                    rlim_max: 1024,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let out = cmd.output().expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "constrained shedding probe must skip, not fail\n{stderr}"
+        );
+        assert!(
+            stderr.contains("high-fd control unstageable"),
+            "constrained probe must take the capacity skip\n{stderr}"
+        );
+    }
+
     /// R19-007: a fork-only inheritor must not be murdered at
     /// another collection's expiry — fork copies every fd
     /// regardless of CLOEXEC, so a bare pauser landing in a
@@ -22309,7 +22694,7 @@ time.sleep(30)
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn shedding_inheritor_survives_expiry_while_holders_retire() {
-        use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
+        use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
         // Unwind-safe owned-child cleanup: the hoisted
         // `KillOnDrop` (explicit cleanup below runs first
@@ -22320,11 +22705,11 @@ time.sleep(30)
         let write_fd = write.as_raw_fd();
         let want_ino = pipe_dev_ino(read_fd).expect("collection pipe identified");
         // High leak copy (inherited despite CLOEXEC-marking).
-        // SAFETY: duplicates an owned descriptor.
-        let high = unsafe { libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 5000) };
-        assert!(high >= 5000, "high leak copy staged (fd {high})");
-        // SAFETY: fcntl reported success — owned from here.
-        let _high_owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(high) };
+        // R20-015: capacity-gated staging (constrained
+        // runners skip loud — the control cannot stage).
+        let Some(_high_owned) = stage_high_leak_copy(write_fd) else {
+            return;
+        };
         // Inheritor: shedding pauser (the fixed artifact) —
         // forks now, sheds, parks.
         // SAFETY: child sheds then pauses (syscalls only).

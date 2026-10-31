@@ -3283,7 +3283,10 @@ impl Drop for FdTableConfinement {
 /// order and out of order (refcounted nesting). The final
 /// value allows a sibling holder (in-process confiners
 /// nest; the cap stays correct either way — never
-/// garbage, never stuck).
+/// garbage, never stuck). R20-016: this tolerant shape
+/// documents sibling-yield only — exactness is proven by
+/// `fd_table_confinement_restores_ceiling_exact` (this
+/// test is mutant-green without restoration).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn fd_table_confinement_restores_ceiling() {
@@ -3331,6 +3334,98 @@ fn fd_table_confinement_restores_ceiling() {
     assert!(
         final_soft == before2 || final_soft == capped2 || final_soft == hard,
         "last drop must restore (or yield to a live sibling holder), got {final_soft}"
+    );
+}
+
+/// R20-016 (toolchain twin): exact restoration in
+/// isolation — same mutant-green diagnosis as the audit
+/// twin (the tolerant test above accepts `final_soft ==
+/// capped`, conflating sibling-yield with
+/// broken-restore). Fresh-image probe, no siblings by
+/// construction, EXACT restoration both orders; a
+/// ≤4096-ambient runner skips.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn fd_table_confinement_restores_ceiling_exact_probe() {
+    // SAFETY: getrlimit on self only.
+    let limits_now = || {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+            0,
+            "own NOFILE limit must be readable"
+        );
+        rlim.rlim_cur
+    };
+    let before = limits_now();
+    if before <= 4096 {
+        eprintln!("skip: ambient soft {before} ≤ 4096 (exact restoration untestable)");
+        return;
+    }
+    let outer = confine_fd_table_for_exhaustion();
+    assert_eq!(limits_now(), 4096, "cap must apply");
+    let inner = confine_fd_table_for_exhaustion();
+    assert_eq!(limits_now(), 4096, "nested hold keeps the cap");
+    drop(inner);
+    assert_eq!(limits_now(), 4096, "inner drop must not restore early");
+    drop(outer);
+    assert_eq!(
+        limits_now(),
+        before,
+        "last drop must restore exactly (no siblings in fresh image)"
+    );
+    // Reverse order: dropping the outer hold first must
+    // not restore early either.
+    let outer = confine_fd_table_for_exhaustion();
+    assert_eq!(limits_now(), 4096, "cap must re-apply");
+    let inner = confine_fd_table_for_exhaustion();
+    drop(outer);
+    assert_eq!(
+        limits_now(),
+        4096,
+        "outer-first drop must not restore early"
+    );
+    drop(inner);
+    assert_eq!(
+        limits_now(),
+        before,
+        "reverse-order last drop must restore exactly"
+    );
+    eprintln!("R20016-EXACT-RESTORED");
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn fd_table_confinement_restores_ceiling_exact() {
+    if std::env::var("SCOPEBASE_R20016_EXACT_PROBE").is_ok() {
+        fd_table_confinement_restores_ceiling_exact_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("fd_table_confinement_restores_ceiling_exact")
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R20016_EXACT_PROBE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "exact-restoration probe must pass\n{stderr}"
+    );
+    if stderr.contains("≤ 4096 (exact restoration untestable)") {
+        eprintln!("skip (probe on a ≤4096-ambient runner)");
+        return;
+    }
+    assert!(
+        stderr.contains("R20016-EXACT-RESTORED"),
+        "probe must cite exact restoration\n{stderr}"
     );
 }
 
