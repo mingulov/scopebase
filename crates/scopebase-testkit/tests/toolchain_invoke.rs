@@ -3964,17 +3964,17 @@ fn child_guard_drop_retires_verified_non_child() {
             fired.pin(tick);
         }
     } // Drop fires here.
-      // Observe before cleanup (IR-002 discipline): settled
-      // dead, or still live past the window.
+      // R17-009: DISCHARGE required (not merely death) — the
+      // live shell reaps promptly; a lingering zombie past the
+      // window is unresolved (the old Z-or-gone verdict masked
+      // undischarged kills).
     let end = Instant::now() + Duration::from_secs(5);
     let retired = loop {
-        match task_state(grand) {
-            Some(state) if state != 'Z' => {
-                if Instant::now() >= end {
-                    break false;
-                }
-            }
-            _ => break true,
+        if task_starttime_checked(grand) == Ok(None) {
+            break true;
+        }
+        if Instant::now() >= end {
+            break false;
         }
         std::thread::sleep(Duration::from_millis(10));
     };
@@ -4002,6 +4002,84 @@ fn child_guard_drop_retires_verified_non_child() {
     assert!(
         retired,
         "pinned guard drop must retire the verified grandchild"
+    );
+}
+
+/// R17-009: toolchain twin — kill an ADOPTED grandchild via
+/// the pinned drop, then require status DISCHARGE (not
+/// merely death). The shell exits immediately (no wait) so
+/// the sleeper is orphaned to init; the pinned drop signals
+/// it; init reaps. The verdict requires GONE — a lingering
+/// zombie past the window is unresolved. Duration 76 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn adopted_kill_discharges_through_init() {
+    use std::io::BufRead as _;
+    let mut sh = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("sleep 76 & echo $!; exit 0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sh spawns");
+    let mut line = String::new();
+    std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+        .read_line(&mut line)
+        .expect("orphan pid readable");
+    let orphan = line.trim().parse::<i32>().expect("pid parses");
+    // Reap the shell: the sleeper is necessarily adopted away
+    // (proven by construction — no ppid parse needed).
+    let status = sh.wait().expect("shell exit");
+    assert!(status.success(), "shell must exit clean");
+    let otick = task_starttime_checked(orphan)
+        .expect("orphan stat readable")
+        .expect("orphan visible");
+    // Sanity: live, and not our child.
+    assert!(
+        matches!(task_state(orphan), Some(state) if state != 'Z'),
+        "adopted sleeper must be live"
+    );
+    {
+        let mut status = 0;
+        // SAFETY: WNOHANG probe only.
+        let got = unsafe { libc::waitpid(orphan, &mut status, libc::WNOHANG) };
+        assert!(got < 0, "adopted sleeper must not be our child");
+    }
+    // Pinned drop kills (bare construction: fresh sighting,
+    // contract-sound; R17-007 late-pin covers unreadable
+    // construction).
+    {
+        let mut fired = SilentChildGuard::new(orphan);
+        if fired.tick.is_none() {
+            fired.pin(otick);
+        }
+    } // Drop fires here.
+      // Verdict: DISCHARGED (gone) — init reaps promptly.
+    let end = Instant::now() + Duration::from_secs(5);
+    let discharged = loop {
+        if task_starttime_checked(orphan) == Ok(None) {
+            break true;
+        }
+        if Instant::now() >= end {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // Cleanup (mutant-clean): tick-gated kill, poll gone.
+    let _ = kill_tick_gated(orphan, otick);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if task_starttime_checked(orphan) != Ok(Some(otick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "adopted sleeper must die");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        discharged,
+        "adopted kill must discharge through the adopter, not linger as zombie"
     );
 }
 
@@ -4070,15 +4148,16 @@ fn nonchild_pin_recovery_probe() {
             fired.pin(tick);
         }
     })); // Drop fires here (scope end or unwind).
+         // R17-009: DISCHARGE required (not merely death) — the
+         // live shell reaps promptly; a lingering zombie past the
+         // window is unresolved.
     let end = Instant::now() + Duration::from_secs(5);
     let retired = loop {
-        match task_state(grand) {
-            Some(state) if state != 'Z' => {
-                if Instant::now() >= end {
-                    break false;
-                }
-            }
-            _ => break true,
+        if task_starttime_checked(grand) == Ok(None) {
+            break true;
+        }
+        if Instant::now() >= end {
+            break false;
         }
         std::thread::sleep(Duration::from_millis(10));
     };
