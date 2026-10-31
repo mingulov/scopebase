@@ -3210,6 +3210,9 @@ fn retire_child_silent(pid: i32) {
     let mut status = 0;
     // SAFETY: WNOHANG probe of a possibly-owned child; never blocks.
     let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    // R16-011: this probe-first shape is PINNED by IR-002 (a
+    // live non-child takes no signal here) — the pinned twin
+    // below is the only evolution allowed.
     if got != 0 {
         // Our zombie discharged (got == pid), or not our child
         // at all (got < 0: gone, or a foreign recycle) —
@@ -3224,6 +3227,48 @@ fn retire_child_silent(pid: i32) {
     loop {
         let mut status = 0;
         // SAFETY: waitpid on an owned child; WNOHANG never blocks.
+        let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if got == pid || got < 0 {
+            return;
+        }
+        if Instant::now() >= end {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// R16-011: SIGKILL for a TICK-VERIFIED live task — the pinned
+/// twin of `retire_child_silent` (which stays probe-first and
+/// spares non-children for the UNPINNED path per IR-002;
+/// toolchain twin of the audit R16-010 fix, same contract). The
+/// pin proves OUR staged task (a recycled number mismatches
+/// before this is reached), so a non-child (a staged
+/// grandchild — waitpid ECHILDs, never ours to reap) is owed
+/// SIGKILL exactly like an owned live child; its parent (the
+/// live `sh`) or init reaps. Our zombie discharges (waitpid
+/// hit, no kill needed); the bounded reap loop only ever reaps
+/// an owned child (ECHILD returns at once). Never panics (drop
+/// context).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_task_silent(pid: i32) {
+    let mut status = 0;
+    // SAFETY: WNOHANG probe of a possibly-owned child; never blocks.
+    let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    if got == pid {
+        // Our zombie discharged — done, no kill needed.
+        return;
+    }
+    // got == 0 (our live child) or got < 0 (not our child — a
+    // tick-verified staged task): SIGKILL either way.
+    // SAFETY: signal-only to a tick-verified staged task; errors ignored.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid on a possibly-owned child; WNOHANG never blocks.
         let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         if got == pid || got < 0 {
             return;
@@ -3295,7 +3340,10 @@ fn pin_birth_tick(pid: i32) -> Option<u64> {
 /// exit (early return or panic). Covers pausers (retire) and
 /// zombies (discharge status — the kill also reaches a child hung
 /// before its immediate exit; an already-exited zombie answers
-/// ESRCH and is simply reaped).
+/// ESRCH and is simply reaped). R16-011: a VERIFIED task takes
+/// SIGKILL even when it is not our child (a staged grandchild
+/// the pin proves ours — toolchain twin of the audit R16-010
+/// fix, same contract).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct SilentChildGuard {
     pid: i32,
@@ -3399,8 +3447,11 @@ impl Drop for SilentChildGuard {
             // milliseconds — a blind kill would murder it (the
             // full-suite flake). Residual: a same-tick recycle
             // inside the µs gate→signal window (S100-class).
+            // R16-011: verified-ours takes the pinned twin
+            // (signals non-children too); the unpinned arm
+            // above stays child-only.
             Some(tick) => match task_starttime_checked(self.pid) {
-                Ok(Some(now)) if now == tick => retire_child_silent(self.pid),
+                Ok(Some(now)) if now == tick => retire_task_silent(self.pid),
                 // R15-005: proven-gone/recycled stays silent (as
                 // before); only a FAILED read takes the fd-less
                 // fallback probe below.
@@ -3759,6 +3810,218 @@ fn retire_child_silent_probe_first_spares_live_non_child() {
     assert!(survived, "silent retire must not murder a live non-child");
 }
 
+/// R16-011: the PINNED path is the twin of IR-002's unpinned
+/// one (toolchain twin of the audit R16-010 fix — same
+/// contract) — a tick-verified live NON-child (a staged
+/// grandchild, never ours to waitpid) dropped through
+/// `SilentChildGuard` must DIE: the pin proves OUR task (a
+/// recycled number mismatches and spares, as before) and
+/// SIGKILL is owed (its parent — the live `sh` — or init
+/// reaps; nothing we do can reap it). Pre-fix the drop
+/// funnels into the child-only retire and ECHILDs without
+/// signaling (RED: the grandchild stays live); post-fix the
+/// verified arm signals (GREEN). The verdict reads /proc
+/// STATE settled (IR-002 discipline: a tick cannot tell live
+/// from zombie, SIGKILL delivery is async).
+/// Observe-before-cleanup: RED runs retire the survivor so the
+/// failure stays clean. Duration 57 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn child_guard_drop_retires_verified_non_child() {
+    use std::io::BufRead as _;
+    let mut parent = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("sleep 57 & echo $!; wait")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sh parent spawns");
+    let mut line = String::new();
+    std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        .read_line(&mut line)
+        .expect("grandchild pid readable");
+    let grand = line.trim().parse::<i32>().expect("pid parses");
+    // R16-011: custody before the sanity reads (the drop under
+    // test moves this guard into its own scope below).
+    let pinned = SilentChildGuard::new(grand);
+    let tick = task_starttime_checked(grand)
+        .expect("grandchild stat readable")
+        .expect("grandchild present");
+    // Sanity: live, and not our child (the ECHILD the old
+    // path hid behind).
+    assert!(
+        matches!(task_state(grand), Some(state) if state != 'Z'),
+        "staged grandchild must be live"
+    );
+    {
+        let mut status = 0;
+        // SAFETY: WNOHANG probe only.
+        let got = unsafe { libc::waitpid(grand, &mut status, libc::WNOHANG) };
+        assert!(got < 0, "staged grandchild must not be our child");
+    }
+    {
+        let fired = pinned;
+        assert_eq!(fired.tick, Some(tick), "constructor must pin the live tick");
+    } // Drop fires here.
+      // Observe before cleanup (IR-002 discipline): settled
+      // dead, or still live past the window.
+    let end = Instant::now() + Duration::from_secs(5);
+    let retired = loop {
+        match task_state(grand) {
+            Some(state) if state != 'Z' => {
+                if Instant::now() >= end {
+                    break false;
+                }
+            }
+            _ => break true,
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // Cleanup (runs on RED too): tick-gated kill (R15-003 —
+    // a blind kill would risk a recycled replacement), poll
+    // gone, then reap the sh parent (its `wait` ends with
+    // the grandchild).
+    let _ = kill_tick_gated(grand, tick);
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if task_starttime_checked(grand) != Ok(Some(tick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "staged grandchild must die");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        if parent.try_wait().expect("parent wait").is_some() {
+            break;
+        }
+        assert!(Instant::now() < end, "sh parent must exit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        retired,
+        "pinned guard drop must retire the verified grandchild"
+    );
+}
+
+/// R16-011: probe-staging failure custody — every staged birth
+/// across the EMFILE/late-pin/gated-kill shapes must disappear
+/// with its status discharged when an injected failure reports.
+/// Three arms (each stages + guards exactly as the fixed sites
+/// do, injects under catch, then requires disappearance +
+/// discharge + report): a pauser with an injected OBSERVATION
+/// failure before any read; a pauser pinned then failed by an
+/// injected ASSERTION (the late-pin second-guard shape); an sh
+/// plus a staged grandchild with an injected failure (the
+/// EMFILE stranger shape — grandchild custody needs the pinned
+/// twin).
+/// Observe-before-cleanup per arm (mutant runs stay clean);
+/// asserts read captured evidence. Pre-fix (guards removed)
+/// every arm strands (RED, proven by mutant runs during
+/// development); post-fix all retire (GREEN). Duration 56 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn probe_staging_failures_retire_before_report() {
+    use std::io::BufRead as _;
+    // Arm OBS: pauser birth, observation failure injected
+    // before any read.
+    let slot = std::cell::Cell::new(-1);
+    let obs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let pid = fork_pauser();
+        slot.set(pid);
+        let _guard = SilentChildGuard::new(pid);
+        panic!("R16011 injected observation failure");
+    }));
+    let opid = slot.get();
+    assert!(opid > 0, "obs arm must stage a pauser");
+    let ostate = task_starttime_checked(opid);
+    retire_child_silent(opid);
+    assert_eq!(ostate, Ok(None), "obs failure must not leak the pauser");
+    assert_pid_free(opid, "obs");
+    assert!(obs.is_err(), "obs failure must report");
+    // Arm PINNED: pauser birth + pin, assertion failure
+    // injected after (the late-pin second-guard shape).
+    let slot = std::cell::Cell::new(-1);
+    let pinned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let pid = fork_pauser();
+        slot.set(pid);
+        let mut _guard = SilentChildGuard::new(pid);
+        let tick = task_starttime_checked(pid)
+            .expect("pinned stat readable")
+            .expect("pinned visible");
+        _guard.pin(tick);
+        panic!("R16011 injected assertion failure");
+    }));
+    let ppid = slot.get();
+    assert!(ppid > 0, "pinned arm must stage a pauser");
+    let pstate = task_starttime_checked(ppid);
+    retire_child_silent(ppid);
+    assert_eq!(pstate, Ok(None), "pinned failure must not leak the pauser");
+    assert_pid_free(ppid, "pinned");
+    assert!(pinned.is_err(), "pinned failure must report");
+    // Arm STRANGER: sh + grandchild, failure injected after
+    // staging (the EMFILE stranger shape).
+    let mut parent = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg("sleep 56 & echo $!; wait")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sh parent spawns");
+    let sh = parent.id() as i32;
+    // Outer custody for the pre-catch reads (the inner guards
+    // below are the tested artifact; these only cover staging
+    // and verify silent at the end).
+    let mut outer_sh = SilentChildGuard::new(sh);
+    let mut line = String::new();
+    std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+        .read_line(&mut line)
+        .expect("grandchild pid readable");
+    let stranger = line.trim().parse::<i32>().expect("pid parses");
+    let mut outer_stranger = SilentChildGuard::new(stranger);
+    let stick = task_starttime_checked(stranger)
+        .expect("stranger stat readable")
+        .expect("stranger present");
+    let shtick = task_starttime_checked(sh)
+        .expect("sh stat readable")
+        .expect("sh present");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _sh_guard = SilentChildGuard::new(sh);
+        let _stranger_guard = SilentChildGuard::new(stranger);
+        panic!("R16011 injected stranger-staging failure");
+    }));
+    let sstate = task_starttime_checked(stranger);
+    let hstate = task_starttime_checked(sh);
+    // Hygiene (mutant-clean): tick-gated stranger kill, sh
+    // kill+reap through the owned handle, poll both gone.
+    let _ = kill_tick_gated(stranger, stick);
+    let _ = parent.kill();
+    let _ = parent.wait();
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        let down = task_starttime_checked(stranger) != Ok(Some(stick))
+            && task_starttime_checked(sh) != Ok(Some(shtick));
+        if down {
+            break;
+        }
+        assert!(Instant::now() < end, "stranger pair must die in hygiene");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    outer_sh.disarm();
+    outer_stranger.disarm();
+    assert_eq!(
+        sstate,
+        Ok(None),
+        "stranger failure must not leak the grandchild"
+    );
+    assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
+    assert_pid_free(sh, "stranger-sh");
+    assert!(failed.is_err(), "stranger failure must report");
+}
+
 /// R14-001: a Drop guard must never signal a recycled number.
 /// The fixture is retired explicitly (kill+reap, number free),
 /// then a steered stand-in retakes the number at a different
@@ -3880,6 +4143,10 @@ fn drop_guard_spares_recycled_number() {
 /// literal transient-EMFILE staging is infeasible in-process
 /// (fd exhaustion is process-global); transient healing is
 /// covered by the scripted unit test above.
+/// R16-011: the second replacement rides its OWN guard (the
+/// stale first guard correctly spares it — including on unwind
+/// — so without independent custody a failed observation or
+/// assertion below would strand a perpetual pauser).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn late_pin_spares_second_replacement() {
@@ -3920,11 +4187,17 @@ fn late_pin_spares_second_replacement() {
         eprintln!("skip: second retake contended");
         return;
     }
+    // R16-011: independent custody for the second replacement
+    // (the stale first guard spares it by design — unwind
+    // included — so the reads and asserts below would strand
+    // it without this).
+    let mut second_guard = SilentChildGuard::new(seed);
     let second_tick = task_starttime_checked(seed)
         .expect("second stat readable")
         .expect("second visible");
     if second_tick == first_tick {
         kill_wait_child(seed);
+        second_guard.disarm();
         eprintln!("skip: same-tick retake (S100 — untestable this run)");
         return;
     }
@@ -3939,6 +4212,7 @@ fn late_pin_spares_second_replacement() {
         "survivor must be live, not a zombie"
     );
     kill_wait_child(seed);
+    second_guard.disarm();
 }
 
 /// R15-005: run one probe mode in a FRESH process image (the
@@ -4006,7 +4280,13 @@ fn emfile_probe_child(mode: &str) {
     use std::io::BufRead as _;
     // Stage the fixture (all fds available here). The stranger
     // mode keeps its sh parent for loud cleanup below.
+    // R16-011: staging guards (declared here, armed at each
+    // birth — a failed expect/assert anywhere below unwinds
+    // through retirement, never an orphaned pauser/sleeper).
     let mut sh_parent: Option<std::process::Child> = None;
+    let mut _zguard: Option<SilentChildGuard> = None;
+    let mut _sh_guard: Option<SilentChildGuard> = None;
+    let mut _stranger_guard: Option<SilentChildGuard> = None;
     let pid = match mode {
         "live" | "gone" | "stolen" => fork_pauser(),
         "zombie" => {
@@ -4017,6 +4297,7 @@ fn emfile_probe_child(mode: &str) {
                 unsafe { libc::_exit(0) };
             }
             assert!(kid > 0, "zombie fork");
+            _zguard = Some(SilentChildGuard::new(kid));
             let end = Instant::now() + Duration::from_secs(5);
             loop {
                 let row =
@@ -4041,11 +4322,15 @@ fn emfile_probe_child(mode: &str) {
                 .stderr(std::process::Stdio::null())
                 .spawn()
                 .expect("sh parent spawns");
+            // R16-011: custody AT birth for both (the asserts
+            // below unwind through retirement, never orphans).
+            _sh_guard = Some(SilentChildGuard::new(parent.id() as i32));
             let mut line = String::new();
             std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
                 .read_line(&mut line)
                 .expect("grandchild pid readable");
             let stranger = line.trim().parse::<i32>().expect("pid parses");
+            _stranger_guard = Some(SilentChildGuard::new(stranger));
             assert!(
                 matches!(task_state(stranger), Some(state) if state != 'Z'),
                 "staged stranger must be live"
@@ -4061,6 +4346,11 @@ fn emfile_probe_child(mode: &str) {
         }
         _ => panic!("unknown probe mode {mode}"),
     };
+    // R16-011: staging custody for every mode (covers the
+    // pin reads below plus every later assert — the drop test
+    // moves only the mode guard, so this one still backstops
+    // the tails; all verify silent on happy paths).
+    let _staging_guard = SilentChildGuard::new(pid);
     // Pin BEFORE any mode-specific pre-step (gone retires
     // pre-exhaust; the pin must cite the live fixture).
     let guard = SilentChildGuard::new(pid);
@@ -4074,6 +4364,9 @@ fn emfile_probe_child(mode: &str) {
     // the fallback must not reap). BEFORE exhaustion (fork
     // needs fds). Single-threaded probe: no in-process
     // contention, flock-only steering is sound.
+    // R16-011: B custody (declared outside — the tail
+    // disarms after reaping; skips disarm after retiring).
+    let mut b_guard: Option<SilentChildGuard> = None;
     if mode == "stolen" {
         kill_wait_child(pid);
         let last_before =
@@ -4086,11 +4379,17 @@ fn emfile_probe_child(mode: &str) {
                 return;
             }
         };
+        // R16-011: custody AT placement — the reads below
+        // panic safe (B is a perpetual pauser until zombified).
+        b_guard = Some(SilentChildGuard::new(sibling));
         let btick = task_starttime_checked(sibling)
             .expect("sibling stat readable")
             .expect("sibling visible");
         if btick == tick {
             kill_wait_child(sibling);
+            if let Some(guard) = b_guard.as_mut() {
+                guard.disarm();
+            }
             eprintln!("R16004-SKIP stolen (same-tick retake S100)");
             eprintln!("R15005-CHILD-DONE mode={mode}");
             return;
@@ -4184,6 +4483,9 @@ fn emfile_probe_child(mode: &str) {
             // SAFETY: WNOHANG reap of our own staged zombie.
             let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
             assert_eq!(got, pid, "sibling zombie status stolen by the fallback");
+            if let Some(guard) = b_guard.as_mut() {
+                guard.disarm();
+            }
             eprintln!("R16004-STATUS retained pid={pid}");
         }
         "stranger" => {
@@ -4398,6 +4700,9 @@ fn steer_sleep_onto(want: i32, self_grouped: bool) -> Option<std::process::Child
 /// live-state (a zombie keeps its tick) plus the unchanged
 /// replacement tick. Pre-fix the replacement dies (RED);
 /// post-fix it survives (GREEN).
+/// R16-011: initial + replacement pausers ride guards (a
+/// failed observation or assertion would otherwise strand a
+/// perpetual pauser).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn gated_kill_spares_steered_replacement() {
@@ -4418,10 +4723,13 @@ fn gated_kill_spares_steered_replacement() {
         return;
     }
     let owned = fork_pauser();
+    // R16-011: custody AT birth — the reads below panic safe.
+    let mut owned_guard = SilentChildGuard::new(owned);
     let owned_tick = task_starttime_checked(owned)
         .expect("fixture stat readable")
         .expect("fixture visible");
     kill_wait_child(owned);
+    owned_guard.disarm();
     std::thread::sleep(Duration::from_millis(50));
     let _nsflock = ns_last_pid_flock();
     let mut standin = -1;
@@ -4444,11 +4752,16 @@ fn gated_kill_spares_steered_replacement() {
         eprintln!("skip: fixture number not retaken (contended)");
         return;
     }
+    // R16-011: independent custody for the replacement (no
+    // fallible op sits between placement and break above, so
+    // post-loop construction closes every window below).
+    let mut standin_guard = SilentChildGuard::new(owned);
     let standin_tick = task_starttime_checked(owned)
         .expect("stand-in stat readable")
         .expect("stand-in visible");
     if standin_tick == owned_tick {
         kill_wait_child(owned);
+        standin_guard.disarm();
         eprintln!("skip: same-tick retake (S100 — untestable this run)");
         return;
     }
@@ -4476,6 +4789,7 @@ fn gated_kill_spares_steered_replacement() {
         "survivor is the placed replacement, not a second recycle"
     );
     kill_wait_child(owned);
+    standin_guard.disarm();
 }
 
 /// R15-003 efficacy + decision guard (runs everywhere, no
@@ -4484,6 +4798,8 @@ fn gated_kill_spares_steered_replacement() {
 /// test vacuously); wrong-tick and gone numbers skip; the
 /// unreadable arm reports false without signaling (injected
 /// read). Duration 51 is unique to this test.
+/// R16-011: each staged sleeper rides a guard (a failed
+/// observation or assertion would otherwise strand it).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn gated_kill_acts_on_matching_identity() {
@@ -4500,6 +4816,8 @@ fn gated_kill_acts_on_matching_identity() {
         .spawn()
         .expect("staged spawns");
     let spid = staged.id() as i32;
+    // R16-011: custody AT birth — the reads below panic safe.
+    let mut staged_guard = SilentChildGuard::new(spid);
     let stick = task_starttime_checked(spid)
         .expect("staged stat readable")
         .expect("staged visible");
@@ -4521,6 +4839,7 @@ fn gated_kill_acts_on_matching_identity() {
         Ok(None),
         "signaled task reaped gone"
     );
+    staged_guard.disarm();
     // Wrong tick on a live task: spared.
     let mut stranger = std::process::Command::new("/bin/sleep")
         .arg("51")
@@ -4530,6 +4849,8 @@ fn gated_kill_acts_on_matching_identity() {
         .spawn()
         .expect("stranger spawns");
     let xpid = stranger.id() as i32;
+    // R16-011: custody AT birth — the reads below panic safe.
+    let mut stranger_guard = SilentChildGuard::new(xpid);
     let xtick = task_starttime_checked(xpid)
         .expect("stranger stat readable")
         .expect("stranger visible");
@@ -4550,6 +4871,7 @@ fn gated_kill_acts_on_matching_identity() {
         libc::kill(xpid, libc::SIGKILL);
     }
     let _ = stranger.wait();
+    stranger_guard.disarm();
     // Gone number: silent no-op.
     let mut gone = std::process::Command::new("/bin/true")
         .stdin(std::process::Stdio::null())
@@ -4574,6 +4896,8 @@ fn gated_kill_acts_on_matching_identity() {
         .spawn()
         .expect("parked spawns");
     let ppid = parked.id() as i32;
+    // R16-011: custody AT birth — the reads below panic safe.
+    let mut parked_guard = SilentChildGuard::new(ppid);
     let ptick = task_starttime_checked(ppid)
         .expect("parked stat readable")
         .expect("parked visible");
@@ -4600,6 +4924,7 @@ fn gated_kill_acts_on_matching_identity() {
         libc::kill(ppid, libc::SIGKILL);
     }
     let _ = parked.wait();
+    parked_guard.disarm();
 }
 
 /// R15-004: the birth pin retries transient read errors but

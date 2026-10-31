@@ -4325,6 +4325,9 @@ mod tests {
     /// failure under catch, assert the (pid, starttime) evidence
     /// shape, prove denial took (writer survived) or success
     /// (writer gone), clean up loud, print DONE.
+    /// R16-011: writer + probe ride guards from birth (a failed
+    /// staging expect or evidence assert would otherwise orphan
+    /// them past the probe's exit).
     #[cfg(target_arch = "x86_64")]
     fn r15008_probe_child(mode: &str) {
         use super::super::seccomp::{install_deny_one, DenyAction};
@@ -4341,6 +4344,9 @@ mod tests {
             .spawn()
             .expect("writer spawns");
         let wpid = writer.id() as libc::pid_t;
+        // R16-011: custody AT birth — staging + evidence below
+        // panic safe.
+        let mut writer_guard = FixtureGuard::new(wpid);
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
@@ -4365,6 +4371,11 @@ mod tests {
         } else {
             None
         };
+        // R16-011: custody AT birth (timeout mode only).
+        let mut probe_guard: Option<FixtureGuard> = None;
+        if let Some(standin) = probe.as_ref() {
+            probe_guard = Some(FixtureGuard::new(standin.id() as libc::pid_t));
+        }
         // Pidfile setup per mode (publish modes drive the
         // rendezvous publish through GRANDCHILD_PIDFILE_ENV).
         let pidfile = std::env::temp_dir().join(format!(
@@ -4401,9 +4412,13 @@ mod tests {
             // paths work) and SKIP loud, R14-011-style.
             let _ = writer.kill();
             let _ = writer.wait();
+            writer_guard.disarm();
             if let Some(mut probe) = probe.take() {
                 let _ = probe.kill();
                 let _ = probe.wait();
+            }
+            if let Some(guard) = probe_guard.as_mut() {
+                guard.disarm();
             }
             let _ = std::fs::remove_file(&pidfile);
             let _ = std::fs::remove_dir(format!("{}.tmp", pidfile.display()));
@@ -4473,6 +4488,7 @@ mod tests {
                 Ok(None),
                 "retired writer must be gone"
             );
+            writer_guard.disarm();
         }
         // Loud cleanup (plain kill+wait need no pidfd — the
         // filter only denied pidfd_open).
@@ -4490,6 +4506,7 @@ mod tests {
                 assert!(Instant::now() < end, "writer cleanup must retire");
                 std::thread::sleep(Duration::from_millis(10));
             }
+            writer_guard.disarm();
         }
         if mode == "timeout" {
             let probe = probe.as_mut().expect("probe staged");
@@ -4497,6 +4514,9 @@ mod tests {
                 probe.try_wait().expect("probe wait").is_some(),
                 "timeout body must reap the probe"
             );
+            if let Some(guard) = probe_guard.as_mut() {
+                guard.disarm();
+            }
             assert!(
                 std::fs::metadata(&pidfile).is_err(),
                 "timeout body must remove the pidfile (IR-004)"
@@ -7860,8 +7880,14 @@ mod tests {
         // Stage the fixture; owned handles stay alive for loud
         // cleanup below (the guard never waits on the live
         // modes, so no reap races the handles).
+        // R16-011: staging guards (declared here, armed at each
+        // birth — a failed expect/assert anywhere below unwinds
+        // through retirement, never an orphaned sleeper).
         let mut owned: Option<std::process::Child> = None;
         let mut sh_parent: Option<std::process::Child> = None;
+        let mut _zguard: Option<FixtureGuard> = None;
+        let mut _sh_guard: Option<FixtureGuard> = None;
+        let mut _stranger_guard: Option<FixtureGuard> = None;
         let pid = match mode {
             "live" | "gone" | "stolen" => {
                 let child = spawn_sleep("51");
@@ -7878,7 +7904,10 @@ mod tests {
                     .expect("true spawns");
                 let pid = child.id() as libc::pid_t;
                 owned = Some(child);
-                // Settle into Z BEFORE the guard (bounded poll
+                // R16-011: custody before the settle (the loop
+                // below unwinds through discharge).
+                _zguard = Some(FixtureGuard::new(pid));
+                // Settle into Z BEFORE the mode guard (bounded poll
                 // on /proc state — never a reaping wait).
                 let end = Instant::now() + Duration::from_secs(5);
                 loop {
@@ -7899,11 +7928,17 @@ mod tests {
                     .stderr(std::process::Stdio::null())
                     .spawn()
                     .expect("sh parent spawns");
+                // R16-011: custody AT birth for the parent (the
+                // reads below unwind through retirement).
+                _sh_guard = Some(FixtureGuard::new(parent.id() as libc::pid_t));
                 let mut line = String::new();
                 std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
                     .read_line(&mut line)
                     .expect("grandchild pid readable");
                 let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+                // R16-011: custody AT parse (the asserts below
+                // unwind through retirement, never an orphan).
+                _stranger_guard = Some(FixtureGuard::new(stranger));
                 assert!(
                     matches!(proc_state(stranger), Some(state) if state != 'Z'),
                     "staged stranger must be live"
@@ -7919,6 +7954,12 @@ mod tests {
             }
             _ => panic!("unknown probe mode {mode}"),
         };
+        // R16-011: staging custody for every mode (covers the
+        // pin reads below plus every later assert — the drop
+        // test moves only the mode guard, so this one still
+        // backstops the tails; all verify silent on happy
+        // paths).
+        let _staging_guard = FixtureGuard::new(pid);
         let guard = FixtureGuard::new(pid);
         let tick = proc_starttime(pid)
             .expect("fixture stat readable")
@@ -7930,6 +7971,9 @@ mod tests {
         // the fallback must not reap). BEFORE exhaustion (spawn
         // needs fds). Single-threaded probe: no in-process
         // contention, flock-only steering is sound.
+        // R16-011: B custody (declared outside — the tail
+        // disarms after reaping; skips disarm after retiring).
+        let mut b_guard: Option<FixtureGuard> = None;
         if mode == "stolen" {
             let mut child = owned.take().expect("owned staged");
             let _ = child.kill();
@@ -7942,12 +7986,18 @@ mod tests {
                     return;
                 }
             };
+            // R16-011: custody AT placement — the reads below
+            // panic safe.
+            b_guard = Some(FixtureGuard::new(pid));
             let btick = proc_starttime(pid)
                 .expect("sibling stat readable")
                 .expect("sibling visible");
             if btick == tick {
                 let _ = sibling.kill();
                 let _ = sibling.wait();
+                if let Some(guard) = b_guard.as_mut() {
+                    guard.disarm();
+                }
                 eprintln!("R16004-SKIP stolen (same-tick retake S100)");
                 eprintln!("R15005-CHILD-DONE mode={mode}");
                 return;
@@ -8034,6 +8084,9 @@ mod tests {
                 // SAFETY: WNOHANG reap of our own staged zombie.
                 let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
                 assert_eq!(got, pid, "sibling zombie status stolen by the fallback");
+                if let Some(guard) = b_guard.as_mut() {
+                    guard.disarm();
+                }
                 eprintln!("R16004-STATUS retained pid={pid}");
             }
             "stranger" => {
@@ -9301,6 +9354,10 @@ mod tests {
             .read_line(&mut line)
             .expect("grandchild pid readable");
         let grand = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        // R16-011: custody before the sanity reads (the drop
+        // under test moves this guard into its own scope
+        // below).
+        let pinned = FixtureGuard::new(grand);
         let tick = proc_starttime(grand)
             .expect("grandchild stat readable")
             .expect("grandchild present");
@@ -9317,12 +9374,8 @@ mod tests {
             assert!(got < 0, "staged grandchild must not be our child");
         }
         {
-            let pinned = FixtureGuard::new(grand);
-            assert_eq!(
-                pinned.tick,
-                Some(tick),
-                "constructor must pin the live tick"
-            );
+            let fired = pinned;
+            assert_eq!(fired.tick, Some(tick), "constructor must pin the live tick");
         } // Drop fires here.
           // Observe before cleanup (IR-002 discipline): settled
           // dead, or still live past the window.
@@ -9363,6 +9416,152 @@ mod tests {
             retired,
             "pinned guard drop must retire the verified grandchild"
         );
+    }
+
+    /// R16-011: probe-staging failure custody (audit twin of the
+    /// toolchain shape test) — every staged birth across the
+    /// EMFILE/denial/discrimination shapes must disappear with
+    /// its status discharged when an injected failure reports.
+    /// Three arms (each stages + guards exactly as the fixed
+    /// sites do, injects under catch, then requires
+    /// disappearance + discharge + report): a sleeper with an
+    /// injected OBSERVATION failure before any read; a sleeper
+    /// killed and settled to Z with an injected ASSERTION
+    /// failure at the zombie stage (the discrimination shape);
+    /// an sh + staged grandchild with an injected failure (the
+    /// EMFILE stranger shape — grandchild custody needs the
+    /// R16-010 pinned twin). Observe-before-cleanup per arm
+    /// (mutant runs stay clean); asserts read captured
+    /// evidence. Pre-fix (guards removed) every arm strands
+    /// (RED, proven by mutant runs during development);
+    /// post-fix all retire (GREEN). Duration 47 is unique to
+    /// this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn probe_staging_failures_retire_before_report() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        fn spawn_sleep(dur: &str) -> std::process::Child {
+            std::process::Command::new("/bin/sleep")
+                .arg(dur)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sleep spawns")
+        }
+        // Arm OBS: sleeper birth, observation failure injected
+        // before any read.
+        let slot = std::cell::Cell::new(-1);
+        let obs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Temporary handle (the guard owns custody —
+            // dropping the handle interferes with nothing).
+            slot.set(spawn_sleep("47").id() as libc::pid_t);
+            let pid = slot.get();
+            let _guard = FixtureGuard::new(pid);
+            panic!("R16011 injected observation failure");
+        }));
+        let opid = slot.get();
+        assert!(opid > 0, "obs arm must stage a sleeper");
+        let ostate = proc_starttime(opid);
+        retire_audit_child_silent(opid);
+        assert_eq!(ostate, Ok(None), "obs failure must not leak the sleeper");
+        assert_audit_pid_free(opid, "obs");
+        assert!(obs.is_err(), "obs failure must report");
+        // Arm ZOMBIE: sleeper killed and settled to Z, assertion
+        // failure injected at the zombie stage (the
+        // discrimination shape — discharge, not just death).
+        let slot = std::cell::Cell::new(-1);
+        let zomb = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Temporary handle (the guard owns custody —
+            // dropping the handle interferes with nothing).
+            slot.set(spawn_sleep("47").id() as libc::pid_t);
+            let pid = slot.get();
+            let _guard = FixtureGuard::new(pid);
+            // SAFETY: signal-only to our own staged sleeper.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if matches!(proc_state(pid), Some(state) if state == 'Z') {
+                    break;
+                }
+                assert!(Instant::now() < end, "sleeper never zombied");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            panic!("R16011 injected zombie-stage failure");
+        }));
+        let zpid = slot.get();
+        assert!(zpid > 0, "zombie arm must stage a sleeper");
+        let zstate = proc_starttime(zpid);
+        {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own staged zombie.
+            unsafe { libc::waitpid(zpid, &mut status, libc::WNOHANG) };
+        }
+        assert_eq!(zstate, Ok(None), "zombie failure must not leak the sleeper");
+        assert_audit_pid_free(zpid, "zombie");
+        assert!(zomb.is_err(), "zombie failure must report");
+        // Arm STRANGER: sh + grandchild, failure injected after
+        // staging (the EMFILE stranger shape).
+        let mut parent = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 47 & echo $!; wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh parent spawns");
+        let sh = parent.id() as libc::pid_t;
+        // Outer custody for the pre-catch reads (the inner
+        // guards below are the tested artifact; these only
+        // cover staging and verify silent at the end).
+        let mut outer_sh = FixtureGuard::new(sh);
+        let mut line = String::new();
+        std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
+            .read_line(&mut line)
+            .expect("grandchild pid readable");
+        let stranger = line.trim().parse::<libc::pid_t>().expect("pid parses");
+        let mut outer_stranger = FixtureGuard::new(stranger);
+        let stick = proc_starttime(stranger)
+            .expect("stranger stat readable")
+            .expect("stranger present");
+        let shtick = proc_starttime(sh)
+            .expect("sh stat readable")
+            .expect("sh present");
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _sh_guard = FixtureGuard::new(sh);
+            let _stranger_guard = FixtureGuard::new(stranger);
+            panic!("R16011 injected stranger-staging failure");
+        }));
+        let sstate = proc_starttime(stranger);
+        let hstate = proc_starttime(sh);
+        // Hygiene (mutant-clean): tick-gated stranger kill, sh
+        // kill+reap through the owned handle, poll both gone.
+        let _ = kill_tick_gated(stranger, stick);
+        let _ = parent.kill();
+        let _ = parent.wait();
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            let down = proc_starttime(stranger) != Ok(Some(stick))
+                && proc_starttime(sh) != Ok(Some(shtick));
+            if down {
+                break;
+            }
+            assert!(Instant::now() < end, "stranger pair must die in hygiene");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        outer_sh.disarm();
+        outer_stranger.disarm();
+        assert_eq!(
+            sstate,
+            Ok(None),
+            "stranger failure must not leak the grandchild"
+        );
+        assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
+        assert_audit_pid_free(sh, "stranger-sh");
+        assert!(failed.is_err(), "stranger failure must report");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
@@ -10795,6 +10994,9 @@ mod tests {
     /// it), the NEW oracle reports not-live (definitive for
     /// owned children: ECHILD/Some = not live). Duration 73 is
     /// unique to this test.
+    /// R16-011: the writer rides a guard from birth (a failed
+    /// observation or assertion would otherwise strand the
+    /// sleeper or leave the zombie unreaped).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn liveness_oracle_discriminates_zombie_from_live() {
@@ -10807,6 +11009,9 @@ mod tests {
             .spawn()
             .expect("writer spawns");
         let wpid = writer.id() as libc::pid_t;
+        // R16-011: custody AT birth — the reads below panic
+        // safe (live sleeper or unreaped zombie alike).
+        let mut writer_guard = FixtureGuard::new(wpid);
         let wtick = proc_starttime(wpid)
             .expect("writer stat readable")
             .expect("writer visible");
@@ -10839,6 +11044,7 @@ mod tests {
         // Hygiene (the try_wait above already reaped).
         let _ = writer.wait();
         assert_eq!(proc_starttime(wpid), Ok(None), "zombie retired loud");
+        writer_guard.disarm();
     }
 
     /// R13-005: an outer probe that exits after grandchild birth
