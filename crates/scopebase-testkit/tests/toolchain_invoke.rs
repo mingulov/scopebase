@@ -4770,8 +4770,17 @@ fn steer_pauser_onto(want: i32, last_before: &str) -> Option<i32> {
         kill_wait_child(kid);
         kid_guard.disarm();
     }
+    // R17-006: custody ACROSS the restore — the flock re-take
+    // below panics under EMFILE (open assert); without this a
+    // restore panic strands the placed pauser. Disarmed on
+    // success (the caller guards immediately — no fallible
+    // ops between).
+    let mut placed_guard = placed.map(SilentChildGuard::new);
     drop(_nsflock);
     locked_restore_hint(last_before);
+    if let Some(guard) = placed_guard.as_mut() {
+        guard.disarm();
+    }
     placed
 }
 
@@ -4821,8 +4830,100 @@ fn steer_sleep_onto(want: i32, self_grouped: bool) -> Option<std::process::Child
         }
         found
     };
+    // R17-006: custody ACROSS the restore (same window as the
+    // pauser helper — a restore panic strands the standin).
+    // Disarmed on success (the caller owns the Child handle
+    // and guards immediately).
+    let mut found_guard = found
+        .as_ref()
+        .map(|kid| SilentChildGuard::new(kid.id() as i32));
     locked_restore_hint(last_before.trim());
+    if let Some(guard) = found_guard.as_mut() {
+        guard.disarm();
+    }
     found
+}
+
+/// R17-006: probe body (fresh image, SCOPEBASE_R17006_RESTORE)
+/// — mirror of the steer-helper restore window: place a
+/// pauser, guard it, exhaust fds, run the locked restore
+/// (the flock open panics), unwind, restore fds, require the
+/// pauser retired with its status discharged. RED (no guard):
+/// the perpetual pauser strands; GREEN: the guard retires it
+/// on unwind. No steering (placement mechanics orthogonal).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn steer_restore_window_probe() {
+    let hint = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
+    let pauser = fork_pauser();
+    let tick = task_starttime_checked(pauser)
+        .expect("pauser stat readable")
+        .expect("pauser visible");
+    // Guard constructed outside (pin verified), dropped
+    // inside on unwind; exhaustion declared LAST inside so
+    // unwind drops held first (fds back), then the guard
+    // retires.
+    let guard = SilentChildGuard::new(pauser);
+    assert_eq!(
+        guard.tick,
+        Some(tick),
+        "construction must pin (stage broken otherwise)"
+    );
+    let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = guard;
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        locked_restore_hint(hint.trim());
+        panic!("unreachable: restore must panic under EMFILE");
+    }));
+    assert!(fired.is_err(), "restore must panic under EMFILE");
+    // Observe before cleanup.
+    let state = task_starttime_checked(pauser);
+    let retired = task_retired_checked(pauser);
+    // Hygiene (mutant-clean): the perpetual pauser must die
+    // even on RED runs.
+    kill_wait_child(pauser);
+    assert_eq!(state, Ok(None), "restore panic must not strand the pauser");
+    assert_eq!(retired, Ok(true), "restore panic must discharge the pauser");
+    eprintln!("R17006-RESTORED retired=1");
+}
+
+/// R17-006: a restore panic between placement and the
+/// caller's guard must still retire the placed pauser
+/// (custody across the restore window — the flock re-take
+/// panics under EMFILE). The probe mirrors the helper shape
+/// (place → guard → restore); the helpers carry the same
+/// guard (review-matched — the window inside the helper is
+/// atomic from outside, uninjectable directly).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn steer_restore_panic_retires_placed_pauser() {
+    if std::env::var("SCOPEBASE_R17006_RESTORE").is_ok() {
+        steer_restore_window_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("steer_restore_panic_retires_placed_pauser")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R17006_RESTORE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "probe must retire through the restore panic\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R17006-RESTORED retired=1"),
+        "probe must cite the retirement\n{stderr}"
+    );
 }
 
 /// R15-003: toolchain twin of the audit steered-replacement

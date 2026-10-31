@@ -2245,7 +2245,17 @@ mod tests {
             }
             found
         };
+        // R17-006: custody ACROSS the restore (audit twin of
+        // the toolchain fix — a restore panic strands the
+        // standin). Disarmed on success (the caller owns the
+        // Child handle and guards immediately).
+        let mut found_guard = found
+            .as_ref()
+            .map(|kid| FixtureGuard::new(kid.id() as libc::pid_t));
         audit_locked_restore_hint(last_before.trim());
+        if let Some(guard) = found_guard.as_mut() {
+            guard.disarm();
+        }
         found
     }
 
@@ -7835,6 +7845,8 @@ mod tests {
             .spawn()
             .expect("owned spawns");
         let opid = owned.id() as libc::pid_t;
+        // R17-006: custody AT birth — the reads below panic safe.
+        let mut owned_guard = FixtureGuard::new(opid);
         let otick = proc_starttime(opid)
             .expect("owned stat readable")
             .expect("owned visible");
@@ -7846,6 +7858,7 @@ mod tests {
             !matches!(owned.try_wait(), Ok(None)),
             "owned child retired by the gated retire (reaped or ECHILD)"
         );
+        owned_guard.disarm();
         // Helper (b): live task, matching tick — signaled (poll
         // it gone; the owner handle reaps).
         let mut staged = std::process::Command::new("/bin/sleep")
@@ -7856,6 +7869,8 @@ mod tests {
             .spawn()
             .expect("staged spawns");
         let spid = staged.id() as libc::pid_t;
+        // R17-006: custody AT birth — the reads below panic safe.
+        let mut staged_guard = FixtureGuard::new(spid);
         let stick = proc_starttime(spid)
             .expect("staged stat readable")
             .expect("staged visible");
@@ -7875,6 +7890,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(proc_starttime(spid), Ok(None), "signaled task reaped gone");
+        staged_guard.disarm();
         // Wrong tick on a live task — spared by both helpers.
         let mut stranger = std::process::Command::new("/bin/sleep")
             .arg("54")
@@ -7884,6 +7900,8 @@ mod tests {
             .spawn()
             .expect("stranger spawns");
         let xpid = stranger.id() as libc::pid_t;
+        // R17-006: custody AT birth — the reads below panic safe.
+        let mut stranger_guard = FixtureGuard::new(xpid);
         let xtick = proc_starttime(xpid)
             .expect("stranger stat readable")
             .expect("stranger visible");
@@ -7911,6 +7929,7 @@ mod tests {
             libc::kill(xpid, libc::SIGKILL);
         }
         let _ = stranger.wait();
+        stranger_guard.disarm();
         // Gone number — silent no-op for both.
         let mut gone = std::process::Command::new("/bin/true")
             .stdin(std::process::Stdio::null())
@@ -7953,6 +7972,8 @@ mod tests {
         // Unreadable: false, no signal (victim survives).
         let mut parked = spawn();
         let ppid = parked.id() as libc::pid_t;
+        // R17-006: custody AT birth — the reads below panic safe.
+        let mut parked_guard = FixtureGuard::new(ppid);
         let ptick = proc_starttime(ppid)
             .expect("victim stat readable")
             .expect("victim visible");
@@ -7966,6 +7987,8 @@ mod tests {
         // Scripted match: signals (victim dies).
         let mut doomed = spawn();
         let dpid = doomed.id() as libc::pid_t;
+        // R17-006: custody AT birth — the reads below panic safe.
+        let mut doomed_guard = FixtureGuard::new(dpid);
         let dtick = proc_starttime(dpid)
             .expect("victim stat readable")
             .expect("victim visible");
@@ -7987,6 +8010,7 @@ mod tests {
             Ok(None),
             "signaled victim reaped gone"
         );
+        doomed_guard.disarm();
         // Scripted mismatch: skips (victim survives).
         assert!(
             kill_tick_gated_with(ppid, ptick, |_| Ok(Some(ptick.wrapping_add(1)))),
@@ -8000,6 +8024,7 @@ mod tests {
             libc::kill(ppid, libc::SIGKILL);
         }
         let _ = parked.wait();
+        parked_guard.disarm();
     }
 
     /// R15-004: audit twin of the toolchain pin-retry unit test
@@ -8091,8 +8116,18 @@ mod tests {
                 let _ = cand.kill();
                 let _ = cand.wait();
             }
+            // R17-006: custody ACROSS the restore (a restore
+            // panic strands the placed candidate). Disarmed on
+            // success (the caller owns the Child handle and
+            // guards immediately).
+            let mut placed_guard = placed
+                .as_ref()
+                .map(|kid| FixtureGuard::new(kid.id() as libc::pid_t));
             drop(_nsflock);
             audit_locked_restore_hint(&last_before);
+            if let Some(guard) = placed_guard.as_mut() {
+                guard.disarm();
+            }
             placed
         };
         let mut seed = spawn();
@@ -8125,12 +8160,19 @@ mod tests {
                 return;
             }
         };
+        // R17-006: independent custody for the second
+        // replacement (audit twin of the toolchain guard —
+        // the stale first guard spares it by design, so the
+        // reads and asserts below would strand it without
+        // this).
+        let mut second_guard = FixtureGuard::new(number);
         let second_tick = proc_starttime(number)
             .expect("second stat readable")
             .expect("second visible");
         if second_tick == first_tick {
             let _ = second.kill();
             let _ = second.wait();
+            second_guard.disarm();
             eprintln!("skip: same-tick retake (S100 — untestable this run)");
             return;
         }
@@ -8150,6 +8192,7 @@ mod tests {
         );
         let _ = second.kill();
         let _ = second.wait();
+        second_guard.disarm();
     }
 
     /// R15-005: run one probe mode in a FRESH process image
@@ -9767,7 +9810,7 @@ mod tests {
     /// toolchain shape test) — every staged birth across the
     /// EMFILE/denial/discrimination shapes must disappear with
     /// its status discharged when an injected failure reports.
-    /// Three arms (each stages + guards exactly as the fixed
+    /// Six arms (each stages + guards exactly as the fixed
     /// sites do, injects under catch, then requires
     /// disappearance + discharge + report): a sleeper with an
     /// injected OBSERVATION failure before any read; a sleeper
@@ -9775,7 +9818,11 @@ mod tests {
     /// failure at the zombie stage (the discrimination shape);
     /// an sh + staged grandchild with an injected failure (the
     /// EMFILE stranger shape — grandchild custody needs the
-    /// R16-010 pinned twin). Observe-before-cleanup per arm
+    /// R16-010 pinned twin); R17-006 DECISION (birth + read +
+    /// injected observation, then failure); R17-006 SECOND
+    /// (first retired explicitly, second read, then failure);
+    /// R17-006 TRIPLE (three births with interleaved reads,
+    /// then failure). Observe-before-cleanup per arm
     /// (mutant runs stay clean); asserts read captured
     /// evidence. Pre-fix (guards removed) every arm strands
     /// (RED, proven by mutant runs during development);
@@ -10012,6 +10059,129 @@ mod tests {
         assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
         assert_audit_pid_free(sh, "stranger-sh");
         assert!(failed.is_err(), "stranger failure must report");
+        // Arm DECISION (R17-006 site 1): sleeper birth, tick
+        // read, INJECTED observation (unreadable reports
+        // unproven without signaling), then failure before
+        // explicit cleanup (the decision-tests window).
+        let dslot = std::cell::Cell::new(-1);
+        let dtick_slot = std::cell::Cell::new(None);
+        let decision = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dslot.set(spawn_sleep("47").id() as libc::pid_t);
+            let pid = dslot.get();
+            let _guard = FixtureGuard::new(pid);
+            let tick = proc_starttime(pid)
+                .expect("decision stat readable")
+                .expect("decision visible");
+            dtick_slot.set(Some(tick));
+            assert!(
+                !kill_tick_gated_with(pid, tick, |_| Err("injected".to_string())),
+                "injected read must report unproven"
+            );
+            panic!("R17006 injected decision-window failure");
+        }));
+        let dpid = dslot.get();
+        assert!(dpid > 0, "decision arm must stage a sleeper");
+        let dstate = proc_starttime(dpid);
+        // Hygiene (R17-003 shape): tick-gated retire only.
+        if dtick_slot
+            .get()
+            .is_some_and(|t| proc_starttime(dpid) == Ok(Some(t)))
+        {
+            retire_audit_child_silent(dpid);
+        }
+        assert_eq!(
+            dstate,
+            Ok(None),
+            "decision failure must not leak the sleeper"
+        );
+        assert_audit_pid_free(dpid, "decision");
+        assert!(decision.is_err(), "decision failure must report");
+        // Arm SECOND (R17-006 site 2): first birth retired
+        // explicitly, second birth read, then failure before
+        // explicit cleanup (the late-pin second window — the
+        // stale first guard spares the second by design, so
+        // the second needs independent custody).
+        let aslot = std::cell::Cell::new(-1);
+        let bslot = std::cell::Cell::new(-1);
+        let btick_slot = std::cell::Cell::new(None);
+        let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // First birth retired explicitly (kill+reap need
+            // a handle).
+            let mut first = spawn_sleep("47");
+            let apid = first.id() as libc::pid_t;
+            aslot.set(apid);
+            let _ = first.kill();
+            let _ = first.wait();
+            bslot.set(spawn_sleep("47").id() as libc::pid_t);
+            let bpid = bslot.get();
+            let _bguard = FixtureGuard::new(bpid);
+            let btick = proc_starttime(bpid)
+                .expect("second stat readable")
+                .expect("second visible");
+            btick_slot.set(Some(btick));
+            panic!("R17006 injected second-window failure");
+        }));
+        let apid = aslot.get();
+        let bpid = bslot.get();
+        assert!(bpid > 0, "second arm must stage a sleeper");
+        let astate = proc_starttime(apid);
+        let bstate = proc_starttime(bpid);
+        if btick_slot
+            .get()
+            .is_some_and(|t| proc_starttime(bpid) == Ok(Some(t)))
+        {
+            retire_audit_child_silent(bpid);
+        }
+        assert_eq!(astate, Ok(None), "second arm must not leak the first");
+        assert_eq!(bstate, Ok(None), "second failure must not leak the second");
+        assert_audit_pid_free(bpid, "second");
+        assert!(second.is_err(), "second failure must report");
+        // Arm TRIPLE (R17-006 site 4): three births with
+        // interleaved reads, then failure before explicit
+        // cleanup (the EMFILE-staging window — the mirror
+        // reads all three ticks so hygiene stays tick-gated;
+        // the fixed site reads two, equally guarded).
+        let triple: std::cell::RefCell<Vec<(libc::pid_t, u64)>> =
+            std::cell::RefCell::new(Vec::new());
+        let tripled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let p = spawn_sleep("47").id() as libc::pid_t;
+            let _pguard = FixtureGuard::new(p);
+            let ptick = proc_starttime(p)
+                .expect("triple probe readable")
+                .expect("triple probe visible");
+            triple.borrow_mut().push((p, ptick));
+            let m = spawn_sleep("47").id() as libc::pid_t;
+            let _mguard = FixtureGuard::new(m);
+            let mtick = proc_starttime(m)
+                .expect("triple mid readable")
+                .expect("triple mid visible");
+            triple.borrow_mut().push((m, mtick));
+            let w = spawn_sleep("47").id() as libc::pid_t;
+            let _wguard = FixtureGuard::new(w);
+            let wtick = proc_starttime(w)
+                .expect("triple writer readable")
+                .expect("triple writer visible");
+            triple.borrow_mut().push((w, wtick));
+            panic!("R17006 injected triple-window failure");
+        }));
+        let staged = triple.borrow().clone();
+        assert_eq!(staged.len(), 3, "triple arm must stage three sleepers");
+        let mut tstates = Vec::new();
+        for (pid, tick) in &staged {
+            tstates.push((*pid, proc_starttime(*pid)));
+            if proc_starttime(*pid) == Ok(Some(*tick)) {
+                retire_audit_child_silent(*pid);
+            }
+        }
+        for (pid, state) in &tstates {
+            assert_eq!(
+                *state,
+                Ok(None),
+                "triple failure must not leak sleeper {pid}"
+            );
+            assert_audit_pid_free(*pid, "triple");
+        }
+        assert!(tripled.is_err(), "triple failure must report");
     }
 
     /// R12-006: collection must expire under a saturated stdout.
@@ -12554,6 +12724,10 @@ mod tests {
             .spawn()
             .expect("probe spawns");
         let pid = probe.id() as libc::pid_t;
+        // R17-006: custody AT each birth (was: all three
+        // guards after three births + reads — a failed read
+        // stranded all three).
+        let mut probe_guard = FixtureGuard::new(pid);
         let mut mid = std::process::Command::new("/bin/sleep")
             .arg("31")
             .stdin(std::process::Stdio::null())
@@ -12562,6 +12736,7 @@ mod tests {
             .spawn()
             .expect("mid standin spawns");
         let mid_id = mid.id() as libc::pid_t;
+        let mut mid_guard = FixtureGuard::new(mid_id);
         let mid_tick = proc_starttime(mid_id)
             .expect("mid stat readable")
             .expect("mid visible");
@@ -12573,13 +12748,10 @@ mod tests {
             .spawn()
             .expect("writer standin spawns");
         let writer_id = writer.id() as libc::pid_t;
+        let mut writer_guard = FixtureGuard::new(writer_id);
         let writer_tick = proc_starttime(writer_id)
             .expect("writer stat readable")
             .expect("writer visible");
-        // R16-011: unwind safety from birth.
-        let mut probe_guard = FixtureGuard::new(pid);
-        let mut mid_guard = FixtureGuard::new(mid_id);
-        let mut writer_guard = FixtureGuard::new(writer_id);
         // Unpublished pidfile (missing = unpublished).
         let pidfile = std::env::temp_dir().join(format!(
             "scopebase-r16006-emfile-{}.pid",
@@ -12769,6 +12941,91 @@ mod tests {
         assert!(
             iterations >= 10,
             "sentinel must run during the probe, only {iterations} iterations"
+        );
+    }
+
+    /// R17-006: probe body (fresh image,
+    /// SCOPEBASE_R17006_RESTORE) — audit twin of the
+    /// toolchain restore-window mirror: place a sleeper,
+    /// guard it, exhaust fds, run the locked restore (the
+    /// flock open panics), unwind, restore fds, require the
+    /// sleeper retired with its status discharged. Duration
+    /// 41 is unique to this test.
+    #[cfg(target_arch = "x86_64")]
+    fn audit_steer_restore_window_probe() {
+        let hint = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").unwrap_or_default();
+        let mut sleeper = std::process::Command::new("/bin/sleep")
+            .arg("41")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = sleeper.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        // Guard constructed outside (pin verified),
+        // dropped inside on unwind; exhaustion declared LAST
+        // inside so unwind drops held first (fds back), then
+        // the guard retires.
+        let guard = FixtureGuard::new(pid);
+        assert_eq!(
+            guard.tick,
+            Some(tick),
+            "construction must pin (stage broken otherwise)"
+        );
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = guard;
+            let mut held = Vec::new();
+            while let Ok(file) = std::fs::File::open("/dev/null") {
+                held.push(file);
+            }
+            assert!(!held.is_empty(), "exhaustion must consume fds");
+            audit_locked_restore_hint(hint.trim());
+            panic!("unreachable: restore must panic under EMFILE");
+        }));
+        assert!(fired.is_err(), "restore must panic under EMFILE");
+        // Observe before cleanup (the handle below is the
+        // owner's — dropping it interferes with nothing).
+        let state = proc_starttime(pid);
+        // Hygiene (mutant-clean): kill+reap through the owned
+        // handle even on RED runs.
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
+        assert_eq!(state, Ok(None), "restore panic must not strand the sleeper");
+        eprintln!("R17006-ARESTORED retired=1");
+    }
+
+    /// R17-006: audit twin — a restore panic between placement
+    /// and the caller's guard must still retire the placed
+    /// sleeper (custody across the restore window).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn audit_steer_restore_panic_retires_placed_sleeper() {
+        if std::env::var("SCOPEBASE_R17006_RESTORE").is_ok() {
+            audit_steer_restore_window_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::audit_steer_restore_panic_retires_placed_sleeper")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R17006_RESTORE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must retire through the restore panic\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R17006-ARESTORED retired=1"),
+            "probe must cite the retirement\n{stderr}"
         );
     }
 
