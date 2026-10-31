@@ -4972,7 +4972,7 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
 /// then exec the publisher — the trap never touches the
 /// test's own process. Pre-fix the killed sleep auto-reaps
 /// (RED at the zombify poll); post-fix the pair names the
-/// original birth. Duration 82 is unique to this test.
+/// original birth. Duration 105 is unique to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn pair_publisher_normalizes_inherited_sigchld_ign() {
@@ -4986,7 +4986,7 @@ fn pair_publisher_normalizes_inherited_sigchld_ign() {
         .arg("-c")
         .arg("trap '' CHLD; exec \"$0\" \"$@\"")
         .arg(pair_publisher_bin())
-        .arg("82")
+        .arg("105")
         .arg("wait")
         .env("SCOPEBASE_PUBLISHER_PAUSE_FILE", &flag)
         .stdin(std::process::Stdio::null())

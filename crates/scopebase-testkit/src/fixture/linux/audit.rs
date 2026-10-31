@@ -12391,7 +12391,7 @@ mod tests {
     /// the R20-004 pause-hook flow — pre-fix the killed sleep
     /// auto-reaps (no zombie: RED at the zombify poll);
     /// post-fix the zombie persists and the pair names the
-    /// original birth. Duration 80 is unique to this test.
+    /// original birth. Duration 100 is unique to this test.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pair_publisher_normalizes_inherited_sigchld_ign() {
@@ -12406,7 +12406,7 @@ mod tests {
             .arg("-c")
             .arg("trap '' CHLD; exec \"$0\" \"$@\"")
             .arg(pair_publisher_bin())
-            .arg("80")
+            .arg("100")
             .arg("wait")
             .env("SCOPEBASE_PUBLISHER_PAUSE_FILE", &flag)
             .stdin(std::process::Stdio::null())
