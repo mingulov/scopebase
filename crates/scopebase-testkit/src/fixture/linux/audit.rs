@@ -19739,10 +19739,17 @@ time.sleep(30)
             // reaped it before the hook ran — post-hoc proof
             // the mandate population was real and ours).
             drop(guard);
-            let mut st = 0;
-            // SAFETY: WNOHANG probe only.
-            let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
-            assert_eq!(got, -1, "C was drained by pass 1 (stage broken otherwise)");
+            // C's birth must be gone from its number (pass 1
+            // reaped it before the hook ran — post-hoc proof
+            // the mandate population was real and ours; a
+            // zombie would keep its birth, so absence proves
+            // discharge — a foreign birth means the suite
+            // recycled the freed number under load).
+            assert_ne!(
+                proc_starttime(cpid),
+                Ok(Some(ctick)),
+                "C was drained by pass 1 (stage broken otherwise)"
+            );
             eprintln!("skip: reform steering missed");
             return;
         }
@@ -19774,18 +19781,15 @@ time.sleep(30)
         // Pass 1's reaped C stays drained (ECHILD): the
         // mandate population was real, drained by the drain
         // itself, never custody-kept.
-        let mut cst = 0;
-        // SAFETY: WNOHANG probe only — a stale number at
-        // worst (post-hoc stage proof, not identity).
-        let cgot = unsafe { libc::waitpid(cpid, &mut cst, libc::WNOHANG) };
-        assert_eq!(cgot, -1, "C was drained by pass 1, not custody-kept");
-        // C's birth is gone from the number (drained above —
-        // a recycle would show a different birth, never
-        // C's own).
+        // C was drained by pass 1 (not custody-kept): its
+        // birth is gone from the number — a zombie would
+        // keep it, so absence proves discharge; a foreign
+        // birth means the suite recycled the freed number
+        // under load (C still drained).
         assert_ne!(
             proc_starttime(cpid),
             Ok(Some(ctick)),
-            "C's birth must be gone from its number"
+            "C was drained by pass 1, not custody-kept"
         );
     }
 
@@ -19968,15 +19972,12 @@ time.sleep(30)
         if guard.missed {
             let stray = guard.stray.take();
             drop(guard);
-            // C was reaped by the drain (the hook fired after
-            // it) — its status is the drain's, ECHILD for us.
-            let mut st = 0;
-            // SAFETY: WNOHANG probe only — our (former) child.
-            let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
-            assert!(
-                got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
-                "C status must already be drained, got {got}"
-            );
+            // Reap the misplaced reform FIRST: it may have
+            // landed on C's freed number with a same-tick
+            // birth (steered spawns land in G's small-integer
+            // neighborhood, and cpid IS G+1) — probing C
+            // before discharging it would false-positive.
+            // C's drain-history is untouched by this.
             if let Some((spid, _)) = stray {
                 let end = Instant::now() + Duration::from_secs(10);
                 loop {
@@ -19991,6 +19992,19 @@ time.sleep(30)
                     std::thread::sleep(Duration::from_millis(10));
                 }
             }
+            // C was reaped by the drain (the hook fired after
+            // it): its birth is gone from the number — a
+            // zombie would keep it, so absence proves
+            // discharge; a foreign birth means the suite
+            // recycled the freed number under load (the
+            // stray is already discharged above, so only an
+            // external same-tick retake could still collide —
+            // negligible, and loud if it ever does).
+            assert_ne!(
+                proc_starttime(cpid),
+                Ok(Some(ctick)),
+                "C status must already be drained"
+            );
             eprintln!("skip: reform steering missed");
             return;
         }
@@ -19999,22 +20013,15 @@ time.sleep(30)
         // The veto is expected — and here RED CERTIFIES TRUE
         // over the theft (fast RED at this very assert).
         assert!(!retired, "reformed group must veto, never certify");
-        // C was reaped by the drain before the hook (its
-        // status is the drain's, ECHILD for us).
-        let mut st = 0;
-        // SAFETY: WNOHANG probe only — our (former) child.
-        let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
-        assert!(
-            got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
-            "C status must already be drained, got {got}"
-        );
-        // C's birth is gone from the number (drained above —
-        // a recycle would show a different birth, never
-        // C's own).
+        // C was reaped by the drain before the hook: its
+        // birth is gone from the number — a zombie would
+        // keep it, so absence proves discharge; a foreign
+        // birth means the suite recycled the freed number
+        // under load (C still drained).
         assert_ne!(
             proc_starttime(cpid),
             Ok(Some(ctick)),
-            "C's birth must be gone from its number"
+            "C status must already be drained"
         );
         // The reform's status stays with its owner (us,
         // playing sibling): exit-0, precisely.
@@ -20039,14 +20046,18 @@ time.sleep(30)
     /// (mid's group, holding the probe's pipes), with an
     /// immediate-exit outer filler and mid exiting at once
     /// (bounded preflight failure). The probe reports
-    /// (mid, mid_tick) on stdout (mid's zombie persists
-    /// until the probe exits, so the tick read is
-    /// deterministic); mid reports the writer pid through
-    /// the pidfile. Returns the reaped probe, its birth
-    /// tick, (mid, tick), (writer, tick). The writer's
-    /// group membership is asserted (provably outside the
-    /// probe group — probe-group retirement cannot explain
-    /// its disappearance).
+    /// (mid, mid_tick), (filler, filler_tick), and a reap
+    /// verdict on stdout (zombie starttimes read fine
+    /// pre-reap, so the tick reads are deterministic);
+    /// R19-013: it then reaps its own filler + middleman
+    /// before exiting (a suite-adopted zombie would spin
+    /// the staging loops — the harness waitpid-assists
+    /// backstop python-side failure modes). Mid reports
+    /// the writer pid through the pidfile. Returns the
+    /// reaped probe, its birth tick, (mid, tick), (writer,
+    /// tick). The writer's group membership is asserted
+    /// (provably outside the probe group — probe-group
+    /// retirement cannot explain its disappearance).
     #[cfg(target_arch = "x86_64")]
     fn stage_dead_mid_pipe_writer(
         case: &str,
@@ -20058,8 +20069,16 @@ time.sleep(30)
         use std::time::{Duration, Instant};
         claim_pidfile(pidfile).expect("rendezvous pidfile claimed");
         let mark = format!("R18001-{case}");
+        // R19-013: the stager reaps its own children
+        // (filler + mid — zombie starttimes read fine
+        // pre-reap) and reports what it reaped: the FILLER
+        // line carries the filler's birth for the harness
+        // assist, the REAPED line derives from the actual
+        // waitpid returns (1) or the steered skip (0 —
+        // SCOPEBASE_R19013_NOREAP pins the harness-assist
+        // half independently).
         let script = format!(
-            "# {mark}\nimport os\nif os.fork() == 0:\n    os._exit(0)\nmid = os.fork()\nif mid == 0:\n    os.setpgid(0, 0)\n    w = os.fork()\n    if w == 0:\n        import time\n        time.sleep({writer_sleep_secs})\n        os._exit(0)\n    open(r'{path}', 'w').write(str(w))\n    os._exit(0)\nfields = open(f'/proc/{{mid}}/stat').read().split()\nprint(f'{{mid}} {{fields[21]}}', flush=True)\n",
+            "# {mark}\nimport os\nfiller = os.fork()\nif filler == 0:\n    os._exit(0)\nmid = os.fork()\nif mid == 0:\n    os.setpgid(0, 0)\n    w = os.fork()\n    if w == 0:\n        import time\n        time.sleep({writer_sleep_secs})\n        os._exit(0)\n    open(r'{path}', 'w').write(str(w))\n    os._exit(0)\nfields = open(f'/proc/{{mid}}/stat').read().split()\nprint(f'{{mid}} {{fields[21]}}', flush=True)\nffields = open(f'/proc/{{filler}}/stat').read().split()\nprint(f'FILLER {{filler}} {{ffields[21]}}', flush=True)\nif os.environ.get('SCOPEBASE_R19013_NOREAP'):\n    print('REAPED 0', flush=True)\nelse:\n    r1 = os.waitpid(filler, 0)\n    r2 = os.waitpid(mid, 0)\n    print(f'REAPED {{int(r1[0] == filler and r2[0] == mid)}}', flush=True)\n",
             path = pidfile.display(),
         );
         let mut probe = std::process::Command::new("python3");
@@ -20081,22 +20100,64 @@ time.sleep(30)
         let staged = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
-        // The probe's report line (blocks until printed).
+        // The probe's report lines (each blocks until
+        // printed): mid birth, filler birth, reap verdict.
+        let mut out = std::io::BufReader::new(probe.stdout.as_mut().expect("probe stdout"));
         let mut line = String::new();
-        std::io::BufReader::new(probe.stdout.as_mut().expect("probe stdout"))
-            .read_line(&mut line)
-            .expect("mid report readable");
+        out.read_line(&mut line).expect("mid report readable");
         let mut words = line.split_whitespace();
-        let mid = words
+        let mid: libc::pid_t = words
             .next()
             .expect("mid pid reported")
             .parse()
             .expect("pid parses");
-        let mtick = words
+        let mtick: u64 = words
             .next()
             .expect("mid tick reported")
             .parse()
             .expect("tick parses");
+        let mut filler_line = String::new();
+        out.read_line(&mut filler_line)
+            .expect("filler report readable");
+        let mut fwords = filler_line.split_whitespace();
+        assert_eq!(
+            fwords.next(),
+            Some("FILLER"),
+            "filler line must carry its tag, got {filler_line:?}"
+        );
+        let filler: libc::pid_t = fwords
+            .next()
+            .expect("filler pid reported")
+            .parse()
+            .expect("filler pid parses");
+        let ftick: u64 = fwords
+            .next()
+            .expect("filler tick reported")
+            .parse()
+            .expect("filler tick parses");
+        let mut reaped_line = String::new();
+        out.read_line(&mut reaped_line)
+            .expect("reap report readable");
+        let mut rwords = reaped_line.split_whitespace();
+        assert_eq!(
+            rwords.next(),
+            Some("REAPED"),
+            "reap line must carry its tag, got {reaped_line:?}"
+        );
+        let reaped: u8 = rwords
+            .next()
+            .expect("reap verdict reported")
+            .parse()
+            .expect("verdict parses");
+        // The verdict pins the stager half (1: both
+        // waitpids returned their child; 0: steered skip —
+        // the harness assists must carry the staging).
+        let noreap_steered = std::env::var("SCOPEBASE_R19013_NOREAP").is_ok();
+        assert_eq!(
+            reaped,
+            u8::from(!noreap_steered),
+            "reap verdict must match the steering (steered: {noreap_steered})"
+        );
         // The middleman's report (poll: mid writes, then exits).
         let writer: libc::pid_t = {
             let end = Instant::now() + Duration::from_secs(5);
@@ -20119,7 +20180,16 @@ time.sleep(30)
         // group — its retirement cannot ride the probe
         // killpg).
         let end = Instant::now() + Duration::from_secs(5);
-        while proc_starttime(mid) != Ok(None) {
+        loop {
+            // R19-013 (R18-006 pattern): reap the
+            // tick-verified zombie — python reaps its own,
+            // this backstops python-side failure modes (a
+            // suite-adopted zombie would spin stat-only
+            // past the bound).
+            waitpid_assist_verified(mid, mtick);
+            if proc_starttime(mid) != Ok(Some(mtick)) {
+                break;
+            }
             assert!(Instant::now() < end, "middleman must exit before expiry");
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -20133,6 +20203,20 @@ time.sleep(30)
         // contract names): only the writer holds stdout now.
         let status = probe.wait().expect("probe exit");
         assert!(status.success(), "probe must exit clean");
+        // R19-013: every status discharged — the filler was
+        // reaped by python pre-exit (REAPED 1 above); poll
+        // to gone with assist (python-side failure modes
+        // adopt to us under a subreaper runner — stat
+        // alone would spin).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            waitpid_assist_verified(filler, ftick);
+            if proc_starttime(filler) != Ok(Some(ftick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "filler status must discharge");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         (probe, staged, mid, mtick, writer, wtick)
     }
 
@@ -20197,6 +20281,7 @@ time.sleep(30)
             "writer-held collection must expire (dead fixture otherwise)"
         );
         assert!(writer_gone, "{what}");
+        eprintln!("R18001-CASE-DONE case={case}");
     }
 
     /// R18-001: a mid-only union with the middleman already
@@ -20230,6 +20315,118 @@ time.sleep(30)
             84,
             false,
             "empty-union expiry must retire the orphaned writer",
+        );
+    }
+
+    /// R19-013: the mid-only dead-mid case under a confined
+    /// subreaper — the stager's filler + middleman zombies
+    /// adopt to the probe (stat alone would spin the
+    /// staging loop 5s and panic before writer custody,
+    /// stranding the writer and all statuses). RED
+    /// (unreaped stager, stat-only loop): the probe fails
+    /// the staging assert. GREEN: python reaps its own
+    /// children (harness waitpid-assists backstop
+    /// python-side failure modes), staging succeeds, and
+    /// every status discharges.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expired_mid_only_union_retires_orphaned_writer_under_subreaper() {
+        if std::env::var("SCOPEBASE_R19013_SUBREAPER").is_ok() {
+            // Confined subreaper (fresh image — the
+            // process-global mark stays inside the probe).
+            // SAFETY: prctl on self; marking a fresh probe process.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                0,
+                "probe must become a child subreaper"
+            );
+            run_dead_mid_expiry_case(
+                "mid-only",
+                83,
+                true,
+                "mid-only expiry must retire the orphaned writer",
+            );
+            return;
+        }
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::expired_mid_only_union_retires_orphaned_writer_under_subreaper")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19013_SUBREAPER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must stage + retire under a subreaper\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R18001-CASE-DONE case=mid-only"),
+            "probe must cite case completion\n{stderr}"
+        );
+    }
+
+    /// R19-013: the empty-union dead-mid case under a
+    /// confined subreaper, with python reaping STEERED OFF
+    /// (SCOPEBASE_R19013_NOREAP) — this pins the harness
+    /// waitpid-assist half independently (the mid-only twin
+    /// pins the property with both halves on; the
+    /// in-process cases pin the python-reap half via the
+    /// REAPED 1 report). RED (stat-only loop): the probe
+    /// fails the staging assert. GREEN: the assists retire
+    /// every adopted zombie and the case completes.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expired_empty_union_retires_orphaned_writer_under_subreaper() {
+        if std::env::var("SCOPEBASE_R19013_SUBREAPER").is_ok() {
+            // Confined subreaper (fresh image — the
+            // process-global mark stays inside the probe).
+            // SAFETY: prctl on self; marking a fresh probe process.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                0,
+                "probe must become a child subreaper"
+            );
+            run_dead_mid_expiry_case(
+                "empty",
+                84,
+                false,
+                "empty-union expiry must retire the orphaned writer",
+            );
+            return;
+        }
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::expired_empty_union_retires_orphaned_writer_under_subreaper")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R19013_SUBREAPER", "1")
+            .env("SCOPEBASE_R19013_NOREAP", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must stage + retire under a subreaper\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R18001-CASE-DONE case=empty"),
+            "probe must cite case completion\n{stderr}"
         );
     }
 
