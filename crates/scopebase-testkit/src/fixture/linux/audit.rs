@@ -6112,6 +6112,113 @@ mod tests {
         (kids, unresolved)
     }
 
+    /// R18-001: best-effort retirement of a GONE stray's
+    /// process group (the stray led its own group — pgid
+    /// == its number — and orphaned members keep the
+    /// group alive past its death). Anchor-gated (R13-003
+    /// shape): a live foreign self-grouper at the number
+    /// vetoes (R14-006 — a reformed group is never
+    /// signaled); an ESRCH-empty group returns true at
+    /// once (nothing to do — the common gone-clean case);
+    /// otherwise SIGKILL the group, drain our adopted
+    /// zombies, and prove ESRCH-empty before `deadline`.
+    /// Returns true only on the empty proof. Never panics.
+    /// Residual (S100-class): a dead recycler's live
+    /// inheritor (exact-number recycle + self-group + fork
+    /// + exit, all between the stray's death and this
+    /// call) shares the pgid and is signaled with our
+    /// orphans — indistinguishable without a
+    /// birth-vs-death clock.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stray_group_best_effort(
+        pgid: libc::pid_t,
+        started: u64,
+        deadline: std::time::Instant,
+    ) -> bool {
+        use std::time::Duration;
+        // Anchor: the number's current holder, if a live
+        // foreign self-grouper, proves the group reformed —
+        // veto (never signal another owner's group).
+        match proc_starttime(pgid) {
+            Ok(Some(now)) if now != started => {
+                // SAFETY: getpgid queries only. ESRCH (died
+                // between the reads) is freed-equivalent.
+                if unsafe { libc::getpgid(pgid) } == pgid {
+                    eprintln!(
+                        "stray-group {pgid} reformed by a live foreign self-grouper \
+                         — vetoed (no signal)"
+                    );
+                    return false;
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("stray-group {pgid} unreadable at anchor: {error} — vetoed (no signal)");
+                return false;
+            }
+        }
+        // Probe before firing: ESRCH (empty or never
+        // existed) is done; anything else must prove out
+        // below (unreachable EPERM fails closed — never
+        // certify what cannot be verified).
+        // SAFETY: killpg(pgid, 0) probes existence only.
+        if unsafe { libc::killpg(pgid, 0) } < 0 {
+            // SAFETY: errno location for this thread.
+            let errno = unsafe { libc::__errno_location().read() };
+            if errno == libc::ESRCH {
+                return true;
+            }
+            eprintln!("stray-group {pgid} probe failed (errno {errno}) — vetoed (no signal)");
+            return false;
+        }
+        // SAFETY: signal-only to the group; errors ignored
+        // (house discipline — the proof below decides).
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+        loop {
+            // Drain OUR adopted zombies in this group
+            // (subreaper/PID-1 runners adopt the dead
+            // members — a zombie still holds the group
+            // observable; waitpid(-pgid) reaps only our
+            // children here, so a reformed foreign group
+            // can never lose status to this drain).
+            loop {
+                let mut status = 0;
+                // SAFETY: -pgid filters to our children in
+                // this group; WNOHANG never blocks.
+                let got = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
+                if got > 0 {
+                    continue;
+                }
+                if got < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                }
+                break;
+            }
+            // SAFETY: killpg(pgid, 0) probes existence only.
+            if unsafe { libc::killpg(pgid, 0) } < 0 {
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                if errno == libc::ESRCH {
+                    return true;
+                }
+                eprintln!("stray-group {pgid} probe failed mid-drain (errno {errno})");
+                return false;
+            }
+            if std::time::Instant::now() >= deadline {
+                eprintln!(
+                    "stray-group {pgid} still observable past the bound \
+                     (member unkillable or unreaped)"
+                );
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     /// R17-001: one frame of the stray-tree retirement.
     /// `snapshot` names the frame's children source (the
     /// `_with` seam models a blind observer — IR1
@@ -6130,11 +6237,12 @@ mod tests {
     /// frame (fresh pin + tick gate per child — the
     /// recorded tick is the independent expectation,
     /// exactly like a staged union stray). Death before
-    /// the frame reads as gone (same outcomes as the
-    /// single path: absent-or-recycled certifies, only
-    /// unreadable is unresolved). Returns true only
-    /// when the stray is proven gone, every unioned
-    /// child retired, and nothing read unreadable.
+    /// the frame runs the group arm (R18-001:
+    /// absent-or-recycled retires the stray's group with
+    /// an empty proof; only unreadable is unresolved).
+    /// Returns true only when the stray is proven gone,
+    /// every unioned child retired, and nothing read
+    /// unreadable.
     /// Residuals: same-jiffy recycle onto a snapshotted
     /// number (S100 — the already-accepted R11-014
     /// class); depth cap 16 (anti-forkbomb loud-false;
@@ -6154,7 +6262,11 @@ mod tests {
         }
         match proc_starttime(pid) {
             Ok(Some(now)) if now == started => {}
-            Ok(_) => return true,
+            // R18-001: a gone (or recycled) stray's group may
+            // still hold orphaned members — retire the group
+            // (anchor-gated, empty-proven) instead of
+            // succeeding at once.
+            Ok(_) => return retire_stray_group_best_effort(pid, started, deadline),
             Err(_) => return false,
         }
         let (mut kids, mut unresolved) = snapshot(pid);
@@ -6377,6 +6489,204 @@ mod tests {
         // SAFETY: pin owned by this scope.
         unsafe { libc::close(pin) };
         await_proc_gone_reaping(pid, started, Duration::from_secs(5))
+    }
+
+    /// R18-001: do the fdinfo flags of one /proc fd grant
+    /// WRITE access (pure over the file text)? The `flags:`
+    /// line carries the open-mode octal; O_ACCMODE (low two
+    /// bits) 0 is RDONLY, 1/2 are WRONLY/RDWR.
+    /// Missing/unparseable flags answer false (fail-closed:
+    /// an unverifiable holder is never treated as a writer).
+    #[cfg(target_arch = "x86_64")]
+    fn fdinfo_flags_grant_write(text: &str) -> bool {
+        for line in text.lines() {
+            let rest = match line.strip_prefix("flags:") {
+                Some(rest) => rest.trim(),
+                None => continue,
+            };
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(mode) = u32::from_str_radix(&digits, 8) {
+                return mode & 0o3 != 0;
+            }
+            return false;
+        }
+        false
+    }
+
+    /// R18-001: fdinfo open-mode parsing — WRONLY/RDWR
+    /// grant write, RDONLY and missing/unparseable flags
+    /// do not (fail-closed). Pure and deterministic.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn fdinfo_write_flags_parse() {
+        assert!(fdinfo_flags_grant_write(
+            "pos:\t0\nflags:\t0100001\nmnt_id:\t9\n"
+        ));
+        assert!(fdinfo_flags_grant_write(
+            "pos:\t0\nflags:\t0100002\nmnt_id:\t9\n"
+        ));
+        assert!(!fdinfo_flags_grant_write(
+            "pos:\t0\nflags:\t0100000\nmnt_id:\t9\n"
+        ));
+        assert!(!fdinfo_flags_grant_write("pos:\t0\nmnt_id:\t9\n"));
+        assert!(!fdinfo_flags_grant_write("flags: bogus\n"));
+        assert!(!fdinfo_flags_grant_write(""));
+    }
+
+    /// R18-001: (dev, ino) identity of an open descriptor
+    /// (None when fstat fails — the caller degrades loud).
+    #[cfg(target_arch = "x86_64")]
+    fn pipe_dev_ino(fd: i32) -> Option<(u64, u64)> {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstat on a live owned descriptor.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } < 0 {
+            return None;
+        }
+        // SAFETY: fstat succeeded — initialized.
+        let stat = unsafe { stat.assume_init() };
+        Some((stat.st_dev as u64, stat.st_ino as u64))
+    }
+
+    /// R18-001: every live task holding WRITE access to one
+    /// of `want` ((dev, ino) of our collection pipes) as
+    /// (pid, starttime) pairs — discovered holders join the
+    /// expiry strays. Soundness: write-holders of OUR read
+    /// ends descend from the probe (we never held the write
+    /// ends, so inheritance cannot fabricate one — our own
+    /// forks hold read ends only and the flags filter
+    /// excludes them); ourselves excluded by pid as
+    /// belt-and-braces. Best-effort discovery: unreadable or
+    /// unverifiable tasks skip (never killed by number —
+    /// the frame re-gates every pair by identity before
+    /// acting). A total listing failure returns empty (the
+    /// caller logs loud and retires the union alone).
+    #[cfg(target_arch = "x86_64")]
+    fn discover_pipe_writers(want: &[(u64, u64)]) -> Vec<(libc::pid_t, u64)> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut found = Vec::new();
+        if want.is_empty() {
+            return found;
+        }
+        let me = std::process::id() as libc::pid_t;
+        let entries = match std::fs::read_dir("/proc") {
+            Ok(entries) => entries,
+            Err(_) => return found,
+        };
+        for entry in entries.flatten() {
+            let pid: libc::pid_t = match entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+            {
+                Some(pid) => pid,
+                None => continue,
+            };
+            if pid == me || pid <= 1 {
+                continue;
+            }
+            let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+                Ok(fds) => fds,
+                Err(_) => continue,
+            };
+            let mut holds = false;
+            for fd in fds.flatten() {
+                let text = match std::fs::read_link(fd.path()) {
+                    Ok(target) => match target.into_os_string().into_string() {
+                        Ok(text) => text,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+                let ino_text = match text
+                    .strip_prefix("pipe:[")
+                    .and_then(|rest| rest.strip_suffix(']'))
+                {
+                    Some(ino_text) => ino_text,
+                    None => continue,
+                };
+                let ino: u64 = match ino_text.parse() {
+                    Ok(ino) => ino,
+                    Err(_) => continue,
+                };
+                if !want.iter().any(|(_, wanted)| *wanted == ino) {
+                    continue;
+                }
+                // Ino match: fully identify (ino alone could
+                // collide across pipefs instances) — open
+                // NONBLOCK (a stale readlink must never hang
+                // the scan) and fstat.
+                let file = match std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(fd.path())
+                {
+                    Ok(file) => file,
+                    Err(_) => continue,
+                };
+                use std::os::unix::io::AsRawFd as _;
+                let matched = match pipe_dev_ino(file.as_raw_fd()) {
+                    Some(id) => want.contains(&id),
+                    None => false,
+                };
+                if !matched {
+                    continue;
+                }
+                // Direction: only WRITE holders block EOF
+                // (read-end copies — our own forks — spare).
+                let info = match std::fs::read_to_string(format!(
+                    "/proc/{pid}/fdinfo/{}",
+                    fd.file_name().to_string_lossy()
+                )) {
+                    Ok(info) => info,
+                    Err(_) => continue,
+                };
+                if fdinfo_flags_grant_write(&info) {
+                    holds = true;
+                    break;
+                }
+            }
+            if !holds {
+                continue;
+            }
+            // Pin identity: only a live verified birth joins
+            // (dead/unverifiable skips — never by number).
+            if let Ok(Some(tick)) = proc_starttime(pid) {
+                found.push((pid, tick));
+            }
+        }
+        found
+    }
+
+    /// R18-001: the union plus any unobserved pipe-holders
+    /// (stdout/stderr read-end fds, None when already
+    /// dropped — discovery degrades loud to the union
+    /// alone). Called at every collection-expiry site: a
+    /// writer the union never named still blocks EOF, so
+    /// expiry must retire it by discovered identity.
+    #[cfg(target_arch = "x86_64")]
+    fn extend_strays_with_pipe_writers(
+        strays: &[(libc::pid_t, u64)],
+        out_fd: Option<i32>,
+        err_fd: Option<i32>,
+    ) -> Vec<(libc::pid_t, u64)> {
+        let mut want = Vec::new();
+        for fd in [out_fd, err_fd].into_iter().flatten() {
+            if let Some(id) = pipe_dev_ino(fd) {
+                want.push(id);
+            }
+        }
+        if want.is_empty() {
+            eprintln!("expiry skips pipe-holder discovery (pipes unreadable)");
+            return strays.to_vec();
+        }
+        let mut all = strays.to_vec();
+        for pair in discover_pipe_writers(&want) {
+            if !all.contains(&pair) {
+                eprintln!("expiry discovered pipe-holder stray {}", pair.0);
+                all.push(pair);
+            }
+        }
+        all
     }
 
     /// R11-014: fail-closed retirement for an expired (or
@@ -6751,7 +7061,13 @@ mod tests {
         };
         // A blocking read could outlive `end` — fail closed.
         if !nonblocking(&stdout) || !nonblocking(&stderr) {
-            expire_probe_collection(id, expected, strays, group_died);
+            {
+                use std::os::unix::io::AsRawFd as _;
+                let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
+                let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
+                let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                expire_probe_collection(id, expected, &all, group_died);
+            }
             return None;
         }
         let mut out = Vec::new();
@@ -6780,7 +7096,13 @@ mod tests {
                 return Some((out, err));
             }
             if std::time::Instant::now() >= end {
-                expire_probe_collection(id, expected, strays, group_died);
+                {
+                    use std::os::unix::io::AsRawFd as _;
+                    let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
+                    let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
+                    let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                    expire_probe_collection(id, expected, &all, group_died);
+                }
                 return None;
             }
             // Negative fds are skipped by poll: done pipes
@@ -6826,7 +7148,13 @@ mod tests {
                 if error.kind() == std::io::ErrorKind::Interrupted {
                     continue;
                 }
-                expire_probe_collection(id, expected, strays, group_died);
+                {
+                    use std::os::unix::io::AsRawFd as _;
+                    let out_fd = stdout.as_ref().map(|pipe| pipe.as_raw_fd());
+                    let err_fd = stderr.as_ref().map(|pipe| pipe.as_raw_fd());
+                    let all = extend_strays_with_pipe_writers(strays, out_fd, err_fd);
+                    expire_probe_collection(id, expected, &all, group_died);
+                }
                 return None;
             }
             if ready == 0 {
@@ -15387,6 +15715,295 @@ mod tests {
         rchild_guard.disarm();
         let status = parent.wait().expect("replacement parent reaps");
         assert!(status.success(), "replacement parent must exit clean");
+    }
+
+    /// R18-001 staging: probe → mid (own group) → writer
+    /// (mid's group, holding the probe's pipes), with an
+    /// immediate-exit outer filler and mid exiting at once
+    /// (bounded preflight failure). The probe reports
+    /// (mid, mid_tick) on stdout (mid's zombie persists
+    /// until the probe exits, so the tick read is
+    /// deterministic); mid reports the writer pid through
+    /// the pidfile. Returns the reaped probe, its birth
+    /// tick, (mid, tick), (writer, tick). The writer's
+    /// group membership is asserted (provably outside the
+    /// probe group — probe-group retirement cannot explain
+    /// its disappearance).
+    #[cfg(target_arch = "x86_64")]
+    fn stage_dead_mid_pipe_writer(
+        case: &str,
+        pidfile: &std::path::Path,
+        writer_sleep_secs: u64,
+    ) -> (std::process::Child, u64, libc::pid_t, u64, libc::pid_t, u64) {
+        use std::io::BufRead as _;
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        claim_pidfile(pidfile).expect("rendezvous pidfile claimed");
+        let mark = format!("R18001-{case}");
+        let script = format!(
+            "# {mark}\nimport os\nif os.fork() == 0:\n    os._exit(0)\nmid = os.fork()\nif mid == 0:\n    os.setpgid(0, 0)\n    w = os.fork()\n    if w == 0:\n        import time\n        time.sleep({writer_sleep_secs})\n        os._exit(0)\n    open(r'{path}', 'w').write(str(w))\n    os._exit(0)\nfields = open(f'/proc/{{mid}}/stat').read().split()\nprint(f'{{mid}} {{fields[21]}}', flush=True)\n",
+            path = pidfile.display(),
+        );
+        let mut probe = std::process::Command::new("python3");
+        probe
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            probe.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let mut probe = probe.spawn().expect("expiry probe spawns");
+        let id = probe.id() as libc::pid_t;
+        let staged = proc_starttime(id)
+            .expect("probe stat readable")
+            .expect("probe visible");
+        // The probe's report line (blocks until printed).
+        let mut line = String::new();
+        std::io::BufReader::new(probe.stdout.as_mut().expect("probe stdout"))
+            .read_line(&mut line)
+            .expect("mid report readable");
+        let mut words = line.split_whitespace();
+        let mid = words
+            .next()
+            .expect("mid pid reported")
+            .parse()
+            .expect("pid parses");
+        let mtick = words
+            .next()
+            .expect("mid tick reported")
+            .parse()
+            .expect("tick parses");
+        // The middleman's report (poll: mid writes, then exits).
+        let writer: libc::pid_t = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(text) = std::fs::read_to_string(pidfile) {
+                    if let Ok(pid) = text.trim().parse() {
+                        break pid;
+                    }
+                }
+                assert!(Instant::now() < end, "writer pid never reported");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let wtick = proc_starttime(writer)
+            .expect("writer stat readable")
+            .expect("writer live");
+        // The hole staged: the middleman is gone before any
+        // collection runs; the writer lives on in the
+        // middleman's group (provably outside the probe
+        // group — its retirement cannot ride the probe
+        // killpg).
+        let end = Instant::now() + Duration::from_secs(5);
+        while proc_starttime(mid) != Ok(None) {
+            assert!(Instant::now() < end, "middleman must exit before expiry");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(writer) },
+            mid,
+            "writer must sit in the middleman group (non-vacuity)"
+        );
+        // Reap the probe (the caller-side wait the R12-005
+        // contract names): only the writer holds stdout now.
+        let status = probe.wait().expect("probe exit");
+        assert!(status.success(), "probe must exit clean");
+        (probe, staged, mid, mtick, writer, wtick)
+    }
+
+    /// R18-001 driver: collect a dead-mid fixture under the
+    /// given union, then require the orphaned writer's
+    /// independent disappearance. Observe-before-cleanup
+    /// (RED runs retire the parked writer explicitly).
+    #[cfg(target_arch = "x86_64")]
+    fn run_dead_mid_expiry_case(case: &str, writer_sleep_secs: u64, mid_only: bool, what: &str) {
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r18001-{case}-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let (mut child, staged, mid, mtick, writer, wtick) =
+            stage_dead_mid_pipe_writer(case, &pidfile, writer_sleep_secs);
+        let strays: Vec<(libc::pid_t, u64)> = if mid_only {
+            vec![(mid, mtick)]
+        } else {
+            Vec::new()
+        };
+        // Custody across collection (R18-004: pipe-reported
+        // birth — expected-identity over the transmitted
+        // tick; unwind retires the writer instead of
+        // parking it for the whole sleep).
+        let mut writer_guard = FixtureGuard::new_expected(writer, wtick);
+        assert!(
+            writer_guard.tick.is_some(),
+            "writer custody must pin (stage broken otherwise)"
+        );
+        let end = Instant::now() + Duration::from_secs(3);
+        let got = collect_probe_output_bounded(&mut child, end, staged, &strays);
+        // Observe before cleanup (R12-014): capture the
+        // evidence, retire remainders so RED runs stay
+        // clean, then assert.
+        let writer_gone = await_proc_gone_reaping(writer, wtick, Duration::from_secs(5));
+        if !writer_gone {
+            let _ = kill_tick_gated(writer, wtick);
+        } else {
+            writer_guard.disarm();
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(writer) != Ok(Some(wtick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "parked writer must die in cleanup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(
+            got.is_none(),
+            "writer-held collection must expire (dead fixture otherwise)"
+        );
+        assert!(writer_gone, "{what}");
+    }
+
+    /// R18-001: a mid-only union with the middleman already
+    /// gone must still retire its orphaned writer (the
+    /// writer sits in the middleman's group holding the
+    /// pipes — tree retirement that returns true on the
+    /// gone middleman parks it). RED: expiry succeeds the
+    /// frame at once and the writer survives. Writer sleep
+    /// 83 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expired_mid_only_union_retires_orphaned_writer() {
+        run_dead_mid_expiry_case(
+            "mid-only",
+            83,
+            true,
+            "mid-only expiry must retire the orphaned writer",
+        );
+    }
+
+    /// R18-001: an EMPTY union with the middleman already
+    /// gone must still retire its orphaned writer (nothing
+    /// names it — discovery runs off the held pipes).
+    /// RED: expiry has no stray to retire and the writer
+    /// survives. Writer sleep 84 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn expired_empty_union_retires_orphaned_writer() {
+        run_dead_mid_expiry_case(
+            "empty",
+            84,
+            false,
+            "empty-union expiry must retire the orphaned writer",
+        );
+    }
+
+    /// R18-001: the frame's group arm, discriminated —
+    /// a dead self-grouped stray with a NON-PIPE orphan in
+    /// its group (no pipes anywhere, so pipe discovery
+    /// cannot help): retiring the frame must kill the
+    /// orphan and prove the group empty. RED (entry-gone
+    /// returns true at once): the orphan parks. Duration
+    /// 85 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stray_frame_retires_dead_leaders_group() {
+        use std::time::{Duration, Instant};
+        if !staged_probe_python3() {
+            eprintln!("skip: python3 unavailable (no staged probes)");
+            return;
+        }
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r18001-direct-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        claim_pidfile(&pidfile).expect("rendezvous pidfile claimed");
+        // Mid: self-group, fork a pipeless sleeper, report
+        // (mid, mtick, child, ctick) — both ticks read by
+        // the owner while live — then exit at once.
+        let script = format!(
+            "# R18001-DIRECT\nimport os\nos.setpgid(0, 0)\nc = os.fork()\nif c == 0:\n    import time\n    time.sleep(85)\n    os._exit(0)\nself_fields = open('/proc/self/stat').read().split()\nchild_fields = open(f'/proc/{{c}}/stat').read().split()\nopen(r'{path}', 'w').write(f'{{os.getpid()}} {{self_fields[21]}} {{c}} {{child_fields[21]}}')\n",
+            path = pidfile.display(),
+        );
+        let mut mid = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("mid spawns");
+        let mid_pid = mid.id() as libc::pid_t;
+        let _ = mid.wait();
+        let (reported_mid, mtick, child, ctick): (libc::pid_t, u64, libc::pid_t, u64) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                    let words: Vec<&str> = text.split_whitespace().collect();
+                    if words.len() == 4 {
+                        if let (Ok(a), Ok(b), Ok(c), Ok(d)) = (
+                            words[0].parse(),
+                            words[1].parse(),
+                            words[2].parse(),
+                            words[3].parse(),
+                        ) {
+                            break (a, b, c, d);
+                        }
+                    }
+                }
+                assert!(Instant::now() < end, "mid report never landed");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        assert_eq!(reported_mid, mid_pid, "report must name the staged mid");
+        assert_eq!(proc_starttime(mid_pid), Ok(None), "mid must be dead");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(child) },
+            mid_pid,
+            "orphan must sit in the dead leader group (non-vacuity)"
+        );
+        // Custody for unwind paths (transmitted birth —
+        // expected-identity).
+        let mut orphan_guard = FixtureGuard::new_expected(child, ctick);
+        assert!(
+            orphan_guard.tick.is_some(),
+            "orphan custody must pin (stage broken otherwise)"
+        );
+        // The frame on the dead leader: group arm retires
+        // the orphan and proves the group empty.
+        let retired = retire_stray_tree_best_effort(mid_pid, mtick);
+        let orphan_gone = await_proc_gone_reaping(child, ctick, Duration::from_secs(5));
+        if !orphan_gone {
+            let _ = kill_tick_gated(child, ctick);
+        } else {
+            orphan_guard.disarm();
+        }
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(child) != Ok(Some(ctick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "parked orphan must die in cleanup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&pidfile);
+        assert!(retired, "frame must retire the dead leader group");
+        assert!(orphan_gone, "dead leader group must not strand its orphan");
     }
 
     /// R17-001-RED-1: mid-only observed union. The
