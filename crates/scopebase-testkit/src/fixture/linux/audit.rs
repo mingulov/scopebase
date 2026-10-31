@@ -6302,7 +6302,22 @@ mod tests {
                 -1
             }
             Err(_) => {
-                unresolved = true;
+                // R19-003: re-verify (mirror the ESRCH arm) —
+                // the snapshot above cost milliseconds of /proc
+                // walking, and a recycle inside it leaves the
+                // replacement's children unioned (the reuse
+                // verdict below truncates only subsequent
+                // additions, and the recursion would validate
+                // the strangers' genuine ticks and kill them).
+                // Only a still-expected number keeps the union.
+                match proc_starttime(pid) {
+                    Ok(Some(now)) if now == started => {}
+                    Ok(_) => kids.clear(),
+                    Err(_) => {
+                        unresolved = true;
+                        kids.clear();
+                    }
+                }
                 -1
             }
         };
@@ -6392,6 +6407,15 @@ mod tests {
                         }
                     }
                     Err(_) => {
+                        // R19-004: discarding fresh additions
+                        // on unreadable MUST mark unresolved
+                        // (mirror the pre-kill arm) — the
+                        // parent may die before the next
+                        // snapshot, reparenting the discarded
+                        // children beyond rediscovery, and a
+                        // later gone arm would otherwise
+                        // certify over survivors.
+                        unresolved = true;
                         kids.truncate(kept);
                     }
                 }
@@ -17298,6 +17322,321 @@ mod tests {
         let status = parent.wait().expect("replacement parent reaps");
         parent_guard.disarm();
         assert!(status.success(), "replacement parent must exit clean");
+    }
+
+    /// R19-003: a pin failure must re-verify before keeping
+    /// the initial union — the snapshot costs milliseconds
+    /// of /proc walking, and a recycle inside it leaves the
+    /// replacement's children unioned (the later reuse
+    /// verdict truncates only subsequent additions, and the
+    /// recursion validates the strangers' genuine ticks and
+    /// kills them). The steering snapshot models a genuine
+    /// in-window recycle (kill + steered replacement + its
+    /// transmitted child pair), with transient exhaustion
+    /// across the pin. RED (this shape): the Err arm keeps
+    /// the initial kids and the recursion murders the
+    /// replacement's child. GREEN: the arm re-reads, finds
+    /// the number unverifiable (still exhausted), discards,
+    /// and reports unresolved with every replacement alive.
+    /// Durations 912 (victim sleeper) / 913 (replacement
+    /// sleeper) are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_pin_failure_reverifies_before_keeping_union() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let spawn_sh = |sleep: &str| {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(pair_publisher_script(sleep, "wait"))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sh spawns")
+        };
+        let read_pair = |sh: &mut std::process::Child| -> (libc::pid_t, u64) {
+            let mut line = String::new();
+            std::io::BufReader::new(sh.stdout.take().expect("sh stdout"))
+                .read_line(&mut line)
+                .expect("sleep pair readable");
+            parse_published_pair(line.trim(), "sleep publication")
+        };
+        // Victim parent sh1 (our child) + its sleeper C1.
+        let mut sh1 = spawn_sh("912");
+        let sh1pid = sh1.id() as libc::pid_t;
+        let (c1, c1tick) = read_pair(&mut sh1);
+        let sh1tick = proc_starttime(sh1pid)
+            .expect("sh1 stat readable")
+            .expect("sh1 visible");
+        // Steering state (the snapshot seam runs on this
+        // thread; the frame borrows it by shared ref).
+        struct Steer {
+            calls: u32,
+            held: Vec<std::fs::File>,
+            sh1: Option<std::process::Child>,
+            sh2: Option<std::process::Child>,
+            cprime: Option<(libc::pid_t, u64)>,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            calls: 0,
+            held: Vec::new(),
+            sh1: Some(sh1),
+            sh2: None,
+            cprime: None,
+        });
+        // Placement exclusion across the frame (the recycle
+        // lands inside the initial snapshot below).
+        let _nsflock = ns_last_pid_flock();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = retire_stray_tree_frame_with(sh1pid, sh1tick, deadline, 0, &|_pid| -> (
+            Vec<(libc::pid_t, u64)>,
+            bool,
+        ) {
+            let mut state = state.borrow_mut();
+            state.calls += 1;
+            if state.calls == 1 {
+                // In-window recycle (models a genuine
+                // recycle between the frame's gate and its
+                // initial snapshot): retire sh1, steer sh2
+                // onto its number, THEN exhaust across the
+                // pin (spawn + pair read need fds first).
+                let mut sh1 = state.sh1.take().expect("sh1 staged");
+                assert!(kill_tick_gated(sh1pid, sh1tick), "victim parent signaled");
+                let _ = sh1.wait();
+                assert_eq!(proc_starttime(sh1pid), Ok(None), "victim number must free");
+                if !audit_steer_next_pid_unlocked(sh1pid) {
+                    return (Vec::new(), true);
+                }
+                let mut sh2 = spawn_sh("913");
+                let sh2pid = sh2.id() as libc::pid_t;
+                let (cprime, cptick) = read_pair(&mut sh2);
+                if sh2pid != sh1pid {
+                    // Steering miss (placement contention):
+                    // park cleanly; the caller skips.
+                    let _ = kill_tick_gated(cprime, cptick);
+                    let _ = sh2.kill();
+                    let _ = sh2.wait();
+                    return (Vec::new(), true);
+                }
+                state.sh2 = Some(sh2);
+                state.cprime = Some((cprime, cptick));
+                // Exhaust across the pin (the frame's
+                // pidfd_open + re-read run next).
+                while let Ok(file) = std::fs::File::open("/dev/null") {
+                    state.held.push(file);
+                }
+                assert!(!state.held.is_empty(), "exhaustion must consume fds");
+                return (vec![(cprime, cptick)], false);
+            }
+            // Later polls: restore (idempotent) and report
+            // no fresh children.
+            state.held.clear();
+            (Vec::new(), false)
+        });
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        let mut state = state.borrow_mut();
+        let (sh2opt, cprime) = (state.sh2.take(), state.cprime);
+        drop(state);
+        // Steering-miss skip (placement contention above).
+        let (mut sh2, (cprime, cptick)) = match (sh2opt, cprime) {
+            (Some(sh2), Some(pair)) => (sh2, pair),
+            _ => {
+                eprintln!("skip: replacement steering missed");
+                return;
+            }
+        };
+        // Non-vacuity: sh2 really sits on sh1's number with a
+        // different birth (else the recycle never staged).
+        let sh2tick = proc_starttime(sh1pid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if sh2tick == sh1tick {
+            // Same-tick retake (S100): retire everything,
+            // skip loud.
+            let _ = kill_tick_gated(cprime, cptick);
+            let _ = sh2.kill();
+            let _ = sh2.wait();
+            let _ = kill_tick_gated(c1, c1tick);
+            let end = Instant::now() + Duration::from_secs(2);
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG assist only.
+                unsafe {
+                    libc::waitpid(c1, &mut st, libc::WNOHANG);
+                }
+                if proc_starttime(c1) != Ok(Some(c1tick)) {
+                    break;
+                }
+                if Instant::now() >= end {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            eprintln!("skip: same-tick retake (S100 — untestable this run)");
+            return;
+        }
+        // The frame must report unresolved (never success —
+        // the pin never verified anything).
+        assert!(
+            !result,
+            "pin failure with an unverifiable parent must not certify"
+        );
+        // Both replacement tasks survive with status: the
+        // child was unioned but must never be signaled.
+        assert_proc_settled_live(
+            cprime,
+            cptick,
+            2,
+            "replacement child must survive the kept union",
+        );
+        assert_proc_settled_live(
+            sh1pid,
+            sh2tick,
+            2,
+            "replacement parent must survive the kept union",
+        );
+        // Cleanup: retire the replacement child (its status
+        // drains to sh2), reap sh2, retire orphaned C1.
+        let _ = kill_tick_gated(cprime, cptick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_starttime(cprime) != Ok(Some(cptick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "replacement child must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let status = sh2.wait().expect("replacement parent reaps");
+        assert!(status.success(), "replacement parent must exit clean");
+        let _ = kill_tick_gated(c1, c1tick);
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: WNOHANG assist only — C1 reparented to
+            // init (reaps itself) or to this suite (we reap).
+            let mut st = 0;
+            unsafe {
+                libc::waitpid(c1, &mut st, libc::WNOHANG);
+            }
+            if proc_starttime(c1) != Ok(Some(c1tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "orphaned victim child must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// R19-004: an unreadable poll-gate must mark unresolved
+    /// when it discards fresh additions — the parent may die
+    /// before the next snapshot, reparenting the discarded
+    /// children beyond rediscovery, and a later gone arm
+    /// would otherwise certify over survivors (the
+    /// "re-captured on later polls" hope assumes continued
+    /// observability, which death breaks). The steering
+    /// snapshot models one genuine fresh-child observation
+    /// under a transient read failure, then a clean parent
+    /// disappearance. RED (this shape): the gate truncates
+    /// without marking and the frame certifies `true` over
+    /// the live child. GREEN: unresolved, `false`, child
+    /// parked-but-reported. Durations 914 (parent) / 915
+    /// (fresh child) are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn frame_unreadable_gate_marks_unresolved() {
+        use std::time::{Duration, Instant};
+        // Parent P + fresh child C (both our children; the
+        // frame treats the listed pair as P's child — the
+        // model of a genuinely observed fresh birth).
+        let mut parent = std::process::Command::new("/bin/sleep")
+            .arg("914")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("parent spawns");
+        let pid = parent.id() as libc::pid_t;
+        let started = proc_starttime(pid)
+            .expect("parent stat readable")
+            .expect("parent visible");
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("915")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("fresh child spawns");
+        let cpid = child.id() as libc::pid_t;
+        let ctick = proc_starttime(cpid)
+            .expect("child stat readable")
+            .expect("child visible");
+        // Steering state (snapshot seam runs on this thread).
+        struct Steer {
+            calls: u32,
+            held: Vec<std::fs::File>,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            calls: 0,
+            held: Vec::new(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = retire_stray_tree_frame_with(pid, started, deadline, 0, &|_pid| -> (
+            Vec<(libc::pid_t, u64)>,
+            bool,
+        ) {
+            let mut state = state.borrow_mut();
+            state.calls += 1;
+            if state.calls == 1 {
+                // Initial snapshot: no children yet.
+                return (Vec::new(), false);
+            }
+            if state.calls == 2 {
+                // First poll: a genuine fresh child under
+                // a transient read failure (the gate read
+                // that follows this snapshot fails).
+                while let Ok(file) = std::fs::File::open("/dev/null") {
+                    state.held.push(file);
+                }
+                assert!(!state.held.is_empty(), "exhaustion must consume fds");
+                return (vec![(cpid, ctick)], false);
+            }
+            // Later polls: restored, nothing fresh (the
+            // parent is dying/dead from the frame's
+            // pidfd kill).
+            state.held.clear();
+            (Vec::new(), false)
+        });
+        // Never successful certification over the survivor.
+        assert!(
+            !result,
+            "unreadable discard must not certify over the discarded child"
+        );
+        assert_proc_settled_live(
+            cpid,
+            ctick,
+            2,
+            "discarded fresh child must survive (parked-but-reported)",
+        );
+        // Cleanup: retire the child, reap the parent (the
+        // frame killed it; it is our zombie).
+        let _ = kill_tick_gated(cpid, ctick);
+        let _ = child.wait();
+        let _ = parent.wait();
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
