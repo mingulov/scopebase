@@ -6802,15 +6802,44 @@ fn drain_exited_child_output(child: &std::process::Child) -> (Vec<u8>, Vec<u8>) 
 /// R14-006: the armed drop re-decides through
 /// `probe_group_kill_allowed` (a stranger-reformed group is
 /// spared even on panic paths).
+/// R15-006: constructed via `new` (auto-pins the leader tick;
+/// None when the read fails) — guard FIRST, before any
+/// fallible staging read, so a staging panic never leaks
+/// silently. The unpinned drop retires the leader by
+/// waitpid-probe and caveats a possibly-live group (never a
+/// blind killpg — the group is unverified without a pin).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct KillGroupOnDrop {
     group: libc::pid_t,
-    tick: u64,
+    tick: Option<u64>,
     disarmed: bool,
+}
+
+/// R15-006: unpinned-drop loudness decision — silent ONLY when
+/// killpg-0 proves the group gone (a nonzero return with
+/// ESRCH); any present-or-unknown outcome yells. The leader is
+/// discharged first either way, so only the group's fate is in
+/// doubt — and doubt is loud (unit-pinned below).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn unpinned_group_drop_loud(killpg_ret: libc::c_int, killpg_errno: libc::c_int) -> bool {
+    !(killpg_ret != 0 && killpg_errno == libc::ESRCH)
 }
 
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 impl KillGroupOnDrop {
+    /// R15-006: guard FIRST — auto-pins the leader's birth tick
+    /// (the group number doubles as the self-grouped leader's
+    /// pid; 100ms retry per R15-004). None when the read fails:
+    /// the drop takes the unpinned fallback (leader retired,
+    /// loud caveat, never a blind killpg).
+    fn new(group: libc::pid_t) -> Self {
+        Self {
+            group,
+            tick: pin_birth_tick(group),
+            disarmed: false,
+        }
+    }
+
     fn disarm(&mut self) {
         self.disarmed = true;
     }
@@ -6822,19 +6851,76 @@ impl Drop for KillGroupOnDrop {
         if self.disarmed {
             return;
         }
-        // R14-006: re-decide at drop — after our probe retired,
-        // a stranger may have reformed the group (self-grouped
-        // onto the freed pgid); fire only while the decision
-        // still allows it. Best-effort (never panics).
-        if !probe_group_kill_allowed(self.group, self.tick) {
-            return;
-        }
-        // SAFETY: signal-only to the test's own group;
-        // best-effort (failure paths must not panic).
-        unsafe {
-            libc::killpg(self.group, libc::SIGKILL);
+        match self.tick {
+            Some(tick) => {
+                // R14-006: re-decide at drop — after our probe
+                // retired, a stranger may have reformed the
+                // group (self-grouped onto the freed pgid); fire
+                // only while the decision still allows it.
+                // Best-effort (never panics).
+                if !probe_group_kill_allowed(self.group, tick) {
+                    return;
+                }
+                // SAFETY: signal-only to the test's own group;
+                // best-effort (failure paths must not panic).
+                unsafe {
+                    libc::killpg(self.group, libc::SIGKILL);
+                }
+            }
+            // R15-006: unpinned (the construction read failed) —
+            // retire the leader by waitpid-probe (verified own
+            // child or reaped/ECHILD — never a tick gate we
+            // don't have), then probe the GROUP: ESRCH-gone
+            // discharges silently, anything else yells an
+            // actionable caveat (pgid + leader outcome — the
+            // owner retires through it). Never killpgs: without
+            // a pin the group is unverified (a stranger may have
+            // self-grouped onto the number); the staged
+            // sleeper's own clock bounds the leak (31s in the
+            // canonical stage). Residual: leader-number recycle
+            // by our own fork (R14-001-class, same as the
+            // silent-guard None arm).
+            None => {
+                retire_child_silent(self.group);
+                // Re-probe: discharged (reaped/ECHILD) or
+                // stuck-live?
+                let mut status = 0;
+                // SAFETY: WNOHANG probe; never blocks.
+                let got = unsafe { libc::waitpid(self.group, &mut status, libc::WNOHANG) };
+                let leader = if got == 0 { "live" } else { "discharged" };
+                // SAFETY: signal 0 probes existence only.
+                let probed = unsafe { libc::killpg(self.group, 0) };
+                // SAFETY: errno location for this thread.
+                let errno = unsafe { libc::__errno_location().read() };
+                if !unpinned_group_drop_loud(probed, errno) {
+                    return;
+                }
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "scopebase unresolved-group pgid={} tick=none leader={leader}",
+                    self.group
+                );
+            }
         }
     }
+}
+
+/// R15-006: unpinned-drop loudness decision matrix — silent
+/// ONLY when killpg-0 proves the group gone (ESRCH); any
+/// present-or-unknown group yells. The leader outcome is not an
+/// input (the leader is discharged first either way).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn unpinned_group_drop_decisions() {
+    // ESRCH-proven gone: silent.
+    assert!(!unpinned_group_drop_loud(-1, libc::ESRCH));
+    // Present (signalable or foreign): loud.
+    assert!(unpinned_group_drop_loud(0, 0));
+    assert!(unpinned_group_drop_loud(-1, libc::EPERM));
+    // Unknown errors: loud (fail-loud direction).
+    assert!(unpinned_group_drop_loud(-1, libc::EINVAL));
+    assert!(unpinned_group_drop_loud(-1, libc::EINTR));
 }
 
 /// R11-016(b2): retiring a failed probe's tree kills the
@@ -6864,20 +6950,30 @@ fn probe_tree_retirement_kills_stranded_group() {
         });
     }
     let mut child = child.spawn().expect("spawn failing stage");
-    // R12-005: pin before any wait (retirement identity gate).
-    let staged = task_starttime_checked(child.id() as i32)
-        .expect("stage stat readable")
-        .expect("stage visible");
     let group = child.id() as libc::pid_t;
+    // R15-006: fault injection — exhaust fds BEFORE any read so
+    // the staging reads fail (the read-failure probe runs this
+    // body in a fresh image and requires retirement-before-
+    // report). Declared BEFORE the guard: unwind drops the guard
+    // first (still exhausted), restoring fds only after.
+    let mut _emfile_held = Vec::new();
+    if std::env::var("SCOPEBASE_R15006_EMFILE").is_ok() {
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            _emfile_held.push(file);
+        }
+    }
     // IR1: the 31s sleeper dies with the test on every path
     // (failed asserts unwind through this guard).
     // R14-012: custody BEFORE the wait+asserts (a staging panic
     // must still retire the group; disarmed once proven dead).
-    let mut guard = KillGroupOnDrop {
-        group,
-        tick: staged,
-        disarmed: false,
-    };
+    // R15-006: guard FIRST (auto-pins; a raced/absent read leaves
+    // None for the unpinned fallback — the tick read below must
+    // never precede custody).
+    let mut guard = KillGroupOnDrop::new(group);
+    // R12-005: pin before any wait (retirement identity gate).
+    let staged = task_starttime_checked(child.id() as i32)
+        .expect("stage stat readable")
+        .expect("stage visible");
     let status = child.wait().expect("stage exit");
     assert!(!status.success());
     assert_eq!(status.code(), Some(3));
@@ -6901,6 +6997,89 @@ fn probe_tree_retirement_kills_stranded_group() {
             Instant::now() < end,
             "stranded group {group} survived retirement"
         );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// R15-006: inject the initial read failure (EMFILE before any
+/// read) into the REAL stranded-group stage and require
+/// retirement-before-report: the staging panic must name the
+/// read site, the unpinned drop must discharge the shell leader
+/// and caveat the possibly-live group (never a blind killpg),
+/// and the caveat's pgid must be actionable (the parent retires
+/// the group through it — no leak even on this path). Pre-fix
+/// the read-first order panics with no guard and no caveat
+/// (RED); post-fix the guard-first order yells (GREEN).
+/// RED runs strand a 31s sleeper + shell zombie — the leak
+/// under test, cleaned on GREEN runs via the caveat.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn stranded_group_read_failure_retires_before_report() {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("probe_tree_retirement_kills_stranded_group")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R15006_EMFILE", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Fail-safe: a filter miss exits 0 — the staging panic must
+    // fail the child.
+    assert!(
+        !out.status.success(),
+        "child must fail at the staging read\n{stderr}"
+    );
+    assert!(
+        stderr.contains("stage stat readable"),
+        "panic must name the read site\n{stderr}"
+    );
+    // The caveat cites the group + leader outcome; parse the
+    // pgid for the functional cleanup below.
+    let mut pgid = None;
+    let mut leader_discharged = false;
+    for line in stderr.lines() {
+        if let Some(rest) = line.strip_prefix("scopebase unresolved-group ") {
+            for word in rest.split_whitespace() {
+                if let Some(value) = word.strip_prefix("pgid=") {
+                    pgid = value.parse::<i32>().ok();
+                }
+                if word == "leader=discharged" {
+                    leader_discharged = true;
+                }
+            }
+        }
+    }
+    let pgid = pgid.expect("caveat must cite the pgid");
+    assert!(
+        leader_discharged,
+        "leader must discharge before report\n{stderr}"
+    );
+    // The group is still alive here (the fallback never killpgs
+    // blind) — then retire it THROUGH the caveat.
+    // SAFETY: signal 0 probes existence only.
+    assert_eq!(
+        unsafe { libc::killpg(pgid, 0) },
+        0,
+        "stranded group must outlive the unresolved drop\n{stderr}"
+    );
+    // SAFETY: signal-only to the staged group whose pgid the
+    // caveat cited (its sleeper is ours — alive from the caveat
+    // through the probe above, so the number cannot have
+    // recycled).
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: signal 0 probes existence only.
+        if unsafe { libc::killpg(pgid, 0) } < 0 {
+            break;
+        }
+        assert!(Instant::now() < end, "caveat group {pgid} must die");
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -6946,7 +7125,9 @@ fn group_guard_drop_spares_reformed_stranger() {
     // our retired probe's; the live holder is a stranger.
     let guard = KillGroupOnDrop {
         group: id as libc::pid_t,
-        tick: 0xDEAD_BEEF_DEAD_BEEF,
+        // R15-006: white-box the Some arm (a mismatched pin the
+        // auto-pin constructor would never produce).
+        tick: Some(0xDEAD_BEEF_DEAD_BEEF),
         disarmed: false,
     };
     drop(guard);
