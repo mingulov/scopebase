@@ -1743,7 +1743,25 @@ fn stale_child_wait_after_sweep_steals_nothing() {
     // BEFORE any locked_* call below (same-process POSIX locks
     // merge: a nested locked_* drop would release this guard).
     drop(_nsflock);
-    let mut replacement = replacement.expect("replacement placed on stray's number");
+    // R19015-FLAKE03: 100 placement misses mean the number is
+    // squatted — an early hint-theft landed a long-lived
+    // suite spawn on it and the rest miss deterministically
+    // (same-tick cannot span 100 tries). The squatter is
+    // another test's live task (never kill it) — skip loud
+    // (retake-contention precedent), never fail.
+    let mut replacement = match replacement {
+        Some(replacement) => replacement,
+        None => {
+            eprintln!("skip: stray number squatted during placement (retake contended)");
+            // Discharge our own swept stray (birth-gated:
+            // a recycled number is spared, never waited on)
+            // and restore the hint (as the success path
+            // does) before the early return.
+            wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
+            locked_restore_hint(&last_before);
+            return;
+        }
+    };
     // Kill the replacement: it becomes a zombie holding the
     // number (nothing reaps it before the stale wait — the
     // owner handle below is its only waiter).
@@ -1842,7 +1860,24 @@ fn stale_child_wait_after_sweep_blocks_on_nothing() {
     // BEFORE any locked_* call below (same-process POSIX locks
     // merge: a nested locked_* drop would release this guard).
     drop(_nsflock);
-    let mut replacement = replacement.expect("replacement placed on stray's number");
+    // R19015-FLAKE03: 100 placement misses mean the number is
+    // squatted — an early hint-theft landed a long-lived
+    // suite spawn on it and the rest miss deterministically
+    // (same-tick cannot span 100 tries; never kill the
+    // squatter) — skip loud (retake-contention precedent),
+    // never fail.
+    let mut replacement = match replacement {
+        Some(replacement) => replacement,
+        None => {
+            eprintln!("skip: stray number squatted during placement (retake contended)");
+            // Discharge our own swept stray (birth-gated)
+            // and restore the hint (as the success path
+            // does) before the early return.
+            wait_child_unless_reaped(&mut stray, stray_pid, stray_tick);
+            locked_restore_hint(&last_before);
+            return;
+        }
+    };
     // R12-003: the gated wait skips at once (the live holder is
     // a replacement, not the stray) instead of blocking on its
     // lifetime.
