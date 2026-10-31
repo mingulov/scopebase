@@ -3923,6 +3923,16 @@ fn assert_child_gone(pid: i32, pinned: u64, what: &str) {
 /// zombie fails the first (it keeps its tick); an unreaped death
 /// fails the second. Checked in this order so the discharge
 /// probe can never mask a zombie by reaping it mid-check.
+/// R19003-FLAKE02 (toolchain twin of the audit proof): absence
+/// is sound ONLY ns-anchored to the retirement it verifies —
+/// freed numbers are retaken within µs-ms (frontier-retake +
+/// hint-thieves; audit staging-obs failed 4/15 runs with a
+/// foreign birth exactly on vacuous plants), and birth-gating
+/// cannot save ms-lifetime fixtures (thief births share the
+/// jiffy ~90%). Every staged caller now relies on its frozen
+/// post-unwind read; trailing fresh-read absence asserts were
+/// removed (suite timing, not retirement). Remaining caller:
+/// gone-number only (retired-long-ago, non-frontier).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn assert_pid_free(pid: i32, what: &str) {
     assert_eq!(
@@ -3965,6 +3975,11 @@ fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i3
     // retire (a surviving fixture fails loud below — the
     // injection must take, never pass vacuously).
     let slot_a = std::cell::Cell::new(-1);
+    // R19003-FLAKE02: ns-anchored retirement capture —
+    // read immediately post-retire inside the catch (a
+    // post-unwind read crosses a µs frontier-retake
+    // window; a trailing fresh-read assert crosses ms).
+    let state_a = std::cell::Cell::new(None);
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let pid = birth();
         slot_a.set(pid);
@@ -3977,12 +3992,17 @@ fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i3
             _guard.pin(tick);
         }
         retire_child_silent(pid);
+        state_a.set(Some(task_starttime_checked(pid)));
         observe(pid);
     }));
     // A birth panic stages nothing (slot stays -1 — never
     // waitpid(-1): that would reap ANY sibling child).
     if slot_a.get() > 0 {
-        assert_pid_free(slot_a.get(), tag);
+        assert_eq!(
+            state_a.take(),
+            Some(Ok(None)),
+            "{tag}: retire must leave the fixture gone"
+        );
     }
     assert!(
         observed.is_err(),
@@ -4028,7 +4048,9 @@ fn staging_custody_holds(tag: &str, birth: impl Fn() -> i32, observe: impl Fn(i3
         Ok(None),
         "{tag}: spawn-failure must not leak the fixture"
     );
-    assert_pid_free(pid, tag);
+    // R19003-FLAKE02: no trailing fresh-read absence
+    // assert — `state` above is the ns-anchored
+    // retirement proof (see helper docs).
     assert!(spawned.is_err(), "{tag}: later-spawn failure must report");
 }
 
@@ -5463,7 +5485,9 @@ fn probe_staging_failures_retire_before_report() {
     let ostate = task_starttime_checked(opid);
     retire_child_silent(opid);
     assert_eq!(ostate, Ok(None), "obs failure must not leak the pauser");
-    assert_pid_free(opid, "obs");
+    // R19003-FLAKE02: no trailing fresh-read absence
+    // assert — `ostate` is the ns-anchored retirement
+    // proof (see helper docs).
     assert!(obs.is_err(), "obs failure must report");
     // Arm PINNED: pauser birth + pin, assertion failure
     // injected after (the late-pin second-guard shape).
@@ -5483,7 +5507,9 @@ fn probe_staging_failures_retire_before_report() {
     let pstate = task_starttime_checked(ppid);
     retire_child_silent(ppid);
     assert_eq!(pstate, Ok(None), "pinned failure must not leak the pauser");
-    assert_pid_free(ppid, "pinned");
+    // R19003-FLAKE02: no trailing fresh-read absence
+    // assert — `pstate` is the ns-anchored retirement
+    // proof (see helper docs).
     assert!(pinned.is_err(), "pinned failure must report");
     // R17-002: serialize steerers (scoped hold — the OBS and
     // PINNED arms above run unconditionally; only the
@@ -5557,7 +5583,9 @@ fn probe_staging_failures_retire_before_report() {
         "stranger failure must not leak the grandchild"
     );
     assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
-    assert_pid_free(sh, "stranger-sh");
+    // R19003-FLAKE02: no trailing fresh-read absence
+    // assert — `hstate` is the ns-anchored retirement
+    // proof (see helper docs).
     assert!(failed.is_err(), "stranger failure must report");
     // R17-002 arm 1 (live): steer a live replacement onto
     // sh's freed number, then run the hygiene — the sh kill

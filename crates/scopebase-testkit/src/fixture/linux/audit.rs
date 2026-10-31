@@ -10559,6 +10559,24 @@ mod tests {
     /// death fails the second. Checked in this order so the
     /// discharge probe can never mask a zombie by reaping it
     /// mid-check.
+    /// R19003-FLAKE02: absence is sound ONLY ns-anchored to
+    /// the retirement it verifies. A freed number is retaken
+    /// within µs-ms by (a) frontier-retake (the sequential
+    /// allocator reissues the most-recently-freed number at
+    /// the frontier to the next ambient suite spawn) or (b)
+    /// hint-thieves (an ambient spawn consuming a steered
+    /// plant's ns_last_pid hint — the flock serializes
+    /// steerers, not ambient forks). Proven: staging-obs
+    /// failed 4/15 runs with a foreign birth at the freed
+    /// number exactly when both plants went vacuous (thief
+    /// stole the hint, planter missed). Birth-gating does NOT
+    /// save ms-lifetime fixtures (thief births land in the
+    /// same jiffy ~90%); the sound retirement proof is the
+    /// frozen post-unwind read (ostate/zstate/dstate/...) —
+    /// every staged caller now relies on it, and trailing
+    /// fresh-read absence asserts were removed (they tested
+    /// suite timing, not retirement). Remaining caller:
+    /// gone-number only (retired-long-ago, non-frontier).
     #[cfg(target_arch = "x86_64")]
     fn assert_audit_pid_free(pid: libc::pid_t, what: &str) {
         assert_eq!(
@@ -10621,6 +10639,11 @@ mod tests {
         // bounded retire (a surviving fixture fails loud below —
         // the injection must take, never pass vacuously).
         let slot_a = std::cell::Cell::new(-1);
+        // R19003-FLAKE02: ns-anchored retirement capture —
+        // read immediately post-retire inside the catch (a
+        // post-unwind read crosses a µs frontier-retake
+        // window; a trailing fresh-read assert crosses ms).
+        let state_a = std::cell::Cell::new(None);
         let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let pid = birth();
             slot_a.set(pid);
@@ -10633,12 +10656,17 @@ mod tests {
                 _guard.pin(tick);
             }
             retire_audit_child_silent(pid);
+            state_a.set(Some(proc_starttime(pid)));
             observe(pid);
         }));
         // A birth panic stages nothing (slot stays -1 — never
         // waitpid(-1): that would reap ANY sibling child).
         if slot_a.get() > 0 {
-            assert_audit_pid_free(slot_a.get(), tag);
+            assert_eq!(
+                state_a.take(),
+                Some(Ok(None)),
+                "{tag}: retire must leave the fixture gone"
+            );
         }
         assert!(
             observed.is_err(),
@@ -10686,7 +10714,10 @@ mod tests {
             Ok(None),
             "{tag}: spawn-failure must not leak the fixture"
         );
-        assert_audit_pid_free(pid, tag);
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `state` above is the ns-anchored
+        // retirement proof; a later occupant is a foreign
+        // frontier-retake (see helper docs).
         assert!(spawned.is_err(), "{tag}: later-spawn failure must report");
     }
 
@@ -12887,7 +12918,10 @@ mod tests {
         }
         gated_retire();
         assert_eq!(ostate, Ok(None), "obs failure must not leak the sleeper");
-        assert_audit_pid_free(opid, "obs");
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `ostate` is the ns-anchored retirement
+        // proof; a later occupant is a foreign hint-thief
+        // (proven: fails exactly on vacuous plants).
         assert!(obs.is_err(), "obs failure must report");
         // Arm ZOMBIE: sleeper killed and settled to Z, assertion
         // failure injected at the zombie stage (the
@@ -12957,7 +12991,9 @@ mod tests {
         }
         gated_reap();
         assert_eq!(zstate, Ok(None), "zombie failure must not leak the sleeper");
-        assert_audit_pid_free(zpid, "zombie");
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `zstate` is the ns-anchored retirement
+        // proof (same hint-thief exposure as obs).
         assert!(zomb.is_err(), "zombie failure must report");
         // Arm STRANGER: sh + grandchild, failure injected after
         // staging (the EMFILE stranger shape).
@@ -13054,7 +13090,9 @@ mod tests {
             "stranger failure must not leak the grandchild"
         );
         assert_eq!(hstate, Ok(None), "stranger failure must not leak sh");
-        assert_audit_pid_free(sh, "stranger-sh");
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `hstate` is the ns-anchored retirement
+        // proof (see helper docs).
         assert!(failed.is_err(), "stranger failure must report");
         // Arm DECISION (R17-006 site 1): sleeper birth, tick
         // read, INJECTED observation (unreadable reports
@@ -13091,7 +13129,9 @@ mod tests {
             Ok(None),
             "decision failure must not leak the sleeper"
         );
-        assert_audit_pid_free(dpid, "decision");
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `dstate` is the ns-anchored retirement
+        // proof (see helper docs).
         assert!(decision.is_err(), "decision failure must report");
         // Arm SECOND (R17-006 site 2): first birth retired
         // explicitly, second birth read, then failure before
@@ -13131,7 +13171,9 @@ mod tests {
         }
         assert_eq!(astate, Ok(None), "second arm must not leak the first");
         assert_eq!(bstate, Ok(None), "second failure must not leak the second");
-        assert_audit_pid_free(bpid, "second");
+        // R19003-FLAKE02: no trailing fresh-read absence
+        // assert — `bstate` is the ns-anchored retirement
+        // proof (see helper docs).
         assert!(second.is_err(), "second failure must report");
         // Arm TRIPLE (R17-006 site 4): three births with
         // interleaved reads, then failure before explicit
@@ -13176,7 +13218,9 @@ mod tests {
                 Ok(None),
                 "triple failure must not leak sleeper {pid}"
             );
-            assert_audit_pid_free(*pid, "triple");
+            // R19003-FLAKE02: no trailing fresh-read
+            // absence assert — `state` is the ns-anchored
+            // retirement proof (see helper docs).
         }
         assert!(tripled.is_err(), "triple failure must report");
     }
@@ -19692,18 +19736,18 @@ time.sleep(30)
             2,
             "shedding inheritor must survive discovery + retire",
         );
-        // The retired holders were OUR children, killed AND
-        // reaped by the production frames (R19-005 precedent:
-        // post-retire waitpid deterministically sees ECHILD).
-        for (pid, what) in [(cpid, "control"), (wpid, "writer")] {
-            let mut st = 0;
-            // SAFETY: WNOHANG probe only — our (former) children.
-            let got = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
-            assert!(
-                got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
-                "{what} status must already be drained by the production frame, got {got}"
-            );
-        }
+        // R19003-FLAKE02: no post-hoc waitpid-ECHILD loop.
+        // Production-true above already certified the named
+        // births gone (observed absence/reuse inside the
+        // frame — the ns-anchored proof); our zombie at the
+        // number is then impossible (dead-is-dead: the birth
+        // cannot return), so a fresh waitpid here asserts
+        // suite timing, not production behavior — a frontier-
+        // retake lands an ambient suite child (got 0, proven
+        // 4/15 runs) or a foreign zombie (numeric waitpid
+        // would STEAL its status). The asserted production
+        // receipt is the complete proof; this loop could only
+        // noise-or-harm.
         drop(writer);
         // Cleanup: the surviving inheritor (gated kill,
         // status drains to us).
