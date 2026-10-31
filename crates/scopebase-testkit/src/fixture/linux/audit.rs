@@ -3689,18 +3689,23 @@ mod tests {
     /// visible NOW (missing reads contribute nothing, never fail).
     /// Post-exit wait loops poll this per slice and union the
     /// last-seen tuples into the expiry strays, so a death between
-    /// birth and publication still retires. (The timeout body's
-    /// forensics snapshot stays inline until the R16-002 rework
-    /// unifies it here.)
+    /// birth and publication still retires. R16-002: the timeout
+    /// body's forensics snapshot shares this (same shape — the
+    /// mid tuple takes the group path, the writer the individual
+    /// path).
+    /// R16-002: one discovery slice — (middleman, firstborn)
+    /// identity tuples, each None when unobserved this slice.
     #[cfg(target_arch = "x86_64")]
-    fn snapshot_probe_tree(id: libc::pid_t) -> Vec<(libc::pid_t, u64)> {
-        let mut seen = Vec::new();
+    type ProbeTreeSnapshot = (Option<(libc::pid_t, u64)>, Option<(libc::pid_t, u64)>);
+    #[cfg(target_arch = "x86_64")]
+    fn snapshot_probe_tree(id: libc::pid_t) -> ProbeTreeSnapshot {
+        let mut seen = (None, None);
         if let Some(mid) = middleman_first_child(id) {
             if let Ok(Some(mtick)) = proc_starttime(mid) {
-                seen.push((mid, mtick));
+                seen.0 = Some((mid, mtick));
                 if let Some(born) = middleman_first_child(mid) {
                     if let Ok(Some(tick)) = proc_starttime(born) {
-                        seen.push((born, tick));
+                        seen.1 = Some((born, tick));
                     }
                 }
             }
@@ -3786,13 +3791,33 @@ mod tests {
     /// group strands the parked writer). R15-008: denied
     /// retirements keep explicit (pid, starttime) evidence in
     /// the message (the pidfile is still removed).
+    /// R16-002: reaped-input safe — staging callers fire after
+    /// try_wait-Some (number released, possibly recycled), so
+    /// the probe signals and the number-snapshot run ONLY on
+    /// try_wait-None (proven live, ours); a reaped child retires
+    /// by recorded identity (pidfile + `known`) alone.
+    /// R16-006: `known` carries caller-observed tuples (read
+    /// while fds worked) — under EMFILE the snapshot and the
+    /// pidfile read both fail, and these are the only identities
+    /// the body can attempt (unverifiable ones land in the
+    /// unresolved note, never a silent skip).
     #[cfg(target_arch = "x86_64")]
     fn timeout_retire_hung_probe(
         child: &mut std::process::Child,
         pidfile: &std::path::Path,
         what: &str,
+        known: &[(libc::pid_t, u64)],
     ) -> ! {
         let id = child.id() as libc::pid_t;
+        // R16-002: the child may already be reaped (staging
+        // callers fire after try_wait-Some) — a reaped number is
+        // RELEASED and may name a stranger's task and group.
+        // Signal the probe ONLY on try_wait-None (proven live,
+        // ours); every other outcome (reaped, zombie reaped here,
+        // ECHILD-stolen) skips the signals AND the snapshot
+        // (number-discovery past reparenting is meaningless —
+        // recorded identities below are the only handle then).
+        let ours_live = matches!(child.try_wait(), Ok(None));
         // R15-002: descendant forensics BEFORE the kill — a probe
         // stopped or hung before its birth scan publishes
         // nothing, and its middleman leads an independent group
@@ -3800,29 +3825,32 @@ mod tests {
         // strays would strand the parked writer; the EOF
         // self-release never arrives under read-denying specs).
         // Snapshot the middleman and its firstborn with ticks
-        // while the probe is alive (all timeout callers fire on
-        // live probes; a dead probe snapshots empty and the
-        // body degrades to its previous behavior). A middleman
-        // forked between snapshot and kill is missed
-        // (millisecond window, only injected timeouts fire that
-        // early — spontaneous timeouts fire 30s+ in, when the
-        // tree is long stable); a spontaneously crashed probe
-        // reparents past discovery (collect paths, out of the
-        // timeout model) — both recorded residuals.
-        let snapshot = (|| {
-            let mid = middleman_first_child(id)?;
-            let mtick = proc_starttime(mid).ok()??;
-            let writer = middleman_first_child(mid)
-                .and_then(|born| proc_starttime(born).ok()?.map(|tick| (born, tick)));
-            Some((mid, mtick, writer))
-        })();
-        // SAFETY: signal-only to the probe's own group, then the
-        // probe itself; errors ignored. The probe is our unreaped
-        // child (alive-or-zombie — the number cannot have
-        // recycled), so both signals address our own tasks.
-        unsafe {
-            libc::killpg(id, libc::SIGKILL);
-            libc::kill(id, libc::SIGKILL);
+        // while the probe is alive (shared
+        // [`snapshot_probe_tree`]). A middleman forked between
+        // snapshot and kill is missed (millisecond window, only
+        // injected timeouts fire that early — spontaneous
+        // timeouts fire 30s+ in, when the tree is long stable); a
+        // spontaneously crashed probe reparents past discovery
+        // (collect paths, out of the timeout model) — both
+        // recorded residuals.
+        let snapshot = if ours_live {
+            let (mid_seen, writer_seen) = snapshot_probe_tree(id);
+            mid_seen.map(|(mid, mtick)| (mid, mtick, writer_seen))
+        } else {
+            eprintln!(
+                "timeout skips probe-{id} signals+snapshot: child already reaped (strays by identity below)"
+            );
+            None
+        };
+        if ours_live {
+            // SAFETY: signal-only to the probe's own group, then the
+            // probe itself; errors ignored. try_wait-None above
+            // proves OUR child unreaped (alive — the number cannot
+            // have recycled), so both signals address our own tasks.
+            unsafe {
+                libc::killpg(id, libc::SIGKILL);
+                libc::kill(id, libc::SIGKILL);
+            }
         }
         let _ = child.wait();
         // Unresolved identities accumulate here (R15-008: a
@@ -3830,6 +3858,11 @@ mod tests {
         // evidence — the pidfile below is removed regardless, so
         // the message is the only record).
         let mut unresolved: Vec<(libc::pid_t, u64)> = Vec::new();
+        // Individually-retired identities (dedup: the snapshot
+        // writer, a known tuple and a pidfile stray may name the
+        // same task — a second retire would false-report the
+        // retired task as unresolved).
+        let mut done: Vec<(libc::pid_t, u64)> = Vec::new();
         // R15-002: retire the snapshotted descendants — the
         // middleman group by tick-gated group kill (covers a
         // writer born after the snapshot: the middleman forks
@@ -3849,7 +3882,20 @@ mod tests {
                 if !retire_known_stray_best_effort(wpid, wtick) {
                     unresolved.push((wpid, wtick));
                 }
+                done.push((wpid, wtick));
             }
+        }
+        // R16-006: caller-known identities (observed while fds
+        // worked — the snapshot above and the pidfile read below
+        // both fail under EMFILE). Same individual path + proof.
+        for candidate in known {
+            if done.contains(candidate) {
+                continue;
+            }
+            if !retire_known_stray_best_effort(candidate.0, candidate.1) {
+                unresolved.push(*candidate);
+            }
+            done.push(*candidate);
         }
         // R14-009: the timeout retires the published strays — an
         // independently-grouped writer survives the killpg above
@@ -3864,9 +3910,13 @@ mod tests {
         let stray_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let strays = read_published_grandchild_strays(pidfile);
             for (pid, started) in strays {
+                if done.contains(&(pid, started)) {
+                    continue;
+                }
                 if !retire_known_stray_best_effort(pid, started) {
                     unresolved.push((pid, started));
                 }
+                done.push((pid, started));
             }
         }));
         let _ = std::fs::remove_file(pidfile);
@@ -4295,7 +4345,7 @@ mod tests {
             "timeout" => {
                 let probe = probe.as_mut().expect("probe staged");
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    timeout_retire_hung_probe(probe, &pidfile, "R15008 timeout");
+                    timeout_retire_hung_probe(probe, &pidfile, "R15008 timeout", &[(wpid, wtick)]);
                 }));
                 match outcome {
                     Err(payload) => payload
@@ -9429,13 +9479,19 @@ mod tests {
                     return;
                 }
                 None => {
-                    observed.extend(snapshot_probe_tree(id));
+                    let (mid_seen, writer_seen) = snapshot_probe_tree(id);
+                    observed.extend(mid_seen.into_iter().chain(writer_seen));
                 }
             }
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
                 // group + probe, retires published strays).
-                timeout_retire_hung_probe(&mut child, &pidfile, "subreaper probe hung past 150s");
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "subreaper probe hung past 150s",
+                    &observed,
+                );
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -10062,7 +10118,7 @@ mod tests {
                 break status;
             }
             if Instant::now() >= end {
-                timeout_retire_hung_probe(&mut child, &pidfile, "ir003 probe hung past 150s");
+                timeout_retire_hung_probe(&mut child, &pidfile, "ir003 probe hung past 150s", &[]);
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -10149,7 +10205,7 @@ mod tests {
             .expect("sleep spawns");
         let what = "ir004 probe hung past 0s";
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            timeout_retire_hung_probe(&mut child, &pidfile, what)
+            timeout_retire_hung_probe(&mut child, &pidfile, what, &[])
         }));
         // Observe before cleanup (R12-014): capture the
         // evidence first, remove any remainder so even RED
@@ -10399,9 +10455,15 @@ mod tests {
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
                 // group + probe, retires published strays).
-                timeout_retire_hung_probe(&mut child, &pidfile, "abandoning probe hung past 60s");
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "abandoning probe hung past 60s",
+                    &observed,
+                );
             }
-            observed.extend(snapshot_probe_tree(id));
+            let (mid_seen, writer_seen) = snapshot_probe_tree(id);
+            observed.extend(mid_seen.into_iter().chain(writer_seen));
             std::thread::sleep(Duration::from_millis(20));
         };
         // Skip path first: without seccomp the probe refuses
@@ -10571,6 +10633,7 @@ mod tests {
                             "midflight probe staging failure",
                             "midflight-birth",
                             "skip-path probe must EOF its output, got expiry",
+                            &[],
                         ),
                     }
                 }
@@ -10580,12 +10643,13 @@ mod tests {
                     "midflight probe staging failure",
                     "midflight-birth",
                     &format!("probe exited {status} before grandchild birth"),
+                    &[],
                 );
             }
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
                 // group + probe, retires published strays).
-                timeout_retire_hung_probe(&mut child, &pidfile, "grandchild never born (60s)");
+                timeout_retire_hung_probe(&mut child, &pidfile, "grandchild never born (60s)", &[]);
             }
             if let Some(mid) = middleman_first_child(id) {
                 if let Some(born) = middleman_first_child(mid) {
@@ -10624,6 +10688,7 @@ mod tests {
                     "midflight probe staging failure",
                     "midflight-kill",
                     "probe completed before the kill",
+                    &[(mid, mid_tick), (writer, writer_tick)],
                 );
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -10640,6 +10705,7 @@ mod tests {
                 "midflight probe staging failure",
                 "midflight-kill",
                 "probe must still run at kill time",
+                &[(mid, mid_tick), (writer, writer_tick)],
             );
         }
         // SAFETY: SIGKILL to our own pinned probe child.
@@ -10651,6 +10717,7 @@ mod tests {
                 "midflight probe staging failure",
                 "midflight-kill",
                 &format!("probe SIGKILL refused ({errno})"),
+                &[(mid, mid_tick), (writer, writer_tick)],
             );
         }
         let end = Instant::now() + Duration::from_secs(60);
@@ -10661,7 +10728,12 @@ mod tests {
             if Instant::now() >= end {
                 // R14-009: the shared timeout body (kills the
                 // group + probe, retires published strays).
-                timeout_retire_hung_probe(&mut child, &pidfile, "killed probe never reaped");
+                timeout_retire_hung_probe(
+                    &mut child,
+                    &pidfile,
+                    "killed probe never reaped",
+                    &[(mid, mid_tick), (writer, writer_tick)],
+                );
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -10794,6 +10866,13 @@ mod tests {
     /// but unverified here (µs–ms windows); a same-tick recycle
     /// inside the verify window misreads as survival (S100-µs —
     /// never observed unsteered).
+    /// R16-006: `known` threads caller-observed tuples through
+    /// (the driver's birth records, read while fds worked) — the
+    /// prestage rediscovery below fails under EMFILE, and without
+    /// these the verification set goes vacuously empty while a
+    /// known writer parks. Verification is tri-state per tuple:
+    /// proven-gone passes, still-there panics (BUG), unreadable
+    /// reports UNVERIFIED (never a "retired" claim over doubt).
     #[cfg(target_arch = "x86_64")]
     fn held_probe_staging_failure(
         child: &mut std::process::Child,
@@ -10801,6 +10880,7 @@ mod tests {
         what: &str,
         stage: &str,
         detail: &str,
+        known: &[(libc::pid_t, u64)],
     ) -> ! {
         let id = child.id() as libc::pid_t;
         // Prestage scan (best-effort record for post-body
@@ -10822,7 +10902,7 @@ mod tests {
         // The real timeout body, under catch (it diverges by
         // design — a return is a retirement bug).
         let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            timeout_retire_hung_probe(child, pidfile, what);
+            timeout_retire_hung_probe(child, pidfile, what, known);
         }));
         let body_text = match body {
             Err(payload) => payload
@@ -10844,15 +10924,296 @@ mod tests {
             std::fs::metadata(pidfile).is_err(),
             "staging {stage} failed ({detail}): pidfile NOT removed (BUG)"
         );
-        for (pid, tick) in strays.iter().chain(mid.iter()).chain(writer.iter()) {
-            assert!(
-                proc_starttime(*pid) != Ok(Some(*tick)),
-                "staging {stage} failed ({detail}): recorded fixture {pid}:{tick} NOT retired (BUG)"
+        // Verify the retirement over rediscovered PLUS
+        // caller-known identities, tri-state each: proven-gone
+        // passes, still-there is a BUG panic, unreadable joins
+        // the UNVERIFIED report (never a "retired" claim).
+        let mut verify: Vec<(libc::pid_t, u64)> = Vec::new();
+        for candidate in strays
+            .iter()
+            .chain(mid.iter())
+            .chain(writer.iter())
+            .chain(known.iter())
+        {
+            if !verify.contains(candidate) {
+                verify.push(*candidate);
+            }
+        }
+        let mut unverified: Vec<(libc::pid_t, u64)> = Vec::new();
+        for (pid, tick) in &verify {
+            match proc_starttime(*pid) {
+                Ok(Some(now)) if now == *tick => {
+                    panic!(
+                        "staging {stage} failed ({detail}): recorded fixture {pid}:{tick} NOT retired (BUG)"
+                    );
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    unverified.push((*pid, *tick));
+                }
+            }
+        }
+        if unverified.is_empty() {
+            panic!(
+                "staging {stage} failed ({detail}); fixtures retired via timeout body ({body_text}); prestage scan: mid={mid:?} writer={writer:?} strays={strays:?} known={known:?}"
             );
         }
         panic!(
-            "staging {stage} failed ({detail}); fixtures retired via timeout body ({body_text}); prestage scan: mid={mid:?} writer={writer:?} strays={strays:?}"
+            "staging {stage} failed ({detail}); fixtures UNVERIFIED via timeout body ({body_text}); unverified={unverified:?} known={known:?}; prestage scan: mid={mid:?} writer={writer:?} strays={strays:?}"
         );
+    }
+
+    /// R16-002: staging cleanup must not signal a reaped probe's
+    /// number. Staging callers fire after try_wait-Some (the child
+    /// reaped, the number released); the timeout body must skip
+    /// its probe signals then — a steered stranger may own the
+    /// number and its group. RED: the body's unconditional
+    /// killpg+kill murder the self-grouped replacement; GREEN:
+    /// try_wait-first skips the signals and the replacement
+    /// survives with its status retained (collected below).
+    /// All eleven staging branches funnel through this helper
+    /// into the one body (branch strings don't change the signal
+    /// path) — this test pins the shared path; per-caller
+    /// reaped/live audit in the fix commit.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn staging_cleanup_spares_recycled_probe_number() {
+        use std::os::unix::process::CommandExt as _;
+        // Serialize steerers in-process (whole-test hold); the
+        // placement loop below adds the cross-process lock.
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        // The "probe": spawned, reaped, number released.
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let id = probe.id() as libc::pid_t;
+        // SAFETY: signal-only to our own staged probe.
+        unsafe {
+            libc::kill(id, libc::SIGKILL);
+        }
+        let _ = probe.wait();
+        // Steer a SELF-GROUPED replacement onto the number (the
+        // killpg arm needs a group at the number to prove the skip).
+        let _flock = ns_last_pid_flock();
+        let mut standin = None;
+        for _ in 0..100 {
+            if !audit_steer_next_pid_unlocked(id) {
+                break;
+            }
+            let mut command = std::process::Command::new("/bin/sleep");
+            command
+                .arg("31")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid on self pre-exec, no userspace state.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            let kid = command.spawn().expect("standin spawns");
+            if kid.id() as libc::pid_t == id {
+                standin = Some(kid);
+                break;
+            }
+            let mut miss = kid;
+            let _ = miss.kill();
+            let _ = miss.wait();
+        }
+        drop(_flock);
+        let mut standin = match standin {
+            Some(kid) => kid,
+            None => {
+                eprintln!("skip: retake contended");
+                return;
+            }
+        };
+        // R16-011: unwind safety — a staging failure below must
+        // retire the replacement, never leak it.
+        let mut standin_guard = FixtureGuard::new(id);
+        // Settled-live proof the stage holds (try_wait-None over
+        // our own child — never a tick-match).
+        assert!(
+            matches!(standin.try_wait(), Ok(None)),
+            "steered replacement must start live"
+        );
+        // Unpublished pidfile (nothing recorded — the body acts
+        // on the number alone).
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r16002-recycled-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            held_probe_staging_failure(
+                &mut probe,
+                &pidfile,
+                "r16002 staging",
+                "r16002-recycle",
+                "recycled probe number",
+                &[],
+            );
+        }));
+        assert!(fired.is_err(), "helper must diverge (it returned)");
+        // Survived with status retained: live now, SIGKILL-collected
+        // by its owner below (RED: murdered — Some).
+        assert!(
+            matches!(standin.try_wait(), Ok(None)),
+            "recycled replacement must survive staging cleanup"
+        );
+        let _ = standin.kill();
+        let status = standin.wait().expect("standin reaped");
+        assert!(!status.success(), "standin must die by our SIGKILL");
+        standin_guard.disarm();
+        let _ = std::fs::remove_file(&pidfile);
+    }
+
+    /// R16-006: staging failure under EMFILE must report known
+    /// identities as UNVERIFIED, never claim retirement. The held
+    /// driver knows mid/writer tuples the helper's rediscovery
+    /// cannot re-read without fds; dropping them converts failed
+    /// observations into an empty (vacuous) verification set.
+    /// RED (5-arg call): EMFILE empties the set, the writer parks,
+    /// the message claims "fixtures retired via timeout body".
+    /// GREEN (known threaded through): the message reports
+    /// UNVERIFIED with the cited tuples. The writer stays live in
+    /// both (EMFILE forbids verification, so no blind kill) and
+    /// the suite retires it loud post-restore.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn staging_failure_under_emfile_reports_unverified_known() {
+        // Live probe + two known fixtures (recorded identities;
+        // stand-in sleeps — the helper treats known tuples as
+        // individual strays, no grouping assumed).
+        let mut probe = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("probe spawns");
+        let pid = probe.id() as libc::pid_t;
+        let mut mid = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("mid standin spawns");
+        let mid_id = mid.id() as libc::pid_t;
+        let mid_tick = proc_starttime(mid_id)
+            .expect("mid stat readable")
+            .expect("mid visible");
+        let mut writer = std::process::Command::new("/bin/sleep")
+            .arg("31")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("writer standin spawns");
+        let writer_id = writer.id() as libc::pid_t;
+        let writer_tick = proc_starttime(writer_id)
+            .expect("writer stat readable")
+            .expect("writer visible");
+        // R16-011: unwind safety from birth.
+        let mut probe_guard = FixtureGuard::new(pid);
+        let mut mid_guard = FixtureGuard::new(mid_id);
+        let mut writer_guard = FixtureGuard::new(writer_id);
+        // Unpublished pidfile (missing = unpublished).
+        let pidfile = std::env::temp_dir().join(format!(
+            "scopebase-r16006-emfile-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        // Exhaust AFTER all fds-needing setup. Declared LAST:
+        // unwind drops it first, restoring fds before the guards
+        // retire.
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            held_probe_staging_failure(
+                &mut probe,
+                &pidfile,
+                "r16006 staging",
+                "r16006-emfile",
+                "stop-stage failure under EMFILE",
+                &[(mid_id, mid_tick), (writer_id, writer_tick)],
+            );
+        }));
+        drop(held);
+        let text = match fired {
+            Err(payload) => payload
+                .downcast::<String>()
+                .map(|boxed| *boxed)
+                .unwrap_or_else(|_| String::from("<non-string panic>")),
+            Ok(_) => panic!("helper must diverge (it returned)"),
+        };
+        // Claim-reality correspondence (stable RED to GREEN: the
+        // RED run violates all three; only the call gains the
+        // known arg for GREEN).
+        let claims_retired = text.contains("fixtures retired via");
+        let writer_live = matches!(writer.try_wait(), Ok(None));
+        assert!(
+            !(claims_retired && writer_live),
+            "must not claim retirement over a parked writer, got: {text}"
+        );
+        assert!(
+            text.contains("UNVERIFIED"),
+            "unverifiable staging must report UNVERIFIED, got: {text}"
+        );
+        assert!(
+            text.contains(&format!("({mid_id}, {mid_tick})"))
+                && text.contains(&format!("({writer_id}, {writer_tick})")),
+            "known tuples must ride the report, got: {text}"
+        );
+        // No blind kill under EMFILE (characterization: live in
+        // both RED and GREEN — pins the R15-003 invariant so the
+        // fix cannot "solve" this by signaling unverified).
+        assert!(
+            writer_live,
+            "unverifiable writer must stay live (no blind kill)"
+        );
+        assert!(
+            matches!(mid.try_wait(), Ok(None)),
+            "unverifiable middleman must stay live (no blind kill)"
+        );
+        // Loud post-hoc cleanup (the report cited them; we retire them).
+        let _ = mid.kill();
+        let _ = mid.wait();
+        mid_guard.disarm();
+        let _ = writer.kill();
+        let _ = writer.wait();
+        writer_guard.disarm();
+        // The probe the body DID retire (live, ours, kill needs no fds).
+        assert!(
+            matches!(probe.try_wait(), Ok(Some(_)) | Err(_)),
+            "probe must be reaped by the body"
+        );
+        probe_guard.disarm();
+        let _ = std::fs::remove_file(&pidfile);
     }
 
     /// R14-009: drive one parent's timeout branch against a probe
@@ -10940,6 +11301,7 @@ mod tests {
                     what,
                     "birth",
                     &format!("probe exited {status} before grandchild birth"),
+                    &[],
                 );
             }
             if Instant::now() >= end {
@@ -10949,6 +11311,7 @@ mod tests {
                     what,
                     "birth",
                     &format!("grandchild never born ({:?})", timeouts.birth),
+                    &[],
                 );
             }
             if let Some(mid) = middleman_first_child(id) {
@@ -10978,6 +11341,7 @@ mod tests {
                     what,
                     "publication",
                     "birth never published before the hold",
+                    &[(mid, mid_tick), (writer, writer_tick)],
                 );
             }
             if child.try_wait().expect("probe wait").is_some() {
@@ -10987,6 +11351,7 @@ mod tests {
                     what,
                     "publication",
                     "probe completed before the hold",
+                    &[(mid, mid_tick), (writer, writer_tick)],
                 );
             }
             let filled = std::fs::read_to_string(&pidfile)
@@ -11015,6 +11380,7 @@ mod tests {
                 what,
                 "stop",
                 &format!("probe SIGSTOP refused ({errno})"),
+                &[(mid, mid_tick), (writer, writer_tick)],
             );
         }
         let stopped = Instant::now() + timeouts.stop;
@@ -11029,6 +11395,7 @@ mod tests {
                     what,
                     "stop",
                     "probe never stopped after SIGSTOP",
+                    &[(mid, mid_tick), (writer, writer_tick)],
                 );
             }
             let state = std::fs::read_to_string(format!("/proc/{id}/stat"))
@@ -11047,7 +11414,12 @@ mod tests {
         // the branch ran), and the suite survives to verify the
         // retirement below.
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            timeout_retire_hung_probe(&mut child, &pidfile, what)
+            timeout_retire_hung_probe(
+                &mut child,
+                &pidfile,
+                what,
+                &[(mid, mid_tick), (writer, writer_tick)],
+            )
         }));
         match fired {
             Err(payload) => {
@@ -11333,7 +11705,12 @@ mod tests {
         );
         let what = "r15002 stopped probe timeout";
         let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            timeout_retire_hung_probe(&mut child, &pidfile, what)
+            timeout_retire_hung_probe(
+                &mut child,
+                &pidfile,
+                what,
+                &[(mid, mid_tick), (writer, writer_tick)],
+            )
         }));
         let text = match fired {
             Err(payload) => payload
@@ -12153,7 +12530,8 @@ mod tests {
                     return;
                 }
                 None => {
-                    observed.extend(snapshot_probe_tree(id));
+                    let (mid_seen, writer_seen) = snapshot_probe_tree(id);
+                    observed.extend(mid_seen.into_iter().chain(writer_seen));
                 }
             }
             if Instant::now() >= end {
@@ -12163,6 +12541,7 @@ mod tests {
                     &mut child,
                     &pidfile,
                     "adopting-guard probe hung past 60s",
+                    &observed,
                 );
             }
             std::thread::sleep(Duration::from_millis(20));
