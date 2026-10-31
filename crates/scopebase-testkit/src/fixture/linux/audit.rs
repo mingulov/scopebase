@@ -17310,6 +17310,33 @@ mod tests {
         }
     }
 
+    /// R20-017: stamp-then-release for the EMFILE window —
+    /// exhaustion ends at the FIRST close, so the RELEASED
+    /// stamp must precede the multi-ms `drop(held)` (4096
+    /// closes + descheduling admit healthy post-release
+    /// iterations inside the window). The pre-drop stamp is
+    /// the last moment of certain fullness (conservative
+    /// either way: iterations strictly before it ran full —
+    /// nothing closes table fds mid-window). The observer
+    /// runs AT stamp time, before the first close (the seam
+    /// for the order regression: it must observe a
+    /// non-empty hold and a full table; a drop-first mutant
+    /// observes neither). The stamp arg forces
+    /// stamp-before-observe by construction (a stamp moved
+    /// below the observer does not compile) — every
+    /// line-move order mutant either fails to compile or
+    /// REDs in the observer.
+    #[cfg(target_arch = "x86_64")]
+    fn stamp_release_held(
+        held: Vec<std::fs::File>,
+        observe: impl FnOnce(u64, &[std::fs::File]),
+    ) -> u64 {
+        let stamp = monotonic_nanos();
+        observe(stamp, &held);
+        drop(held);
+        stamp
+    }
+
     /// R18-012: the overlap verdict — at least ten sentinel
     /// iterations strictly inside [HELD, RELEASED] with no new
     /// failures there. Activity confined outside the window
@@ -17838,6 +17865,80 @@ mod tests {
     /// UNVERIFIED with the cited tuples. The writer stays live in
     /// both (EMFILE forbids verification, so no blind kill) and
     /// the suite retires it loud post-restore.
+    /// R20-017: order regression — the RELEASED observer
+    /// runs at stamp time, before the first close: it must
+    /// observe a non-empty hold and a FULL table. Fresh-image
+    /// probe (exhausts its own confined table — in-process
+    /// exhaustion would break the shared harness): fills to
+    /// EMFILE, releases through the helper with an observing
+    /// closure (a /dev/null open must fail EMFILE at stamp
+    /// time). RED (drop-first mutant — proven manually):
+    /// the observer finds an empty hold / drained table →
+    /// panic. GREEN: EMFILE → post-release positive control
+    /// (opens succeed once drained — the observer's EMFILE
+    /// was genuine) → cite.
+    #[cfg(target_arch = "x86_64")]
+    fn release_stamp_observes_full_table_probe() {
+        // Fresh image — the limit dies with the probe.
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        let terminal = loop {
+            match std::fs::File::open("/dev/null") {
+                Ok(file) => held.push(file),
+                Err(error) => break error,
+            }
+        };
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        assert_eq!(
+            terminal.raw_os_error(),
+            Some(libc::EMFILE),
+            "exhaustion must end at EMFILE, got {terminal}"
+        );
+        let _stamp = stamp_release_held(held, |_stamp, held| {
+            assert!(!held.is_empty(), "released hold must be non-vacuous");
+            match std::fs::File::open("/dev/null") {
+                Err(error) if error.raw_os_error() == Some(libc::EMFILE) => {}
+                other => panic!("table must be full at stamp time, got {other:?}"),
+            }
+        });
+        // Positive control: post-release the table drains,
+        // so opens succeed — the observer's EMFILE above
+        // was genuine fullness, not a broken check.
+        let reopened = std::fs::File::open("/dev/null");
+        assert!(
+            reopened.is_ok(),
+            "post-release opens must succeed (positive control), got {reopened:?}"
+        );
+        drop(reopened);
+        eprintln!("R20017-STAMP-BEFORE-RELEASE");
+    }
+
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn release_stamp_observes_full_table() {
+        if std::env::var("SCOPEBASE_R20017_ORDER_PROBE").is_ok() {
+            release_stamp_observes_full_table_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::release_stamp_observes_full_table")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R20017_ORDER_PROBE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "order probe must pass\n{stderr}");
+        assert!(
+            stderr.contains("R20017-STAMP-BEFORE-RELEASE"),
+            "probe must cite stamp-before-release\n{stderr}"
+        );
+    }
+
     /// R17-005: probe body — runs in a FRESH process image (the
     /// test re-execs itself with SCOPEBASE_R17005_EMFILE set);
     /// in-process exhaustion would break the shared harness.
@@ -17936,14 +18037,17 @@ mod tests {
                 &[(mid_id, mid_tick), (writer_id, writer_tick)],
             );
         }));
-        drop(held);
         // R18-012: window-end handshake — the parent's
         // overlap verdict counts only iterations strictly
         // inside this window.
-        // R19-017: occurrence stamp — taken after the drop
-        // above, so every sentinel iteration strictly before
-        // it ran against genuine exhaustion.
-        eprintln!("R17005-RELEASED t={}", monotonic_nanos());
+        // R19-017: occurrence stamp — every sentinel
+        // iteration strictly before it ran against genuine
+        // exhaustion. R20-017: stamp-then-release (the
+        // stamp precedes the first close — see the helper).
+        let released = stamp_release_held(held, |_stamp, held| {
+            assert!(!held.is_empty(), "released hold must be non-vacuous");
+        });
+        eprintln!("R17005-RELEASED t={released}");
         let text = match fired {
             Err(payload) => payload
                 .downcast::<String>()
