@@ -6080,11 +6080,37 @@ mod tests {
     /// call) shares the pgid and is signaled with our
     /// orphans — indistinguishable without a
     /// birth-vs-death clock.
+    ///
+    /// R19-008: the anchor re-runs before EVERY waitpid (each
+    /// outer pass, each inner reap — R14-007/R15-007 shape):
+    /// a same-process reform (recycled number + self-group +
+    /// zombie, all between passes/reaps) vetoes loud-false
+    /// instead of losing the replacement's status to the
+    /// drain. Residual: the recheck→waitpid µs TOCTOU inside
+    /// one iteration (no atomic check-and-reap exists) —
+    /// S100-class, consistent with R13-003.
     #[cfg(target_arch = "x86_64")]
     fn retire_stray_group_best_effort(
         pgid: libc::pid_t,
         started: u64,
         deadline: std::time::Instant,
+    ) -> bool {
+        retire_stray_group_best_effort_with(pgid, started, deadline, None, None)
+    }
+
+    /// R19-008: `pass_hook` runs after every drain pass (a
+    /// between-passes barrier for the regression — R14-007
+    /// shape); `reap_hook` runs after every successful inner
+    /// reap, BEFORE that reap's recheck (it simulates the
+    /// adversary between reaps — R15-007 shape). Production
+    /// passes None, None.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_stray_group_best_effort_with(
+        pgid: libc::pid_t,
+        started: u64,
+        deadline: std::time::Instant,
+        pass_hook: Option<&dyn Fn()>,
+        reap_hook: Option<&dyn Fn()>,
     ) -> bool {
         use std::time::Duration;
         // Anchor: the number's current holder, if a live
@@ -6127,19 +6153,65 @@ mod tests {
         unsafe {
             libc::killpg(pgid, libc::SIGKILL);
         }
+        // R19-008 recheck (same anchor, mid-drain): the
+        // number's current holder, if a live foreign
+        // self-grouper, proves the group reformed between
+        // passes/reaps — veto (never reap or certify
+        // another birth's group). Unreadable vetoes likewise.
+        let recheck_vetoed = |pgid: libc::pid_t, started: u64| -> bool {
+            match proc_starttime(pgid) {
+                Ok(Some(now)) if now != started => {
+                    // SAFETY: getpgid queries only. ESRCH
+                    // (died between the reads) is
+                    // freed-equivalent.
+                    if unsafe { libc::getpgid(pgid) } == pgid {
+                        eprintln!(
+                            "stray-group {pgid} reformed mid-drain \
+                             by a live foreign self-grouper — vetoed"
+                        );
+                        return true;
+                    }
+                    false
+                }
+                Ok(_) => false,
+                Err(error) => {
+                    eprintln!("stray-group {pgid} unreadable mid-drain: {error} — vetoed");
+                    true
+                }
+            }
+        };
         loop {
+            // R19-008: re-run the anchor every pass — a
+            // between-passes reform vetoes before the next
+            // waitpid can reap its status.
+            if recheck_vetoed(pgid, started) {
+                return false;
+            }
             // Drain OUR adopted zombies in this group
             // (subreaper/PID-1 runners adopt the dead
             // members — a zombie still holds the group
-            // observable; waitpid(-pgid) reaps only our
-            // children here, so a reformed foreign group
-            // can never lose status to this drain).
+            // observable; waitpid(-pgid) reaps our children
+            // here, so the rechecks above and below are the
+            // only barrier between the drain and a
+            // same-process reform's status).
             loop {
                 let mut status = 0;
                 // SAFETY: -pgid filters to our children in
                 // this group; WNOHANG never blocks.
                 let got = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
                 if got > 0 {
+                    // R19-008 seam (R15-007 shape): the
+                    // between-reaps adversary runs here; the
+                    // recheck below must observe its plant.
+                    if let Some(hook) = reap_hook {
+                        hook();
+                    }
+                    // R19-008: re-run the anchor after every
+                    // reap — a between-reaps reform vetoes
+                    // before the next waitpid can reap it.
+                    if recheck_vetoed(pgid, started) {
+                        return false;
+                    }
                     continue;
                 }
                 if got < 0 {
@@ -6149,6 +6221,13 @@ mod tests {
                     }
                 }
                 break;
+            }
+            // Between-passes barrier (regression seam; None
+            // in production calls). Runs after every reap
+            // pass — even one that empties the group — so a
+            // planted reform is visible to the next recheck.
+            if let Some(hook) = pass_hook {
+                hook();
             }
             // SAFETY: killpg(pgid, 0) probes existence only.
             if unsafe { libc::killpg(pgid, 0) } < 0 {
@@ -19002,6 +19081,602 @@ time.sleep(30)
         }
         let st = reaped.expect("inheritor status must drain to us (retained, never stolen)");
         assert!(libc::WIFSIGNALED(st), "inheritor must die by our signal");
+    }
+
+    /// R19-008 staging: a reformable group — steered leader L
+    /// (pid G, self-grouped, sleep 920) + a caller-spawned
+    /// member C (joined to G while L lives), then L killed +
+    /// self-reaped, leaving group#G populated-only-by-C with
+    /// number G free for a steered reform. The caller holds
+    /// AUDIT_STEER_SERIAL + the ns_last_pid flock across
+    /// staging AND the retire (the reform hook steers under
+    /// them); this NEVER restores (locked restore nests the
+    /// flock — caller drops it first, then restores).
+    /// `spawn_member` runs while L is alive and returns C's
+    /// (pid, tick). Returns None on steering miss (caller
+    /// drops the flock, restores, skips loud — L retired).
+    #[cfg(target_arch = "x86_64")]
+    fn stage_reformable_group(
+        last_before: &str,
+        spawn_member: &dyn Fn(libc::pid_t) -> (libc::pid_t, u64),
+    ) -> Option<(libc::pid_t, u64, libc::pid_t, u64)> {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let g = last_before.trim().parse::<i32>().unwrap_or(0) + 1;
+        if g <= 1 || !audit_steer_next_pid_unlocked(g) {
+            return None;
+        }
+        let mut leader_cmd = std::process::Command::new("/bin/sleep");
+        leader_cmd
+            .arg("920")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            leader_cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+        let leader = leader_cmd.spawn().expect("leader spawns");
+        let lpid = leader.id() as libc::pid_t;
+        if lpid != g {
+            // Steering miss: retire the misplaced leader
+            // (bounded numeric reap — never a blocking wait),
+            // signal skip.
+            if let Some(mtick) = proc_starttime(lpid).ok().flatten() {
+                let _ = kill_tick_gated(lpid, mtick);
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let mut st = 0;
+                    // SAFETY: WNOHANG assist only — our child.
+                    if unsafe { libc::waitpid(lpid, &mut st, libc::WNOHANG) } == lpid {
+                        break;
+                    }
+                    if proc_starttime(lpid).ok().flatten() != Some(mtick) {
+                        break;
+                    }
+                    if Instant::now() >= end {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            drop(leader);
+            return None;
+        }
+        let ltick = proc_starttime(lpid)
+            .expect("leader stat readable")
+            .expect("leader visible");
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(lpid) },
+            lpid,
+            "leader must self-group (stage broken otherwise)"
+        );
+        // Member joins while the group lives; the join is
+        // proven (a failed setpgid is stage-broken, loud).
+        let (cpid, ctick) = spawn_member(g);
+        // SAFETY: getpgid queries only.
+        assert_eq!(
+            unsafe { libc::getpgid(cpid) },
+            g,
+            "member must join the group (stage broken otherwise)"
+        );
+        // Leader retires (owned, gated, self-reaped — no
+        // drain has run, so the status is ours); the number
+        // must free for the reform.
+        let _ = kill_tick_gated(lpid, ltick);
+        drop(leader);
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG assist only — our child.
+            if unsafe { libc::waitpid(lpid, &mut st, libc::WNOHANG) } == lpid {
+                reaped = Some(st);
+            }
+            if proc_starttime(lpid) != Ok(Some(ltick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "leader must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let st = reaped.expect("leader status must drain to us (retained, never stolen)");
+        assert!(libc::WIFSIGNALED(st), "leader must die by our signal");
+        assert_eq!(
+            proc_starttime(g),
+            Ok(None),
+            "group number must free for the reform"
+        );
+        Some((g, ltick, cpid, ctick))
+    }
+
+    /// R19-008 (between passes): the group drain must re-run
+    /// its anchor every pass — a same-process reform between
+    /// passes (recycled number + self-group + zombie) keeps
+    /// its status with its owner instead of losing it to
+    /// waitpid(-pgid). Staging mirrors the reaps twin (C is a
+    /// /bin/true zombie at entry — pass 1 drains it, so the
+    /// reform plants over an empty group); the pass hook then
+    /// steers a self-grouped reform onto G and polls it
+    /// zombie. RED (this shape): no recheck — the pass-2
+    /// drain reaps the reform AND certifies true over the
+    /// theft. GREEN: the pass-top recheck vetoes loud-false
+    /// and the reform's exit-0 stays (WIFEXITED). Same-role
+    /// note as the reaps twin. (An unreaped member at hook
+    /// time correlates with steer-miss — observed,
+    /// unexplained; both twins plant over a drained C.)
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn group_drain_rechecks_anchor_between_passes() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let _nsflock = ns_last_pid_flock();
+        // Member C: /bin/true joined to G (zombie at entry —
+        // pass 1 drains it, so the reform plants over an
+        // empty group).
+        let Some((g, ltick, cpid, ctick)) = stage_reformable_group(&last_before, &|g| {
+            let mut member_cmd = std::process::Command::new("/bin/true");
+            member_cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid to the live group pre-exec, no
+            // userspace state.
+            unsafe {
+                member_cmd.pre_exec(move || {
+                    libc::setpgid(0, g);
+                    Ok(())
+                });
+            }
+            let member = member_cmd.spawn().expect("member spawns");
+            let cpid = member.id() as libc::pid_t;
+            let ctick = proc_starttime(cpid)
+                .expect("member stat readable")
+                .expect("member visible");
+            drop(member);
+            // Non-vacuity: C is a pending zombie before the
+            // retire.
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                if proc_state(cpid) == Some('Z') {
+                    break;
+                }
+                assert!(
+                    Instant::now() < end,
+                    "member must zombify (stage broken otherwise)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            (cpid, ctick)
+        }) else {
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            eprintln!("skip: leader steering missed");
+            return;
+        };
+        // Reform steering (the hook runs on this thread, under
+        // the held flock — unlocked steering is sound).
+        struct Steer {
+            fired: bool,
+            missed: bool,
+            same_tick: bool,
+            reform: Option<(libc::pid_t, u64)>,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            fired: false,
+            missed: false,
+            same_tick: false,
+            reform: None,
+        });
+        let retired = retire_stray_group_best_effort_with(
+            g,
+            ltick,
+            Instant::now() + Duration::from_secs(2),
+            Some(&|| {
+                let mut state = state.borrow_mut();
+                if state.fired {
+                    return;
+                }
+                state.fired = true;
+                // Between-passes reform: steer G (free — the
+                // leader is reaped, C drained by pass 1),
+                // spawn a self-grouped /bin/true, poll it
+                // zombie.
+                if !audit_steer_next_pid_unlocked(g) {
+                    state.missed = true;
+                    return;
+                }
+                let mut reform_cmd = std::process::Command::new("/bin/true");
+                reform_cmd
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec, no
+                // userspace state.
+                unsafe {
+                    reform_cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                let reform = reform_cmd.spawn().expect("reform spawns");
+                let rpid = reform.id() as libc::pid_t;
+                drop(reform);
+                if rpid != g {
+                    // Steering miss: reap the misplaced reform
+                    // (it exits at once) and signal skip.
+                    let end = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        let mut st = 0;
+                        // SAFETY: WNOHANG assist only — ours.
+                        if unsafe { libc::waitpid(rpid, &mut st, libc::WNOHANG) } == rpid {
+                            break;
+                        }
+                        if Instant::now() >= end {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    state.missed = true;
+                    return;
+                }
+                let rtick = proc_starttime(rpid)
+                    .expect("reform stat readable")
+                    .expect("reform visible");
+                if rtick == ltick {
+                    // Same-tick retake (S100 — the anchor
+                    // cannot see it either): skip loud.
+                    let _ = unsafe {
+                        let mut st = 0;
+                        libc::waitpid(rpid, &mut st, libc::WNOHANG)
+                    };
+                    state.same_tick = true;
+                    return;
+                }
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if proc_state(rpid) == Some('Z') {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "reform must zombify (stage broken otherwise)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                state.reform = Some((rpid, rtick));
+            }),
+            None,
+        );
+        // Hook steering is done — drop the flock FIRST (never
+        // nest), then restore the hint.
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        let guard = state.borrow();
+        if guard.same_tick {
+            drop(guard);
+            eprintln!("skip: same-tick reform (S100 — untestable this run)");
+            return;
+        }
+        if guard.missed || !guard.fired {
+            // Steering miss (or hook never fired): the
+            // misplaced reform was reaped in-hook — nothing
+            // further to retire. C must be drained (pass 1
+            // reaped it before the hook ran — post-hoc proof
+            // the mandate population was real and ours).
+            drop(guard);
+            let mut st = 0;
+            // SAFETY: WNOHANG probe only.
+            let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
+            assert_eq!(got, -1, "C was drained by pass 1 (stage broken otherwise)");
+            eprintln!("skip: reform steering missed");
+            return;
+        }
+        let (rpid, rtick) = guard.reform.expect("reform recorded");
+        drop(guard);
+        // GREEN fails (must veto): the reformed group is a
+        // different birth — retire must be false, provably
+        // by recheck, whatever the shape below certifies.
+        // RED(after-the-fact reading guide): the drain
+        // certifies true here — no recheck ever ran.
+        assert!(!retired, "reformed group must veto, never certify");
+        // The reform's status stays with its owner (us,
+        // playing sibling): exit-0, precisely.
+        let mut st = 0;
+        // SAFETY: blocking reap of our known-zombie child.
+        let got = unsafe { libc::waitpid(rpid, &mut st, 0) };
+        assert_eq!(
+            got, rpid,
+            "reform status must stay with its owner (never stolen)"
+        );
+        assert!(
+            libc::WIFEXITED(st) && libc::WEXITSTATUS(st) == 0,
+            "reform must report its true exit-0, got {st}"
+        );
+        assert_ne!(
+            rtick, ltick,
+            "reform must be a different birth (stage broken otherwise)"
+        );
+        // Pass 1's reaped C stays drained (ECHILD): the
+        // mandate population was real, drained by the drain
+        // itself, never custody-kept.
+        let mut cst = 0;
+        // SAFETY: WNOHANG probe only — a stale number at
+        // worst (post-hoc stage proof, not identity).
+        let cgot = unsafe { libc::waitpid(cpid, &mut cst, libc::WNOHANG) };
+        assert_eq!(cgot, -1, "C was drained by pass 1, not custody-kept");
+        // C's birth is gone from the number (drained above —
+        // a recycle would show a different birth, never
+        // C's own).
+        assert_ne!(
+            proc_starttime(cpid),
+            Ok(Some(ctick)),
+            "C's birth must be gone from its number"
+        );
+    }
+
+    /// R19-008 (between reaps): the group drain must re-run
+    /// its anchor after every inner reap — a same-process
+    /// reform between reaps (recycled number + self-group +
+    /// zombie) keeps its status with its owner. C is a
+    /// /bin/true member (zombie at drain entry — the inner
+    /// loop reaps it first, deterministically ours); the reap
+    /// hook then steers a self-grouped /bin/true reform onto
+    /// G and polls it zombie. RED (this shape): no recheck —
+    /// the next inner waitpid reaps the reform AND the drain
+    /// certifies true over the theft. GREEN: the post-reap
+    /// recheck vetoes loud-false and the reform's exit-0
+    /// stays (WIFEXITED). Same-role note as the passes twin.
+    /// Residual F16: C's zombie window (death→drain-reap,
+    /// ~ms) is sibling-sweep-visible — a steal there fails
+    /// the hook-fired assert loud, never silent.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn group_drain_rechecks_anchor_between_reaps() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::{Duration, Instant};
+        let _serial = AUDIT_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        if !audit_locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+            eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+            return;
+        }
+        let _nsflock = ns_last_pid_flock();
+        // Member C: /bin/true joined to G (zombie at entry —
+        // the inner loop's first reap is deterministically
+        // ours).
+        let Some((g, ltick, cpid, ctick)) = stage_reformable_group(&last_before, &|g| {
+            let mut member_cmd = std::process::Command::new("/bin/true");
+            member_cmd
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: setpgid to the live group pre-exec, no
+            // userspace state.
+            unsafe {
+                member_cmd.pre_exec(move || {
+                    libc::setpgid(0, g);
+                    Ok(())
+                });
+            }
+            let member = member_cmd.spawn().expect("member spawns");
+            let cpid = member.id() as libc::pid_t;
+            let ctick = proc_starttime(cpid)
+                .expect("member stat readable")
+                .expect("member visible");
+            drop(member);
+            // Non-vacuity: C is a pending zombie before the
+            // retire (else the first reap is not provably
+            // ours).
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                if proc_state(cpid) == Some('Z') {
+                    break;
+                }
+                assert!(
+                    Instant::now() < end,
+                    "member must zombify (stage broken otherwise)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            (cpid, ctick)
+        }) else {
+            drop(_nsflock);
+            audit_locked_restore_hint(&last_before);
+            eprintln!("skip: leader steering missed");
+            return;
+        };
+        // Reform steering (the hook runs on this thread, under
+        // the held flock — unlocked steering is sound).
+        struct Steer {
+            fired: bool,
+            missed: bool,
+            same_tick: bool,
+            reform: Option<(libc::pid_t, u64)>,
+            stray: Option<(libc::pid_t, u64)>,
+        }
+        let state = std::cell::RefCell::new(Steer {
+            fired: false,
+            missed: false,
+            same_tick: false,
+            reform: None,
+            stray: None,
+        });
+        let retired = retire_stray_group_best_effort_with(
+            g,
+            ltick,
+            Instant::now() + Duration::from_secs(5),
+            None,
+            Some(&|| {
+                let mut state = state.borrow_mut();
+                if state.fired {
+                    return;
+                }
+                state.fired = true;
+                // Between-reaps reform: steer G (free — the
+                // leader is reaped), spawn a self-grouped
+                // /bin/true, poll it zombie.
+                if !audit_steer_next_pid_unlocked(g) {
+                    state.missed = true;
+                    return;
+                }
+                let mut reform_cmd = std::process::Command::new("/bin/true");
+                reform_cmd
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                // SAFETY: setpgid on self pre-exec, no
+                // userspace state.
+                unsafe {
+                    reform_cmd.pre_exec(|| {
+                        libc::setpgid(0, 0);
+                        Ok(())
+                    });
+                }
+                let reform = reform_cmd.spawn().expect("reform spawns");
+                let rpid = reform.id() as libc::pid_t;
+                drop(reform);
+                if rpid != g {
+                    let rtick = proc_starttime(rpid).ok().flatten().unwrap_or(0);
+                    state.stray = Some((rpid, rtick));
+                    state.missed = true;
+                    return;
+                }
+                let rtick = proc_starttime(rpid)
+                    .expect("reform stat readable")
+                    .expect("reform visible");
+                if rtick == ltick {
+                    // Same-tick retake (S100): skip loud.
+                    let _ = unsafe {
+                        let mut st = 0;
+                        libc::waitpid(rpid, &mut st, libc::WNOHANG)
+                    };
+                    state.same_tick = true;
+                    return;
+                }
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    if proc_state(rpid) == Some('Z') {
+                        break;
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "reform must zombify (stage broken otherwise)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                state.reform = Some((rpid, rtick));
+            }),
+        );
+        // Hook steering is done — drop the flock FIRST (never
+        // nest), then restore the hint.
+        drop(_nsflock);
+        audit_locked_restore_hint(&last_before);
+        let mut guard = state.borrow_mut();
+        if guard.same_tick {
+            drop(guard);
+            eprintln!("skip: same-tick reform (S100 — untestable this run)");
+            return;
+        }
+        // A sibling sweep stealing C pre-reap would empty the
+        // group at entry (hook never fires) — loud, never
+        // silent (F16 residual, ~ms window).
+        assert!(guard.fired, "reap hook must fire (C must reap first)");
+        if guard.missed {
+            let stray = guard.stray.take();
+            drop(guard);
+            // C was reaped by the drain (the hook fired after
+            // it) — its status is the drain's, ECHILD for us.
+            let mut st = 0;
+            // SAFETY: WNOHANG probe only — our (former) child.
+            let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
+            assert!(
+                got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+                "C status must already be drained, got {got}"
+            );
+            if let Some((spid, _)) = stray {
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    let mut st = 0;
+                    // SAFETY: WNOHANG assist only — our child.
+                    if unsafe { libc::waitpid(spid, &mut st, libc::WNOHANG) } == spid {
+                        break;
+                    }
+                    if Instant::now() >= end {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            eprintln!("skip: reform steering missed");
+            return;
+        }
+        let (rpid, rtick) = guard.reform.expect("reform recorded");
+        drop(guard);
+        // The veto is expected — and here RED CERTIFIES TRUE
+        // over the theft (fast RED at this very assert).
+        assert!(!retired, "reformed group must veto, never certify");
+        // C was reaped by the drain before the hook (its
+        // status is the drain's, ECHILD for us).
+        let mut st = 0;
+        // SAFETY: WNOHANG probe only — our (former) child.
+        let got = unsafe { libc::waitpid(cpid, &mut st, libc::WNOHANG) };
+        assert!(
+            got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
+            "C status must already be drained, got {got}"
+        );
+        // C's birth is gone from the number (drained above —
+        // a recycle would show a different birth, never
+        // C's own).
+        assert_ne!(
+            proc_starttime(cpid),
+            Ok(Some(ctick)),
+            "C's birth must be gone from its number"
+        );
+        // The reform's status stays with its owner (us,
+        // playing sibling): exit-0, precisely.
+        let mut st = 0;
+        // SAFETY: blocking reap of our known-zombie child.
+        let got = unsafe { libc::waitpid(rpid, &mut st, 0) };
+        assert_eq!(
+            got, rpid,
+            "reform status must stay with its owner (never stolen)"
+        );
+        assert!(
+            libc::WIFEXITED(st) && libc::WEXITSTATUS(st) == 0,
+            "reform must report its true exit-0, got {st}"
+        );
+        assert_ne!(
+            rtick, ltick,
+            "reform must be a different birth (stage broken otherwise)"
+        );
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
