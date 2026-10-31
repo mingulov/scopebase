@@ -19653,6 +19653,21 @@ mod tests {
         let pub1tick = proc_starttime(pub1pid)
             .expect("pub1 stat readable")
             .expect("pub1 visible");
+        // R20-011: custody at staging (unwind must not
+        // strand the pair; drops stay silent once the
+        // explicit paths below retire it). pub1's guard is
+        // a same-class inclusion (its pre-seam expects were
+        // equally unguarded).
+        let pub1_guard = FixtureGuard::new(pub1pid);
+        assert!(
+            pub1_guard.tick.is_some(),
+            "publisher custody must pin (stage broken otherwise)"
+        );
+        let c1_guard = FixtureGuard::new_expected(c1, c1tick);
+        assert!(
+            c1_guard.tick.is_some(),
+            "c1 custody must pin (stage broken otherwise)"
+        );
         // Steering state (the snapshot seam runs on this
         // thread; the frame borrows it by shared ref).
         struct Steer {
@@ -19695,6 +19710,25 @@ mod tests {
                 assert!(kill_tick_gated(pub1pid, pub1tick), "victim parent signaled");
                 let _ = pub1.wait();
                 assert_eq!(proc_starttime(pub1pid), Ok(None), "victim number must free");
+                // R20-011: forced placement-failure injection
+                // (regression steering — post-parent-death
+                // shapes only; c1 is orphaned-live here in
+                // both modes). "pre-steer" returns at once
+                // (steer-failure shape); "post-spawn" spawns
+                // + parks pub2 first (miss shape — placement
+                // unchecked, so contention cannot flake it).
+                if let Ok(mode) = std::env::var("SCOPEBASE_R20011_FORCE_MISS") {
+                    if mode == "post-spawn" {
+                        if audit_steer_next_pid_unlocked(pub1pid) {
+                            let mut pub2 = spawn_publisher("913");
+                            let (cprime, cptick) = read_pair(&mut pub2);
+                            let _ = kill_tick_gated(cprime, cptick);
+                            let _ = pub2.kill();
+                            let _ = pub2.wait();
+                        }
+                    }
+                    return (Vec::new(), true);
+                }
                 if !audit_steer_next_pid_unlocked(pub1pid) {
                     return (Vec::new(), true);
                 }
@@ -19733,6 +19767,29 @@ mod tests {
         let (mut pub2, (cprime, cptick)) = match (sh2opt, cprime) {
             (Some(pub2), Some(pair)) => (pub2, pair),
             _ => {
+                // R20-011: retire orphaned c1 explicitly (the
+                // seam orphaned it killing pub1 — the old
+                // code skipped with c1 live, a 912s strand
+                // holding a spent write end). Mirrors the
+                // GREEN-tail loop; the citation below proves
+                // it (the regression requires it).
+                let _ = kill_tick_gated(c1, c1tick);
+                let end = Instant::now() + Duration::from_secs(10);
+                loop {
+                    // SAFETY: WNOHANG assist only — C1
+                    // reparented to init (reaps itself) or to
+                    // this suite (we reap).
+                    let mut st = 0;
+                    unsafe {
+                        libc::waitpid(c1, &mut st, libc::WNOHANG);
+                    }
+                    if proc_starttime(c1) != Ok(Some(c1tick)) {
+                        break;
+                    }
+                    assert!(Instant::now() < end, "orphaned victim child must die");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                eprintln!("R20011-C1-RETIRED");
                 eprintln!("skip: replacement steering missed");
                 return;
             }
@@ -19858,6 +19915,63 @@ mod tests {
             stderr.contains("R19003-PINFAIL-DONE"),
             "probe must cite completion\n{stderr}"
         );
+    }
+
+    /// R20-011: forced post-parent-death placement failures
+    /// must retire orphaned c1 before the skip returns — the
+    /// seam orphans c1 (kills+reaps pub1), then the
+    /// steering-fail and misplaced-reform paths skipped with
+    /// c1 live (912s strand holding a spent write end). Runs
+    /// the pin-failure probe twice (pre-steer and post-spawn
+    /// forcing — both post-parent-death shapes) and requires
+    /// the skip + the c1-retired citation each time. RED
+    /// (this shape): the skip returns with no citation (c1
+    /// stranded). GREEN: explicit skip-path cleanup cites.
+    /// Environmental probe skips propagate as skips; a
+    /// citation-less placement skip fails.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pin_failure_skip_retires_orphaned_c1() {
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        for mode in ["pre-steer", "post-spawn"] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg("fixture::linux::audit::tests::frame_pin_failure_reverifies_before_keeping_union")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R19003_PINFAIL", "1")
+                .env("SCOPEBASE_R20011_FORCE_MISS", mode)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "probe must complete the forced-miss case ({mode})\n{stderr}"
+            );
+            if stderr.contains("R20011-C1-RETIRED") {
+                assert!(
+                    stderr.contains("skip: replacement steering missed"),
+                    "forced miss must still skip ({mode})\n{stderr}"
+                );
+                continue;
+            }
+            // No citation: environmental skips propagate;
+            // a citation-less placement skip fails.
+            if stderr.lines().any(|line| {
+                line.contains("skip: ns_last_pid unreadable")
+                    || line.contains("skip: ns_last_pid unwritable")
+            }) {
+                eprintln!("skip (probe environmental, {mode})");
+                continue;
+            }
+            panic!("forced miss skipped without retiring c1 ({mode})\n{stderr}");
+        }
     }
 
     /// R20-006: a denied pin over a gone number must KEEP
@@ -20654,6 +20768,12 @@ else:
                 if state.fired {
                     return;
                 }
+                // R20-012 no-fire injection: the hook never
+                // fires for the victim (the from-audit !fired
+                // skip shape) — victim stays unkilled.
+                if std::env::var("SCOPEBASE_R20012_FORCE_NO_FIRE").is_ok() {
+                    return;
+                }
                 state.fired = true;
                 // In-window recycle: retire the victim, steer
                 // the forker's fork (same pipe!) onto its
@@ -20662,6 +20782,14 @@ else:
                 assert!(kill_tick_gated(vpid, vtick), "victim signaled");
                 let _ = victim.wait();
                 assert_eq!(proc_starttime(vpid), Ok(None), "victim number must free");
+                // R20-012 miss injection: steer refusal after
+                // the victim's kill (mirrors the
+                // audit-steer-refusal skip shape) — the
+                // forker stays staged, waiting on the flag.
+                if std::env::var("SCOPEBASE_R20012_FORCE_MISS").is_ok() {
+                    state.missed = true;
+                    return;
+                }
                 if !audit_steer_next_pid_unlocked(vpid) {
                     state.missed = true;
                     return;
@@ -20728,15 +20856,72 @@ else:
         let mut guard = state.borrow_mut();
         if guard.missed || !guard.fired {
             // Steering miss (or hook never fired — stage
-            // broken either way): park the stray + legit and
-            // skip loud.
+            // broken either way). R20-012: discharge EVERY
+            // staged process before skipping — a steer
+            // refusal left the flag-gated forker (no
+            // timeout) waiting forever holding the
+            // collection write end, and !fired left the
+            // victim unkilled.
             let stray = guard.stray.take();
+            let victim = guard.victim.take();
+            let forker = guard.forker.take();
             drop(guard);
             if let Some((spid, stick)) = stray {
                 park_stray(spid, stick);
             }
+            // Forker: raise the flag it waits on, bounded
+            // await its exit, then park the reported
+            // grandchild (sleeps 30s holding the write
+            // end — the flag-raise's own byproduct).
+            if let Some(mut forker) = forker {
+                let _ = std::fs::write(&flag_fork, "fork\n");
+                let end = Instant::now() + Duration::from_secs(10);
+                let ftick = proc_starttime(fpid).ok().flatten();
+                loop {
+                    match forker.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) if Instant::now() < end => {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(t) = ftick {
+                    let _ = kill_tick_gated(fpid, t);
+                }
+                let _ = forker.wait();
+                let end = Instant::now() + Duration::from_secs(10);
+                let forked: Option<libc::pid_t> = loop {
+                    if let Ok(text) = std::fs::read_to_string(&flag_forked) {
+                        if let Ok(parsed) = text.trim().parse() {
+                            break Some(parsed);
+                        }
+                    }
+                    if Instant::now() >= end {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                // The forker always reports before exiting:
+                // a missing report means the discharge is
+                // unproven — fail loud, never skip.
+                let forked = forked.expect("forker must report its fork for discharge");
+                let gtick = proc_starttime(forked).ok().flatten();
+                park_stray(forked, gtick);
+            }
+            // Victim: kill gated + reap (already reaped in
+            // the miss shape — `None` then — stranded and
+            // unkilled in the !fired shape).
+            if let Some(mut victim) = victim {
+                let _ = kill_tick_gated(vpid, vtick);
+                let _ = victim.wait();
+            }
             let _ = kill_tick_gated(lpid, ltick);
             let _ = legit.wait();
+            let _ = std::fs::remove_file(&flag_fork);
+            let _ = std::fs::remove_file(&flag_forked);
+            eprintln!("R20012-SKIP-DISCHARGED");
             eprintln!("skip: replacement steering missed");
             return;
         }
@@ -20746,9 +20931,12 @@ else:
         // (else the recycle never staged).
         if rtick == vtick {
             // Same-tick retake (S100): park and skip loud.
+            // (R20-012: hook already consumed forker/victim
+            // here — nothing staged remains.)
             park_stray(vpid, Some(rtick));
             let _ = kill_tick_gated(lpid, ltick);
             let _ = legit.wait();
+            eprintln!("R20012-SKIP-DISCHARGED");
             eprintln!("skip: same-tick retake (S100 — untestable this run)");
             return;
         }
@@ -20809,6 +20997,67 @@ else:
         park_stray(vpid, Some(rtick));
         let _ = std::fs::remove_file(&flag_fork);
         let _ = std::fs::remove_file(&flag_forked);
+    }
+
+    /// R20-012: forced skip shapes must discharge every
+    /// staged process before returning — the missed/!fired
+    /// skip parked stray+legit only: a steer refusal left
+    /// the flag-gated forker (no timeout) waiting forever
+    /// holding the collection write end, and !fired left the
+    /// victim unkilled. Runs the birth-bracket test twice
+    /// fresh-image (forced steer-refusal miss; forced
+    /// hook-not-fired) and requires the skip + the
+    /// discharge citation each time. RED (this shape): the
+    /// skip returns with no citation (forker/victim
+    /// stranded). GREEN: flag-raise + kill/reap retires all.
+    /// Environmental probe skips propagate as skips; a
+    /// citation-less placement skip fails.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn discovery_skip_discharges_staged_processes() {
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        for (var, mode) in [
+            ("SCOPEBASE_R20012_FORCE_MISS", "miss"),
+            ("SCOPEBASE_R20012_FORCE_NO_FIRE", "no-fire"),
+        ] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg("fixture::linux::audit::tests::discovery_pins_birth_across_pipe_evidence")
+                .arg("--nocapture")
+                .env(var, "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "probe must complete the forced-skip case ({mode})\n{stderr}"
+            );
+            if stderr.contains("R20012-SKIP-DISCHARGED") {
+                assert!(
+                    stderr.contains("skip: replacement steering missed"),
+                    "forced skip must still skip ({mode})\n{stderr}"
+                );
+                continue;
+            }
+            // No citation: environmental skips propagate;
+            // a citation-less placement skip fails.
+            if stderr.lines().any(|line| {
+                line.contains("skip: python3 unavailable")
+                    || line.contains("skip: ns_last_pid unreadable")
+                    || line.contains("skip: ns_last_pid unwritable")
+            }) {
+                eprintln!("skip (probe environmental, {mode})");
+                continue;
+            }
+            panic!("forced skip stranded staged processes ({mode})\n{stderr}");
+        }
     }
 
     /// R19-006: pipe discovery must verify identity and mode
