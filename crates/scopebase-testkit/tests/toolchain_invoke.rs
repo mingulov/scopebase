@@ -897,6 +897,31 @@ fn boot_ticks_now() -> Option<u64> {
     Some(now.tv_sec as u64 * hz + (now.tv_nsec as u64 * hz) / 1_000_000_000)
 }
 
+/// R23-008 (toolchain twin): ownership predicate for
+/// custody-scan candidates — mirror of the lib helper
+/// (our euid AND our session; fail-closed on unreadable
+/// evidence).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn task_owned_by_us(pid: i32) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    // SAFETY: geteuid/getsid query only.
+    let euid = unsafe { libc::geteuid() };
+    let ours = unsafe { libc::getsid(0) };
+    if ours < 0 {
+        return false;
+    }
+    let meta = match std::fs::metadata(format!("/proc/{pid}")) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    if meta.uid() != euid {
+        return false;
+    }
+    // SAFETY: getsid queries only (ESRCH on raced exit
+    // returns -1, never our session).
+    unsafe { libc::getsid(pid) == ours }
+}
+
 /// S112-round8: parent pid of a live task (field 4 of
 /// `/proc/PID/stat`). `None` when unreadable/gone — unproven, and
 /// the sweep spares unproven tasks.
@@ -4620,7 +4645,10 @@ fn middleman_guard_denied_pin_reports_unpinned() {
 /// `sleep dur` exists anywhere in /proc. R22-016(a):
 /// entry / cmdline read errors other than NotFound fail
 /// LOUD (mirror of the lib fix — swallowing them is
-/// false absence over live m2).
+/// false absence over live m2). R23-008: ownership-scoped
+/// (euid + session; window off — the oracle takes no
+/// anchor) but still fork-shape-exact argv0 (no basename:
+/// the R12 fallback's basename recheck keeps its meaning).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn live_sleep_with_dur(dur: &str) -> bool {
     let entries = std::fs::read_dir("/proc").expect("/proc readable");
@@ -4644,6 +4672,13 @@ fn live_sleep_with_dur(dur: &str) -> bool {
         let argv0 = args.next().unwrap_or_default();
         let argv1 = args.next().unwrap_or_default();
         if argv0 != b"sleep" || argv1 != dur.as_bytes() {
+            continue;
+        }
+        let pid: i32 = match name.parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        if !task_owned_by_us(pid) {
             continue;
         }
         match std::fs::read_to_string(format!("/proc/{name}/stat")) {
@@ -4779,12 +4814,50 @@ impl Drop for OutageHold {
     }
 }
 
-/// R22-008 (toolchain twin): collect (pid,
-/// starttime-tick) of every LIVE (non-zombie) `sleep
-/// dur` — mirror of the lib custody scan (NotFound
-/// skips; any other read error fails LOUD).
+/// R22-008 (toolchain twin): oracle scan — every LIVE
+/// (non-zombie) `sleep dur` in /proc that WE own (euid +
+/// session; window off — anchor 0). Mirror of the lib
+/// oracle scan (NotFound skips; any other read error
+/// fails LOUD).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn sleep_pids_with_dur(dur: &str) -> Vec<(i32, u64)> {
+    sleep_owned_pids_with_dur(dur, 0)
+}
+
+/// R23-009 (toolchain twin): argv predicate — `sleep
+/// <dur>` by basename (shared by the match and the
+/// post-stat re-verify so the two can never drift
+/// apart). Mirror of the lib predicate.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn cmdline_matches_sleep_dur(cmdline: &[u8], dur: &str) -> bool {
+    let mut args = cmdline.split(|b| *b == 0);
+    let argv0 = args.next().unwrap_or_default();
+    let argv1 = args.next().unwrap_or_default();
+    let base = argv0.rsplit(|b| *b == b'/').next().unwrap_or_default();
+    base == b"sleep" && argv1 == dur.as_bytes()
+}
+
+/// R23-008 (toolchain twin): ownership-scoped scan —
+/// mirror of the lib helper (basename argv0 + birth
+/// window `tick >= anchor` + euid + session).
+/// Production callers use this (no hook); the R23-009
+/// regression uses
+/// [`sleep_owned_pids_with_dur_with_hook`].
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn sleep_owned_pids_with_dur(dur: &str, anchor: u64) -> Vec<(i32, u64)> {
+    sleep_owned_pids_with_dur_with_hook(dur, anchor, None)
+}
+
+/// R23-009 (toolchain twin): seam for the recycle
+/// regression — `hook` runs after an argv match and
+/// before the stat read (the finding's window).
+/// Production callers pass `None`.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn sleep_owned_pids_with_dur_with_hook(
+    dur: &str,
+    anchor: u64,
+    hook: Option<&dyn Fn(i32)>,
+) -> Vec<(i32, u64)> {
     let mut found = Vec::new();
     let entries = std::fs::read_dir("/proc").expect("/proc readable");
     for entry in entries {
@@ -4805,24 +4878,47 @@ fn sleep_pids_with_dur(dur: &str) -> Vec<(i32, u64)> {
                 panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
             }
         };
-        let mut args = cmdline.split(|b| *b == 0);
-        let argv0 = args.next().unwrap_or_default();
-        let argv1 = args.next().unwrap_or_default();
         // Basename match: fork-exec'd sleeps carry argv0
         // "sleep", Command-spawned ones (the pair
         // publisher) "/bin/sleep" — the R12 fallback
         // sweeps the latter. Unique durations keep both
         // shapes disjoint.
-        let base = argv0.rsplit(|b| *b == b'/').next().unwrap_or_default();
-        if base != b"sleep" || argv1 != dur.as_bytes() {
+        if !cmdline_matches_sleep_dur(&cmdline, dur) {
             continue;
         }
         let pid: i32 = match name.parse() {
             Ok(pid) => pid,
             Err(_) => continue,
         };
+        if let Some(hook) = hook {
+            hook(pid);
+        }
         match task_starttime_checked(pid) {
             Ok(Some(tick)) => {
+                // R23-009: bind the argv to the tick — a
+                // recycle between the cmdline and stat reads
+                // shows the replacement's argv here;
+                // nonmatching ⟹ skip (the old code
+                // authenticated the replacement's tick with
+                // the former occupant's argv, then killed
+                // it). Read-error discipline as above
+                // (NotFound skips; else LOUD).
+                let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+                    Ok(cmdline2) => cmdline2,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        panic!("custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}")
+                    }
+                };
+                if !cmdline_matches_sleep_dur(&cmdline2, dur) {
+                    continue;
+                }
+                if tick < anchor {
+                    continue;
+                }
+                if !task_owned_by_us(pid) {
+                    continue;
+                }
                 let live = std::fs::read_to_string(format!("/proc/{pid}/stat"))
                     .ok()
                     .and_then(|text| {
@@ -4845,15 +4941,20 @@ fn sleep_pids_with_dur(dur: &str) -> Vec<(i32, u64)> {
 /// unknown-pid m2 — mirror of the lib helper
 /// (tick-gated SIGKILL per scanned birth + bounded drain
 /// + re-scan; true when no LIVE `sleep dur` remains).
+///
+/// R23-008: the anchor is captured by the CALLER at
+/// wrapper entry / pre-staging time; the trailing
+/// re-scan shares it (basename-aware — the exact-argv0
+/// `live_` oracle no longer trails here).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn kill_sleep_with_dur(dur: &str) -> bool {
-    for (pid, tick) in sleep_pids_with_dur(dur) {
+fn kill_sleep_with_dur(dur: &str, anchor: u64) -> bool {
+    for (pid, tick) in sleep_owned_pids_with_dur(dur, anchor) {
         kill_tick_gated(pid, tick);
         if !birth_drained_007(pid, tick, std::time::Duration::from_secs(5)) {
             return false;
         }
     }
-    !live_sleep_with_dur(dur)
+    sleep_owned_pids_with_dur(dur, anchor).is_empty()
 }
 
 /// R22-014 (toolchain twin): fault-leg duration
@@ -4864,21 +4965,112 @@ fn r22014_sleep_dur(default: &'static str) -> String {
     std::env::var("SCOPEBASE_R22014_SLEEP_DUR").unwrap_or_else(|_| default.to_string())
 }
 
+/// R23-010 (toolchain twin): argv predicate —
+/// `scopebase-pair-publisher <dur>`, tail-agnostic.
+/// Mirror of the lib predicate.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn cmdline_matches_publisher_dur(cmdline: &[u8], dur: &str) -> bool {
+    let mut args = cmdline.split(|b| *b == 0);
+    let argv0 = args.next().unwrap_or_default();
+    let argv1 = args.next().unwrap_or_default();
+    let base = argv0.rsplit(|b| *b == b'/').next().unwrap_or_default();
+    base == b"scopebase-pair-publisher" && argv1 == dur.as_bytes()
+}
+
+/// R23-010 (toolchain twin): ownership-scoped publisher
+/// scan — mirror of the lib helper (same window +
+/// ownership + post-stat argv re-verify, no hook seam).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn scan_owned_publishers_with_dur(dur: &str, anchor: u64) -> Vec<(i32, u64)> {
+    let mut found = Vec::new();
+    let entries = std::fs::read_dir("/proc").expect("/proc readable");
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("custody scan: readdir mid-scan failed: {error}"),
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
+            Ok(c) => c,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
+            }
+        };
+        if !cmdline_matches_publisher_dur(&cmdline, dur) {
+            continue;
+        }
+        let pid: i32 = match name.parse() {
+            Ok(pid) => pid,
+            Err(_) => continue,
+        };
+        match task_starttime_checked(pid) {
+            Ok(Some(tick)) => {
+                let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+                    Ok(cmdline2) => cmdline2,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        panic!("custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}")
+                    }
+                };
+                if !cmdline_matches_publisher_dur(&cmdline2, dur) {
+                    continue;
+                }
+                if tick < anchor {
+                    continue;
+                }
+                if !task_owned_by_us(pid) {
+                    continue;
+                }
+                let live = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|text| {
+                        text.rsplit_once(") ").and_then(|(_, after)| {
+                            after.split_whitespace().next().map(str::to_string)
+                        })
+                    });
+                if live.as_deref() != Some("Z") {
+                    found.push((pid, tick));
+                }
+            }
+            Ok(None) => continue,
+            Err(error) => panic!("custody scan: stat unreadable mid-scan: {error}"),
+        }
+    }
+    found
+}
+
 /// R22-014/R12 (toolchain twin): fallback custody sweep
 /// — mirror of the lib helper (the probe died before
 /// transmitting its SLEEPER line; sweep by the unique
-/// duration). Returns the swept count.
+/// duration). Returns the swept count. R23-008: the
+/// anchor is captured by the CALLER (wrapper entry /
+/// pre-staging). R23-010: the orphaned PUBLISHER is
+/// retired FIRST (mirror of the lib fix).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-fn r22006_fallback_sweep_sleep(dur: &str) -> usize {
-    let swept = sleep_pids_with_dur(dur).len();
+fn r22006_fallback_sweep_sleep(dur: &str, anchor: u64) -> usize {
+    for (pid, tick) in scan_owned_publishers_with_dur(dur, anchor) {
+        kill_tick_gated(pid, tick);
+        assert!(
+            birth_drained_007(pid, tick, std::time::Duration::from_secs(5)),
+            "R12 fallback: publisher {pid} must die by our kill"
+        );
+        eprintln!("R12 fallback: retired orphaned publisher {pid} (tick {tick})");
+    }
+    let swept = sleep_owned_pids_with_dur(dur, anchor).len();
     assert!(
-        kill_sleep_with_dur(dur),
+        kill_sleep_with_dur(dur, anchor),
         "R12 fallback: live sleep-{dur} survived the sweep"
     );
-    // Basename recheck (kill_'s trailing live_ scan is
-    // fork-shape-exact — blind to "/bin/sleep").
+    // Second re-scan (same window — custody never trusts
+    // a single pass).
     assert!(
-        sleep_pids_with_dur(dur).is_empty(),
+        sleep_owned_pids_with_dur(dur, anchor).is_empty(),
         "R12 fallback: live sleep-{dur} survived the sweep"
     );
     swept
@@ -4929,6 +5121,9 @@ fn reportless_fallback_kills_group_unconditionally() {
         reportless_fallback_kills_group_unconditionally_probe();
         return;
     }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before the probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
     let outcome = run_fresh_probe_collect(
         "SCOPEBASE_R22008_FALLBACK_TWIN",
         "reportless_fallback_kills_group_unconditionally",
@@ -4957,7 +5152,7 @@ fn reportless_fallback_kills_group_unconditionally() {
         "wrapper must drain m1"
     );
     assert!(
-        kill_sleep_with_dur("854"),
+        kill_sleep_with_dur("854", anchor),
         "wrapper must drain the residual sleep 854"
     );
     assert!(!outcome.timed_out, "probe must complete\n{stderr}");
@@ -5097,6 +5292,9 @@ fn reportless_probe_denied_stays_unresolved() {
         reportless_probe_denied_stays_unresolved_probe();
         return;
     }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before the probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
     let outcome = run_fresh_probe_collect(
         "SCOPEBASE_R22009_DENY_KILLPG_TWIN",
         "reportless_probe_denied_stays_unresolved",
@@ -5121,7 +5319,7 @@ fn reportless_probe_denied_stays_unresolved() {
         "wrapper must drain m1"
     );
     assert!(
-        kill_sleep_with_dur("856"),
+        kill_sleep_with_dur("856", anchor),
         "wrapper must drain the live sleep 856"
     );
     // R23-002: explicit unsupported_arch skip (custody
@@ -10816,6 +11014,9 @@ fn publisher_guard_denied_kill_reports_unresolved() {
         publisher_guard_denied_kill_reports_unresolved_probe();
         return;
     }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before the probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
     let out = run_fresh_probe_bounded(
         "SCOPEBASE_R22006_DENY_KILL_TWIN",
         "publisher_guard_denied_kill_reports_unresolved",
@@ -10835,7 +11036,7 @@ fn publisher_guard_denied_kill_reports_unresolved() {
     let (sleeper, stick) = match parse_r22006_sleeper(&stdout) {
         Some(pair) => pair,
         None => {
-            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("986"));
+            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("986"), anchor);
             if let Some(errlog) = parse_r22006_errlog(&stdout) {
                 let _ = std::fs::remove_file(&errlog);
             }
@@ -10959,6 +11160,9 @@ fn publisher_guard_denied_wait_reports_unresolved() {
         publisher_guard_denied_wait_reports_unresolved_probe();
         return;
     }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before the probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
     let out = run_fresh_probe_bounded(
         "SCOPEBASE_R22006_DENY_WAIT_TWIN",
         "publisher_guard_denied_wait_reports_unresolved",
@@ -10970,7 +11174,7 @@ fn publisher_guard_denied_wait_reports_unresolved() {
     let (sleeper, _stick) = match parse_r22006_sleeper(&stdout) {
         Some(pair) => pair,
         None => {
-            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("987"));
+            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("987"), anchor);
             if let Some(errlog) = parse_r22006_errlog(&stdout) {
                 let _ = std::fs::remove_file(&errlog);
             }
@@ -11077,6 +11281,429 @@ fn r22006_wait_fallback_sweeps_untransmitted_sleeper() {
     assert!(
         sleep_pids_with_dur("843").is_empty(),
         "no live sleep-843 may survive the fallback"
+    );
+}
+
+/// R23-008/009 (toolchain twin): leg-local drop guard
+/// (kill-only — detached reapers or explicit waitpids
+/// handle the reap, so the drop never blocks or
+/// panics). Pre-pin (`None`) the raw kill is still
+/// sound: our own unreaped child.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct LegChildGuard {
+    pid: i32,
+    tick: Option<u64>,
+    disarmed: bool,
+}
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for LegChildGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        match self.tick {
+            Some(tick) => {
+                kill_tick_gated(self.pid, tick);
+            }
+            None => {
+                // SAFETY: signal to our own unreaped
+                // child (or ESRCH nop); errors ignored.
+                unsafe {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// R23-008 (toolchain twin): mirror of the lib leg — a
+/// STALE unrelated `sleep 872` must survive the R12
+/// fallback sweep; only the fresh fixture birth is
+/// retired. RED (old duration-only scan: swept-2 +
+/// unrelated gone). Duration 872 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22006_fallback_spares_stale_unrelated_sleeper() {
+    use std::time::Duration;
+    // 1. Unrelated FIRST (stale by fallback time — the 25
+    // ms sleep crosses a jiffy boundary, so its tick is
+    // strictly below the pre-staging anchor).
+    let mut unrelated = std::process::Command::new("/bin/sleep")
+        .arg("872")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("staging broken (unrelated spawn)");
+    let upid = unrelated.id() as i32;
+    let mut _uguard = LegChildGuard {
+        pid: upid,
+        tick: None,
+        disarmed: false,
+    };
+    std::thread::spawn(move || {
+        let mut status = 0;
+        // SAFETY: waitpid on the known own child; errors ignored.
+        unsafe {
+            libc::waitpid(upid, &mut status, 0);
+        }
+    });
+    let utick = task_starttime_checked(upid)
+        .expect("staging broken (unrelated stat)")
+        .expect("staging broken (unrelated visible)");
+    _uguard.tick = Some(utick);
+    std::thread::sleep(Duration::from_millis(25));
+    // Ownership anchor: post-stale-sleep (strictly past
+    // the unrelated's tick), pre-fixture (at-or-before
+    // the fixture's tick) — deterministic both sides.
+    let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+    // 2. The faulted fixture: a fresh sleep-872 of unknown
+    // birth (the R12 shape — direct fallback, no line).
+    let mut fixture = std::process::Command::new("/bin/sleep")
+        .arg("872")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("staging broken (fixture spawn)");
+    let fpid = fixture.id() as i32;
+    let mut _fguard = LegChildGuard {
+        pid: fpid,
+        tick: None,
+        disarmed: false,
+    };
+    std::thread::spawn(move || {
+        let mut status = 0;
+        // SAFETY: waitpid on the known own child; errors ignored.
+        unsafe {
+            libc::waitpid(fpid, &mut status, 0);
+        }
+    });
+    let ftick = task_starttime_checked(fpid)
+        .expect("staging broken (fixture stat)")
+        .expect("staging broken (fixture visible)");
+    _fguard.tick = Some(ftick);
+    assert!(
+        ftick > utick,
+        "staging broken (staleness unreal: {utick} vs {ftick})"
+    );
+    assert_eq!(
+        sleep_pids_with_dur("872").len(),
+        2,
+        "staging broken (scan must see both sleep-872 births)"
+    );
+    // 3. The wrapper's R12 path, direct.
+    let swept = r22006_fallback_sweep_sleep("872", anchor);
+    assert_eq!(swept, 1, "fallback must sweep exactly the fixture");
+    // 4. Fixture birth drained; unrelated survives as the
+    // SAME birth.
+    match task_starttime_checked(fpid) {
+        Ok(None) => {}
+        Ok(Some(now)) => assert_ne!(now, ftick, "fixture birth must be retired"),
+        Err(error) => panic!("fixture drainage unverifiable: {error}"),
+    }
+    assert_eq!(
+        task_starttime_checked(upid),
+        Ok(Some(utick)),
+        "stale unrelated sleeper must survive as the same birth"
+    );
+    // 5. Explicit retire (no litter) + disarm + reap.
+    kill_tick_gated(upid, utick);
+    assert!(
+        birth_drained_007(upid, utick, Duration::from_secs(5)),
+        "unrelated retire must land"
+    );
+    _uguard.disarmed = true;
+    let _ = unrelated.wait();
+    kill_tick_gated(fpid, ftick);
+    assert!(
+        birth_drained_007(fpid, ftick, Duration::from_secs(5)),
+        "fixture retire must land"
+    );
+    _fguard.disarmed = true;
+    let _ = fixture.wait();
+}
+
+/// R23-009 (toolchain twin): mirror of the lib leg — the
+/// scan hook swaps the candidate between the cmdline and
+/// stat reads; the steered replacement (different birth,
+/// nonmatching `sleep 31` argv) must be EXCLUDED from the
+/// scan and left untouched by the backstop. RED (no argv
+/// re-verify: the scan authenticates the replacement's
+/// tick with the former occupant's argv and the backstop
+/// kills it). Duration 875 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22008_backstop_binds_argv_to_tick_across_recycle() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::time::Duration;
+    // Steering serial hold + writability proof (mirror of
+    // the R12-002 prologue — skip when unsteerable).
+    let _steer = STEER_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_path = "/proc/sys/kernel/ns_last_pid";
+    let last_before = match std::fs::read_to_string(last_path) {
+        Ok(text) => text.trim().to_string(),
+        Err(_) => {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+    };
+    if !locked_steer_next_pid(last_before.parse::<i32>().unwrap_or(0) + 1) {
+        eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+        return;
+    }
+    locked_restore_hint(&last_before);
+    // Anchor pre-staging (candidate + replacement both
+    // in-window — the window must not interfere with the
+    // binding proof).
+    let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+    // Candidate sleep-875 (own child, behind a mutex so
+    // the hook can reap it; the guard covers panic
+    // paths).
+    let candidate = std::process::Command::new("/bin/sleep")
+        .arg("875")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("staging broken (candidate spawn)");
+    let cpid = candidate.id() as i32;
+    let mut _cguard = LegChildGuard {
+        pid: cpid,
+        tick: None,
+        disarmed: false,
+    };
+    let ctick = task_starttime_checked(cpid)
+        .expect("staging broken (candidate stat)")
+        .expect("staging broken (candidate visible)");
+    _cguard.tick = Some(ctick);
+    let candidate_slot = Mutex::new(Some(candidate));
+    // Shared hook state (fire-once).
+    let fired = AtomicBool::new(false);
+    let skipped = AtomicBool::new(false);
+    let placed: Mutex<Option<(std::process::Child, LegChildGuard, u64)>> = Mutex::new(None);
+    let hook = |pid: i32| {
+        if pid != cpid || fired.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        kill_tick_gated(pid, ctick);
+        {
+            let mut slot = candidate_slot.lock().unwrap();
+            let child = slot.as_mut().expect("staging broken (candidate slot?)");
+            wait_child_unless_reaped(child, pid, ctick);
+        }
+        // Steered plant (mirror of the R12-002 placement
+        // loop — flock across steer-then-spawn, restore
+        // after the drop, same-tick retries inside).
+        let mut replacement: Option<(std::process::Child, u64)> = None;
+        let _nsflock = ns_last_pid_flock();
+        for _ in 0..100 {
+            if !steer_next_pid_unlocked(pid) {
+                break;
+            }
+            let mut cand = std::process::Command::new("/bin/sleep")
+                .arg("31")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("standin spawns");
+            if cand.id() as i32 != pid {
+                let _ = cand.kill();
+                let _ = cand.wait();
+                continue;
+            }
+            match task_starttime_checked(pid) {
+                Ok(Some(tick)) if tick != ctick => {
+                    replacement = Some((cand, tick));
+                    break;
+                }
+                _ => {
+                    let _ = cand.kill();
+                    let _ = cand.wait();
+                    continue;
+                }
+            }
+        }
+        drop(_nsflock);
+        locked_restore_hint(&last_before);
+        match replacement {
+            Some((kid, retick)) => {
+                let cmd = std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .expect("staging broken (replacement cmdline)");
+                assert!(
+                    !cmdline_matches_sleep_dur(&cmd, "875"),
+                    "staging broken (replacement matches?)"
+                );
+                let rguard = LegChildGuard {
+                    pid,
+                    tick: Some(retick),
+                    disarmed: false,
+                };
+                *placed.lock().unwrap() = Some((kid, rguard, retick));
+            }
+            None => {
+                skipped.store(true, Ordering::SeqCst);
+            }
+        }
+    };
+    // Drive the scan through the seam.
+    let found = sleep_owned_pids_with_dur_with_hook("875", anchor, Some(&hook));
+    // Contended plant → skip loud (the candidate is
+    // already dead + reaped — nothing litters).
+    if skipped.load(Ordering::SeqCst) {
+        eprintln!("skip: replacement planting contended (retake squatted)");
+        let _ = candidate_slot
+            .lock()
+            .unwrap()
+            .as_mut()
+            .map(|child| child.wait());
+        _cguard.disarmed = true;
+        return;
+    }
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "staging broken (hook never fired)"
+    );
+    let (mut kid, mut rguard, retick) = placed
+        .lock()
+        .unwrap()
+        .take()
+        .expect("staging broken (fired but no plant?)");
+    // The binding proof: a recycled number whose holder
+    // changed argv mid-observation is excluded.
+    assert!(
+        found.is_empty(),
+        "recycled candidate must be excluded, got: {found:?}"
+    );
+    // End-to-end: the backstop must not touch it either
+    // (this also covers the twin `kill_sleep_with_dur`
+    // rewire — the R23-008 twin leg drives the fallback).
+    assert!(
+        kill_sleep_with_dur("875", anchor),
+        "backstop must drain clean (recycled candidate excluded)"
+    );
+    assert_eq!(
+        task_starttime_checked(cpid),
+        Ok(Some(retick)),
+        "replacement must survive untouched as the same birth"
+    );
+    // Explicit retire (no litter) + disarm + reap (reap
+    // BEFORE the drain poll — our own child zombies until
+    // reaped; no detached reaper runs in this leg).
+    kill_tick_gated(cpid, retick);
+    let _ = kid.wait();
+    assert!(
+        birth_drained_007(cpid, retick, Duration::from_secs(5)),
+        "replacement retire must land"
+    );
+    rguard.disarmed = true;
+    let _ = candidate_slot
+        .lock()
+        .unwrap()
+        .as_mut()
+        .map(|child| child.wait());
+    _cguard.disarmed = true;
+}
+
+/// R23-010 (toolchain twin): mirror of the lib leg — hold
+/// the publisher pre-spawn (no probe — probe-death by
+/// absence), run the R12 fallback, release the hold, and
+/// prove no sleeper ever appears. RED
+/// (publisher-unaware fallback: the released publisher
+/// spawns sleep-877 late). Duration 877 is unique to this
+/// test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22006_fallback_retires_held_publisher_before_sweep() {
+    use std::io::BufRead as _;
+    use std::time::{Duration, Instant};
+    // Hold flag (absent = held).
+    let flag = std::env::temp_dir().join(format!(
+        "scopebase-r23010-hold-{}-{}.flag",
+        std::process::id(),
+        errlog_nonce()
+    ));
+    let _ = std::fs::remove_file(&flag);
+    // Anchor pre-staging.
+    let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+    // Held publisher (own child; guard + detached reaper
+    // as usual — the fallback's drain polls for
+    // tick-gone).
+    let mut publisher = std::process::Command::new(pair_publisher_bin())
+        .arg("877")
+        .arg("wait")
+        .env("SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD", &flag)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("staging broken (publisher spawn)");
+    let ppid = publisher.id() as i32;
+    let mut _pguard = LegChildGuard {
+        pid: ppid,
+        tick: None,
+        disarmed: false,
+    };
+    std::thread::spawn(move || {
+        let mut status = 0;
+        // SAFETY: waitpid on the known own child; errors ignored.
+        unsafe {
+            libc::waitpid(ppid, &mut status, 0);
+        }
+    });
+    let ptick = task_starttime_checked(ppid)
+        .expect("staging broken (publisher stat)")
+        .expect("staging broken (publisher visible)");
+    _pguard.tick = Some(ptick);
+    // 1. Hold proof: the readiness line (no settling
+    // sleeps) + no sleep-877 born yet. The reader stays
+    // alive for the whole leg (a dropped read end EPIPEs
+    // the released publisher's pair print — its guard
+    // would kill the sleeper and vacate the regression).
+    let mut line = String::new();
+    let mut _held_stdout =
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"));
+    _held_stdout
+        .read_line(&mut line)
+        .expect("held line readable");
+    assert!(
+        line.contains("R23010-HELD"),
+        "staging broken (no hold proof: {line:?})"
+    );
+    assert!(
+        sleep_pids_with_dur("877").is_empty(),
+        "staging broken (sleeper pre-born?)"
+    );
+    // 2. The wrapper's R12 path (no probe — probe-death by
+    // absence).
+    let swept = r22006_fallback_sweep_sleep("877", anchor);
+    assert_eq!(swept, 0, "no sleeper exists to sweep (held pre-spawn)");
+    // 3. Release + poll 1 s for a late birth (collect,
+    // never assert yet — custody before verdicts).
+    std::fs::write(&flag, "go").expect("staging broken (flag write)");
+    let end = Instant::now() + Duration::from_secs(1);
+    let mut appeared = false;
+    while Instant::now() < end {
+        if !sleep_pids_with_dur("877").is_empty() {
+            appeared = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // 4. Custody BEFORE verdicts (RED-safe): retire the
+    // publisher + sweep any late sleeper, then judge.
+    kill_tick_gated(ppid, ptick);
+    let _ = publisher.wait();
+    let _ = r22006_fallback_sweep_sleep("877", anchor);
+    let _ = std::fs::remove_file(&flag);
+    _pguard.disarmed = true;
+    assert!(
+        !appeared,
+        "late sleeper appeared — the fallback did not retire the held publisher"
     );
 }
 

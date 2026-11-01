@@ -38,6 +38,13 @@
 //! Hook: SCOPEBASE_PUBLISHER_PAUSE_TIMEOUT_MS=ms — override
 //!   the pause bound (regression only: fail the pause path
 //!   promptly). Unset = 30000. Unparsable fails loud.
+//! Hook: SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD=path — when set
+//!   and the path is absent, print R23010-HELD, then wait
+//!   (bounded by the pause timeout above) for the path to
+//!   appear BEFORE spawning the sleep (R23-010 regression
+//!   staging: hold the publisher pre-spawn, prove the
+//!   wrapper retires it before any sleeper can appear).
+//!   Unset env = no-op.
 //! Hook: SCOPEBASE_PUBLISHER_FAULT_STEP=step — force the
 //!   named post-spawn step to fail (regression only: prove
 //!   each producer step fails loud + discharged). One of
@@ -270,6 +277,23 @@ fn main() {
     // pre-spawn like the others: nothing staged on typo...
     // a bool has no typo shape, so presence alone arms).
     let deny_wait = std::env::var("SCOPEBASE_PUBLISHER_DENY_WAIT").is_ok();
+    // R23-010 regression hook (pre-spawn hold — unset =
+    // no-op; expiry fails loud with nothing staged). Prints
+    // R23010-HELD on hold entry (readiness proof — the
+    // wrapper must observe it before sweeping).
+    if let Ok(flag) = std::env::var("SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD") {
+        println!("R23010-HELD");
+        std::io::stdout()
+            .flush()
+            .unwrap_or_else(|error| fail(&format!("held line unflushable: {error}")));
+        let end = std::time::Instant::now() + std::time::Duration::from_millis(pause_timeout_ms);
+        while !std::path::Path::new(&flag).exists() {
+            if std::time::Instant::now() >= end {
+                fail("pre-spawn hold flag never appeared (stage broken)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
     // Spawn with inherited stdio (exactly the shell
     // script's topology: the sleep holds our stdout pipe).
     // The "exit 0" tail deliberately never waits (the

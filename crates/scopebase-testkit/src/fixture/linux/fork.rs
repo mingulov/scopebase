@@ -1794,46 +1794,11 @@ mod tests {
     /// other than NotFound fail LOUD too (one free slot
     /// plus EMFILE ⟹ opendir consumes it and every
     /// cmdline read fails — swallowing that is false
-    /// absence over live m2).
+    /// absence over live m2). R23-008: ownership-scoped
+    /// (euid + session; window off) — absence means OUR
+    /// fixture drained.
     fn live_sleep_with_dur(dur: &str) -> bool {
-        let entries = std::fs::read_dir("/proc").expect("/proc readable");
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => panic!("readdir mid-scan failed: {error}"),
-            };
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !name.bytes().all(|b| b.is_ascii_digit()) {
-                continue;
-            }
-            let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
-                Ok(c) => c,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => panic!("/proc/{name}/cmdline unreadable mid-scan: {error}"),
-            };
-            let mut args = cmdline.split(|b| *b == 0);
-            let argv0 = args.next().unwrap_or_default();
-            let argv1 = args.next().unwrap_or_default();
-            if argv0 != b"sleep" || argv1 != dur.as_bytes() {
-                continue;
-            }
-            // Candidate: live or zombie?
-            match std::fs::read_to_string(format!("/proc/{name}/stat")) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => panic!("/proc/{name}/stat unreadable mid-scan: {error}"),
-                Ok(text) => {
-                    let state = text
-                        .rsplit_once(") ")
-                        .and_then(|(_, after)| after.split_whitespace().next());
-                    if state != Some("Z") {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        !sleep_owned_pids_with_dur(dur, 0).is_empty()
     }
 
     /// R21-008: a jammed report post-second-fork fully
@@ -1939,6 +1904,9 @@ mod tests {
             reportless_fallback_kills_group_unconditionally_probe();
             return;
         }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before the probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
         let outcome = run_fresh_probe_collect(
             "SCOPEBASE_R22008_FALLBACK",
             "reportless_fallback_kills_group_unconditionally",
@@ -1970,7 +1938,7 @@ mod tests {
             "wrapper must drain m1"
         );
         assert!(
-            kill_sleep_with_dur("853"),
+            kill_sleep_with_dur("853", anchor),
             "wrapper must drain the residual sleep 853"
         );
         assert!(!outcome.timed_out, "probe must complete\n{stderr}");
@@ -1991,6 +1959,291 @@ mod tests {
             stderr.contains("R22008-ASSUMED-GROUPED"),
             "fallback must cite the assumed-grouped kill\n{stderr}"
         );
+    }
+
+    /// R23-008: a STALE unrelated `sleep 871` (born before
+    /// the backstop runs) must survive `kill_sleep_with_dur`;
+    /// only the fresh fixture birth is retired. RED (old
+    /// duration-only scan: the stale sleeper is killed too).
+    /// Duration 871 is unique to this test.
+    /// R23-008/009: leg-local drop guard (kill-only —
+    /// detached reapers or explicit waitpids handle the
+    /// reap, so the drop never blocks or panics).
+    /// Pre-pin (`None`) the raw kill is still sound: the
+    /// target is our own unreaped child (the reservation
+    /// holds from spawn).
+    struct LegChildGuard {
+        pid: libc::pid_t,
+        tick: Option<u64>,
+        disarmed: bool,
+    }
+    impl Drop for LegChildGuard {
+        fn drop(&mut self) {
+            if self.disarmed {
+                return;
+            }
+            match self.tick {
+                Some(tick) => {
+                    kill_tick_gated_fork(self.pid, tick);
+                }
+                None => {
+                    // SAFETY: signal to our own unreaped
+                    // child (or ESRCH nop); errors ignored.
+                    unsafe {
+                        libc::kill(self.pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn r22008_backstop_spares_stale_unrelated_sleeper() {
+        use std::time::Duration;
+        // 1. Unrelated FIRST (stale by backstop time — the
+        // 25 ms sleep crosses a jiffy boundary, so its tick
+        // is strictly below the kill-time anchor). `sleep`
+        // (PATH-searched) keeps argv0 bare — the fork
+        // scanners match fork-shape-exact argv0.
+        let mut unrelated = std::process::Command::new("sleep")
+            .arg("871")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (unrelated spawn)");
+        let upid = unrelated.id() as libc::pid_t;
+        let mut _uguard = LegChildGuard {
+            pid: upid,
+            tick: None,
+            disarmed: false,
+        };
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(upid, &mut status, 0);
+            }
+        });
+        let utick = fork_starttime(upid)
+            .expect("staging broken (unrelated stat)")
+            .expect("staging broken (unrelated visible)");
+        _uguard.tick = Some(utick);
+        std::thread::sleep(Duration::from_millis(25));
+        // Ownership anchor: post-stale-sleep (strictly past
+        // the unrelated's tick), pre-fixture (at-or-before
+        // the fixture's tick) — deterministic both sides.
+        let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+        // 2. The faulted fixture: a fresh sleep-871 of
+        // unknown birth (the backstop shape — direct, no
+        // line).
+        let mut fixture = std::process::Command::new("sleep")
+            .arg("871")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (fixture spawn)");
+        let fpid = fixture.id() as libc::pid_t;
+        let mut _fguard = LegChildGuard {
+            pid: fpid,
+            tick: None,
+            disarmed: false,
+        };
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(fpid, &mut status, 0);
+            }
+        });
+        let ftick = fork_starttime(fpid)
+            .expect("staging broken (fixture stat)")
+            .expect("staging broken (fixture visible)");
+        _fguard.tick = Some(ftick);
+        assert!(
+            ftick > utick,
+            "staging broken (staleness unreal: {utick} vs {ftick})"
+        );
+        assert_eq!(
+            sleep_pids_with_dur("871").len(),
+            2,
+            "staging broken (scan must see both sleep-871 births)"
+        );
+        // 3. The wrapper's backstop path, direct.
+        assert!(
+            kill_sleep_with_dur("871", anchor),
+            "backstop must drain the fixture"
+        );
+        // 4. Fixture birth drained; unrelated survives as
+        // the SAME birth.
+        match fork_starttime(fpid) {
+            Ok(None) => {}
+            Ok(Some(now)) => assert_ne!(now, ftick, "fixture birth must be retired"),
+            Err(error) => panic!("fixture drainage unverifiable: {error}"),
+        }
+        assert_eq!(
+            fork_starttime(upid),
+            Ok(Some(utick)),
+            "stale unrelated sleeper must survive as the same birth"
+        );
+        // 5. Explicit retire (no litter) + disarm + reap.
+        kill_tick_gated_fork(upid, utick);
+        assert!(
+            birth_drained(upid, utick, Duration::from_secs(5)),
+            "unrelated retire must land"
+        );
+        _uguard.disarmed = true;
+        let _ = unrelated.wait();
+        kill_tick_gated_fork(fpid, ftick);
+        assert!(
+            birth_drained(fpid, ftick, Duration::from_secs(5)),
+            "fixture retire must land"
+        );
+        _fguard.disarmed = true;
+        let _ = fixture.wait();
+    }
+
+    /// R23-009: the scan hook swaps the candidate between
+    /// the cmdline and stat reads — the steered
+    /// replacement (different birth, nonmatching
+    /// `/bin/sleep 31` argv) must be EXCLUDED from the scan
+    /// and left untouched by the backstop. RED (no argv
+    /// re-verify: the scan authenticates the replacement's
+    /// tick with the former occupant's argv and the
+    /// backstop kills it). Duration 874 is unique to this
+    /// test.
+    #[test]
+    fn r22008_backstop_binds_argv_to_tick_across_recycle() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        use std::time::Duration;
+        // Steering serial hold + writability proof (skip
+        // when unsteerable — established precedent).
+        let _serial = FORK_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return;
+            }
+        };
+        {
+            // Writability probe (locked steer + restore —
+            // mirrors audit's `steer_hold` prologue; the
+            // restore is best-effort, never load-bearing).
+            let _probe = fork_pid_flock();
+            if !fork_steer_next_pid_unlocked(last_before.parse::<i32>().unwrap_or(0) + 1) {
+                eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+                return;
+            }
+            let _ = std::fs::write(last_path, &last_before);
+        }
+        // Anchor pre-staging (candidate + replacement both
+        // in-window — the window must not interfere with
+        // the binding proof).
+        let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+        // Candidate sleep-874 (bare argv0 — the fork
+        // scanners match fork-shape-exact argv0).
+        let mut candidate = std::process::Command::new("sleep")
+            .arg("874")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (candidate spawn)");
+        let cpid = candidate.id() as libc::pid_t;
+        let mut _cguard = LegChildGuard {
+            pid: cpid,
+            tick: None,
+            disarmed: false,
+        };
+        let ctick = fork_starttime(cpid)
+            .expect("staging broken (candidate stat)")
+            .expect("staging broken (candidate visible)");
+        _cguard.tick = Some(ctick);
+        // Shared hook state (fire-once).
+        let fired = AtomicBool::new(false);
+        let skipped = AtomicBool::new(false);
+        let placed: Mutex<Option<(std::process::Child, LegChildGuard, u64)>> = Mutex::new(None);
+        let hook = |pid: libc::pid_t| {
+            if pid != cpid || fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            kill_tick_gated_fork(pid, ctick);
+            reap_child_bounded(pid, "R23-009");
+            match fork_plant_sleep_onto(pid, "31", ctick) {
+                Some((kid, retick)) => {
+                    let cmd = std::fs::read(format!("/proc/{pid}/cmdline"))
+                        .expect("staging broken (replacement cmdline)");
+                    assert!(
+                        !cmdline_matches_sleep_dur_exact(&cmd, "874"),
+                        "staging broken (replacement matches?)"
+                    );
+                    let rguard = LegChildGuard {
+                        pid,
+                        tick: Some(retick),
+                        disarmed: false,
+                    };
+                    *placed.lock().unwrap() = Some((kid, rguard, retick));
+                }
+                None => {
+                    skipped.store(true, Ordering::SeqCst);
+                }
+            }
+        };
+        // Drive the scan through the seam.
+        let found = sleep_owned_pids_with_dur_with_hook("874", anchor, Some(&hook));
+        // Contended plant → skip loud (the candidate is
+        // already dead + reaped — nothing litters).
+        if skipped.load(Ordering::SeqCst) {
+            eprintln!("skip: replacement planting contended (retake squatted)");
+            let _ = candidate.wait();
+            _cguard.disarmed = true;
+            return;
+        }
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "staging broken (hook never fired)"
+        );
+        let (mut kid, mut rguard, retick) = placed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("staging broken (fired but no plant?)");
+        // The binding proof: a recycled number whose holder
+        // changed argv mid-observation is excluded.
+        assert!(
+            found.is_empty(),
+            "recycled candidate must be excluded, got: {found:?}"
+        );
+        // End-to-end: the backstop must not touch it
+        // either.
+        assert!(
+            kill_sleep_with_dur("874", anchor),
+            "backstop must drain clean (recycled candidate excluded)"
+        );
+        assert_eq!(
+            fork_starttime(cpid),
+            Ok(Some(retick)),
+            "replacement must survive untouched as the same birth"
+        );
+        // Explicit retire (no litter) + disarm + reap
+        // (reap BEFORE the drain poll — our own child
+        // zombies (tick kept) until reaped; no detached
+        // reaper runs in this leg).
+        kill_tick_gated_fork(cpid, retick);
+        let _ = kid.wait();
+        assert!(
+            birth_drained(cpid, retick, Duration::from_secs(5)),
+            "replacement retire must land"
+        );
+        rguard.disarmed = true;
+        _cguard.disarmed = true;
+        let _ = candidate.wait();
     }
 
     /// R22-014 fault leg: a pre-tail staging panic must
@@ -2130,6 +2383,9 @@ mod tests {
             reportless_probe_denied_stays_unresolved_probe();
             return;
         }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before the probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
         let outcome = run_fresh_probe_collect(
             "SCOPEBASE_R22009_DENY_KILLPG",
             "reportless_probe_denied_stays_unresolved",
@@ -2159,7 +2415,7 @@ mod tests {
             "wrapper must drain m1"
         );
         assert!(
-            kill_sleep_with_dur("855"),
+            kill_sleep_with_dur("855", anchor),
             "wrapper must drain the live sleep 855"
         );
         // R23-002: explicit unsupported_arch skip (custody
@@ -2868,16 +3124,252 @@ mod tests {
         ProbeOutcome { timed_out, out }
     }
 
-    /// R22-008: collect (pid, starttime-tick) of every
-    /// LIVE (non-zombie) `sleep dur` in /proc — the
-    /// reportless fault probes' m2 has an unknown pid, so
-    /// wrapper-side custody rides this scan (tick-gated
-    /// kill + drain per birth). Read-error discipline
-    /// mirrors `live_sleep_with_dur` (R22-016(a)):
-    /// NotFound (vanished) skips; any other read error
-    /// fails LOUD (a custody scan must never certify
-    /// absence over unreadable entries).
+    /// R23-008: boot-clock ticks now (CLOCK_MONOTONIC
+    /// → jiffies) — the ownership-window anchor. Ported
+    /// from the toolchain twin (`boot_ticks_now`,
+    /// crates/scopebase-testkit/tests/toolchain_invoke.rs:882-898
+    /// at f614a4d — same source as the audit copy).
+    fn boot_ticks_now() -> Option<u64> {
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: clock_gettime with a valid out-pointer.
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+            return None;
+        }
+        // SAFETY: sysconf with a valid name.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if hz <= 0 {
+            return None;
+        }
+        let hz = hz as u64;
+        Some(now.tv_sec as u64 * hz + (now.tv_nsec as u64 * hz) / 1_000_000_000)
+    }
+
+    /// R23-008: ownership predicate for custody-scan
+    /// candidates — mirror of the audit helper (our euid
+    /// AND our session; fail-closed on unreadable
+    /// evidence).
+    fn task_owned_by_us(pid: libc::pid_t) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: geteuid/getsid query only.
+        let euid = unsafe { libc::geteuid() };
+        let ours = unsafe { libc::getsid(0) };
+        if ours < 0 {
+            return false;
+        }
+        let meta = match std::fs::metadata(format!("/proc/{pid}")) {
+            Ok(meta) => meta,
+            Err(_) => return false,
+        };
+        if meta.uid() != euid {
+            return false;
+        }
+        // SAFETY: getsid queries only (ESRCH on raced
+        // exit returns -1, never our session).
+        unsafe { libc::getsid(pid) == ours }
+    }
+
+    /// R22-008: oracle scan — every LIVE (non-zombie)
+    /// `sleep dur` in /proc that WE own (euid + session;
+    /// window off — anchor 0).
     fn sleep_pids_with_dur(dur: &str) -> Vec<(libc::pid_t, u64)> {
+        sleep_owned_pids_with_dur(dur, 0)
+    }
+
+    /// R23-009: fork-side pid-placement serial
+    /// (in-process half — POSIX fcntl placement locks
+    /// merge same-process, so each steering test file
+    /// holds its own; cross-file contention degrades to
+    /// retries and skip-loud, never wrongness — every
+    /// plant verifies pid + different-tick).
+    static FORK_STEER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// R23-009: cross-process placement lock — lean twin
+    /// of audit's `NsLastPidFlock` (audit.rs, R12-005):
+    /// POSIX fcntl (NOT flock — flock leaks into
+    /// fork-only children), SAME lockfile path (kept in
+    /// sync by hand). NEVER NEST (same-process POSIX
+    /// locks merge).
+    struct ForkPidFlock {
+        fd: libc::c_int,
+    }
+
+    /// R23-009: take the cross-process placement lock
+    /// (blocking; held for milliseconds across one
+    /// steer-then-spawn placement loop).
+    fn fork_pid_flock() -> ForkPidFlock {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = std::env::temp_dir().join("scopebase-ns-last-pid.lock");
+        let bytes = path.as_os_str().as_bytes();
+        let cpath = std::ffi::CString::new(bytes).expect("lock path c-str");
+        // SAFETY: valid path pointer with O_CLOEXEC (out
+        // of exec'd children's fd tables).
+        let fd = unsafe {
+            libc::open(
+                cpath.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        assert!(fd >= 0, "placement lock opens");
+        // SAFETY: F_SETLKW on an owned fd, whole-file write lock.
+        let locked = unsafe {
+            libc::fcntl(
+                fd,
+                libc::F_SETLKW,
+                &libc::flock {
+                    l_type: libc::F_WRLCK as libc::c_short,
+                    l_whence: libc::SEEK_SET as libc::c_short,
+                    l_start: 0,
+                    l_len: 0,
+                    l_pid: 0,
+                },
+            )
+        };
+        assert_eq!(locked, 0, "placement lock acquires");
+        ForkPidFlock { fd }
+    }
+
+    impl Drop for ForkPidFlock {
+        fn drop(&mut self) {
+            // SAFETY: unlock-then-close an owned fd (never
+            // nest: releasing here releases the process's
+            // lock).
+            unsafe {
+                libc::fcntl(
+                    self.fd,
+                    libc::F_SETLK,
+                    &libc::flock {
+                        l_type: libc::F_UNLCK as libc::c_short,
+                        l_whence: libc::SEEK_SET as libc::c_short,
+                        l_start: 0,
+                        l_len: 0,
+                        l_pid: 0,
+                    },
+                );
+                libc::close(self.fd);
+            }
+        }
+    }
+
+    /// R23-009: unlocked allocator steer — port of
+    /// audit's `audit_steer_next_pid_unlocked` (audit.rs,
+    /// R13-009): direct write, sudo fallback. Call ONLY
+    /// under a held placement guard or via a
+    /// locked-steer-then-restore probe.
+    fn fork_steer_next_pid_unlocked(want: libc::pid_t) -> bool {
+        use std::process::Stdio;
+        let path = "/proc/sys/kernel/ns_last_pid";
+        let text = format!("{}", want - 1);
+        if std::fs::write(path, &text).is_ok() {
+            return true;
+        }
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo {text} | sudo -n tee {path} >/dev/null 2>&1"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    /// R23-009: steer a fresh `sleep <dur>` onto the freed
+    /// `want` with a DIFFERENT tick than `orig_tick` —
+    /// lean twin of audit's `steer_sleep_onto` +
+    /// `plant_replacement` (R16-003/R17-003), except
+    /// same-tick plants retry inside the loop (a fast
+    /// plant usually shares the victim's jiffy — bailing
+    /// there would skip most runs). Caller holds
+    /// [`FORK_STEER_SERIAL`]. None when contended (100
+    /// misses — caller skips loud) or the hint is
+    /// unwritable. Restores the hint either way.
+    fn fork_plant_sleep_onto(
+        want: libc::pid_t,
+        dur: &str,
+        orig_tick: u64,
+    ) -> Option<(std::process::Child, u64)> {
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = std::fs::read_to_string(last_path).unwrap_or_default();
+        let found = {
+            let _flock = fork_pid_flock();
+            let mut found = None;
+            for _ in 0..100 {
+                if !fork_steer_next_pid_unlocked(want) {
+                    break;
+                }
+                let mut kid = std::process::Command::new("/bin/sleep")
+                    .arg(dur)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("standin spawns");
+                if kid.id() as libc::pid_t != want {
+                    let _ = kid.kill();
+                    let _ = kid.wait();
+                    continue;
+                }
+                match fork_starttime(want) {
+                    Ok(Some(tick)) if tick != orig_tick => {
+                        found = Some((kid, tick));
+                        break;
+                    }
+                    _ => {
+                        let _ = kid.kill();
+                        let _ = kid.wait();
+                        continue;
+                    }
+                }
+            }
+            found
+        };
+        {
+            // Fresh guard (the loop guard dropped above —
+            // never nest).
+            let _restore = fork_pid_flock();
+            let _ = std::fs::write(last_path, last_before.trim());
+        }
+        found
+    }
+
+    /// R23-009: argv predicate — fork-shape-exact
+    /// `sleep <dur>` (bare argv0 only, never a path —
+    /// shared by the match and the post-stat re-verify so
+    /// the two can never drift apart).
+    fn cmdline_matches_sleep_dur_exact(cmdline: &[u8], dur: &str) -> bool {
+        let mut args = cmdline.split(|b| *b == 0);
+        let argv0 = args.next().unwrap_or_default();
+        let argv1 = args.next().unwrap_or_default();
+        argv0 == b"sleep" && argv1 == dur.as_bytes()
+    }
+
+    /// R23-008: ownership-scoped scan — the oracle shape
+    /// plus the birth window (`tick >= anchor`). Kill
+    /// paths pass a kill-time anchor. Read-error
+    /// discipline mirrors `live_sleep_with_dur`
+    /// (R22-016(a)): NotFound (vanished) skips; any other
+    /// read error fails LOUD (a custody scan must never
+    /// certify absence over unreadable entries).
+    /// Production callers use this (no hook); the R23-009
+    /// regression uses
+    /// [`sleep_owned_pids_with_dur_with_hook`].
+    fn sleep_owned_pids_with_dur(dur: &str, anchor: u64) -> Vec<(libc::pid_t, u64)> {
+        sleep_owned_pids_with_dur_with_hook(dur, anchor, None)
+    }
+
+    /// R23-009: seam for the recycle regression — `hook`
+    /// runs after an argv match and before the stat read
+    /// (the finding's window). Production callers pass
+    /// `None` (see [`sleep_owned_pids_with_dur`]).
+    fn sleep_owned_pids_with_dur_with_hook(
+        dur: &str,
+        anchor: u64,
+        hook: Option<&dyn Fn(libc::pid_t)>,
+    ) -> Vec<(libc::pid_t, u64)> {
         let mut found = Vec::new();
         let entries = std::fs::read_dir("/proc").expect("/proc readable");
         for entry in entries {
@@ -2898,18 +3390,42 @@ mod tests {
                     panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
                 }
             };
-            let mut args = cmdline.split(|b| *b == 0);
-            let argv0 = args.next().unwrap_or_default();
-            let argv1 = args.next().unwrap_or_default();
-            if argv0 != b"sleep" || argv1 != dur.as_bytes() {
+            if !cmdline_matches_sleep_dur_exact(&cmdline, dur) {
                 continue;
             }
             let pid: libc::pid_t = match name.parse() {
                 Ok(pid) => pid,
                 Err(_) => continue,
             };
+            if let Some(hook) = hook {
+                hook(pid);
+            }
             match fork_starttime(pid) {
                 Ok(Some(tick)) => {
+                    // R23-009: bind the argv to the tick — a
+                    // recycle between the cmdline and stat
+                    // reads shows the replacement's argv here;
+                    // nonmatching ⟹ skip (the old code
+                    // authenticated the replacement's tick
+                    // with the former occupant's argv, then
+                    // killed it). Read-error discipline as
+                    // above (NotFound skips; else LOUD).
+                    let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+                        Ok(cmdline2) => cmdline2,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => panic!(
+                            "custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}"
+                        ),
+                    };
+                    if !cmdline_matches_sleep_dur_exact(&cmdline2, dur) {
+                        continue;
+                    }
+                    if tick < anchor {
+                        continue;
+                    }
+                    if !task_owned_by_us(pid) {
+                        continue;
+                    }
                     let live = std::fs::read_to_string(format!("/proc/{pid}/stat"))
                         .ok()
                         .and_then(|text| {
@@ -2935,14 +3451,18 @@ mod tests {
     /// after the drain catches births raced past the first
     /// scan (none expected — the middleman is dead — but
     /// custody never trusts a single pass).
-    fn kill_sleep_with_dur(dur: &str) -> bool {
-        for (pid, tick) in sleep_pids_with_dur(dur) {
+    fn kill_sleep_with_dur(dur: &str, anchor: u64) -> bool {
+        // R23-008: the anchor is captured by the CALLER
+        // (wrapper entry / pre-staging — a kill-time anchor
+        // lands a jiffy past births staged ms earlier and
+        // would exclude our own fixture).
+        for (pid, tick) in sleep_owned_pids_with_dur(dur, anchor) {
             kill_tick_gated_fork(pid, tick);
             if !birth_drained(pid, tick, std::time::Duration::from_secs(5)) {
                 return false;
             }
         }
-        !live_sleep_with_dur(dur)
+        sleep_owned_pids_with_dur(dur, anchor).is_empty()
     }
 
     /// R22-007 denied-pin probe (fresh image): seccomp-deny
