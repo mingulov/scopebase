@@ -973,6 +973,18 @@ mod tests {
             }
         }
 
+        /// R23-023 leg seam: an unpinned guard (the
+        /// pinning read failed) — the drop must still kill
+        /// + reap an owned live child, and must not read
+        /// errno after a successful (==0) waitpid probe.
+        fn for_test_unpinned(pid: libc::pid_t) -> Self {
+            ForkChildGuard {
+                pid,
+                tick: None,
+                disarmed: false,
+            }
+        }
+
         fn disarm(&mut self) {
             self.disarmed = true;
         }
@@ -996,7 +1008,12 @@ mod tests {
                 if got == self.pid {
                     return;
                 }
-                if std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+                // R23-023: errno is meaningful only when
+                // waitpid FAILED (got < 0) — a 0 (live,
+                // unreaped) leaves stale errno behind.
+                if got < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                {
                     return;
                 }
                 // SAFETY: our own unreaped child (the bare
@@ -1012,7 +1029,9 @@ mod tests {
                 // SAFETY: WNOHANG reap of our own child.
                 let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
                 if got == self.pid
-                    || std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                    || (got < 0
+                        && std::io::Error::last_os_error().raw_os_error()
+                            == Some(libc::ECHILD))
                 {
                     break;
                 }
@@ -1022,6 +1041,49 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+    }
+
+    /// R23-023: an unpinned guard drop must kill + reap
+    /// an owned live child even with stale ECHILD in
+    /// errno (waitpid==0 leaves errno untouched — only a
+    /// FAILED probe may consult it). RED (old drop: the
+    /// stale ECHILD returns early — the child survives).
+    #[test]
+    fn fork_child_guard_unpinned_ignores_stale_echild() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("2")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let tick = fork_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        // Plant stale ECHILD immediately before the drop:
+        // waitpid on init (never our child) fails ECHILD;
+        // nothing between the plant and the drop's probe
+        // may run (successful waitpid preserves errno, so
+        // the drop's ==0 probe still observes ECHILD —
+        // the old drop misread exactly this).
+        let mut plant_status = 0;
+        // SAFETY: WNOHANG probe of a definite non-child.
+        let planted =
+            unsafe { libc::waitpid(1, &mut plant_status, libc::WNOHANG) };
+        assert_eq!(planted, -1, "init is not our child (errno plant)");
+        {
+            let _guard = ForkChildGuard::for_test_unpinned(pid);
+        }
+        assert_ne!(
+            fork_starttime(pid),
+            Ok(Some(tick)),
+            "unpinned drop must kill the owned child despite stale ECHILD"
+        );
+        assert!(
+            child.try_wait().is_err(),
+            "unpinned drop must reap the owned child (status collected)"
+        );
     }
 
     /// R22-014: fault-leg duration override — legs
@@ -1310,19 +1372,38 @@ mod tests {
             use std::sync::atomic::Ordering;
             let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let mut workers = Vec::with_capacity(count);
-            for _ in 0..count {
-                let (stop, done) = (stop.clone(), done.clone());
-                workers.push(std::thread::spawn(move || {
+            Self::spawn_on(count, stop, done, |stop, done| {
+                std::thread::spawn(move || {
                     hammer_body(&stop);
                     done.fetch_add(1, Ordering::Relaxed);
-                }));
-            }
-            Self {
+                })
+            })
+        }
+
+        /// R23-001: injectable spawner (the leg fails a
+        /// spawn mid-construction). The set is built
+        /// incrementally — a spawn panic drops the partial
+        /// Self (stop set, started subset joined), never a
+        /// bare Vec of detached handles.
+        fn spawn_on(
+            count: usize,
+            stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            mut spawn_one: impl FnMut(
+                std::sync::Arc<std::sync::atomic::AtomicBool>,
+                std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            ) -> std::thread::JoinHandle<()>,
+        ) -> Self {
+            let mut set = Self {
                 stop,
                 done,
-                workers,
+                workers: Vec::with_capacity(count),
+            };
+            for _ in 0..count {
+                let (stop, done) = (set.stop.clone(), set.done.clone());
+                set.workers.push(spawn_one(stop, done));
             }
+            set
         }
 
         fn done_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
@@ -1448,6 +1529,34 @@ mod tests {
             done.load(Ordering::Relaxed),
             2,
             "every started worker must stop on partial start"
+        );
+        // Leg 3 (R23-001): a REAL mid-construction spawn
+        // failure — 2 workers start, the 3rd spawn panics
+        // INSIDE the constructor. The partial Self must
+        // drop (stop set, started subset joined): done
+        // reads exactly 2 (RED, old code: the bare Vec
+        // drops, handles detach, stop never set, done
+        // stays 0).
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut calls = 0u32;
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _set = HammerSet::spawn_on(4, stop, done.clone(), |stop, done| {
+                calls += 1;
+                if calls == 3 {
+                    panic!("R23001 injected mid-construction spawn failure");
+                }
+                std::thread::spawn(move || {
+                    hammer_body(&stop);
+                    done.fetch_add(1, Ordering::Relaxed);
+                })
+            });
+        }));
+        assert!(failed.is_err(), "spawn failure must unwind");
+        assert_eq!(
+            done.load(Ordering::Relaxed),
+            2,
+            "started subset must stop on mid-construction panic"
         );
     }
 

@@ -5461,19 +5461,36 @@ impl HammerSet {
         use std::sync::atomic::Ordering;
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut workers = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (stop, done) = (stop.clone(), done.clone());
-            workers.push(std::thread::spawn(move || {
+        Self::spawn_on(count, stop, done, |stop, done| {
+            std::thread::spawn(move || {
                 hammer_body(&stop);
                 done.fetch_add(1, Ordering::Relaxed);
-            }));
-        }
-        Self {
+            })
+        })
+    }
+
+    /// R23-001 (twin): injectable spawner — mirror of lib
+    /// (incremental Self build; mid-construction spawn
+    /// panic drops the partial set, never a bare Vec).
+    fn spawn_on(
+        count: usize,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        mut spawn_one: impl FnMut(
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+            std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        ) -> std::thread::JoinHandle<()>,
+    ) -> Self {
+        let mut set = Self {
             stop,
             done,
-            workers,
+            workers: Vec::with_capacity(count),
+        };
+        for _ in 0..count {
+            let (stop, done) = (set.stop.clone(), set.done.clone());
+            set.workers.push(spawn_one(stop, done));
         }
+        set
     }
 
     fn done_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
@@ -5588,6 +5605,29 @@ fn contention_hammers_stop_on_unwind_and_partial_start() {
         done.load(Ordering::Relaxed),
         2,
         "every started worker must stop on partial start"
+    );
+    // Leg 3 (R23-001 twin): a REAL mid-construction spawn
+    // failure — mirror of lib (done reads exactly 2).
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut calls = 0u32;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _set = HammerSet::spawn_on(4, stop, done.clone(), |stop, done| {
+            calls += 1;
+            if calls == 3 {
+                panic!("R23001 injected mid-construction spawn failure");
+            }
+            std::thread::spawn(move || {
+                hammer_body(&stop);
+                done.fetch_add(1, Ordering::Relaxed);
+            })
+        });
+    }));
+    assert!(failed.is_err(), "spawn failure must unwind");
+    assert_eq!(
+        done.load(Ordering::Relaxed),
+        2,
+        "started subset must stop on mid-construction panic"
     );
 }
 
