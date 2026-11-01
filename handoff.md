@@ -1,8 +1,63 @@
 # ScopeBase current handoff
 
-Date: 2026-10-25. **The two trees are merged.** At the user's explicit instruction, `feat/m0-foundations` (integration, 139 commits, tip `db47ca34bd97e077c166a65971603867aa875556`) was fast-forward merged into `main`, and the counts/docs were reconciled in the commit containing this file. **`main` in `/home/user/src/m/bpfscope` is now the single canonical tree and ledger.** Fifty-one of 86 tasks are accepted, thirty-five planned (TODO header, TODO checkboxes and traceability ACCEPTED were recounted and agree). The integration worktree `.worktrees/m0-integration` (branch `feat/m0-foundations`, incl. its 45G `target/` and `.superpowers/sdd/` ledger) is **preserved as read-only custody** — do not develop in it, do not delete it without a deliberate retirement decision. The `bp03-prepared` worktree was NOT merged. Basis: the [2026-10-25 deep gap analysis + engineering audit](docs/reviews/2026-10-25-scopebase-gap-audit.md) (11 lanes; required reading §0/§3/§5/§6 per step 2). Round-9 state at merge: external findings S126–S141 fixed/verified; external round 3 produced **S143–S159 (9 Critical / 6 Important / 2 Minor), still unadjudicated — that loop is the first resume work**, so do not repeat any aggregate "full stack green" claim until it closes. Session goal `goal-01a16ea1-c385-7890-995b-da6c0a620f2d` was left ACTIVE but paused by the 2026-10-24 record; resume it, do not create a replacement.
+Date: 2026-11-01. **Resumed in-session after the restart pause; TRACE-AMEND01 landed (see log tip).** Pause record: at the user's explicit request the session finished current work without starting new workers, paused the goal, and wrote this handoff with the TRACE rule GREEN in fixture and the live migration pending. R-stream (R22/R23/R24) fully closed and committed (C7/C8/R-set, external R2 READY zero findings); any-time trio verified and closed (SB02 v4, LEDGER-RECONCILE01, PACKET-GUARD01). The S143–S159 report is confirmed lost in the 10-30 host transfer — owner call still pending (see step 3; re-asked 11-01, no answer yet). The session goal (M0–M6 ScopeBase development, Codex `gpt-6.1-sol` external review after internal rounds) stays ACTIVE — resume it, do not create a replacement.
 
 ## Resume here
+
+Read this section first; everything below the next `---` is prior record.
+You are ready to work when: the tree checks in step 1 pass, you have read the
+documents in step 2, and you hold the owner's S-call answer (step 3) or have
+re-asked it. Do not dispatch product work before that.
+
+### Where exactly are we (snapshot at the 2026-11-01 pause)
+
+| Fact | Value (verify with step 1; do not trust this table if refs moved) |
+|---|---|
+| Canonical tree | `main` in `/home/user/src/m/bpfscope` (see log tip; TRACE commit lands the registry + rule + tests + TODO row + this handoff) |
+| Tasks | 51/86 accepted, 35 planned (unchanged; ledger checker AGREE) |
+| Requirements | 81 PLANNED + 39 DISPOSITIONED (5 SATISFIED + 34 SCOPED); live `check_planning_docs.py` PASS |
+| Amendments | 48 (9 grandfathered 10-18 + 39 dated hashed: 14x 10-22, 24x 10-23, 1x 10-25 merge) |
+| Dirty (owned, uncommitted — leave for review, do not commit without ask) | TRACE commit pending (checker, tests, registry, TODO row, handoff). Pre-existing untracked (not ours): `FP43-CONTINUE.md` (10-30 transfer note) |
+| R-stream | CLOSED: R23-001–023 + R24-001–006 fixed; self-review zero + external (gpt-6.1-sol medium) R2 READY. Commits `4cfc885` (C7), `88a18b6` (C8), `700cdef` (R-set). Review artifacts preserved in-tree: `.scopebase/external-reviews/{c8,rset}-20261101/` (prompts, finals, event streams, R23/R24 finding texts) |
+| Any-time trio | CLOSED (all implemented 10-30, re-verified fresh 11-01, rows closed): SB02 v4 (package-policy 65/65), LEDGER-RECONCILE01 (census AGREE, planning 132/132), PACKET-GUARD01 (117/117 at close; 129 with TRACE tests — full re-run pending in TRACE-C) |
+| TRACE-AMEND01 | LANDED 11-01 (row 84): rule + 39 dispositions (5 SATISFIED + 34 SCOPED) + 39 dated hashed amendments + semantics text; checker PASS, ledger AGREE, structural VALID, orchestration 129/129, planning 132/132; self-review zero + external R2 READY (1 merge-identity fix). Review: `.scopebase/external-reviews/trace-20261101/` |
+| S-loop | REPORT LOST — only passing `S143–S159` citations survive (r10 lane, gap audit); `/tmp/sdd-round7` + home backup gone in transfer. Owner call pending: (a) defer with record (recommended), (b) regenerate via fresh review, (c) scoped regeneration (non-fixture only). Asked async 11-01; re-ask in session — the async answer did not survive the restart |
+| Orphans (left running — do not kill) | 6 sleeping test-binary orphans (ppid 1, superseded build, SN state): `1062713` (prestall probe, 11-01 09:27), `1092447` (tt04 denial probe, 10-31 02:44), `1114337`/`1116577` (middleman wrappers +1 child each, 11-01 11:08/11:09), `2398038`/`2398307` (pausing_grandchild +1 child each, 10-31 17:39/17:40). Ownership unproven on this shared host — a wrong kill is unrecoverable; owner may reap |
+| Goal | ACTIVE-paused (M0–M6 per plan; external review after internal rounds). Codex medium lane `01a19753-…` at RSET-R2-READY (`.scopebase/codex-sessions.json`); max lane untouched |
+| Toolchain/lease | Rust 1.98.1 via mise; lease root `/run/user/1000/scopebase-locks` exists; `tests/package-policy` runs WITHOUT outer wrapper (self-locks); disk 873G free |
+
+### What to do when (order, triggers, gates)
+
+| When | Work | Gate to leave it |
+|---|---|---|
+| NOW, before any dispatch | Step 1 tree verification + step 2 reading | Clean status explained; TRACE state's RED-live-checker understood |
+| FIRST | Step 3: owner S-call (re-ask) | Defer/regenerate/scoped recorded; S-gate re-decided |
+| THEN (needs S-call) | Step 4: integration evidence audit, then product frontier in TODO/traceability order | Per-row exits; no aggregate-green claim until audit closes |
+| AFTER S-call + TRACE | Product frontier in TODO/traceability dependency order (TT03 F-rows/final-index, LX08 joint record first, …) | Per-packet gates |
+| NEVER | Commit/push/amend without the owner's explicit in-session ask; kill the 6 orphans without owner say-so; fetch/port from live donors (fp43: um790 unreachable — frozen snapshots only); blanket-flip requirement statuses (rule forbids it); claim aggregate-green over open Criticals | — |
+
+1. **Verify the tree before anything else** (all read-only):
+   - `git -C /home/user/src/m/bpfscope log --oneline -5` — must show the TRACE-AMEND01 commit on top, then `fbbdfb6` (PACKET row), `9df15ef` (LEDGER row), `76f4363` (SB02 rows); anything above is post-TRACE work.
+   - `git -C /home/user/src/m/bpfscope branch --show-current` — must print `main`.
+   - `git -C /home/user/src/m/bpfscope status --short` — expected clean except `?? FP43-CONTINUE.md` (pre-existing transfer note). Explain anything else before dispatch.
+   - `python3 tools/planning/check_ledger_counts.py` — must print AGREE (51/86/120/179).
+   - `python3 tools/check_planning_docs.py` — must print PASS (81 PLANNED + 39 DISPOSITIONED).
+   - `python3 -m unittest discover -s tests/orchestration` — must be 129/129 OK (takes ~2.5 min).
+   - Recreate the build-lease root if `/run` was wiped: `mkdir -p /run/user/1000/scopebase-locks && chmod 0700 /run/user/1000/scopebase-locks`.
+2. **Read, in order:** this file; [TODO](TODO.md) (row 84 exit + R24-FLAKE13 + review-lane note in row 81's successor context); [AGENTS](AGENTS.md) (alpha mode); the TRACE rule draft in `tools/check_planning_docs.py` (promotion + amendments blocks) and its 12 tests; [DEVELOPMENT](DEVELOPMENT.md) before dispatching workers.
+3. **Owner S-call (re-ask, do not assume):** the S143–S159 finding texts are unrecoverable (verified: gap audit cites the range only; r10 lane holds passing mentions; `/tmp` and home backups lost in transfer; donor snapshots cannot contain it). Options: (a) defer with a record entry (R-stream re-reviewed the fixture surface fresh; R2 READY), (b) regenerate via a fresh max-effort review (expensive; integration range is 200+ commits stale), (c) scoped regeneration of non-fixture surfaces only. Record the answer in TODO + traceability before product dispatch.
+4. **After the S-call:** integration evidence audit first (full-tier vs alpha-tier per accepted task; no aggregate-green claim until it closes), then the product frontier in TODO/traceability dependency order (TT03 F-rows/final-index, LX08 joint record before LX08 dispatch). Keep TDD + review lanes per alpha mode.
+5. **Custody:** preserve every worktree, target, cache, frozen snapshot (`.scopebase/donor-snapshots/2026-10-18` immutable history, `2026-10-29` current refresh — inspect history only via explicit `--git-dir`), review artifacts (`.scopebase/external-reviews/`), and the recovery ref. Never develop in custody worktrees. The 6 orphans above stay until the owner says reap. `FP43-CONTINUE.md` is the 10-30 transfer note — leave it.
+
+---
+
+## Prior record (2026-10-25 merge — superseded above)
+
+> HISTORY ONLY — the route below was written for the 2026-10-25 merge. The current route is Resume here above. Traps: it says the S-loop report is at `/tmp/sdd-round7/codex-r9-final.md` (lost in the 10-30 transfer), calls the R-stream loops future work (they are DONE), and lists the any-time trio as open (all three CLOSED 11-01).
+
+Date: 2026-10-25. **The two trees are merged.** At the user's explicit instruction, `feat/m0-foundations` (integration, 139 commits, tip `db47ca34bd97e077c166a65971603867aa875556`) was fast-forward merged into `main`, and the counts/docs were reconciled in the commit containing this file. **`main` in `/home/user/src/m/bpfscope` is now the single canonical tree and ledger.** Fifty-one of 86 tasks are accepted, thirty-five planned (TODO header, TODO checkboxes and traceability ACCEPTED were recounted and agree). The integration worktree `.worktrees/m0-integration` (branch `feat/m0-foundations`, incl. its 45G `target/` and `.superpowers/sdd/` ledger) is **preserved as read-only custody** — do not develop in it, do not delete it without a deliberate retirement decision. The `bp03-prepared` worktree was NOT merged. Basis: the [2026-10-25 deep gap analysis + engineering audit](docs/reviews/2026-10-25-scopebase-gap-audit.md) (11 lanes; required reading §0/§3/§5/§6 per step 2). Round-9 state at merge: external findings S126–S141 fixed/verified; external round 3 produced **S143–S159 (9 Critical / 6 Important / 2 Minor), still unadjudicated — that loop is the first resume work**, so do not repeat any aggregate "full stack green" claim until it closes. Session goal `goal-01a16ea1-c385-7890-995b-da6c0a620f2d` was left ACTIVE but paused by the 2026-10-24 record; resume it, do not create a replacement.
+
+### 2026-10-25 route (historical — superseded by Resume here above)
 
 Read this section first; everything below the next `---` is prior record.
 You are ready to work when: the tree checks in step 1 pass, you have read the

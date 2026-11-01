@@ -247,6 +247,867 @@
       "task_ids": [
         "LX05"
       ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-bp03-host.md",
+          "blob_sha1": "6403604dc05fba87597d2f1ba874ea5b18744e30"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-bp03-verification.md",
+          "blob_sha1": "656214c23d138994aebad4639f18a454ebfe9f57"
+        },
+        {
+          "path": "docs/reviews/2026-10-22-bp03-host.md",
+          "blob_sha1": "1f2874933eb9443a6ee44eb5b26c77bc76c50322"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "BP03 host contract + verification ratified; scoped package accepted at bfb9452 (108/175, 24 cells, 1844 tests).",
+      "task_ids": [
+        "BP03"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-cp05-generations.md",
+          "blob_sha1": "8915d145ceb32ee9e6b3ddec038d97f167e0e2d9"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-cp05-verification.md",
+          "blob_sha1": "5257ce5c41ca37b2ebd69b8e08ed225eabad1abc"
+        },
+        {
+          "path": "docs/reviews/2026-10-22-cp05-generations.md",
+          "blob_sha1": "39300c79a2b79c4ac25e061f0f3fdda2b51b4ded"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "CP05 generation contract + verification ratified; scoped package accepted at 7d992e1 (50/52, six cells).",
+      "task_ids": [
+        "CP05"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-cp06-views.md",
+          "blob_sha1": "5fcb04751b5301665ade113116a8c91fa736a36b"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-cp06-verification.md",
+          "blob_sha1": "5ea439ffe5ba442716c9d54201422c20f40ddba1"
+        },
+        {
+          "path": "docs/reviews/2026-10-22-cp06-views.md",
+          "blob_sha1": "7cf98d586fb8fb4d4bc3e301f02bb1c241c170a1"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "CP06 views contract + verification ratified; scoped package accepted at e6fe76c (73/75, twelve-plus-six cells).",
+      "task_ids": [
+        "CP06"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-lx08-process.md",
+          "blob_sha1": "5918486b89ea9e1363ba040f2093d114090443a8"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-lx08-verification.md",
+          "blob_sha1": "8d3124e3e0be95c1441c5de042acfe4eb78d69ae"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "LX08 strict process contract + verification ratified as design (exact r2); packet not ready, TT03/TT04/EOF bindings unbound.",
+      "task_ids": [
+        "LX08"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-tt02-prepared-response.md",
+          "blob_sha1": "10bfeb6ee4c8210503512e3396bfbca42d5b39c1"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-tt02-prepared-response-verification.md",
+          "blob_sha1": "dd95b5fd980dae5f48b200ab6aad2fc0ef79fc52"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "TT02 prepared-response contract + verification ratified (exact-r2 scoped maintenance); execution bindings unbound.",
+      "task_ids": [
+        "TT02"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/superpowers/specs/2026-10-22-scopebase-tt03-linux-fixture.md",
+          "blob_sha1": "b4a4e4358dcd89d9f73ffef19228370d39d93543"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-10-22-scopebase-tt03-verification.md",
+          "blob_sha1": "dbb8b7e8da0e968fa64449083cb1998ad5d3460b"
+        },
+        {
+          "path": "docs/reviews/2026-10-22-tt03-routing.md",
+          "blob_sha1": "008d34a9f93a0bbb8ae2bf746ebcc00a4b9c2f9e"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "CONTROLLER_RATIFIED_CONTRACT",
+      "summary": "TT03 Linux fixture contract (r4) + verification + routing review ratified; P/F rows and full TT03 remain planned.",
+      "task_ids": [
+        "TT03"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-bp02-maps.md",
+          "blob_sha1": "5e99885e6d5441952ec8dec0ed1be67bcc44017e"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP02 scoped package + owned-kernel evidence accepted (maps v7/v8 preservation records).",
+      "task_ids": [
+        "BP02"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-bp04-bp06.md",
+          "blob_sha1": "d76ec6ec3df3040cbc16c6800696ce095192ab34"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP04 attachment planner and BP06 ring semantics reviewed toward 147/0 acceptance.",
+      "task_ids": [
+        "BP04",
+        "BP06"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-cp07-cp08-cp09.md",
+          "blob_sha1": "1bee951d1dd24579f2bc45d593100f0b3c28c1ff"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "CP07/CP08/CP09 reviewed; CP09 NEW model-only code two-lane APPROVED after fix round.",
+      "task_ids": [
+        "CP07",
+        "CP08",
+        "CP09"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-job-custody.md",
+          "blob_sha1": "669397157d642099a66a3dd733a1da57a6be7254"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "Job custody + retained-state review recorded (controller/worker roles, resource routing)."
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-lx05-proc.md",
+          "blob_sha1": "11bff0f8a8b6e558d6c276675d1711bccc24b62b"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "LX05 maps/mountinfo parser contract reviewed (frozen grammar, preservation, bounds).",
+      "task_ids": [
+        "LX05"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-tt02-engine.md",
+          "blob_sha1": "b1d6fee6174c3994453e40f74cae8fb0fbf8e142"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT02 engine review recorded (borrowing maintenance accepted; facets remain).",
+      "task_ids": [
+        "TT02"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-tt02-fixture-borrow.md",
+          "blob_sha1": "aa6ebbdb37399bc0f262183140e7c4b8de88f50f"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT02 fixture-borrow review recorded (borrowing maintenance accepted).",
+      "task_ids": [
+        "TT02"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-22-tt06-sdk01-tt08core.md",
+          "blob_sha1": "468fd7462a9281c2f1c1bfd2c66d41fefbdfb9d2"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-22",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT06 campaign scaffolding, SDK01 and TT08 core reviewed (PPV mutation proof).",
+      "task_ids": [
+        "TT06",
+        "SDK01",
+        "TT08"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-bp05-custody.md",
+          "blob_sha1": "c44cdb1ce9b6fad50bf60f4ff9636563a9d5b977"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP05 held-file attachment custody accepted (retirement 24/24); live cells later-owner gates.",
+      "task_ids": [
+        "BP05"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-bp07-writer.md",
+          "blob_sha1": "1ed3903af114a5bb69012228f69377e4e51a953a"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP07 writer ownership accepted as bounded host slice (24/24); Step-4 live deferred to TT05.",
+      "task_ids": [
+        "BP07"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-bp08-identity.md",
+          "blob_sha1": "4daeb2755d89ec25debc2bf4f41cff8f165687db"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP08 producer identity accepted as bounded host increment (15/15); Step-4 live follow-up recorded.",
+      "task_ids": [
+        "BP08"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-bp09-btf.md",
+          "blob_sha1": "df9fef6429e6bc3b12cdf73f14c366f9b71faa21"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "BP09 bounded BTF parser adaptation accepted (btf 37/0); locked btf-rs, no upstreaming.",
+      "task_ids": [
+        "BP09"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-cp10-replay.md",
+          "blob_sha1": "147aae2589985f27d361a16cb646d771d74a2ccc"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "CP10 replay + neutral vectors accepted (15/15 + 8/8); surface ratified RATIFY-2026-10-23-CP10.",
+      "task_ids": [
+        "CP10"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-cp11-consumers.md",
+          "blob_sha1": "12fd3041a3deabf3d673d636836d1f57469940a9"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "CP11 independent consumers accepted (3 consumers 8/8 each, correction holders).",
+      "task_ids": [
+        "CP11"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-lx06-mapping.md",
+          "blob_sha1": "f3cf1849b0caeb8a65c442888be77454a94c3c3f"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "LX06 mapping relations accepted as bounded increment (mapping_contract 20/20); TT04-cell follow-ups.",
+      "task_ids": [
+        "LX06"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-lx10-walk.md",
+          "blob_sha1": "58c4f220b0d071befdf79b64bf5eb491088ab4f5"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "LX10 bounded discovery accepted (walk 34/0 verified by root); D03 scoped grant consumed.",
+      "task_ids": [
+        "LX10"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-lx11-clients.md",
+          "blob_sha1": "e4aee05894615be0f4da23ca37ba97fc6cef2ccc"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "LX11 wired clients accepted (consumers 10/10 + 8/8 verified by root) with developer conformance.",
+      "task_ids": [
+        "LX11"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-rl01-review.md",
+          "blob_sha1": "dc281862bac45bee3a7e5fc12866400bc2484fdb"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "RL01 adversarial review accepted (accepted-only scope; 6 negatives run; NX D01-D04 deferred with owners).",
+      "task_ids": [
+        "RL01"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-sdk02-tt03adopt.md",
+          "blob_sha1": "bca629bf61a7fd4da75f47364e8d1b0c7c9106a9"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "SDK02 bounded context accepted (NEW, two-lane + 4 mutation-proven fixes); TT03 Q-amendments adopted design-only.",
+      "task_ids": [
+        "SDK02",
+        "TT03"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-sdk03-metadata.md",
+          "blob_sha1": "9b9ef24837667b10b01c052d15a057e2d92af786"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "SDK03 capture metadata accepted (sdk 62/0 verified by root) with consumer-linked conformance.",
+      "task_ids": [
+        "SDK03"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-sdk04-observer.md",
+          "blob_sha1": "2c0fedc8cb7c685edda3bd147f5e1984ea5e3dd0"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "SDK04 in-crate observer accepted (11/11 verified by root); plan-text binary app is follow-up SDK04-binary.",
+      "task_ids": [
+        "SDK04"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc01-register.md",
+          "blob_sha1": "22529e778f2e7e8c488a44a0bc11cc02f227a34c"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC01 fixture/toolchain/patch register accepted (schema 14/14 verified by root).",
+      "task_ids": [
+        "TC01"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc02-closure.md",
+          "blob_sha1": "34dc7b0666182d2366e195dd652c70be007aca9a"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC02 compiler closure accepted (executor 55/55 + invoke 16/16 verified by root).",
+      "task_ids": [
+        "TC02"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc03-isa.md",
+          "blob_sha1": "63ddf837c33d38ff9591f5d73e91e5f0f879b0cd"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC03 ISA admission accepted (object_isa 24/24 verified by root) for selected profiles.",
+      "task_ids": [
+        "TC03"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc04-atomics.md",
+          "blob_sha1": "5f64e136d1884180de8490642261ca8c873ca23c"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC04 atomic oracles accepted (atomic_oracle 17/17 verified by root).",
+      "task_ids": [
+        "TC04"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc05-graph.md",
+          "blob_sha1": "7f4aab04bb6815b86747f79057dffc7114c9d606"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC05 graph work accepted as bounded slice (object_graph 20/20); mixed-producer/live/inspect follow-ups.",
+      "task_ids": [
+        "TC05"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tc06-prune.md",
+          "blob_sha1": "112c2751c6dd671943782ead4d0d8e027970537e"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TC06 rule manifests accepted (object_rules 31/31 verified by root).",
+      "task_ids": [
+        "TC06"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tt04-cells.md",
+          "blob_sha1": "95a49bf3ac0576be6a2f58884b54c538f1e10408"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT04 filesystem cells accepted (provision 17/17 + cells 19/19 verified by root) with mapping-policy audit.",
+      "task_ids": [
+        "TT04"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tt07-operator.md",
+          "blob_sha1": "0e4c00922c0d18c489db62c806b02de48eb297a0"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT07 operator accepted (operator 16/16 + installed-matrix 23/23); exit table ratified.",
+      "task_ids": [
+        "TT07"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tt08-tail.md",
+          "blob_sha1": "0e266dea3e00a97e8a4df360b78031b968ae3c08"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT08 core plus GitHub tail accepted (select 12/12 + qual 57/57 verified by root).",
+      "task_ids": [
+        "TT08"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-tt09-perf.md",
+          "blob_sha1": "9f876554f653a3eb3114ea5ab4aca164098ea47d"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "TT09 perf accepted (22/22 + coexistence 6/6 + qual 76/76); 3 live baselines unbuilt with reasons.",
+      "task_ids": [
+        "TT09"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-23-wave29.md",
+          "blob_sha1": "a160191c1830bc3810dc68fd7551c152a0be9a8e"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-23",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "Wave-29 acceptance wave recorded (BP10 adapters scoped with live cells to BP11/TT05; CP12 pilot 10/10).",
+      "task_ids": [
+        "BP10",
+        "CP12"
+      ]
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-10-25-scopebase-gap-audit.md",
+          "blob_sha1": "50b81a96880859d0d1bf4e6cde8ed4f8befd15aa"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-10-25",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "LEDGER_MERGED",
+      "summary": "Integration merged to main (fast-forward to db47ca3; ledger reconciliation in 739aead); TODO/traceability recounted 51/86 with gap-audit findings ledger.",
+      "task_ids": []
     }
   ],
   "profile_extensions": [
@@ -516,99 +1377,139 @@
       "description": "Allocate checked `align_up(value_size, 8) \u00d7 possible_cpu_count` for per-CPU I/O; validate map metadata, key/value ABI and every actual consumer stride before syscall. Parsed/model topology cannot authorize a lengthless kernel copy; use opaque internally acquired live topology and refuse unauthenticated source/change. Reject unknown/overlapping topology and overflow.",
       "id": "BP-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP02"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP02 accepted with scoped package + owned-kernel evidence (bp02-maps): per-CPU geometry, ABI-safe lookup and topology refusal covered; per-consumer stride validation extends as BP11 consumers land."
+      }
     },
     {
       "description": "Capability state, evidence stage, hazard outcome and runtime authority are distinct. Bind cached observations to object/profile/context; no diagnostic receipt can mint authority.",
       "id": "BP-R03",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP03"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP03 host evidence model accepted at bfb9452 (bounded 108/175, 24 cells, 1844 tests): capability/evidence/hazard/authority separation covered; native/operator/profile/distro/cleanup facets remain later-owner work."
+      }
     },
     {
       "description": "Attachment plans preserve file authority and offset-cookie associations, use at most `2n\u22121` attempts for nonempty n-site split isolation, and obey caller error policy without retrying terminal denial/resource failures.",
       "id": "BP-R04",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP04",
         "BP05",
         "BP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP04 planner (147/0), BP05 custody (24/24) and BP10 adapters accepted: authority-preserving plans, 2n-1 isolation and caller error policy covered on host; live-cell attachment behavior goes to BP11/TT05."
+      }
     },
     {
       "description": "Every partial attachment has a terminal disposition: returned active owner, retired, pending or unresolved custody. Retain the original file through native retirement; caller-owned persistent pool permits remain charged for active, uncertain, pending and orphaned effects. Drop is no cleanup proof.",
       "id": "BP-R05",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP04",
         "BP05",
         "BP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP04/BP05/BP10 accepted: terminal dispositions, retained-file retirement and charged pool permits covered on host; live-cell and operator facets remain."
+      }
     },
     {
       "description": "Ring arithmetic is checked, modular wrap is explicit, BUSY is pending, fixed-tail crossing is an error, and bounded drain never grants quiescence. Preserve the backend's documented mmap memory ordering and sole-consumer authority.",
       "id": "BP-R06",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP06",
         "BP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP06 ring semantics (147/0) and BP10 adapters accepted: checked arithmetic, wrap/BUSY/tail rules and ordering covered on host; live ring cells go to BP11/TT05."
+      }
     },
     {
       "description": "Copied staging survives callback-source mutation; a short destination retries the same record once delivered. Preserve separate received/delivered/held/malformed/dropped conservation and error tails.",
       "id": "BP-R07",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP06",
         "BP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP06 staging/conservation (147/0) and BP10 adapters accepted: copied-staging survival and received/delivered/held/malformed/dropped accounting covered on host; live cells remain."
+      }
     },
     {
       "description": "Writer ownership names program, site, CPU lane, guard and architecture. Different programs on one CPU do not share an unprotected slot. Guard refusal has its own miss channel.",
       "id": "BP-R08",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP07"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP07 writer_identity 24/24 accepted as bounded host slice: ownership naming and guard-miss channel covered; Step-4 live cells deferred to the exact TT05 binding."
+      }
     },
     {
       "description": "Insertion identity uses one valid ownership marker; zero identity values stay valid. Independent preallocated diagnostic storage survives primary-map full failure; a cap of 255 is a degradation indication, not an exact event count.",
       "id": "BP-R09",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP02",
         "BP07"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP02 geometry/ABI and BP07 full-map diagnostics accepted on host: single ownership marker and survives-full diagnostic storage covered; live cells remain."
+      }
     },
     {
       "description": "Producer task/exec identity distinguishes birth/thread/exec success/failure, session domains and exhaustion; poll/PID/starttime tracking is never upgraded into this protocol.",
       "id": "BP-R10",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP08"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP08 producer_identity 15/15 accepted as bounded host increment: birth/thread/exec/session/exhaustion protocol covered; Step-4 live cells are recorded follow-up."
+      }
     },
     {
       "description": "Adapt an existing BTF parser; preserve bounded wrapper/type/member/prototype queries and base/module type and string domains. Equal names or sizes alone do not establish identity or map type linkage.",
       "id": "BP-R11",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "BP09",
         "TC05"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "BP09 btf 37/0 and TC05 object_graph 20/20 accepted: bounded BTF queries and relocation-aware graph covered; mixed-producer, live-cell and inspect-wiring follow-ups recorded."
+      }
     },
     {
       "description": "Loader adapters stay narrow, independently optional and validated on exact emitted objects. Track upstream patches separately; no source-green/metadata-green result establishes live support.",
@@ -662,10 +1563,14 @@
       "description": "Profile admission checks decoded final instructions and architecture/endianness/ABI; CPU preset names alone cannot broaden support. Separate ISA, helpers/maps/kfuncs, loader relocation, BTF shape, attach and behavior requirements.",
       "id": "TC-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TC03"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TC03 object_isa 24/24 accepted: final-object inventory and ISA-profile admission mechanism covered for selected profiles; new ISA profiles extend via registry gates."
+      }
     },
     {
       "description": "Used-result RMW tests check old returned and new stored values for each width/op, independent arithmetic, unused-result/CAS controls and selected fixed/unfixed compilers. Concurrent-map/ordering claims have separate live schedules.",
@@ -701,11 +1606,15 @@
       "description": "Object graph transformations are restricted, relocation/callback-aware, and fail closed on unsupported shape. Named stack/linkage/padding/prologue rules preserve old and new kernel workarounds with mutation controls.",
       "id": "TC-R06",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-bpf-toolchain-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TC05",
         "TC06"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TC05 graph transforms and TC06 object_rules 31/31 accepted: restricted relocation-aware transforms and verifier-rule manifests covered; mixed-producer/live-cell follow-ups recorded."
+      }
     },
     {
       "description": "Load, verifier/JIT acceptance, execution correctness, concurrency, performance and cleanup are separate judgments on exact final object bytes. Freeze oldest/current/affected/backport cells before execution.",
@@ -740,143 +1649,199 @@
       "description": "Explicit source/capture/producer/epoch/clock domains; provenance never confers authority",
       "id": "CP-R01",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP01",
         "CP02",
         "CP05",
         "CP09",
         "CP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP01/CP02 foundations with CP05/CP09/CP10 accepted: domain/epoch/clock separation and replay vectors covered; full runtime/profile qualification remains open."
+      }
     },
     {
       "description": "Unit-safe checked arithmetic, partitions and conservation; unknown \u2260 zero",
       "id": "CP-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP02",
         "CP03",
         "CP07",
         "CP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP02/CP03/CP07/CP10 accepted: checked arithmetic, partitions, count bounds and replay covered; full runtime/profile qualification remains open."
+      }
     },
     {
       "description": "Exactly one insertion owner, valid zero-valued identity, counts from secondary lanes",
       "id": "CP-R03",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP04"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP04 insertion model accepted at f2952ee: single owner, valid zero identity and secondary-lane counts covered; actual ABI/producer and migration gates remain separate."
+      }
     },
     {
       "description": "Independent loss units/channels, exact/lower-bound/unknown/capped-signal distinctions; survives-full-map producer contract",
       "id": "CP-R04",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP03",
         "CP04"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP03 counter/loss and CP04 insertion accepted: loss units/channels and survives-full-map contract covered; full runtime qualification and ABI/producer gates remain."
+      }
     },
     {
       "description": "Checked sample/baseline/delta semantics; epoch replacement/reset/wrap never silently subtract",
       "id": "CP-R05",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP03",
         "CP09"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP03 counters and CP09 closure profiles accepted: sample/baseline/delta and epoch rules covered model-side; full runtime qualification remains open."
+      }
     },
     {
       "description": "Explicit generation match and bounded retained provenance; no unknown-ID collision or successor retirement",
       "id": "CP-R06",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP05"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP05 generation model accepted (50/52): generation match and bounded histories covered; runtime identity, adapters, profiles and migration remain later work."
+      }
     },
     {
       "description": "Separate immutable query overlays from persistent per-claim consumed loss",
       "id": "CP-R07",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP06",
         "CP11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP06 scoped views (73/75) and CP11 consumers (3x8/8) accepted: overlays vs consumed loss covered; reducer/audit/export/installed/migration remain later owners."
+      }
     },
     {
       "description": "Physical observations conserved once; alternatives and incomplete candidate sets yield justified bounds",
       "id": "CP-R08",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP07",
         "CP11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP07 count bounds (193/0) and CP11 consumers accepted: conservation and justified bounds covered; full runtime/profile qualification remains open."
+      }
     },
     {
       "description": "Clock-tagged half-open intervals and scoped ordering proof; stable sweep-unique event IDs preserve valid generation-local ordinal reuse; per-generation durations survive unrelated peak refusal",
       "id": "CP-R09",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP02",
         "CP05",
         "CP08",
         "CP11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP02/CP05/CP08/CP11 accepted: intervals, ordering proof, sweep-unique IDs and per-generation durations covered; full runtime qualification remains open."
+      }
     },
     {
       "description": "Checked closure evidence/profile and late invalidation without universal state machine or authority",
       "id": "CP-R10",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP09"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP09 closure profiles accepted model-only (NEW code, two-lane APPROVE): closure evidence and late invalidation covered without a universal machine; runtime qualification open."
+      }
     },
     {
       "description": "Exactly-once required shared loss feeds; missing and measured zero distinct",
       "id": "CP-R11",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP06",
         "CP11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP06 feeds and CP11 consumers accepted: exactly-once shared loss with missing-vs-zero distinction covered; reducer/audit/export/installed/migration remain."
+      }
     },
     {
       "description": "Strict bounded neutral replay and shared cross-language-ready vectors; constructors enforce the same semantics",
       "id": "CP-R12",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SATISFIED",
+        "reason": "CP10 replay 15/15 + neutral 8/8 accepted with ratified surface (RATIFY-2026-10-23-CP10): strict bounded replay, cross-language-ready vectors and enforcing constructors delivered; M6 client consumption is separate requirements business."
+      }
     },
     {
       "description": "Versioned corrections update every participating holder; stale/out-of-order correction refuses",
       "id": "CP-R13",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP06",
         "CP11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "CP06 corrections and CP11 holders accepted: versioned updates with stale/out-of-order refusal covered; reducer/audit/export/installed/migration remain."
+      }
     },
     {
       "description": "Evaluate cross-stage count/byte reservations against two independent consumers before stable extraction",
       "id": "CP-R14",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-capture-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "CP12"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SATISFIED",
+        "reason": "CP12 gated pilot accepted (10/10 + 2 consumer experiments): cross-stage reservations evaluated against two independent consumers; stable export deferral is follow-up outside this requirement evaluate-before-extract text."
+      }
     },
     {
       "description": "Independent positive/active-negative oracles and semantic known-bad controls for every promoted mechanism",
@@ -973,7 +1938,7 @@
       "description": "Prefer an existing implementation plus a narrow tested adapter.",
       "id": "SB-R03",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "SB01",
         "SB02",
@@ -981,7 +1946,11 @@
         "BP01",
         "BP09",
         "TC01"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "Demonstrated across SB01/SB02/LX01/BP01/BP09/TC01 acceptances (btf-rs adaptation, fixture recovery, contract register): existing-plus-adapter holds; remains standing policy for future tasks."
+      }
     },
     {
       "description": "Keep independently useful packages and additive features.",
@@ -1178,12 +2147,16 @@
       "description": "Keep implementation parallelism safe and reviewable.",
       "id": "SB-R16",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "SB01",
         "TT08",
         "RL01"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TT08 causal selection/scheduling and RL01 adversarial review accepted: parallelism stays safe and reviewable; RL01 re-runs when NX lands per its record."
+      }
     },
     {
       "description": "Preserve issue knowledge and upstream removal tests.",
@@ -1221,39 +2194,55 @@
       "description": "Adopt upstream dependencies where they supply the selected contract; record wrappers and provenance",
       "id": "LX-R01",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX01"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "LX01 contract register accepted: upstream-adoption recording established; new adoptions extend it (BP09 btf-rs recorded separately)."
+      }
     },
     {
       "description": "Retain the opened regular inode; refuse proc-fd failure without reopening a pathname",
       "id": "LX-R02",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX02"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SATISFIED",
+        "reason": "LX02 held-file authority accepted: opened-inode retention and proc-fd-failure refusal without pathname reopen fully cover this requirement text; no open facets."
+      }
     },
     {
       "description": "Full read starts at offset zero, preserves shared cursor, bounds every attempted read and rejects observed change",
       "id": "LX-R03",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX03"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "LX03 bounded reader accepted: offset-zero, cursor-preserving, bounded reads with change rejection covered; mapped-image and installed conformance remain open."
+      }
     },
     {
       "description": "Separate input bytes, syscall work, buffer capacity, retained memory and cooperative wait bounds",
       "id": "LX-R04",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX03",
         "LX04",
         "LX10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "LX03/LX04/LX10 accepted: input/work/capacity/memory/wait bounds separated and covered; mapped-image and installed conformance remain open."
+      }
     },
     {
       "description": "Return stage/reason/source/effect and explicit cleanup disposition; do not parse error strings",
@@ -1386,10 +2375,14 @@
       "description": "Bound traversal before enqueue/read/sort, and include global plus per-round costs",
       "id": "LX-R17",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX10"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SATISFIED",
+        "reason": "LX10 bounded discovery accepted (walk 34/0, D03 consumed): pre-enqueue/read/sort traversal bounds with global plus per-round costs fully cover this text; no open facets."
+      }
     },
     {
       "description": "Independently wired clients and developer/operator checks exercise their actual package copy",
@@ -1427,11 +2420,15 @@
       "description": "Diagnostics emit no unsolicited output; safe bounded rendering is separate from sensitive raw fields",
       "id": "LX-R21",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-linux-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "LX02",
         "LX11"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "LX02 authority plus LX11 wired clients (10/10 + 8/8) and conformance accepted: bounded rendering separated from sensitive fields; new-component fields extend coverage as they land."
+      }
     },
     {
       "description": "Versioned additive features and non-exhaustive outcomes reject incompatible evidence",
@@ -1501,10 +2498,14 @@
       "description": "The owned-workload file observer is a genuine non-crypto application of the Linux and capture components. It observes held descriptors, independently generated A/B file contents and path replacement; it reports effects, limits, inconclusive states and final owner disposition. It neither scans unrelated processes nor changes credentials, limits, signals or namespaces. |",
       "id": "SDK-R06",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-sdk-native-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "SDK04"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "SDK04 in-crate observer accepted (11/11): held descriptors, A/B contents, replacement and disposition reporting covered without touching credentials/limits/signals/namespaces; plan-text binary app is follow-up SDK04-binary."
+      }
     },
     {
       "description": "An owned fixture ledger establishes expectations independently of production reads and capture reducers. Positive A and active negative B both execute. A path-reopen mutant, unknown-as-zero mutant and fabricated complete-session mutant each fail their intended assertion after verified setup. |",
@@ -1793,28 +2794,40 @@
       "description": "Combine tests according to their proof limits.",
       "id": "TT-R09",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TT06"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TT06 campaign scaffolding accepted with PPV mutation proof: fault/property/model/fuzz combination per proof limits covered; Miri/libFuzzer/per-target models stay with later owners."
+      }
     },
     {
       "description": "Deliver complete offline run-only packages.",
       "id": "TT-R10",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TT07"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TT07 operator (16/16) plus installed matrix (23/23) accepted with ratified exit table: offline run-only delivery route covered; per-package downstream delivery continues as packages land."
+      }
     },
     {
       "description": "Select changed checks by causal impact.",
       "id": "TT-R11",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TT08"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SATISFIED",
+        "reason": "TT08 core plus GitHub tail accepted (select 12/12, qual 57/57): causal changed-check selection with safe parallel scheduling fully covers this text; no open facets."
+      }
     },
     {
       "description": "Bound tests, resource custody and retained evidence.",
@@ -1835,10 +2848,14 @@
       "description": "Measure performance and coexistence without hiding correctness.",
       "id": "TT-R13",
       "spec": "docs/superpowers/specs/2026-10-17-scopebase-testing-design.md",
-      "status": "PLANNED",
+      "status": "DISPOSITIONED",
       "tasks": [
         "TT09"
-      ]
+      ],
+      "disposition": {
+        "verdict": "SCOPED",
+        "reason": "TT09 measurement accepted (22/22 + coexistence 6/6 + qual 76/76): perf/coexistence without hiding correctness covered; 3 live baselines unbuilt with recorded reasons."
+      }
     },
     {
       "description": "Make support and documentation derive from qualified profiles.",
@@ -1884,7 +2901,8 @@
     "partial_readiness": "Task progress and profile results are separate. A qualified held-file or SDK-host increment cannot close full LX12 or SDK09 scope. Every task starts PLANNED.",
     "profile_composition": "Expand requires_profiles and requires_extensions transitively before environment discovery. Required profile and extension results are separately bound; omitted closure is incomplete. Profile gates activate when any listed profile is in the expanded set AND every when_extensions ID is selected. The independent checker recomputes closure; reasons are explanatory only.",
     "profile_gates": "Additional task prerequisites when accepting a candidate-selected profile or operation described by reason. They never waive required cases. Profiles and required cells freeze before environment discovery.",
-    "source_coverage": "179 rows: 81 source TODO, 33 H families (32 initial plus new H33 license boundary), 23 G gaps also represented in TODO, 14 UC cases and 28 overlap rows. Mapping is not ported or passing tests."
+    "source_coverage": "179 rows: 81 source TODO, 33 H families (32 initial plus new H33 license boundary), 23 G gaps also represented in TODO, 14 UC cases and 28 overlap rows. Mapping is not ported or passing tests.",
+    "requirement_promotion": "REQ-STATUS01 (2026-11-01): a requirement leaves PLANNED for DISPOSITIONED iff all owner tasks are ACCEPTED and it carries an individual disposition {verdict SATISFIED|SCOPED|OPEN, reason >= 32 chars naming covered scope and remaining owners}. Verdicts judge requirement text against recorded acceptance scopes; the integration-evidence-audit tiering is a global caveat recorded in TODO, not a per-requirement facet. PLANNED requirements carry no disposition. Blanket flips fail check_planning_docs.py."
   },
   "source_obligations": [
     {

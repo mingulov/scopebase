@@ -6,7 +6,7 @@ Task progress is administrative; acceptance records never certify runtime suppor
 Counts and unqualified capability guards describe the current foundation schema.
 Amend those guards explicitly when a later qualification schema is implemented.
 """
-import collections, json, os, re, subprocess
+import collections, hashlib, json, os, re, subprocess
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -252,7 +252,21 @@ for p,body in docs.items():
 requirements=reg['requirements']
 if len(requirements)!=120 or {r['id'] for r in requirements}!=set(spec_ids): fail('requirement registry differs from specifications')
 for r in requirements:
-    if r.get('status')!='PLANNED': fail(r['id']+': requirement status must remain PLANNED')
+    state=r.get('status')
+    if state not in ('PLANNED','DISPOSITIONED'): fail(r['id']+': requirement status must be PLANNED or DISPOSITIONED')
+    owners=r.get('tasks') or []
+    complete=bool(owners) and all(task_map.get(t,{}).get('status')=='ACCEPTED' for t in owners)
+    disp=r.get('disposition')
+    if state=='DISPOSITIONED':
+        if not complete: fail(r['id']+': requirement disposition requires all owner tasks ACCEPTED')
+        if not isinstance(disp,dict): fail(r['id']+': requirement disposition must state verdict and reason')
+        else:
+            if disp.get('verdict') not in ('SATISFIED','SCOPED','OPEN'): fail(r['id']+': requirement disposition verdict must be SATISFIED, SCOPED or OPEN')
+            reason=disp.get('reason')
+            if not isinstance(reason,str) or len(reason.strip())<32: fail(r['id']+': requirement disposition reason must be substantive (>= 32 chars)')
+    elif state=='PLANNED':
+        if disp is not None: fail(r['id']+': PLANNED requirement must not carry a disposition')
+        if complete: fail(r['id']+': requirement with all tasks ACCEPTED must be DISPOSITIONED')
     if root/r['spec']!=spec_ids.get(r['id']): fail(r['id']+': wrong spec path')
     if not r['tasks'] or any(t not in task_map for t in r['tasks']): fail(r['id']+': missing/dangling owner')
     for t in r['tasks']:
@@ -261,6 +275,32 @@ for t in tasks:
     for ident in t['requirements']:
         r=next((r for r in requirements if r['id']==ident),None)
         if not r or t['id'] not in r['tasks']: fail(t['id']+': asymmetric requirement mapping')
+amendments=reg.get('plan_amendments')
+if not isinstance(amendments,list): fail('plan_amendments is not a list')
+else:
+    for i,a in enumerate(amendments):
+        tag=f'amendment {i}'
+        date=a.get('date','')
+        if not isinstance(date,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',date): fail(tag+': date must be YYYY-MM-DD'); continue
+        if date<'2026-10-22': continue
+        summary=a.get('summary')
+        if not isinstance(summary,str) or not summary.strip(): fail(tag+': summary must be nonempty text')
+        arts=a.get('artifacts')
+        if not isinstance(arts,list) or not arts: fail(tag+': entries dated 2026-10-22+ must list hashed artifacts')
+        else:
+            for art in arts:
+                path=art.get('path') if isinstance(art,dict) else None
+                want=art.get('blob_sha1') if isinstance(art,dict) else None
+                if not isinstance(path,str) or not (root/path).is_file(): fail(tag+f': artifact {path} missing'); continue
+                if not isinstance(want,str) or not re.fullmatch(r'[0-9a-f]{40}',want): fail(tag+f': artifact {path} blob_sha1 must be 40 hex'); continue
+                data=(root/path).read_bytes()
+                got=hashlib.sha1(b'blob %d\0'%len(data)+data).hexdigest()
+                if got!=want: fail(tag+f': artifact {path} blob mismatch')
+        frozen=a.get('counts_unchanged')
+        if not isinstance(frozen,dict): fail(tag+': counts_unchanged must state tasks/requirements/source_obligations')
+        elif frozen.get('tasks')!=len(tasks) or frozen.get('requirements')!=len(requirements) or frozen.get('source_obligations')!=len(reg.get('source_obligations',[])): fail(tag+': counts_unchanged differs from registry counts')
+        for tid in a.get('task_ids',[]) or []:
+            if tid not in task_map: fail(tag+f': unknown task {tid}')
 expected={'research_todo':set(todo),'regression_family':set(h),'public_contract_gap':set(g),'user_conformance':set(uc),'overlap_row':{'OV'+x for x in ov}}
 observed=collections.defaultdict(list)
 for o in reg['source_obligations']:

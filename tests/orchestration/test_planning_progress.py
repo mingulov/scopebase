@@ -40,6 +40,9 @@ class PlanningProgressTests(unittest.TestCase):
         for task in self.registry['tasks']:
             task['status'] = 'PLANNED'
             task.pop('acceptance', None)
+        for req in self.registry['requirements']:
+            req['status'] = 'PLANNED'
+            req.pop('disposition', None)
         self.write(REGISTRY, json.dumps(self.registry, indent=2) + '\n')
         todo = self.repo / 'TODO.md'
         todo.write_text(todo.read_text().replace('- [x] [', '- [ ] ['))
@@ -202,6 +205,12 @@ class PlanningProgressTests(unittest.TestCase):
         for task in ('SB01', 'SB02', 'SB03', 'BP01', 'TC01', 'TC02', 'TC03'):
             self.progress(task_id=task)
         self.assertEqual(self.tasks['BP09']['status'], 'PLANNED')
+        # REQ-STATUS01: the chain completes TC-R02, so the valid fixture
+        # carries its disposition.
+        req = next(r for r in self.registry['requirements'] if r['id'] == 'TC-R02')
+        req['status'] = 'DISPOSITIONED'
+        req['disposition'] = {'verdict': 'SCOPED',
+                              'reason': 'Fixture disposition for the profile-gate test chain.'}
         self.check()
 
     def test_top_execution_state_must_match_task_progress(self):
@@ -252,6 +261,110 @@ class PlanningProgressTests(unittest.TestCase):
         self.check()
         extension['status'] = 'QUALIFIED'
         self.check('extension status')
+
+    # REQ-STATUS01: requirement promotion rule. LX-R01 is owned by LX01
+    # alone; accepting SB01/SB02/LX01 completes exactly that requirement
+    # (no other requirement resolves over subsets of the chain).
+    def accept_lx_chain(self):
+        for task_id in ('SB01', 'SB02', 'LX01'):
+            self.progress(task_id)
+        return next(r for r in self.registry['requirements']
+                    if r['id'] == 'LX-R01')
+
+    def test_dispositioned_requirement_with_all_tasks_accepted_is_valid(self):
+        req = self.accept_lx_chain()
+        req['status'] = 'DISPOSITIONED'
+        req['disposition'] = {
+            'verdict': 'SCOPED',
+            'reason': 'LX01 held-file increment accepted; mappings remain LX02 work.',
+        }
+        self.check()
+
+    def test_all_accepted_tasks_without_disposition_is_rejected(self):
+        self.accept_lx_chain()
+        self.check('LX-R01: requirement with all tasks ACCEPTED must be DISPOSITIONED')
+
+    def test_disposition_without_all_tasks_accepted_is_rejected(self):
+        self.progress('SB01')
+        req = next(r for r in self.registry['requirements'] if r['id'] == 'LX-R01')
+        req['status'] = 'DISPOSITIONED'
+        req['disposition'] = {'verdict': 'SCOPED', 'reason': 'x' * 40}
+        self.check('LX-R01: requirement disposition requires all owner tasks ACCEPTED')
+
+    def test_disposition_without_object_is_rejected(self):
+        req = self.accept_lx_chain()
+        req['status'] = 'DISPOSITIONED'
+        self.check('LX-R01: requirement disposition must state verdict and reason')
+
+    def test_disposition_with_bad_verdict_is_rejected(self):
+        req = self.accept_lx_chain()
+        req['status'] = 'DISPOSITIONED'
+        req['disposition'] = {'verdict': 'DONE', 'reason': 'y' * 40}
+        self.check('LX-R01: requirement disposition verdict must be SATISFIED, SCOPED or OPEN')
+
+    def test_disposition_with_short_reason_is_rejected(self):
+        req = self.accept_lx_chain()
+        req['status'] = 'DISPOSITIONED'
+        req['disposition'] = {'verdict': 'SCOPED', 'reason': 'too short'}
+        self.check('LX-R01: requirement disposition reason must be substantive')
+
+    def test_planned_requirement_with_disposition_is_rejected(self):
+        req = next(r for r in self.registry['requirements'] if r['id'] == 'LX-R01')
+        req['disposition'] = {'verdict': 'SCOPED', 'reason': 'z' * 40}
+        self.check('LX-R01: PLANNED requirement must not carry a disposition')
+
+    def test_unknown_requirement_status_is_rejected(self):
+        req = next(r for r in self.registry['requirements'] if r['id'] == 'LX-R01')
+        req['status'] = 'SATISFIED'
+        self.check('requirement status must be PLANNED or DISPOSITIONED')
+
+    # TRACE-AMEND01: dated amendments with hashed artifacts.
+    def test_valid_new_amendment_is_accepted(self):
+        blob = self.git('hash-object', 'TODO.md').stdout.strip()
+        self.registry['plan_amendments'].append({
+            'date': '2026-10-22',
+            'summary': 'Fixture ratification record.',
+            'artifacts': [{'path': 'TODO.md', 'blob_sha1': blob}],
+            'task_ids': ['SB01'],
+            'implementation_or_qualification_claim': False,
+            'existing_task_ids_unchanged': True,
+            'counts_unchanged': {'tasks': 86, 'requirements': 120,
+                                 'source_obligations': 179},
+        })
+        self.check()
+
+    def test_new_amendment_without_hashes_is_rejected(self):
+        tag = f'amendment {len(self.registry["plan_amendments"])}'
+        self.registry['plan_amendments'].append({
+            'date': '2026-10-22',
+            'summary': 'Unhashed record.',
+            'counts_unchanged': {'tasks': 86, 'requirements': 120,
+                                 'source_obligations': 179},
+        })
+        self.check(tag + ': entries dated 2026-10-22+ must list hashed artifacts')
+
+    def test_new_amendment_with_wrong_blob_is_rejected(self):
+        tag = f'amendment {len(self.registry["plan_amendments"])}'
+        self.registry['plan_amendments'].append({
+            'date': '2026-10-22',
+            'summary': 'Wrong hash record.',
+            'artifacts': [{'path': 'TODO.md', 'blob_sha1': '0' * 40}],
+            'counts_unchanged': {'tasks': 86, 'requirements': 120,
+                                 'source_obligations': 179},
+        })
+        self.check(tag + ': artifact TODO.md blob mismatch')
+
+    def test_new_amendment_with_counts_drift_is_rejected(self):
+        tag = f'amendment {len(self.registry["plan_amendments"])}'
+        blob = self.git('hash-object', 'TODO.md').stdout.strip()
+        self.registry['plan_amendments'].append({
+            'date': '2026-10-22',
+            'summary': 'Drifted counts record.',
+            'artifacts': [{'path': 'TODO.md', 'blob_sha1': blob}],
+            'counts_unchanged': {'tasks': 86, 'requirements': 121,
+                                 'source_obligations': 179},
+        })
+        self.check(tag + ': counts_unchanged differs from registry counts')
 
 
 if __name__ == '__main__':
