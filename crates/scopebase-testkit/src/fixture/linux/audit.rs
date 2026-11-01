@@ -7543,11 +7543,12 @@ mod tests {
     /// bits) 0 is RDONLY, 1/2 are WRONLY/RDWR.
     /// Missing/unparseable flags answer false (fail-closed:
     /// an unverifiable holder is never treated as a writer).
-    #[cfg(target_arch = "x86_64")]
     /// R21-004: direction predicate shared by the fdinfo
     /// text parse (below) and the pidfd-pinned F_GETFL read
     /// (same predicate, different source — an open file
-    /// description's access mode either way).
+    /// description's access mode either way). R23-002:
+    /// intentionally ungated — a pure predicate with an
+    /// ungated caller (`fdinfo_flags_grant_write`).
     fn open_flags_grant_write(mode: u32) -> bool {
         mode & 0o3 != 0
     }
@@ -11972,6 +11973,10 @@ mod tests {
         loud();
     }
 
+    // R23-002: the Drop impl of the x86-gated
+    // FixtureGuard is itself x86-gated (an ungated impl
+    // is an unresolved type on other architectures).
+    #[cfg(target_arch = "x86_64")]
     impl Drop for FixtureGuard {
         fn drop(&mut self) {
             if self.disarmed {
@@ -13630,7 +13635,10 @@ mod tests {
     /// different-birth replacement (R21-018's repaired
     /// occupancy error, repeated). The original birth
     /// tick is always available at the call sites (the
-    /// transmitted pair / pre-death stat).
+    /// transmitted pair / pre-death stat). R23-002:
+    /// x86-gated (calls the x86-gated `proc_starttime`;
+    /// all callers are x86-gated).
+    #[cfg(target_arch = "x86_64")]
     fn assert_sleeper_discharged(pid: libc::pid_t, orig: u64) {
         match proc_starttime(pid) {
             Ok(None) => {}
@@ -24467,7 +24475,10 @@ mod tests {
     /// R22-017: run a fresh-image probe child, collecting
     /// its output EVEN on timeout. The wrapper judges
     /// completion via `timed_out` + a DONE marker, never
-    /// by output presence alone.
+    /// by output presence alone. R23-002: x86-gated (uses
+    /// the x86-gated `FixtureGuard`; the caller is
+    /// x86-gated).
+    #[cfg(target_arch = "x86_64")]
     fn run_fresh_probe_collect(env: &str, test: &str) -> ProbeOutcome {
         let exe = std::env::current_exe().expect("own test binary");
         let mut child = std::process::Command::new(exe)
@@ -27415,7 +27426,11 @@ time.sleep(30)
     /// run denied) PLUS a printed birth for wrapper-side
     /// backstop (a staging panic before disarm would
     /// otherwise strand past the denied drop). Duration
-    /// 900 is unique to this test.
+    /// 900 is unique to this test. R23-002: x86-gated
+    /// (uses `FixtureGuard`/`proc_starttime`; the wrapper
+    /// is x86-gated, so the name-spawn never fires
+    /// elsewhere).
+    #[cfg(target_arch = "x86_64")]
     fn pidfd_globally_denied_probe_stays_unresolved_probe() {
         use super::super::seccomp::{install_deny_one, DenyAction};
         use std::os::unix::io::AsRawFd as _;

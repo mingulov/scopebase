@@ -4532,7 +4532,18 @@ fn middleman_guard_unpinned_zombie_leaves_m2_for_caller() {
 fn middleman_guard_denied_pin_reports_unpinned_probe() {
     use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
     use std::panic::AssertUnwindSafe;
-    install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).expect("deny installs (staging)");
+    // R23-002: `unsupported_arch` skips explicitly
+    // (seccomp denial is x86-only — exit 0 with the SKIP
+    // marker; the wrapper judges the marker, never the
+    // install). Any other install failure is still
+    // staging-broken.
+    if let Err(error) = install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm) {
+        if error.stage() == "unsupported_arch" {
+            eprintln!("R22007-SKIP unsupported_arch (seccomp denial unavailable)");
+            return;
+        }
+        panic!("deny installs (staging): {error}");
+    }
     assert_eq!(
         scopebase_testkit::fixture::linux::seccomp::pidfd_open_raw(std::process::id() as i32),
         Err(libc::EPERM),
@@ -4573,6 +4584,13 @@ fn middleman_guard_denied_pin_reports_unpinned() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // R23-002: explicit unsupported_arch skip (the probe
+    // stages nothing on this path — no custody to run —
+    // so the check precedes the M2 parse).
+    if stderr.contains("R22007-SKIP") {
+        eprintln!("skip: seccomp pidfd_open denial unsupported on this arch (see probe stderr)");
+        return;
+    }
     let (m2, tick2): (i32, u64) = stdout
         .lines()
         .find_map(|line| {
@@ -5036,7 +5054,18 @@ fn reportless_probe_denied_stays_unresolved_probe() {
         .expect("staging broken (m1 visible)");
     println!("R22009-M1 {m1} {tick1}");
     std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
-    install_deny_kill_negative_pid(DenyAction::Eperm).expect("deny installs (staging)");
+    // R23-002: `unsupported_arch` skips explicitly
+    // (seccomp denial is x86-only — exit 0 with the SKIP
+    // marker; the wrapper judges the marker, never the
+    // install). Any other install failure is still
+    // staging-broken.
+    if let Err(error) = install_deny_kill_negative_pid(DenyAction::Eperm) {
+        if error.stage() == "unsupported_arch" {
+            eprintln!("R22009-SKIP unsupported_arch (seccomp denial unavailable)");
+            return;
+        }
+        panic!("deny installs (staging): {error}");
+    }
     let own = unsafe { libc::getpgid(0) };
     let self_pid = std::process::id() as i32;
     assert_eq!(
@@ -5095,6 +5124,14 @@ fn reportless_probe_denied_stays_unresolved() {
         kill_sleep_with_dur("856"),
         "wrapper must drain the live sleep 856"
     );
+    // R23-002: explicit unsupported_arch skip (custody
+    // above still proves clean — the probe staged and
+    // printed pre-install, then exited 0 — so only the
+    // verdicts below are skipped).
+    if stderr.contains("R22009-SKIP") {
+        eprintln!("skip: seccomp killpg denial unsupported on this arch (see probe stderr)");
+        return;
+    }
     assert!(!outcome.timed_out, "probe must complete\n{stderr}");
     assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
     assert!(
@@ -5176,7 +5213,18 @@ fn reportless_preexec_stall_denied_stays_unresolved_probe() {
     }
     assert!(pinned, "staging broken (stub never stopped-grouped?)");
     eprintln!("R22016B-SCAN-BLIND");
-    install_deny_one(libc::SYS_kill, DenyAction::Eperm).expect("deny installs (staging)");
+    // R23-002: `unsupported_arch` skips explicitly
+    // (seccomp denial is x86-only — exit 0 with the SKIP
+    // marker; the wrapper judges the marker, never the
+    // install). Any other install failure is still
+    // staging-broken.
+    if let Err(error) = install_deny_one(libc::SYS_kill, DenyAction::Eperm) {
+        if error.stage() == "unsupported_arch" {
+            eprintln!("R22016B-SKIP unsupported_arch (seccomp denial unavailable)");
+            return;
+        }
+        panic!("deny installs (staging): {error}");
+    }
     let self_pid = std::process::id() as i32;
     let probed_self = unsafe { libc::kill(self_pid, 0) };
     let errno_self = std::io::Error::last_os_error().raw_os_error();
@@ -5248,6 +5296,14 @@ fn reportless_preexec_stall_denied_stays_unresolved() {
         birth_drained_007(stub, tick_stub, Duration::from_secs(5)),
         "wrapper must drain the stub"
     );
+    // R23-002: explicit unsupported_arch skip (custody
+    // above still proves clean — the probe staged and
+    // printed pre-install, then exited 0 — so only the
+    // verdicts below are skipped).
+    if stderr.contains("R22016B-SKIP") {
+        eprintln!("skip: seccomp kill denial unsupported on this arch (see probe stderr)");
+        return;
+    }
     assert!(!outcome.timed_out, "probe must complete\n{stderr}");
     assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
     assert!(
@@ -10410,7 +10466,18 @@ fn errlog_nonce() -> u64 {
 fn publisher_guard_denied_kill_reports_unresolved_probe() {
     use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
     use std::io::BufRead as _;
-    install_deny_one(libc::SYS_kill, DenyAction::Eperm).expect("deny-kill installs (staging)");
+    // R23-002: `unsupported_arch` skips explicitly
+    // (seccomp denial is x86-only — exit 0 with the SKIP
+    // marker; the wrapper judges the marker, never the
+    // install). Any other install failure is still
+    // staging-broken.
+    if let Err(error) = install_deny_one(libc::SYS_kill, DenyAction::Eperm) {
+        if error.stage() == "unsupported_arch" {
+            eprintln!("R22006-SKIP unsupported_arch (seccomp denial unavailable)");
+            return;
+        }
+        panic!("deny-kill installs (staging): {error}");
+    }
     // SAFETY: signal 0 to self probes only.
     let probed = unsafe { libc::kill(std::process::id() as i32, 0) };
     assert_eq!(probed, -1, "staging broken (kill not denied?)");
@@ -10471,6 +10538,13 @@ fn publisher_guard_denied_kill_reports_unresolved() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // R23-002: explicit unsupported_arch skip (the probe
+    // stages nothing on this path — no custody to run —
+    // so the check precedes the sleeper parse).
+    if stderr.contains("R22006-SKIP") {
+        eprintln!("skip: seccomp kill denial unsupported on this arch (see probe stderr)");
+        return;
+    }
     // R12 (twin): no transmitted birth ⟹ sweep by the
     // unique duration, clean the errlog best-effort,
     // fail loud (same as lib).
