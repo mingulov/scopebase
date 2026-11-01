@@ -278,9 +278,11 @@ fn stat_state_pgrp(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
 /// or any unfreezable/unreapable m1, fails LOUD (citing
 /// m1/the group) — never a silent strand.
 /// Residual (accepted): on the wedged-box fallback path
-/// (m1 unfreezable for 5 s) m1 could fork m2 between the
-/// best-effort pgrp read and its death — µs-narrow, gated
-/// behind a wedged box, and loud.
+/// (m1 unfreezable for 5 s) R22-008 kills the group
+/// UNCONDITIONALLY (m1 pinned ⟹ ours-or-nonexistent) —
+/// the remaining hole is m1 forking m2 between the
+/// killpg and its own death (µs-narrow, gated behind a
+/// wedged box, and loud via R22008-ASSUMED-GROUPED).
 #[cfg(test)]
 fn retire_reportless_middleman(m1: libc::pid_t) {
     use std::time::{Duration, Instant};
@@ -323,11 +325,31 @@ fn retire_reportless_middleman(m1: libc::pid_t) {
         unsafe {
             libc::kill(m1, libc::SIGKILL);
         }
-        if stat_state_pgrp(m1).is_some_and(|(_, g)| g == m1) {
-            // SAFETY: pinned group — ours by construction.
-            unsafe {
-                libc::killpg(m1, libc::SIGKILL);
+        // R22-008: UNCONDITIONAL group-kill — m1 is unreaped
+        // (pinned), so group m1 is ours-or-nonexistent and
+        // the killpg is sound either way (hits an
+        // already-born m2 or ESRCH-nops). The old
+        // `is_some_and(pgrp == m1)` gate re-read None under
+        // a stat outage and SUPPRESSED the kill (m1 killed
+        // + reaped, live m2 stranded — no fork race needed;
+        // m2 can predate the outage). The read below only
+        // characterizes the kill LOUDLY, never gates it.
+        match stat_state_pgrp(m1) {
+            Some((_, g)) if g == m1 => {
+                eprintln!("R22008-ASSUMED-GROUPED: middleman {m1} grouped at fallback read — group-killing");
             }
+            Some((_, g)) => {
+                eprintln!("R22008-ASSUMED-GROUPED: middleman {m1} ungrouped at fallback read (pgrp {g} — m2 unborn?) — killpg anyway (pinned: ours-or-nonexistent, ESRCH-nop when absent)");
+            }
+            None => {
+                eprintln!("R22008-ASSUMED-GROUPED: middleman {m1} pgrp UNREADABLE at fallback (outage?) — killpg anyway (pinned: ours-or-nonexistent; an already-born m2 dies, never strands)");
+            }
+        }
+        // SAFETY: pinned group — ours-or-nonexistent while
+        // m1 is unreaped (no foreign group can hold the
+        // pinned number).
+        unsafe {
+            libc::killpg(m1, libc::SIGKILL);
         }
         reap_child_bounded(m1, "R21008-FALLBACK");
         return;
@@ -396,7 +418,23 @@ fn retire_reportless_middleman(m1: libc::pid_t) {
             // SAFETY: signal-0 probe (no delivery).
             let probed = unsafe { libc::killpg(m1, 0) };
             if probed != 0 {
-                eprintln!("R21008: group {m1} empty post-reap — m2 proven dead");
+                // R22-009: discriminate errno — ESRCH
+                // proves empty (a live grouped m2 would
+                // hold the group open); EPERM/other (a
+                // filter denying group signals denies the
+                // m2 kills AND this probe) fails
+                // LOUD-UNRESOLVED — never an empty
+                // citation. The old `!= 0` treated EVERY
+                // failure as ESRCH-empty and falsely
+                // certified death over live m2. The
+                // pre-reap killpgs stay fire-and-forget
+                // (this probe is the backstop).
+                let errno = std::io::Error::last_os_error().raw_os_error();
+                if errno == Some(libc::ESRCH) {
+                    eprintln!("R21008: group {m1} empty post-reap (ESRCH) — m2 proven dead");
+                    break;
+                }
+                eprintln!("R22009-UNRESOLVED: group {m1} post-reap probe failed errno {errno:?} (not ESRCH — group-signal denial?) — m2 fate UNKNOWN, never an empty citation");
                 break;
             }
             if Instant::now() >= end {
@@ -467,7 +505,7 @@ fn reap_child_bounded(pid: libc::pid_t, tag: &str) {
 #[cfg(test)]
 pub unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(libc::pid_t, libc::pid_t)> {
     // SAFETY: same contract as the inner helper.
-    unsafe { fork_pausing_grandchild_sleep_inner(dur, false).0 }
+    unsafe { fork_pausing_grandchild_sleep_inner(dur, false, true).0 }
 }
 
 /// R21-008: jammed-report variant — drops the report read
@@ -493,13 +531,155 @@ pub unsafe fn fork_pausing_grandchild_sleep_jam_report(
     dur: &str,
 ) -> (Option<(libc::pid_t, libc::pid_t)>, libc::pid_t) {
     // SAFETY: same contract as the inner helper.
-    unsafe { fork_pausing_grandchild_sleep_inner(dur, true) }
+    unsafe { fork_pausing_grandchild_sleep_inner(dur, true, true) }
+}
+
+/// R22-008/009: jammed-report SPAWN ONLY — the jam arm's
+/// spawn + birth-gate WITHOUT the production tail (fault
+/// probes stage the pair healthy, print custody, THEN
+/// inject the fault before running the tail themselves).
+/// Returns `Some(m1)` (m2 born-proven, pids unknown) or
+/// `None` on spawn failure; the birth-gate still panics
+/// loud on an unborn m2 (never a vacuous staging).
+///
+/// Custody: the caller owns the live pair on return (m1
+/// pauses forever, m2 sleeps `dur`) — print the pids (or
+/// arm a guard) IMMEDIATELY; there is no backstop between
+/// return and the caller's first custody act.
+///
+/// # Safety
+///
+/// Same fork contract as
+/// [`fork_pausing_grandchild_sleep`].
+#[cfg(test)]
+pub unsafe fn fork_pausing_grandchild_sleep_jam_noretire(dur: &str) -> Option<libc::pid_t> {
+    // SAFETY: same contract as the inner helper.
+    let (_, m1) = unsafe { fork_pausing_grandchild_sleep_inner(dur, true, false) };
+    (m1 > 0).then_some(m1)
+}
+
+/// R22-016(b): PRE-EXEC-STALL pair spawn — m1 self-groups
+/// first-thing (same program order as the jam spawner:
+/// `stub born ⟹ stub grouped`), forks the stub, then
+/// pauses forever. The stub stops ITSELF first-thing
+/// (`raise(SIGSTOP)` before any exec — it never execs)
+/// and then pauses: this stages the finding's
+/// "fork-proven, descheduled before execve" shape
+/// SYNCHRONOUSLY (no scheduling luck — the stub is
+/// provably pre-exec whenever the parent observes it).
+/// The stub's cmdline is the inherited middleman image
+/// (argv0 ≠ `sleep`) — the argv0 scan is blind to it by
+/// construction.
+///
+/// Returns `(m1, stub)` (stub birth-gated on m1's
+/// children file — panics loud when unborn, never
+/// vacuous; the stub pid is parsed from that same file).
+/// `dur` is the scan key, not an argv (the stub never
+/// execs — nothing stages it): the caller's scan-blind
+/// pin asserts no `sleep dur` is visible, and the value
+/// doubles as the stray-hunt tag. (The parameter exists
+/// so call sites stay duration-keyed like the jam
+/// spawner.)
+///
+/// Custody: the caller owns both on return (m1 pauses
+/// forever, the stub sleeps stopped) — print the pids
+/// (or arm guards) IMMEDIATELY; there is no backstop
+/// between return and the caller's first custody act.
+/// Cleanup is numeric-kill by pid (SIGKILL kills a
+/// stopped process — no CONT needed).
+///
+/// # Safety
+///
+/// Same fork contract as
+/// [`fork_pausing_grandchild_sleep`] (both children run
+/// syscalls only and never return).
+#[cfg(test)]
+pub unsafe fn fork_prestall_grandchild_jam_noretire(
+    dur: &str,
+) -> Option<(libc::pid_t, libc::pid_t)> {
+    let _ = dur;
+    // SAFETY: fork itself is always safe; both children
+    // uphold the syscall-only contract below.
+    let m1 = unsafe { libc::fork() };
+    if m1 == 0 {
+        unsafe {
+            // Self-group FIRST (same as the jam spawner —
+            // the tail's only channel to the stub).
+            // Syscall-only; failure exits pre-stub with
+            // the stub unborn (the parent's birth-gate
+            // fails staging-loud on exactly this).
+            if libc::setpgid(0, 0) != 0 {
+                libc::_exit(127);
+            }
+            shed_inherited_fds(&[]);
+            // Null stdio BEFORE forking the stub (the
+            // stub must hold no test pipe — the probe's
+            // output read cannot wedge).
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+            if null < 0 {
+                libc::_exit(127);
+            }
+            if libc::dup2(null, 0) < 0 || libc::dup2(null, 1) < 0 || libc::dup2(null, 2) < 0 {
+                libc::_exit(127);
+            }
+            if null > 2 {
+                libc::close(null);
+            }
+            let stub = libc::fork();
+            if stub == 0 {
+                // Stub: stop SELF before any exec (never
+                // execs — pre-exec by construction), then
+                // pause (reached only if CONT'd — cleanup
+                // KILLs instead).
+                libc::raise(libc::SIGSTOP);
+                loop {
+                    libc::pause();
+                }
+            }
+            if stub < 0 {
+                libc::_exit(127);
+            }
+            loop {
+                libc::pause();
+            }
+        }
+    }
+    if m1 < 0 {
+        return None;
+    }
+    // Birth-gate on m1's children file (the stub's pid is
+    // parsed from that same file — m1 has exactly one
+    // child).
+    let gate_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(kids) = std::fs::read_to_string(format!("/proc/{m1}/task/{m1}/children")) {
+            if let Some(first) = kids.split_whitespace().next() {
+                if let Ok(stub) = first.parse::<libc::pid_t>() {
+                    if stub > 0 {
+                        return Some((m1, stub));
+                    }
+                }
+            }
+        }
+        if std::time::Instant::now() >= gate_end {
+            match stat_state_pgrp(m1) {
+                Some((st, _)) => {
+                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?)")
+                }
+                None => {
+                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} dead pre-stub (self-exit? — regression vacuous, failing loud)")
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 #[cfg(test)]
 unsafe fn fork_pausing_grandchild_sleep_inner(
     dur: &str,
     jam: bool,
+    retire_on_jam: bool,
 ) -> (Option<(libc::pid_t, libc::pid_t)>, libc::pid_t) {
     use std::os::unix::io::FromRawFd as _;
     // Report pipe (CLOEXEC — out of the exec'd grandchild).
@@ -665,7 +845,9 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
                 }
             }
         }
-        retire_reportless_middleman(m1);
+        if retire_on_jam {
+            retire_reportless_middleman(m1);
+        }
         return (None, m1);
     }
     // Bounded report read (the middleman reports in µs).
@@ -802,6 +984,155 @@ mod tests {
                     "twin {name} must not use {banned} post-fork"
                 );
             }
+        }
+    }
+
+    /// R22-008 follow-up: sleep-duration scan keys must be
+    /// SUITE-DISJOINT — every `sleep NNN` argv staged by
+    /// the fork lib tests, the toolchain twin, and the
+    /// audit suite is a global key: a shared key lets one
+    /// suite's custody scan see (or tick-gated-KILL)
+    /// another suite's sleeper. Found the hard way: the
+    /// reportless legs first shipped
+    /// 951/953-956/959/963-964, ALL audit-held (re-keyed
+    /// to 851/853-856/859/863-864). The 9xx space is ~92%
+    /// spent — allocate REPO-WIDE (quoted, shell-embedded
+    /// `sleep NNN`, and bare forms) before adding a key;
+    /// THIS test enforces the disjointness (fork keys ∩
+    /// audit argv = ∅, twin keys ∩ audit argv = ∅, fork
+    /// keys ∩ twin keys = ∅). Convention pinned here:
+    /// scan keys are 3-digit (the collectors only track
+    /// 3-digit argv).
+    #[test]
+    fn sleep_scan_keys_disjoint_across_suites() {
+        use std::collections::BTreeSet;
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fork_rs = std::fs::read_to_string(root.join("src/fixture/linux/fork.rs"))
+            .expect("fork.rs readable");
+        let twin_rs = std::fs::read_to_string(root.join("tests/toolchain_invoke.rs"))
+            .expect("toolchain twin readable");
+        let audit_rs = std::fs::read_to_string(root.join("src/fixture/linux/audit.rs"))
+            .expect("audit.rs readable");
+        // 3-digit argv at a fork/twin sleep call site:
+        // helper-mediated (`*_with_dur("NNN")`,
+        // `*noretire("NNN")`, `*jam_report("NNN")`,
+        // `*grandchild_sleep("NNN")`) or direct
+        // (`Command::new("/bin/sleep")` + `.arg("NNN")`
+        // within 3 lines).
+        let scan_keys = |text: &str| -> BTreeSet<String> {
+            let mut keys = BTreeSet::new();
+            let lines: Vec<&str> = text.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                for trigger in [
+                    "with_dur(\"",
+                    "noretire(\"",
+                    "jam_report(\"",
+                    "grandchild_sleep(\"",
+                ] {
+                    let mut rest = *line;
+                    while let Some(at) = rest.find(trigger) {
+                        let after = &rest[at + trigger.len()..];
+                        if after.len() >= 4
+                            && after.as_bytes()[..3].iter().all(|b| b.is_ascii_digit())
+                            && after.as_bytes()[3] == b'"'
+                        {
+                            keys.insert(after[..3].to_string());
+                        }
+                        rest = after
+                            .chars()
+                            .next()
+                            .map(|c| &after[c.len_utf8()..])
+                            .unwrap_or("");
+                    }
+                }
+                if line.contains("Command::new(\"/bin/sleep\")") {
+                    for peer in lines.iter().skip(index + 1).take(3) {
+                        if let Some(at) = peer.find(".arg(\"") {
+                            let after = &peer[at + 6..];
+                            if after.len() >= 4
+                                && after.as_bytes()[..3].iter().all(|b| b.is_ascii_digit())
+                                && after.as_bytes()[3] == b'"'
+                            {
+                                keys.insert(after[..3].to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            keys
+        };
+        // Audit sleep argv (conservative superset): every
+        // quoted 3-digit literal plus every shell-embedded
+        // `sleep NNN`. (Counts/ports/bounds ride along —
+        // a scan key matching ANY of them is rejected;
+        // pick another key.)
+        let audit_argv = |text: &str| -> BTreeSet<String> {
+            let mut argv = BTreeSet::new();
+            for line in text.lines() {
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i + 4 < bytes.len() + 1 {
+                    if bytes[i] == b'"'
+                        && bytes[i + 1].is_ascii_digit()
+                        && bytes[i + 2].is_ascii_digit()
+                        && bytes[i + 3].is_ascii_digit()
+                        && bytes.get(i + 4) == Some(&b'"')
+                    {
+                        argv.insert(line[i + 1..i + 4].to_string());
+                        i += 5;
+                    } else {
+                        i += 1;
+                    }
+                }
+                let mut rest = line;
+                while let Some(at) = rest.find("sleep ") {
+                    let after = &rest[at + 6..];
+                    let digits: String = after
+                        .bytes()
+                        .take_while(u8::is_ascii_digit)
+                        .map(|b| b as char)
+                        .collect();
+                    if digits.len() == 3 {
+                        argv.insert(digits);
+                    }
+                    rest = after
+                        .chars()
+                        .next()
+                        .map(|c| &after[c.len_utf8()..])
+                        .unwrap_or("");
+                }
+            }
+            argv
+        };
+        let fork_keys = scan_keys(&fork_rs);
+        let twin_keys = scan_keys(&twin_rs);
+        let audit_keys = audit_argv(&audit_rs);
+        // Anti-vacuity: the collectors find known keys
+        // (a refactor that blinds them fails here,
+        // never passes silently).
+        assert!(
+            fork_keys.contains("853"),
+            "collector must find fork scan keys (got {fork_keys:?})"
+        );
+        assert!(
+            twin_keys.contains("854"),
+            "collector must find twin scan keys (got {twin_keys:?})"
+        );
+        assert!(
+            audit_keys.contains("953"),
+            "collector must find audit sleep argv (got {} keys)",
+            audit_keys.len()
+        );
+        assert!(fork_keys.len() >= 5, "fork scan-key set implausibly small");
+        assert!(twin_keys.len() >= 5, "twin scan-key set implausibly small");
+        for key in fork_keys.intersection(&audit_keys) {
+            panic!("fork scan key {key} collides with an audit sleep argv (re-key repo-wide)");
+        }
+        for key in twin_keys.intersection(&audit_keys) {
+            panic!("twin scan key {key} collides with an audit sleep argv (re-key repo-wide)");
+        }
+        for key in fork_keys.intersection(&twin_keys) {
+            panic!("scan key {key} shared by fork lib + toolchain twin (re-key repo-wide)");
         }
     }
 
@@ -1211,13 +1542,18 @@ mod tests {
     /// strand. Unreadable /proc or an unreadable stat
     /// fails loud (fail-closed — absence must be proven,
     /// never assumed); a pid vanishing mid-scan is dead
-    /// (skipped).
+    /// (skipped). R22-016(a): entry / cmdline read errors
+    /// other than NotFound fail LOUD too (one free slot
+    /// plus EMFILE ⟹ opendir consumes it and every
+    /// cmdline read fails — swallowing that is false
+    /// absence over live m2).
     fn live_sleep_with_dur(dur: &str) -> bool {
         let entries = std::fs::read_dir("/proc").expect("/proc readable");
         for entry in entries {
             let entry = match entry {
                 Ok(e) => e,
-                Err(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("readdir mid-scan failed: {error}"),
             };
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -1226,7 +1562,8 @@ mod tests {
             }
             let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("/proc/{name}/cmdline unreadable mid-scan: {error}"),
             };
             let mut args = cmdline.split(|b| *b == 0);
             let argv0 = args.next().unwrap_or_default();
@@ -1294,6 +1631,522 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// R22-008 fallback probe (fresh image): stage the jam
+    /// pair healthy (m2 birth-gated), print custody, THEN
+    /// exhaust the fd table (stat outage — every
+    /// `stat_state_pgrp` reads None) and run the
+    /// reportless tail into the 5 s fallback. The fallback
+    /// must group-kill UNCONDITIONALLY (m1 is unreaped —
+    /// pinned — so group m1 is ours-or-nonexistent and the
+    /// killpg is sound either way); the old
+    /// `is_some_and(pgrp == m1)` gate re-reads None under
+    /// the outage and SUPPRESSES the kill (m1 killed +
+    /// reaped, already-born m2 stranded). RED (old gate:
+    /// live `sleep 853` survives the probe). Duration 853
+    /// is unique to this test.
+    fn reportless_fallback_kills_group_unconditionally_probe() {
+        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("853") }
+            .expect("staging broken (pair spawn)");
+        let tick1 = fork_starttime(m1)
+            .expect("staging broken (m1 stat)")
+            .expect("staging broken (m1 visible)");
+        println!("R22008-M1 {m1} {tick1}");
+        std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
+        let hold = OutageHold::exhaust();
+        // Anti-vacuity: the outage bites (live m1's stat
+        // unreadable — the freeze-await below burns 5 s of
+        // None into the fallback, exactly the finding's
+        // shape).
+        assert!(
+            stat_state_pgrp(m1).is_none(),
+            "staging broken (stat readable under the hold?)"
+        );
+        retire_reportless_middleman(m1);
+        drop(hold);
+        eprintln!("R22008-DONE");
+    }
+
+    /// R22-008 fallback wrapper: the probe runs
+    /// fresh-image (the outage is process-global).
+    /// Wrapper-side custody (m1 numeric + scan-kill `sleep
+    /// 853`) runs BEFORE the verdict asserts so RED runs
+    /// stay clean; the tail's own retirement is recorded
+    /// BEFORE custody kills (never judged after).
+    #[test]
+    fn reportless_fallback_kills_group_unconditionally() {
+        if std::env::var("SCOPEBASE_R22008_FALLBACK").is_ok() {
+            reportless_fallback_kills_group_unconditionally_probe();
+            return;
+        }
+        let outcome = run_fresh_probe_collect(
+            "SCOPEBASE_R22008_FALLBACK",
+            "reportless_fallback_kills_group_unconditionally",
+        );
+        let stdout = String::from_utf8_lossy(&outcome.out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&outcome.out.stderr).into_owned();
+        let (m1, tick1): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22008-M1 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m1 line?)");
+        // Settle: the tail's kill lands in ms; a stranded
+        // m2 (RED) stays live past the bound.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while live_sleep_with_dur("853") {
+            if std::time::Instant::now() >= end {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let retired_by_tail = !live_sleep_with_dur("853");
+        // Custody BEFORE verdicts (RED runs stay clean).
+        kill_tick_gated_fork(m1, tick1);
+        assert!(
+            birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
+            "wrapper must drain m1"
+        );
+        assert!(
+            kill_sleep_with_dur("853"),
+            "wrapper must drain the residual sleep 853"
+        );
+        assert!(!outcome.timed_out, "probe must complete\n{stderr}");
+        assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R21008-FALLBACK"),
+            "probe must take the fallback path\n{stderr}"
+        );
+        assert!(
+            retired_by_tail,
+            "RED: fallback suppressed the group-kill (live m2 past the tail)"
+        );
+        assert!(
+            stderr.contains("R22008-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22008-ASSUMED-GROUPED"),
+            "fallback must cite the assumed-grouped kill\n{stderr}"
+        );
+    }
+
+    /// R22-009 probe-deny probe (fresh image): stage the
+    /// jam pair healthy, print custody, THEN seccomp-deny
+    /// negative-pid `kill` (the glibc `killpg` lowering)
+    /// with EPERM (positive-pid `kill` stays allowed) and
+    /// run the reportless tail. BOTH m2 group-kills fail
+    /// silently (fire-and-forget — the probe below is the
+    /// backstop) AND the post-reap probe fails EPERM: the
+    /// probe must discriminate errno — ESRCH proves
+    /// empty; EPERM/other fails LOUD-UNRESOLVED (never an
+    /// empty citation). The old `if probed != 0` treats
+    /// EVERY failure as ESRCH-empty and falsely certifies
+    /// death over the LIVE m2. RED (old probe: "proven
+    /// dead" over live `sleep 855`). Duration 855 is
+    /// unique to this test.
+    fn reportless_probe_denied_stays_unresolved_probe() {
+        use super::super::seccomp::{install_deny_kill_negative_pid, DenyAction};
+        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("855") }
+            .expect("staging broken (pair spawn)");
+        let tick1 = fork_starttime(m1)
+            .expect("staging broken (m1 stat)")
+            .expect("staging broken (m1 visible)");
+        println!("R22009-M1 {m1} {tick1}");
+        std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
+        // Selective denial: negative-pid kill (the glibc
+        // killpg lowering) → EPERM, positive-pid kill
+        // allowed (kill/killpg share SYS_kill — a number
+        // filter cannot split them).
+        install_deny_kill_negative_pid(DenyAction::Eperm).expect("deny installs (staging)");
+        // Anti-vacuity: the denial bites (our own live
+        // group probes EPERM now) AND positive-pid kill
+        // still works (signal-0 self-probe).
+        let own = unsafe { libc::getpgid(0) };
+        let self_pid = std::process::id() as libc::pid_t;
+        assert_eq!(
+            unsafe { libc::kill(self_pid, 0) },
+            0,
+            "staging broken (positive-pid kill denied too?)"
+        );
+        let probed = unsafe { libc::killpg(own, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(
+            (probed, errno),
+            (-1, Some(libc::EPERM)),
+            "staging broken (killpg not denied?)"
+        );
+        retire_reportless_middleman(m1);
+        eprintln!("R22009-DONE");
+    }
+
+    /// R22-009 probe-deny wrapper: the probe runs
+    /// fresh-image (seccomp is irreversible). m2 is LIVE
+    /// by design (both group-kills denied) — the wrapper
+    /// proves its survival pre-custody (else the
+    /// regression is vacuous), drains it, and only then
+    /// judges the probe's evidence (UNRESOLVED, never an
+    /// empty citation).
+    #[test]
+    fn reportless_probe_denied_stays_unresolved() {
+        if std::env::var("SCOPEBASE_R22009_DENY_KILLPG").is_ok() {
+            reportless_probe_denied_stays_unresolved_probe();
+            return;
+        }
+        let outcome = run_fresh_probe_collect(
+            "SCOPEBASE_R22009_DENY_KILLPG",
+            "reportless_probe_denied_stays_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&outcome.out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&outcome.out.stderr).into_owned();
+        let (m1, tick1): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22009-M1 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m1 line?)");
+        // Load-bearing anti-vacuity: m2 SURVIVED the tail
+        // (both group-kills denied — nothing else targets
+        // it). A dead m2 here would make the probe's
+        // evidence untestable.
+        assert!(
+            live_sleep_with_dur("855"),
+            "staging broken (m2 dead pre-custody — the denial staged nothing?)"
+        );
+        // Custody BEFORE verdicts (m2 live by design).
+        kill_tick_gated_fork(m1, tick1);
+        assert!(
+            birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
+            "wrapper must drain m1"
+        );
+        assert!(
+            kill_sleep_with_dur("855"),
+            "wrapper must drain the live sleep 855"
+        );
+        assert!(!outcome.timed_out, "probe must complete\n{stderr}");
+        assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("grouped at freeze"),
+            "probe must take the main grouped path\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("R21008-FALLBACK"),
+            "probe must not fall back\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22009-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("proven dead"),
+            "RED: probe certified death over live m2\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22009-UNRESOLVED"),
+            "probe must cite loud-unresolved on EPERM\n{stderr}"
+        );
+    }
+
+    /// R22-016(b): TEST-SIDE group re-probe
+    /// (post-tail) — `killpg(m1, 0)` with errno
+    /// discipline: ESRCH ⟹ empty; 0 ⟹ non-empty; EPERM
+    /// (or any other error) ⟹ UNRESOLVED (never an empty
+    /// citation — conservative over the unpinned squatter
+    /// ambiguity AND over probe denial). The scan cannot
+    /// see a pre-exec grandchild (argv0 ≠ `sleep`), so
+    /// this re-probe is the only channel that can refuse
+    /// the false absence.
+    fn reprobe_group_post_tail(m1: libc::pid_t) -> &'static str {
+        // SAFETY: signal-0 probe (no delivery).
+        let probed = unsafe { libc::killpg(m1, 0) };
+        if probed == 0 {
+            return "R22016B-REPROBE-NONEMPTY";
+        }
+        // R22-009 discipline (shared): ESRCH proves
+        // empty; any other error is UNRESOLVED (never an
+        // empty citation).
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return "R22016B-REPROBE-EMPTY";
+        }
+        "R22016B-REPROBE-UNRESOLVED"
+    }
+
+    /// R22-016(b) pre-exec-stall probe (fresh image):
+    /// stage the pre-exec-stall pair (stub fork-proven by
+    /// the birth gate, self-stopped before any exec —
+    /// argv0 ≠ `sleep`, so the scan is blind to it),
+    /// print custody, pin the blindness (no `sleep 863`
+    /// visible) + the stub's stopped-grouped state, THEN
+    /// seccomp-deny ALL of `kill`/`killpg` (shared number)
+    /// and run the tail. NOTHING dies (SIGSTOP denied ⟹
+    /// the tail burns into the loud fallback; both kills
+    /// denied): m1 lives pausing, the stub lives stopped
+    /// (no orphaning — m1 never dies — so no SIGHUP; a
+    /// killpg-only denial would orphan-SIGHUP a stopped
+    /// stub, which is why the full denial stages the
+    /// survivor). The scan still sees nothing — only the
+    /// TEST-SIDE group re-probe can refuse the false
+    /// absence, and under denial it must say
+    /// LOUD-UNRESOLVED (never EMPTY). RED (old `!= 0`
+    /// re-probe: EMPTY over two live processes).
+    /// Duration 863 is unique to this test.
+    fn reportless_preexec_stall_denied_stays_unresolved_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        let (m1, stub) = unsafe { fork_prestall_grandchild_jam_noretire("863") }
+            .expect("staging broken (pair spawn)");
+        let tick1 = fork_starttime(m1)
+            .expect("staging broken (m1 stat)")
+            .expect("staging broken (m1 visible)");
+        let tick_stub = fork_starttime(stub)
+            .expect("staging broken (stub stat)")
+            .expect("staging broken (stub visible)");
+        println!("R22016B-M1 {m1} {tick1}");
+        println!("R22016B-STUB {stub} {tick_stub}");
+        std::io::Write::flush(&mut std::io::stdout()).expect("custody lines flushed");
+        // Scan-blind pin: the stub is pre-exec (argv0 is
+        // the inherited image, never `sleep`) — the scan
+        // MUST see nothing. (If this ever fires, the stub
+        // exec'd — staging broken, never a pass.)
+        assert!(
+            !live_sleep_with_dur("863"),
+            "staging broken (stub exec'd?!)"
+        );
+        // Stopped-grouped pin: the stub self-stopped (T —
+        // its raise ran, so it is past fork and pre-exec)
+        // AND grouped under m1 (the group re-probe covers
+        // it — an ungrouped stub would make the re-probe's
+        // evidence untestable).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut pinned = false;
+        while std::time::Instant::now() < end {
+            match stat_state_pgrp(stub) {
+                Some((st, pgrp)) if matches!(st, 'T' | 't') && pgrp == m1 => {
+                    pinned = true;
+                    break;
+                }
+                _ => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        assert!(pinned, "staging broken (stub never stopped-grouped?)");
+        eprintln!("R22016B-SCAN-BLIND");
+        install_deny_one(libc::SYS_kill, DenyAction::Eperm).expect("deny installs (staging)");
+        // Anti-vacuity: the FULL denial bites (numeric
+        // self-probe AND group probe both EPERM now).
+        let self_pid = std::process::id() as libc::pid_t;
+        let probed_self = unsafe { libc::kill(self_pid, 0) };
+        let errno_self = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(
+            (probed_self, errno_self),
+            (-1, Some(libc::EPERM)),
+            "staging broken (kill not denied?)"
+        );
+        let own = unsafe { libc::getpgid(0) };
+        let probed = unsafe { libc::killpg(own, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(
+            (probed, errno),
+            (-1, Some(libc::EPERM)),
+            "staging broken (killpg not denied?)"
+        );
+        retire_reportless_middleman(m1);
+        // TEST-SIDE re-probe (the fix): the tail is over
+        // (fallback, both kills denied); the scan says
+        // absent (blind) — this probe must refuse to
+        // certify.
+        eprintln!("{}", reprobe_group_post_tail(m1));
+        // Post-tail survival pins (IN-PROBE — the
+        // wrapper cannot observe survival: our exit
+        // orphans group m1 with a stopped member, so the
+        // kernel SIGHUPs m1 + stub before wrapper
+        // custody. Both MUST be live here — else the
+        // denial staged nothing and the re-probe's
+        // evidence is untestable).
+        assert_eq!(
+            stat_state_pgrp(m1),
+            Some(('S', m1)),
+            "staging broken (m1 not live-pausing post-tail?)"
+        );
+        assert_eq!(
+            stat_state_pgrp(stub),
+            Some(('T', m1)),
+            "staging broken (stub not live-stopped-grouped post-tail?)"
+        );
+        eprintln!("R22016B-SURVIVED");
+        eprintln!("R22016B-DONE");
+    }
+
+    /// R22-016(b) pre-exec-stall wrapper: the probe runs
+    /// fresh-image (seccomp is irreversible). Survival is
+    /// pinned IN-PROBE (R22016B-SURVIVED — post-tail m1-S
+    /// and stub-T-grouped): the wrapper cannot observe
+    /// it (probe exit orphan-SIGHUPs the group before
+    /// custody). Wrapper custody is best-effort drain
+    /// (the kills may or may not land — SIGHUP races
+    /// them); the drain asserts are load-bearing.
+    #[test]
+    fn reportless_preexec_stall_denied_stays_unresolved() {
+        if std::env::var("SCOPEBASE_R22016B_PRESTALL").is_ok() {
+            reportless_preexec_stall_denied_stays_unresolved_probe();
+            return;
+        }
+        let outcome = run_fresh_probe_collect(
+            "SCOPEBASE_R22016B_PRESTALL",
+            "reportless_preexec_stall_denied_stays_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&outcome.out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&outcome.out.stderr).into_owned();
+        let parse = |tag: &str| -> Option<(libc::pid_t, u64)> {
+            stdout.lines().find_map(|line| {
+                let rest = line.strip_prefix(tag)?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+        };
+        let (m1, tick1): (libc::pid_t, u64) =
+            parse("R22016B-M1 ").expect("staging broken (no m1 line?)");
+        let (stub, tick_stub): (libc::pid_t, u64) =
+            parse("R22016B-STUB ").expect("staging broken (no stub line?)");
+        // Custody: best-effort kills (SIGHUP-at-exit
+        // races them — survival was pinned in-probe) +
+        // load-bearing drains.
+        kill_tick_gated_fork(m1, tick1);
+        assert!(
+            birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
+            "wrapper must drain m1"
+        );
+        kill_tick_gated_fork(stub, tick_stub);
+        assert!(
+            birth_drained(stub, tick_stub, std::time::Duration::from_secs(5)),
+            "wrapper must drain the stub"
+        );
+        assert!(!outcome.timed_out, "probe must complete\n{stderr}");
+        assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R22016B-SCAN-BLIND"),
+            "probe must pin scan-blindness\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22016B-SURVIVED"),
+            "probe must pin post-tail survival\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R21008-FALLBACK"),
+            "tail must take the fallback path (SIGSTOP denied)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22016B-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("R22016B-REPROBE-EMPTY"),
+            "RED: re-probe certified EMPTY over live m1 + live stub\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22016B-REPROBE-UNRESOLVED"),
+            "re-probe must cite loud-unresolved on EPERM\n{stderr}"
+        );
+    }
+
+    /// R22-016(a) scan-outage probe (fresh image): stage
+    /// the REPORTED pair (m1 pauses, m2 sleeps `859` —
+    /// both kept alive, never retired), print custody,
+    /// THEN exhaust the fd table to exactly ONE free
+    /// slot and run the live-sleeper scan. opendir
+    /// consumes the last slot, so EVERY cmdline read
+    /// fails EMFILE over the LIVE m2: the scan must fail
+    /// LOUD (NotFound — vanished — skips; any other read
+    /// error panics — the stat arm's existing
+    /// discipline). The old scan swallows entry/cmdline
+    /// errors (`Err(_) => continue`) and reports false
+    /// absence over live m2. RED (old scan: the probe's
+    /// own assert fails WITHOUT the mid-scan marker).
+    /// Duration 859 is unique to this test.
+    fn scan_outage_over_live_sleeper_fails_loud_probe() {
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("859") }.expect("pair staged");
+        let tick1 = fork_starttime(m1)
+            .expect("staging broken (m1 stat)")
+            .expect("staging broken (m1 visible)");
+        let tick2 = fork_starttime(m2)
+            .expect("staging broken (m2 stat)")
+            .expect("staging broken (m2 visible)");
+        println!("R22016A-M1 {m1} {tick1}");
+        println!("R22016A-M2 {m2} {tick2}");
+        std::io::Write::flush(&mut std::io::stdout()).expect("custody lines flushed");
+        // Sanity (pre-outage): the scan sees the live m2
+        // (else the staging is vacuous).
+        assert!(
+            live_sleep_with_dur("859"),
+            "staging broken (scan blind pre-outage?)"
+        );
+        let mut hold = OutageHold::exhaust();
+        hold.release_one();
+        // THE scan: m2 is LIVE; every cmdline read fails
+        // EMFILE. New code panics loud (mid-scan marker);
+        // old code returns false (this assert fails
+        // WITHOUT the marker — RED).
+        assert!(
+            live_sleep_with_dur("859"),
+            "staging broken (scan false over live m2?)"
+        );
+        drop(hold);
+        eprintln!("R22016A-DONE");
+    }
+
+    /// R22-016(a) scan-outage wrapper: the probe runs
+    /// fresh-image (the outage is process-global) and is
+    /// EXPECTED TO FAIL (the loud scan-panic is the
+    /// verdict). Wrapper-side custody (m1 + m2 numeric,
+    /// both live-orphaned) runs BEFORE the verdict
+    /// asserts so RED runs stay clean.
+    #[test]
+    fn scan_outage_over_live_sleeper_fails_loud() {
+        if std::env::var("SCOPEBASE_R22016A_OUTAGE").is_ok() {
+            scan_outage_over_live_sleeper_fails_loud_probe();
+            return;
+        }
+        let outcome = run_fresh_probe_collect(
+            "SCOPEBASE_R22016A_OUTAGE",
+            "scan_outage_over_live_sleeper_fails_loud",
+        );
+        let stdout = String::from_utf8_lossy(&outcome.out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&outcome.out.stderr).into_owned();
+        let parse = |tag: &str| -> Option<(libc::pid_t, u64)> {
+            stdout.lines().find_map(|line| {
+                let rest = line.strip_prefix(tag)?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+        };
+        let (m1, tick1): (libc::pid_t, u64) =
+            parse("R22016A-M1 ").expect("staging broken (no m1 line?)");
+        let (m2, tick2): (libc::pid_t, u64) =
+            parse("R22016A-M2 ").expect("staging broken (no m2 line?)");
+        // Custody BEFORE verdicts (both live by design —
+        // the probe never retires).
+        kill_tick_gated_fork(m1, tick1);
+        assert!(
+            birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
+            "wrapper must drain m1"
+        );
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "wrapper must drain m2"
+        );
+        assert!(!outcome.timed_out, "probe must complete\n{stderr}");
+        assert!(
+            !outcome.out.status.success(),
+            "probe must FAIL (the loud scan-panic is the verdict)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("mid-scan"),
+            "RED: scan swallowed the outage (no loud mid-scan failure over live m2)\n{stderr}"
+        );
     }
 
     /// R22-004(a): the absence-proof never waits — live
@@ -1587,6 +2440,131 @@ mod tests {
         child.wait_with_output().expect("probe output readable")
     }
 
+    /// R22-008: timeout-COLLECTING fresh-image probe run —
+    /// the reportless fault probes own forever-pausing
+    /// middlemen, so a timeout must still collect the
+    /// pipes (early-flushed pid lines survive the kill)
+    /// for wrapper-side custody — never panic away the
+    /// output (the plain runner's shape would strand m1
+    /// forever on a wedged-box timeout).
+    struct ProbeOutcome {
+        timed_out: bool,
+        out: std::process::Output,
+    }
+
+    /// R22-008: run a fresh-image probe child, collecting
+    /// its output EVEN on timeout (kill + reap + read the
+    /// pipes to EOF — early-flushed custody lines survive;
+    /// the pipe rule holds: survivors' stdio is null, so
+    /// EOF follows the kill). The wrapper judges
+    /// completion via `timed_out` + a DONE marker, never
+    /// by output presence alone.
+    fn run_fresh_probe_collect(env: &str, test: &str) -> ProbeOutcome {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(format!("fixture::linux::fork::tests::{test}"))
+            .arg("--nocapture")
+            .env(env, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut timed_out = false;
+        loop {
+            if child.try_wait().expect("child waitable").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= end {
+                let _ = child.kill();
+                timed_out = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let out = child.wait_with_output().expect("probe output readable");
+        ProbeOutcome { timed_out, out }
+    }
+
+    /// R22-008: collect (pid, starttime-tick) of every
+    /// LIVE (non-zombie) `sleep dur` in /proc — the
+    /// reportless fault probes' m2 has an unknown pid, so
+    /// wrapper-side custody rides this scan (tick-gated
+    /// kill + drain per birth). Read-error discipline
+    /// mirrors `live_sleep_with_dur` (R22-016(a)):
+    /// NotFound (vanished) skips; any other read error
+    /// fails LOUD (a custody scan must never certify
+    /// absence over unreadable entries).
+    fn sleep_pids_with_dur(dur: &str) -> Vec<(libc::pid_t, u64)> {
+        let mut found = Vec::new();
+        let entries = std::fs::read_dir("/proc").expect("/proc readable");
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("custody scan: readdir mid-scan failed: {error}"),
+            };
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
+                Ok(c) => c,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
+                }
+            };
+            let mut args = cmdline.split(|b| *b == 0);
+            let argv0 = args.next().unwrap_or_default();
+            let argv1 = args.next().unwrap_or_default();
+            if argv0 != b"sleep" || argv1 != dur.as_bytes() {
+                continue;
+            }
+            let pid: libc::pid_t = match name.parse() {
+                Ok(pid) => pid,
+                Err(_) => continue,
+            };
+            match fork_starttime(pid) {
+                Ok(Some(tick)) => {
+                    let live = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                        .ok()
+                        .and_then(|text| {
+                            text.rsplit_once(") ").and_then(|(_, after)| {
+                                after.split_whitespace().next().map(str::to_string)
+                            })
+                        });
+                    if live.as_deref() != Some("Z") {
+                        found.push((pid, tick));
+                    }
+                }
+                Ok(None) => continue,
+                Err(error) => panic!("custody scan: stat unreadable mid-scan: {error}"),
+            }
+        }
+        found
+    }
+
+    /// R22-008: wrapper-side custody for an unknown-pid m2
+    /// — tick-gated SIGKILL per scanned birth, then a
+    /// bounded tick-aware drain per birth. True when no
+    /// LIVE `sleep dur` remains within the bound. A re-scan
+    /// after the drain catches births raced past the first
+    /// scan (none expected — the middleman is dead — but
+    /// custody never trusts a single pass).
+    fn kill_sleep_with_dur(dur: &str) -> bool {
+        for (pid, tick) in sleep_pids_with_dur(dur) {
+            kill_tick_gated_fork(pid, tick);
+            if !birth_drained(pid, tick, std::time::Duration::from_secs(5)) {
+                return false;
+            }
+        }
+        !live_sleep_with_dur(dur)
+    }
+
     /// R22-007 denied-pin probe (fresh image): seccomp-deny
     /// `pidfd_open` in SELF (the pin genuinely fails —
     /// realistic denial plumbing, not a forged `None`),
@@ -1756,6 +2734,12 @@ mod tests {
             }
             assert!(!held.is_empty(), "exhaustion must consume fds");
             held
+        }
+        /// R22-016(a): release exactly one held fd (the
+        /// one-free-slot staging — opendir consumes it,
+        /// every later open fails EMFILE).
+        fn release_one(&mut self) {
+            assert!(self._held.pop().is_some(), "staging broken (hold empty?)");
         }
     }
 

@@ -78,6 +78,7 @@ impl std::error::Error for SeccompError {}
 // the live C probe; see module docs).
 const BPF_LD_ABS_W: u16 = 0x20;
 const BPF_JEQ_K: u16 = 0x15;
+const BPF_JGE_K: u16 = 0x35;
 const BPF_RET_K: u16 = 0x06;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
@@ -174,6 +175,38 @@ pub fn install_deny_wait_blocking(action: DenyAction) -> Result<(), SeccompError
     install_program(&program)
 }
 
+/// R22-009: deny only NEGATIVE-pid `kill` (the glibc
+/// `killpg` lowering — kill and killpg share `SYS_kill`,
+/// so a syscall-number filter cannot split them) with
+/// the action errno, while positive-pid `kill` stays
+/// allowed. Signed-negative is detected on the arg0 LOW
+/// word (offset 16): low >= 0x80000000 ⟺ bit 31 set (the
+/// high word carries 32-bit-arg garbage — comparing it
+/// would miss every real negative pid).
+///
+/// Boundary (documented, not a hole on the staged
+/// paths): `kill(0, …)` (own-group) stays ALLOWED — only
+/// the negative-pid (explicit-group) form is denied. The
+/// reportless tail never issues `kill(0, …)` (its group
+/// signals all ride `killpg(m1, …)` = `kill(-m1, …)`).
+/// Same confined-helper contract as [`install_deny_one`].
+#[cfg(target_arch = "x86_64")]
+pub fn install_deny_kill_negative_pid(action: DenyAction) -> Result<(), SeccompError> {
+    let deny = action.ret();
+    let program = [
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
+        jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
+        stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
+        jump(BPF_JEQ_K, libc::SYS_kill as u32, 0, 3),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG0_OFF),
+        jump(BPF_JGE_K, 0x8000_0000, 0, 1),
+        stmt(BPF_RET_K, deny),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    install_program(&program)
+}
+
 /// Latch `NO_NEW_PRIVS` and install one classic-BPF program.
 #[cfg(target_arch = "x86_64")]
 fn install_program(program: &[libc::sock_filter]) -> Result<(), SeccompError> {
@@ -231,6 +264,15 @@ pub fn install_deny_ptrace_request(
     _request: libc::c_uint,
     _action: DenyAction,
 ) -> Result<(), SeccompError> {
+    Err(SeccompError {
+        stage: "unsupported_arch",
+        errno: libc::ENOSYS,
+    })
+}
+
+/// Non-x86_64 builds refuse without touching process state.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn install_deny_kill_negative_pid(_action: DenyAction) -> Result<(), SeccompError> {
     Err(SeccompError {
         stage: "unsupported_arch",
         errno: libc::ENOSYS,

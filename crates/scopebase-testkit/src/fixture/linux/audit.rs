@@ -10535,7 +10535,7 @@ mod tests {
                         // retired below (miss-park or armed
                         // guards).
                         let (m1, m2) =
-                            unsafe { super::super::fork::fork_pausing_grandchild_sleep("910") }?;
+                            unsafe { super::super::fork::fork_pausing_grandchild_sleep("810") }?;
                         if m2 != stranger {
                             // Miss: park + retry (the
                             // middleman is ours — kill +
@@ -15431,7 +15431,7 @@ mod tests {
     /// the killpg strands the sleeper and the settle times
     /// out). GREEN: prompt retires, recorded stranded,
     /// SIGKILLed statuses, ESRCH proofs. Duration 963 (hung
-    /// publisher) and 965 (stranded sleep) are unique to
+    /// publisher) and 865 (stranded sleep) are unique to
     /// this test.
     #[test]
     #[cfg(target_arch = "x86_64")]
@@ -15463,7 +15463,7 @@ mod tests {
             let mut leader_cmd = std::process::Command::new("/bin/sh");
             leader_cmd
                 .arg("-c")
-                .arg("sleep 965 & wait")
+                .arg("sleep 865 & wait")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
@@ -23475,7 +23475,7 @@ mod tests {
     /// replacement's child. GREEN: the arm re-reads, finds
     /// the number unverifiable (still exhausted), discards,
     /// and reports unresolved with every replacement alive.
-    /// Durations 912 (victim sleeper) / 913 (replacement
+    /// Durations 912 (victim sleeper) / 813 (replacement
     /// sleeper) are unique to this test. R19003-FLAKE01:
     /// fresh-image probe body — the exhaustion hold must
     /// not share the suite's fd table (M1: siblings EMFILE
@@ -23598,7 +23598,7 @@ mod tests {
                     if let Ok(mode) = std::env::var("SCOPEBASE_R20011_FORCE_MISS") {
                         if mode == "post-spawn" {
                             if audit_steer_next_pid_unlocked(pub1pid) {
-                                let mut pub2 = spawn_publisher("913");
+                                let mut pub2 = spawn_publisher("813");
                                 let (cprime, cptick) = read_pair(&mut pub2);
                                 let _ = kill_tick_gated(cprime, cptick);
                                 let _ = pub2.kill();
@@ -23610,7 +23610,7 @@ mod tests {
                     if !audit_steer_next_pid_unlocked(pub1pid) {
                         return (Vec::new(), true);
                     }
-                    let mut pub2 = spawn_publisher("913");
+                    let mut pub2 = spawn_publisher("813");
                     let pub2pid = pub2.id() as libc::pid_t;
                     let (cprime, cptick) = read_pair(&mut pub2);
                     if pub2pid != pub1pid {
@@ -24883,7 +24883,7 @@ mod tests {
     /// disappearance. RED (this shape): the gate truncates
     /// without marking and the frame certifies `true` over
     /// the live child. GREEN: unresolved, `false`, child
-    /// parked-but-reported. Durations 914 (parent) / 915
+    /// parked-but-reported. Durations 814 (parent) / 915
     /// (fresh child) are unique to this test.
     /// R19003-FLAKE01: fresh-image probe body — the
     /// exhaustion hold must not share the suite's fd table
@@ -24895,7 +24895,7 @@ mod tests {
         // frame treats the listed pair as P's child — the
         // model of a genuinely observed fresh birth).
         let mut parent = std::process::Command::new("/bin/sleep")
-            .arg("914")
+            .arg("814")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
