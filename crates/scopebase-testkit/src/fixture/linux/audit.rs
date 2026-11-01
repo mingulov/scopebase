@@ -12784,8 +12784,15 @@ mod tests {
     /// may exit mid-walk — a pid vanishing mid-scan is
     /// dead (skipped); an unreadable stat keeps the pid
     /// with Nones (blocks certification — never assumed
-    /// gone)). Evidence only — the ESRCH probe judges
-    /// emptiness (kernel-complete, no /proc races).
+    /// gone)). R23-003: the pgrp leg is tri-state —
+    /// gone/foreign/permission-denied skip (EACCES ⟹ not
+    /// ours — our own tasks stay stat-readable under every
+    /// hidepid level), while fd exhaustion (EMFILE/ENFILE,
+    /// which hides OUR tasks too) and malformed stats keep
+    /// the pid with Nones (fail-closed: an unobservable
+    /// task blocks certification alike). Evidence only —
+    /// the ESRCH probe judges emptiness (kernel-complete,
+    /// no /proc races).
     #[cfg(target_arch = "x86_64")]
     fn enumerate_group_members(pgid: libc::pid_t) -> Vec<GroupMember> {
         let mut members = Vec::new();
@@ -12806,7 +12813,38 @@ mod tests {
                 Some(pid) => pid,
                 None => continue,
             };
-            if proc_pgrp(pid) != Some(pgid) {
+            // R23-003: the old `proc_pgrp` conflated
+            // gone/unreadable/malformed into skip — under fd
+            // exhaustion every member vanished and the retire
+            // certified a blind empty. Gone ⟹ skip (dead
+            // holds no group); foreign ⟹ skip;
+            // permission-denied ⟹ skip (EACCES ⟹ foreign —
+            // never our group to kill); fd exhaustion or
+            // malformed ⟹ KEEP with Nones (fail-closed).
+            let pgrp = match read_pgrp_checked(pid) {
+                Ok(Some(pgrp)) => pgrp,
+                Ok(None) => {
+                    members.push(GroupMember {
+                        pid,
+                        birth: None,
+                        state: None,
+                    });
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    let errno = error.raw_os_error();
+                    if errno == Some(libc::EMFILE) || errno == Some(libc::ENFILE) {
+                        members.push(GroupMember {
+                            pid,
+                            birth: None,
+                            state: None,
+                        });
+                    }
+                    continue;
+                }
+            };
+            if pgrp != pgid {
                 continue;
             }
             let birth = match proc_ppid_and_starttime(pid) {
@@ -13062,11 +13100,18 @@ mod tests {
     /// (a tick read SUCCEEDED — the outage took only the
     /// pgrp leg): live-or-zombie-ours ⟹ number held (a
     /// zombie holds its number+pgid) ⟹ killpg sound.
-    /// `Handle` (no read succeeded): validated by
-    /// `try_wait` inside the degraded retire — live ⟹
-    /// number held ⟹ killpg sound; already-dead ⟹ WE reap
-    /// ⟹ pin released ⟹ NO killpg (probe-only). Stale
-    /// (reaped behind our back) ⟹ panic (violation).
+    /// `Handle` (no read succeeded): the strike rests on
+    /// the held handle + reservation (live-or-zombie-ours
+    /// ⟹ number held ⟹ killpg sound); the handle's
+    /// freshness is confirmed by the reap AFTER the strike
+    /// (ECHILD ⟹ stolen ⟹ loud post-discharge panic —
+    /// never silently absorbed). R23-004: a pre-strike
+    /// `try_wait` validation REAPS an already-dead leader
+    /// (releasing the pin before the strike and stranding
+    /// a live sleeper the probe-only tail can never kill),
+    /// and no non-reaping ownership check exists under the
+    /// outage (WNOWAIT EINVALs — unavailable) — so the
+    /// strike precedes all validation.
     #[cfg(target_arch = "x86_64")]
     #[derive(Debug)]
     enum DegradedPin {
@@ -13103,10 +13148,21 @@ mod tests {
     /// path's pinned killpg, minus only the pgrp
     /// re-verification the outage took away. Soundness
     /// rests on the audited reservation, not on a read.
-    /// Returns the leader's status on full discharge;
-    /// panics loud (post-discharge, with what WAS
-    /// discharged cited) on a surviving group, a foreign
-    /// probe errno, or a stolen status.
+    /// R23-004 residual: the strike precedes handle
+    /// validation (no non-reaping check exists under the
+    /// outage), so a handle stolen behind our back AND a
+    /// dead-and-reaped group AND a foreign group recycled
+    /// onto our pgid — all three — would take the strike.
+    /// The steal alone is safe (a live sleeper holds OUR
+    /// group — the strike lands correctly — and the reap
+    /// below still reports it loud post-discharge); only
+    /// the full triple misdirects, and the sleeper dies by
+    /// no hand but this strike (unique durations — no
+    /// sibling sweep names it). Returns the leader's
+    /// status on full discharge; panics loud
+    /// (post-discharge, with what WAS discharged cited) on
+    /// a surviving group, a foreign probe errno, or a
+    /// stolen status.
     #[cfg(target_arch = "x86_64")]
     fn retire_unparsed_degraded(
         publisher: &mut std::process::Child,
@@ -13125,64 +13181,54 @@ mod tests {
              pgrp unverified (outage) — self-groupedness by reservation, not by read)"
         );
         assert_no_subreaper_leak("retire_unparsed_publisher_group (degraded)");
-        // Validate the pin; reap now when already dead (the
-        // pin releases with the reap — no killpg then).
-        let mut status = match pin {
-            DegradedPin::Tick(_) => None,
-            DegradedPin::Handle => match publisher.try_wait() {
-                Ok(None) => None,
-                Ok(Some(status)) => Some(status),
-                Err(error) => panic!(
-                    "unparsed publisher {pubpid} handle stale ({error:?} — reaped behind our \
-                     back: reservation violated, unpinned everything refused)"
-                ),
-            },
-        };
-        if status.is_none() {
-            // SAFETY: killpg under pin (tick-read or
-            // live-handle) + reservation (self-grouped,
-            // never regroups, closed set) — the number is
-            // HELD so the group is ours (see above).
-            unsafe {
-                libc::killpg(pubpid, libc::SIGKILL);
-                libc::kill(pubpid, libc::SIGKILL);
-            }
-        } else {
-            eprintln!(
-                "R22005-DEGRADED unparsed publisher {pubpid}: leader already dead (reaped \
-                 above — pin released, NO killpg: probe-only)"
-            );
+        // R23-004: strike FIRST — unconditionally. The pin
+        // (tick-read, live-handle, or unreaped-zombie, which
+        // holds number+pgid) is held NOW; any pre-strike
+        // try_wait would reap a zombie leader and release
+        // the reservation before the strike (the strand this
+        // fixes), and no non-reaping ownership check exists
+        // here (WNOWAIT EINVALs — unavailable; /proc and
+        // pidfd need the fds the outage took). A handle
+        // stolen behind our back is still detected — by the
+        // reap below (ECHILD ⟹ the existing stolen arm,
+        // loud post-discharge) — never silently absorbed.
+        // SAFETY: killpg under pin + reservation (self-grouped,
+        // never regroups, closed set) — the number is
+        // HELD so the group is ours (see above; the steal +
+        // dead-group + foreign-recycle residual is documented
+        // on the function).
+        unsafe {
+            libc::killpg(pubpid, libc::SIGKILL);
+            libc::kill(pubpid, libc::SIGKILL);
         }
         // Reap the leader through its handle (status kept).
         // A wait error means a sibling stole our reap (the
         // status is gone — the probe below still judges the
         // group, then the theft panics loud).
         let mut stolen = false;
-        if status.is_none() {
-            let start = Instant::now();
-            status = loop {
-                match publisher.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) => {
-                        if start.elapsed() >= Duration::from_secs(5) {
-                            panic!(
-                                "unparsed publisher {pubpid} unreapable after SIGKILL \
-                                 (degraded — D-state?)"
-                            );
-                        }
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "R22005-DEGRADED unparsed publisher {pubpid}: leader reaped behind \
-                             our back ({error:?} — status stolen by a sibling wait)"
+        let start = Instant::now();
+        let status = loop {
+            match publisher.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        panic!(
+                            "unparsed publisher {pubpid} unreapable after SIGKILL \
+                             (degraded — D-state?)"
                         );
-                        stolen = true;
-                        break None;
                     }
+                    std::thread::sleep(Duration::from_millis(1));
                 }
-            };
-        }
+                Err(error) => {
+                    eprintln!(
+                        "R22005-DEGRADED unparsed publisher {pubpid}: leader reaped behind \
+                         our back ({error:?} — status stolen by a sibling wait)"
+                    );
+                    stolen = true;
+                    break None;
+                }
+            }
+        };
         let leader_note = match (&status, stolen) {
             (Some(status), _) => format!("leader reaped ({status:?})"),
             (None, true) => "leader reaped behind our back (status stolen)".to_string(),
@@ -24418,6 +24464,313 @@ mod tests {
         assert!(
             stderr.contains("R22005-DISCHARGED"),
             "probe must cite discharge\n{stderr}"
+        );
+    }
+
+    /// R23-003: fresh-image probe — one-free-slot outage over
+    /// `retire_exited_publisher_group` (zombie leader + live
+    /// sleeper). The pin re-read works (one slot free); the
+    /// enumeration's read_dir consumes it, so every member
+    /// stat fails. The old code reads that blindness as
+    /// unstranded (no killpg), accepts the pinned drain (same
+    /// blindness, re-read per pass), reaps the leader (pin
+    /// released) — the sleeper strands with no safe kill path
+    /// left. The fix fails closed: outage-unreadable tasks
+    /// are kept as members, so stranded fires the pinned
+    /// killpg (the sleeper dies while the leader still pins
+    /// the group); the drain then fails LOUD (timeout — it
+    /// cannot verify emptiness blind), never certifies. RED
+    /// (old: retire returns normally with the sleeper LIVE
+    /// and the leader reaped). Duration 860 is unique to
+    /// this test.
+    #[cfg(target_arch = "x86_64")]
+    fn exited_retire_one_free_slot_kills_while_pinned_probe() {
+        use std::io::BufRead as _;
+        use std::panic::AssertUnwindSafe;
+        use std::time::{Duration, Instant};
+        // 1. Pair + births (fds open).
+        let mut publisher = spawn_self_grouped_publisher("860", "wait", &[]);
+        let pubpid = publisher.id() as libc::pid_t;
+        // R22-014: guard at birth (staging must not strand
+        // the publisher).
+        let mut _pguard = FixtureGuard::new(pubpid);
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        // Parses (valid publication — the pair is the
+        // verdict/cleanup identity, not the retire input).
+        let (sleeper, stick) = try_parse_published_pair(line.trim(), "one-free publication")
+            .expect("pair must parse (valid publication)");
+        let pubtick = proc_starttime(pubpid)
+            .expect("leader stat readable")
+            .expect("leader visible");
+        // NO guard on the sleeper: its survival is the
+        // verdict (a guard drop would kill it and confound
+        // the killpg evidence). Cleanup below is explicit
+        // + tick-gated.
+        // 2. Zombie leader (kill, never reap — the pin holds).
+        assert_eq!(
+            // SAFETY: signal to our own staged child.
+            unsafe { libc::kill(pubpid, libc::SIGKILL) },
+            0,
+            "staging broken (leader kill)"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pubpid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "staging broken (leader never zombie?)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // 3. One-free-slot outage (confine + fill, release one).
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "staging broken (nothing held)");
+        held.pop();
+        // Anti-vacuity: exactly one slot — one open succeeds
+        // (transient, dropped at once), two concurrent fail.
+        {
+            let _one = std::fs::File::open("/dev/null").expect("one slot free");
+            assert!(
+                std::fs::File::open("/dev/null").is_err(),
+                "staging broken (more than one slot free?)"
+            );
+        }
+        // The pin re-read works under the outage (else we
+        // staged full-EMFILE — a different test).
+        assert_eq!(
+            proc_starttime(pubpid),
+            Ok(Some(pubtick)),
+            "staging broken (pin unreadable — outage too tight?)"
+        );
+        // 4. THE retire (must kill-then-loud, never
+        // silent-certify — caught: the loud drain timeout
+        // is the expected post-kill report; the verdicts
+        // below judge behavior, not the panic itself).
+        let _outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            retire_exited_publisher_group(&mut publisher, pubpid, pubtick)
+        }));
+        // 5. Verdicts (fd-lean: sequential transient opens only).
+        // Live ⟺ our tick AND a non-zombie state (a zombie
+        // with our tick is dead-for-custody — init reaps).
+        let sleeper_live = proc_starttime(sleeper) == Ok(Some(stick))
+            && !matches!(proc_state(sleeper), None | Some('Z'));
+        // Pin held ⟺ our zombie (only we reap our child; a
+        // zombie with our tick is unreaped-by-us).
+        let pin_held =
+            proc_starttime(pubpid) == Ok(Some(pubtick)) && proc_state(pubpid) == Some('Z');
+        // 6. Cleanup (runs on RED too — tick-gated kill +
+        // bounded drain, then reap through the handle).
+        kill_tick_gated(sleeper, stick);
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_starttime(sleeper) != Ok(Some(stick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "cleanup must drain the sleeper");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = publisher.try_wait();
+        _pguard.disarm();
+        assert!(
+            !sleeper_live,
+            "RED: one-free-slot retire stranded the live sleeper"
+        );
+        assert!(
+            pin_held,
+            "leader must still pin the group (unreaped) while the sleeper retires"
+        );
+        eprintln!("R23003-DONE pin_held={pin_held}");
+    }
+
+    /// R23-003 wrapper: the one-free-slot probe runs
+    /// fresh-image (it exhausts the fd table). Duration 860
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn exited_retire_one_free_slot_kills_while_pinned() {
+        if std::env::var("SCOPEBASE_R23003_ONE_FREE").is_ok() {
+            exited_retire_one_free_slot_kills_while_pinned_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::exited_retire_one_free_slot_kills_while_pinned")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R23003_ONE_FREE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must kill-while-pinned under one-free-slot outage\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R23003-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R23-004: fresh-image probe — degraded Handle-arm
+    /// retire over an ALREADY-ZOMBIE leader (killed, never
+    /// reaped) under persistent EMFILE. A zombie holds
+    /// number+pgid — the pin is live — so the group strike
+    /// must land BEFORE any reap. The old code try_waits
+    /// first (reaping the zombie, releasing the pin) and
+    /// then suppresses killpg (`status.is_none()` false):
+    /// the live unpublished sleeper survives and the
+    /// probe-only tail can only report it loud, never kill
+    /// it. The fix strikes first (killpg+kill under the
+    /// held pin — live or zombie alike), then reaps. RED
+    /// (old: degraded retire panics `group survived` with
+    /// the sleeper LIVE). Duration 862 is unique to this
+    /// test.
+    #[cfg(target_arch = "x86_64")]
+    fn degraded_retire_zombie_leader_strikes_before_reap_probe() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // 1. Valid publication (fds open) — the pair is the
+        // cleanup identity (the retire takes no stranger).
+        let mut publisher = spawn_self_grouped_publisher("862", "wait", &[]);
+        let pubpid = publisher.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(pubpid);
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        let (sleeper, stick) = try_parse_published_pair(line.trim(), "degraded publication")
+            .expect("pair must parse (valid publication)");
+        // NO guard on the sleeper: its death-by-killpg is
+        // the verdict. Cleanup below is explicit.
+        // 2. Zombie leader (kill, never reap — the pin holds).
+        assert_eq!(
+            // SAFETY: signal to our own staged child.
+            unsafe { libc::kill(pubpid, libc::SIGKILL) },
+            0,
+            "staging broken (leader kill)"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pubpid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "staging broken (leader never zombie?)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // 3. Persistent EMFILE (confine + fill; held through
+        // the retire — the pin re-read must fail, routing
+        // to the degraded Handle arm).
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "staging broken (nothing held)");
+        assert!(
+            std::fs::File::open("/dev/null").is_err(),
+            "staging broken (outage not established)"
+        );
+        assert!(
+            proc_starttime(pubpid).is_err(),
+            "staging broken (setup stat readable — outage not biting?)"
+        );
+        // 4. THE retire (degraded Handle arm — must strike
+        // before reaping; caught: the old code panics
+        // `group survived` here).
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retire_unparsed_publisher_group(&mut publisher)
+        }));
+        // 5. Verdict (fd-free under the outage: killpg-0 —
+        // ESRCH ⟹ the unknown sleeper is dead, it shares
+        // the group).
+        let group_errno = {
+            // SAFETY: signal 0 probes only.
+            let probed = unsafe { libc::killpg(pubpid, 0) };
+            if probed == 0 {
+                0
+            } else {
+                std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or(-999)
+            }
+        };
+        let retired = outcome.is_ok();
+        // 6. Cleanup (runs on RED too — the outage is over:
+        // drop the held table, then tick-gated kill +
+        // bounded drain, then reap through the handle).
+        drop(held);
+        drop(_confined);
+        kill_tick_gated(sleeper, stick);
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_starttime(sleeper) != Ok(Some(stick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "cleanup must drain the sleeper");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = publisher.try_wait();
+        _pguard.disarm();
+        assert!(
+            retired,
+            "RED: degraded retire over a zombie leader must return"
+        );
+        assert_eq!(
+            group_errno,
+            libc::ESRCH,
+            "group must be ESRCH-empty (sleeper struck before the reap)"
+        );
+        eprintln!("R23004-DONE");
+    }
+
+    /// R23-004 wrapper: the degraded-zombie probe runs
+    /// fresh-image (it exhausts the fd table). Duration 862
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn degraded_retire_zombie_leader_strikes_before_reap() {
+        if std::env::var("SCOPEBASE_R23004_DEGRADED_ZOMBIE").is_ok() {
+            degraded_retire_zombie_leader_strikes_before_reap_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::degraded_retire_zombie_leader_strikes_before_reap")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R23004_DEGRADED_ZOMBIE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must strike-before-reap under degraded outage\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22005-DEGRADED"),
+            "probe must take the degraded path\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R23004-DONE"),
+            "probe must cite completion\n{stderr}"
         );
     }
 

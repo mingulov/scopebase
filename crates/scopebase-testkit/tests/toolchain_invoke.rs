@@ -6899,6 +6899,10 @@ struct GroupMember {
 /// R22-001 (toolchain twin): enumerate the CURRENT members
 /// of process group `pgid` via /proc (mirror of the lib
 /// enumerator — evidence only; the ESRCH probe judges).
+/// R23-003 (twin mirror): the pgrp leg is tri-state —
+/// gone/foreign/permission-denied skip, fd exhaustion
+/// (EMFILE/ENFILE) and malformed stats keep the pid with
+/// Nones (fail-closed — same arms as the lib).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn enumerate_group_members(pgid: i32) -> Vec<GroupMember> {
     let mut members = Vec::new();
@@ -6919,7 +6923,36 @@ fn enumerate_group_members(pgid: i32) -> Vec<GroupMember> {
             Ok(pid) => pid,
             Err(_) => continue,
         };
-        if !task_pgrp_matches(&name, pgid) {
+        // R23-003 (twin mirror of the lib fix): the old
+        // bool conflated gone/unreadable/malformed into
+        // skip — under fd exhaustion every member vanished.
+        // Gone ⟹ skip; foreign ⟹ skip; permission-denied ⟹
+        // skip (EACCES ⟹ foreign); fd exhaustion or
+        // malformed ⟹ KEEP with Nones (fail-closed).
+        let pgrp = match read_pgrp_checked_toolchain(pid) {
+            Ok(Some(pgrp)) => pgrp,
+            Ok(None) => {
+                members.push(GroupMember {
+                    pid,
+                    birth: None,
+                    state: None,
+                });
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                let errno = error.raw_os_error();
+                if errno == Some(libc::EMFILE) || errno == Some(libc::ENFILE) {
+                    members.push(GroupMember {
+                        pid,
+                        birth: None,
+                        state: None,
+                    });
+                }
+                continue;
+            }
+        };
+        if pgrp != pgid {
             continue;
         }
         let birth = match (proc_ppid(pid), task_starttime_checked(pid)) {
@@ -7144,8 +7177,12 @@ fn read_pgrp_checked_toolchain(pid: i32) -> Result<Option<i32>, std::io::Error> 
 
 /// R22-005 (toolchain twin): mirror of the lib degraded
 /// pin — `Tick` (a tick read succeeded ⟹ number held ⟹
-/// killpg sound) or `Handle` (validated by `try_wait`
-/// inside the degraded retire).
+/// killpg sound) or `Handle` (mirror of the lib pin —
+/// R23-004: the strike precedes all validation — a
+/// pre-strike `try_wait` would reap a zombie leader and
+/// release the pin before the strike; staleness is
+/// detected by the post-strike reap, loud
+/// post-discharge).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[derive(Debug)]
 enum DegradedPinToolchain {
@@ -7178,57 +7215,43 @@ fn retire_unparsed_degraded_toolchain(
          pgrp unverified (outage) — self-groupedness by reservation, not by read)"
     );
     assert_no_subreaper_leak("retire_unparsed_publisher_group (degraded)");
-    let mut status = match pin {
-        DegradedPinToolchain::Tick(_) => None,
-        DegradedPinToolchain::Handle => match publisher.try_wait() {
-            Ok(None) => None,
-            Ok(Some(status)) => Some(status),
-            Err(error) => panic!(
-                "unparsed publisher {pubpid} handle stale ({error:?} — reaped behind our \
-                 back: reservation violated, unpinned everything refused)"
-            ),
-        },
-    };
-    if status.is_none() {
-        // SAFETY: killpg under pin + reservation (see the
-        // lib proof — the number is HELD so the group is
-        // ours).
-        unsafe {
-            libc::killpg(pubpid, libc::SIGKILL);
-            libc::kill(pubpid, libc::SIGKILL);
-        }
-    } else {
-        eprintln!(
-            "R22005-DEGRADED unparsed publisher {pubpid}: leader already dead (reaped \
-             above — pin released, NO killpg: probe-only)"
-        );
+    // R23-004 (twin mirror of the lib fix): strike FIRST —
+    // unconditionally. Any pre-strike try_wait would reap a
+    // zombie leader and release the reservation before the
+    // strike; a handle stolen behind our back is still
+    // detected by the reap below (ECHILD ⟹ stolen, loud
+    // post-discharge).
+    // SAFETY: killpg under pin + reservation (see the lib
+    // proof — the number is HELD so the group is ours; same
+    // steal + dead-group + foreign-recycle residual).
+    unsafe {
+        libc::killpg(pubpid, libc::SIGKILL);
+        libc::kill(pubpid, libc::SIGKILL);
     }
     let mut stolen = false;
-    if status.is_none() {
-        let start = Instant::now();
-        status = loop {
-            match publisher.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) => {
-                    if start.elapsed() >= Duration::from_secs(5) {
-                        panic!(
-                            "unparsed publisher {pubpid} unreapable after SIGKILL \
-                             (degraded — D-state?)"
-                        );
-                    }
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => {
-                    eprintln!(
-                        "R22005-DEGRADED unparsed publisher {pubpid}: leader reaped behind \
-                         our back ({error:?} — status stolen by a sibling wait)"
+    let start = Instant::now();
+    let status = loop {
+        match publisher.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    panic!(
+                        "unparsed publisher {pubpid} unreapable after SIGKILL \
+                         (degraded — D-state?)"
                     );
-                    stolen = true;
-                    break None;
                 }
+                std::thread::sleep(Duration::from_millis(1));
             }
-        };
-    }
+            Err(error) => {
+                eprintln!(
+                    "R22005-DEGRADED unparsed publisher {pubpid}: leader reaped behind \
+                     our back ({error:?} — status stolen by a sibling wait)"
+                );
+                stolen = true;
+                break None;
+            }
+        }
+    };
     let leader_note = match (&status, stolen) {
         (Some(status), _) => format!("leader reaped ({status:?})"),
         (None, true) => "leader reaped behind our back (status stolen)".to_string(),
@@ -10330,6 +10353,236 @@ fn outage_unparsed_retire_discharges() {
     assert!(
         stderr.contains("R22005-DISCHARGED"),
         "probe must cite discharge\n{stderr}"
+    );
+}
+
+/// R23-003 (toolchain twin): mirror of the lib one-free-slot
+/// probe — zombie leader + live sleeper, exactly one fd free.
+/// The old twin enumerator reads the blindness as unstranded
+/// (no killpg), accepts the pinned drain, reaps the leader —
+/// the sleeper strands. The fix fails closed (outage-kept
+/// members fire the pinned killpg; the drain fails LOUD).
+/// RED (old: retire returns normally with the sleeper LIVE
+/// and the leader reaped). Duration 861 is unique to this
+/// test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn exited_retire_one_free_slot_kills_while_pinned_probe() {
+    use std::io::BufRead as _;
+    use std::panic::AssertUnwindSafe;
+    use std::time::{Duration, Instant};
+    let mut publisher = spawn_self_grouped_publisher("861", "wait", &[]);
+    let pubpid = publisher.id() as i32;
+    let mut _pguard = SilentChildGuard::new(pubpid);
+    let mut line = String::new();
+    std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line)
+        .expect("pair readable");
+    let (sleeper, stick) = try_parse_published_pair(line.trim(), "one-free publication")
+        .expect("pair must parse (valid publication)");
+    let pubtick = task_starttime_checked(pubpid)
+        .expect("leader stat readable")
+        .expect("leader visible");
+    // NO guard on the sleeper: its survival is the verdict.
+    assert_eq!(
+        // SAFETY: signal to our own staged child.
+        unsafe { libc::kill(pubpid, libc::SIGKILL) },
+        0,
+        "staging broken (leader kill)"
+    );
+    settle_zombie_007(pubpid);
+    let _confined = confine_fd_table_for_exhaustion();
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "staging broken (nothing held)");
+    held.pop();
+    {
+        let _one = std::fs::File::open("/dev/null").expect("one slot free");
+        assert!(
+            std::fs::File::open("/dev/null").is_err(),
+            "staging broken (more than one slot free?)"
+        );
+    }
+    assert_eq!(
+        task_starttime_checked(pubpid),
+        Ok(Some(pubtick)),
+        "staging broken (pin unreadable — outage too tight?)"
+    );
+    let _outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        retire_exited_publisher_group(&mut publisher, pubpid, pubtick)
+    }));
+    let sleeper_live = task_starttime_checked(sleeper) == Ok(Some(stick))
+        && !matches!(task_state(sleeper), None | Some('Z'));
+    let pin_held =
+        task_starttime_checked(pubpid) == Ok(Some(pubtick)) && task_state(pubpid) == Some('Z');
+    kill_tick_gated(sleeper, stick);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_starttime_checked(sleeper) != Ok(Some(stick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "cleanup must drain the sleeper");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = publisher.try_wait();
+    _pguard.disarm();
+    assert!(
+        !sleeper_live,
+        "RED: one-free-slot retire stranded the live sleeper"
+    );
+    assert!(
+        pin_held,
+        "leader must still pin the group (unreaped) while the sleeper retires"
+    );
+    eprintln!("R23003-DONE pin_held={pin_held}");
+}
+
+/// R23-003 (toolchain twin): the one-free-slot probe runs
+/// fresh-image (it exhausts the fd table). Duration 861 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn exited_retire_one_free_slot_kills_while_pinned() {
+    if std::env::var("SCOPEBASE_R23003_ONE_FREE_TWIN").is_ok() {
+        exited_retire_one_free_slot_kills_while_pinned_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("exited_retire_one_free_slot_kills_while_pinned")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R23003_ONE_FREE_TWIN", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "probe must kill-while-pinned under one-free-slot outage\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R23003-DONE"),
+        "probe must cite completion\n{stderr}"
+    );
+}
+
+/// R23-004 (toolchain twin): mirror of the lib
+/// degraded-zombie probe — the Handle arm must strike
+/// before reaping an already-zombie leader under EMFILE.
+/// RED (old: degraded retire panics `group survived` with
+/// the sleeper LIVE). Duration 868 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn degraded_retire_zombie_leader_strikes_before_reap_probe() {
+    use std::io::BufRead as _;
+    use std::time::{Duration, Instant};
+    let mut publisher = spawn_self_grouped_publisher("868", "wait", &[]);
+    let pubpid = publisher.id() as i32;
+    let mut _pguard = SilentChildGuard::new(pubpid);
+    let mut line = String::new();
+    std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+        .read_line(&mut line)
+        .expect("pair readable");
+    let (sleeper, stick) = try_parse_published_pair(line.trim(), "degraded publication")
+        .expect("pair must parse (valid publication)");
+    // NO guard on the sleeper: its death-by-killpg is the verdict.
+    assert_eq!(
+        // SAFETY: signal to our own staged child.
+        unsafe { libc::kill(pubpid, libc::SIGKILL) },
+        0,
+        "staging broken (leader kill)"
+    );
+    settle_zombie_007(pubpid);
+    let _confined = confine_fd_table_for_exhaustion();
+    let mut held = Vec::new();
+    while let Ok(file) = std::fs::File::open("/dev/null") {
+        held.push(file);
+    }
+    assert!(!held.is_empty(), "staging broken (nothing held)");
+    assert!(
+        std::fs::File::open("/dev/null").is_err(),
+        "staging broken (outage not established)"
+    );
+    assert!(
+        task_starttime_checked(pubpid).is_err(),
+        "staging broken (setup stat readable — outage not biting?)"
+    );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        retire_unparsed_publisher_group(&mut publisher)
+    }));
+    let group_errno = {
+        // SAFETY: signal 0 probes only.
+        let probed = unsafe { libc::killpg(pubpid, 0) };
+        if probed == 0 {
+            0
+        } else {
+            std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(-999)
+        }
+    };
+    let retired = outcome.is_ok();
+    drop(held);
+    drop(_confined);
+    kill_tick_gated(sleeper, stick);
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if task_starttime_checked(sleeper) != Ok(Some(stick)) {
+            break;
+        }
+        assert!(Instant::now() < end, "cleanup must drain the sleeper");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = publisher.try_wait();
+    _pguard.disarm();
+    assert!(
+        retired,
+        "RED: degraded retire over a zombie leader must return"
+    );
+    assert_eq!(
+        group_errno,
+        libc::ESRCH,
+        "group must be ESRCH-empty (sleeper struck before the reap)"
+    );
+    eprintln!("R23004-DONE");
+}
+
+/// R23-004 (toolchain twin): the degraded-zombie probe runs
+/// fresh-image (it exhausts the fd table). Duration 868 is
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn degraded_retire_zombie_leader_strikes_before_reap() {
+    if std::env::var("SCOPEBASE_R23004_DEGRADED_ZOMBIE_TWIN").is_ok() {
+        degraded_retire_zombie_leader_strikes_before_reap_probe();
+        return;
+    }
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("degraded_retire_zombie_leader_strikes_before_reap")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R23004_DEGRADED_ZOMBIE_TWIN", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("probe child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        out.status.success(),
+        "probe must strike-before-reap under degraded outage\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R22005-DEGRADED"),
+        "probe must take the degraded path\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R23004-DONE"),
+        "probe must cite completion\n{stderr}"
     );
 }
 
