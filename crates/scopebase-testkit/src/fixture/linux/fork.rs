@@ -2072,8 +2072,33 @@ mod tests {
             m1,
             "grandchild must be parented to the live middleman"
         );
+        // Birth pin for the exec-race retry below.
+        let m2tick = fork_starttime(m2)
+            .expect("grandchild stat readable")
+            .expect("grandchild visible");
         for fd in [0, 1, 2] {
-            let link = std::fs::read_link(format!("/proc/{m2}/fd/{fd}")).expect("stdio readable");
+            // The pid report precedes m2's exec — mid-exec
+            // m2 is transiently non-dumpable and its fd dir
+            // can EACCES. Bounded same-birth retries (a
+            // recycled number or persistent denial still
+            // fails loud).
+            let start = std::time::Instant::now();
+            let link = loop {
+                match std::fs::read_link(format!("/proc/{m2}/fd/{fd}")) {
+                    Ok(link) => break link,
+                    Err(error)
+                        if error.raw_os_error() == Some(libc::EACCES)
+                            && start.elapsed() < std::time::Duration::from_secs(2)
+                            && fork_starttime(m2) == Ok(Some(m2tick)) =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) => panic!(
+                        "stdio readable (fd {fd} of grandchild {m2} under {m1}): {error:?}"
+                    ),
+                }
+            };
             assert_eq!(
                 link.to_string_lossy(),
                 "/dev/null",
@@ -2470,7 +2495,7 @@ mod tests {
         // is strictly below the kill-time anchor). `sleep`
         // (PATH-searched) keeps argv0 bare — the fork
         // scanners match fork-shape-exact argv0.
-        let mut unrelated = std::process::Command::new("sleep")
+        let unrelated = std::process::Command::new("sleep")
             .arg("871")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -2502,7 +2527,7 @@ mod tests {
         // 2. The faulted fixture: a fresh sleep-871 of
         // unknown birth (the backstop shape — direct, no
         // line).
-        let mut fixture = std::process::Command::new("sleep")
+        let fixture = std::process::Command::new("sleep")
             .arg("871")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -2559,14 +2584,333 @@ mod tests {
             "unrelated retire must land"
         );
         _uguard.disarmed = true;
-        let _ = unrelated.wait();
         kill_tick_gated_fork(fpid, ftick);
         assert!(
             birth_drained(fpid, ftick, Duration::from_secs(5)),
             "fixture retire must land"
         );
         _fguard.disarmed = true;
-        let _ = fixture.wait();
+    }
+
+    /// R24-001 (fork twin): the ownership-window anchor
+    /// must source CLOCK_BOOTTIME (the starttime domain —
+    /// MONOTONIC excludes suspend). Source-text leg (see
+    /// the audit twin for the rationale): requires the
+    /// BOOTTIME constant in `boot_ticks_now`'s body.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r24001_anchor_clock_source_is_boottime() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let src = std::fs::read_to_string(root.join("src/fixture/linux/fork.rs"))
+            .expect("own source readable");
+        assert_eq!(
+            src.match_indices("\n    fn boot_ticks_now").count(),
+            1,
+            "exactly one anchor fn (rename breaks this leg loudly)"
+        );
+        let start = src
+            .find("\n    fn boot_ticks_now")
+            .expect("anchor fn present");
+        let rel = src[start..].find('{').expect("anchor body opens");
+        let body_start = start + rel;
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in src[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(body_start + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &src[body_start..end.expect("anchor body closes")];
+        assert!(
+            body.contains("CLOCK_BOOTTIME"),
+            "anchor must source CLOCK_BOOTTIME (the starttime domain)"
+        );
+        assert!(
+            !body.contains("CLOCK_MONOTONIC"),
+            "anchor must not source CLOCK_MONOTONIC (excludes suspend)"
+        );
+    }
+
+    /// R24-001 (fork twin): synthetic 600 s-lag control —
+    /// the lagged anchor admits the stale birth while the
+    /// real anchor excludes it; a post-anchor birth
+    /// includes. Mirror of the audit leg (bare-`sleep`
+    /// argv0, the fork scanner). Duration 801 is unique
+    /// to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r24001_lagged_anchor_shape_admits_real_anchor_excludes() {
+        use std::time::Duration;
+        let stale = std::process::Command::new("sleep")
+            .arg("801")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (stale spawn)");
+        let spid = stale.id() as libc::pid_t;
+        let mut _sguard = LegChildGuard {
+            pid: spid,
+            tick: None,
+            disarmed: false,
+        };
+        // Detached reaper (the drain below polls for
+        // tick-gone, but our own children zombie until
+        // reaped — same shape as the stale-sleeper leg).
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(spid, &mut status, 0);
+            }
+        });
+        let stick = fork_starttime(spid)
+            .expect("staging broken (stale stat)")
+            .expect("staging broken (stale visible)");
+        _sguard.tick = Some(stick);
+        std::thread::sleep(Duration::from_millis(25));
+        let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+        assert!(
+            stick < anchor,
+            "staging broken (anchor did not advance past the plant: {stick} vs {anchor})"
+        );
+        let lagged = anchor.saturating_sub(60_000);
+        let admitted: Vec<libc::pid_t> = sleep_owned_pids_with_dur("801", lagged)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        assert!(
+            admitted.contains(&spid),
+            "lagged anchor must admit the stale birth (control broken?)"
+        );
+        let excluded: Vec<libc::pid_t> = sleep_owned_pids_with_dur("801", anchor)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        assert!(
+            !excluded.contains(&spid),
+            "real anchor must exclude the stale birth (anchor lags like post-suspend monotonic?)"
+        );
+        let fresh = std::process::Command::new("sleep")
+            .arg("801")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (fresh spawn)");
+        let fpid = fresh.id() as libc::pid_t;
+        let mut _fguard = LegChildGuard {
+            pid: fpid,
+            tick: None,
+            disarmed: false,
+        };
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(fpid, &mut status, 0);
+            }
+        });
+        let included: Vec<libc::pid_t> = sleep_owned_pids_with_dur("801", anchor)
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        assert!(
+            included.contains(&fpid),
+            "post-anchor birth must be included (overcorrection?)"
+        );
+        assert!(
+            !included.contains(&spid),
+            "stale birth must stay excluded beside a fresh one"
+        );
+        kill_tick_gated_fork(spid, stick);
+        assert!(
+            birth_drained(spid, stick, Duration::from_secs(5)),
+            "stale retire must land"
+        );
+        _sguard.disarmed = true;
+        let ftick = fork_starttime(fpid)
+            .expect("staging broken (fresh stat)")
+            .expect("staging broken (fresh visible)");
+        _fguard.tick = Some(ftick);
+        kill_tick_gated_fork(fpid, ftick);
+        assert!(
+            birth_drained(fpid, ftick, Duration::from_secs(5)),
+            "fresh retire must land"
+        );
+        _fguard.disarmed = true;
+    }
+
+    /// R23-008 (fork twin): our invocation owns a
+    /// DEDICATED session (shared `ensure_dedicated_session`
+    /// — same crate, same image as the audit twin).
+    /// Mirror of the audit dedication leg.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23008_session_dedicated_to_invocation() {
+        use super::super::DedicatedSession;
+        match super::super::ensure_dedicated_session() {
+            DedicatedSession::Unavailable | DedicatedSession::SharedWithWrapper => {
+                eprintln!("skip: session dedication unavailable (group leader?)");
+                return;
+            }
+            DedicatedSession::BySetsid | DedicatedSession::ByBirth => {}
+        }
+        // SAFETY: getsid/getpid/getppid queries only.
+        let me = unsafe { libc::getpid() };
+        let sid = unsafe { libc::getsid(0) };
+        let parent = unsafe { libc::getppid() };
+        let psid = unsafe { libc::getsid(parent) };
+        assert_eq!(
+            sid, me,
+            "test binary must lead its own session (dedicated by setsid)"
+        );
+        assert_ne!(
+            sid, psid,
+            "test session must differ from the invoker's session"
+        );
+    }
+
+    /// R23-008 (fork twin): a post-anchor UNRELATED birth
+    /// in a foreign session must survive the backstop
+    /// while our own post-anchor fixture drains. Mirror
+    /// of the audit leg (bare-`sleep` argv0, the fork
+    /// backstop). Duration 804 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23008_backstop_spares_post_anchor_foreign_session_sleeper() {
+        use std::os::unix::process::CommandExt as _;
+        use std::time::Duration;
+        {
+            use super::super::DedicatedSession;
+            if super::super::ensure_dedicated_session() == DedicatedSession::Unavailable {
+                eprintln!("skip: session dedication unavailable (group leader?)");
+                return;
+            }
+        }
+        // SAFETY: getsid query only.
+        let ours = unsafe { libc::getsid(0) };
+        let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+        let mut stranger_cmd = std::process::Command::new("sleep");
+        stranger_cmd
+            .arg("804")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setsid on the forked child pre-exec (not
+        // a group leader — inherits ours).
+        unsafe {
+            stranger_cmd.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let stranger = stranger_cmd.spawn().expect("staging broken (stranger spawn)");
+        let spid = stranger.id() as libc::pid_t;
+        let mut _sguard = LegChildGuard {
+            pid: spid,
+            tick: None,
+            disarmed: false,
+        };
+        // SAFETY: getsid queries only.
+        let ssid = unsafe { libc::getsid(spid) };
+        assert!(
+            ssid >= 0 && ssid != ours,
+            "staging broken (stranger must sit in a foreign session: {ssid} vs ours {ours})"
+        );
+        let stick = fork_starttime(spid)
+            .expect("staging broken (stranger stat)")
+            .expect("staging broken (stranger visible)");
+        _sguard.tick = Some(stick);
+        assert!(
+            stick >= anchor,
+            "staging broken (stranger must be post-anchor: {stick} vs {anchor})"
+        );
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(spid, &mut status, 0);
+            }
+        });
+        let fixture = std::process::Command::new("sleep")
+            .arg("804")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (fixture spawn)");
+        let fpid = fixture.id() as libc::pid_t;
+        let mut _fguard = LegChildGuard {
+            pid: fpid,
+            tick: None,
+            disarmed: false,
+        };
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(fpid, &mut status, 0);
+            }
+        });
+        let ftick = fork_starttime(fpid)
+            .expect("staging broken (fixture stat)")
+            .expect("staging broken (fixture visible)");
+        _fguard.tick = Some(ftick);
+        // SAFETY: getsid query only.
+        assert_eq!(
+            unsafe { libc::getsid(fpid) },
+            ours,
+            "staging broken (fixture must share our session)"
+        );
+        let seen: Vec<libc::pid_t> = sleep_pids_with_dur("804")
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .collect();
+        assert!(
+            seen.contains(&fpid),
+            "staging broken (oracle must see our fixture)"
+        );
+        assert!(
+            !seen.contains(&spid),
+            "staging broken (oracle must not see the foreign stranger)"
+        );
+        assert!(
+            kill_sleep_with_dur("804", anchor),
+            "backstop must drain the fixture"
+        );
+        match fork_starttime(fpid) {
+            Ok(None) => {}
+            Ok(Some(now)) => assert_ne!(now, ftick, "fixture birth must be retired"),
+            Err(error) => panic!("fixture drainage unverifiable: {error}"),
+        }
+        assert_eq!(
+            fork_starttime(spid),
+            Ok(Some(stick)),
+            "foreign-session stranger must survive as the same birth"
+        );
+        kill_tick_gated_fork(spid, stick);
+        assert!(
+            birth_drained(spid, stick, Duration::from_secs(5)),
+            "stranger retire must land"
+        );
+        _sguard.disarmed = true;
+        kill_tick_gated_fork(fpid, ftick);
+        assert!(
+            birth_drained(fpid, ftick, Duration::from_secs(5)),
+            "fixture retire must land"
+        );
+        _fguard.disarmed = true;
     }
 
     /// R23-009: the scan hook swaps the candidate between
@@ -2597,7 +2941,7 @@ mod tests {
         let anchor = boot_ticks_now().expect("staging broken (boot clock)");
         // Candidate sleep-874 (bare argv0 — the fork
         // scanners match fork-shape-exact argv0).
-        let mut candidate = std::process::Command::new("sleep")
+        let candidate = std::process::Command::new("sleep")
             .arg("874")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -2650,7 +2994,6 @@ mod tests {
         // already dead + reaped — nothing litters).
         if skipped.load(Ordering::SeqCst) {
             eprintln!("skip: replacement planting contended (retake squatted)");
-            let _ = candidate.wait();
             _cguard.disarmed = true;
             return;
         }
@@ -2692,7 +3035,6 @@ mod tests {
         );
         rguard.disarmed = true;
         _cguard.disarmed = true;
-        let _ = candidate.wait();
     }
 
     /// R22-014 fault leg: a pre-tail staging panic must
@@ -3816,8 +4158,11 @@ mod tests {
         ProbeOutcome { timed_out, out }
     }
 
-    /// R23-008: boot-clock ticks now (CLOCK_MONOTONIC
-    /// → jiffies) — the ownership-window anchor. Ported
+    /// R23-008: boot-clock ticks now (CLOCK_BOOTTIME
+    /// → jiffies) — the ownership-window anchor. R24-001:
+    /// BOOTTIME, not MONOTONIC (starttime counts suspend;
+    /// MONOTONIC excludes it — a monotonic anchor admits
+    /// pre-anchor sleepers after any suspend). Ported
     /// from the toolchain twin (`boot_ticks_now`,
     /// crates/scopebase-testkit/tests/toolchain_invoke.rs:882-898
     /// at f614a4d — same source as the audit copy).
@@ -3827,7 +4172,7 @@ mod tests {
             tv_nsec: 0,
         };
         // SAFETY: clock_gettime with a valid out-pointer.
-        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 {
             return None;
         }
         // SAFETY: sysconf with a valid name.
@@ -3845,6 +4190,13 @@ mod tests {
     /// evidence).
     fn task_owned_by_us(pid: libc::pid_t) -> bool {
         use std::os::unix::fs::MetadataExt as _;
+        // R23-008: dedicate our session first (once per
+        // image — same-shell strangers then fail the
+        // session check below even post-anchor).
+        // x86-only (the dedication helper is x86-gated;
+        // other arches run undedicated).
+        #[cfg(target_arch = "x86_64")]
+        let _ = super::super::ensure_dedicated_session();
         // SAFETY: geteuid/getsid query only.
         let euid = unsafe { libc::geteuid() };
         let ours = unsafe { libc::getsid(0) };
