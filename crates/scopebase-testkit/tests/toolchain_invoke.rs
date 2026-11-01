@@ -6923,14 +6923,16 @@ fn enumerate_group_members(pgid: i32) -> Vec<GroupMember> {
             Ok(pid) => pid,
             Err(_) => continue,
         };
-        // R23-003 (twin mirror of the lib fix): the old
-        // bool conflated gone/unreadable/malformed into
-        // skip — under fd exhaustion every member vanished.
-        // Gone ⟹ skip; foreign ⟹ skip; permission-denied ⟹
-        // skip (EACCES ⟹ foreign); fd exhaustion or
+        // R23-003 (twin mirror of the lib fix): gone /
+        // foreign / permission-denied skip; fd exhaustion or
         // malformed ⟹ KEEP with Nones (fail-closed).
-        let pgrp = match read_pgrp_checked_toolchain(pid) {
-            Ok(Some(pgrp)) => pgrp,
+        // R23-006 (twin mirror): ONE read per task (the old
+        // four-read split had the same TOCTOU as the lib).
+        // No between-hook here: the twin has no birth-gated
+        // reaping over its snapshots (no theft path), so no
+        // twin leg needs the seam.
+        let identity = match read_stat_identity_toolchain(pid) {
+            Ok(Some(identity)) => identity,
             Ok(None) => {
                 members.push(GroupMember {
                     pid,
@@ -6952,17 +6954,13 @@ fn enumerate_group_members(pgid: i32) -> Vec<GroupMember> {
                 continue;
             }
         };
-        if pgrp != pgid {
+        if identity.pgrp != pgid {
             continue;
         }
-        let birth = match (proc_ppid(pid), task_starttime_checked(pid)) {
-            (Some(ppid), Ok(Some(tick))) => Some((ppid, tick)),
-            _ => None,
-        };
         members.push(GroupMember {
             pid,
-            birth,
-            state: task_state(pid),
+            birth: Some((identity.ppid, identity.tick)),
+            state: Some(identity.state),
         });
     }
     members
@@ -7173,6 +7171,39 @@ fn read_pgrp_checked_toolchain(pid: i32) -> Result<Option<i32>, std::io::Error> 
         .rsplit_once(") ")
         .and_then(|(_, after)| after.split_whitespace().nth(2))
         .and_then(|field| field.parse::<i32>().ok()))
+}
+
+/// R23-006 (toolchain twin): mirror of the lib
+/// single-read stat identity — pgrp + ppid + tick + state
+/// from ONE row (a split read let a recycle donate a
+/// genuine tick to stale group evidence). Same tri-state
+/// arms as the lib.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct StatIdentityToolchain {
+    pgrp: i32,
+    ppid: i32,
+    tick: u64,
+    state: char,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn read_stat_identity_toolchain(pid: i32) -> Result<Option<StatIdentityToolchain>, std::io::Error> {
+    let row = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    Ok((|| {
+        let after_comm = row.rsplit_once(") ")?.1;
+        let mut fields = after_comm.split_whitespace();
+        let state = fields.next()?.chars().next()?;
+        let ppid = fields.next()?.parse::<i32>().ok()?;
+        let pgrp = fields.next()?.parse::<i32>().ok()?;
+        // Consumed [0..=2]; starttime is [19].
+        let tick = fields.nth(16)?.parse::<u64>().ok()?;
+        Some(StatIdentityToolchain {
+            pgrp,
+            ppid,
+            tick,
+            state,
+        })
+    })())
 }
 
 /// R22-005 (toolchain twin): mirror of the lib degraded
