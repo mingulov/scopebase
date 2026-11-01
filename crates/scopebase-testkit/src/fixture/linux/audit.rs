@@ -6897,6 +6897,26 @@ mod tests {
     /// drain. Residual: the recheck→waitpid µs TOCTOU inside
     /// one iteration (no atomic check-and-reap exists) —
     /// S100-class, consistent with R13-003.
+    ///
+    /// R22-001b: the inner drain is an entry snapshot, not a
+    /// blind waitpid(-pgid) (a freed number — leader reaped
+    /// by an earlier pass — plus a replacement zombie lost
+    /// the replacement's status to the blind drain, which
+    /// then ESRCH-certified over the theft). The snapshot
+    /// (taken before the drain's own killpg) lists our
+    /// zombies in the group (ppid == self, state == Z);
+    /// passes specific-wait the remainder with a per-attempt
+    /// birth gate (recycled numbers drop, never touched).
+    /// Deaths concurrent with the drain — including its own
+    /// killpg victims — are arrivals-by-construction:
+    /// never listed, never reaped; their owners' specific
+    /// waits cannot lose to this drain. Live-at-entry
+    /// mandate members settle through their own frames (a
+    /// later retire converges once they discharge).
+    /// Residual: an entry-zombie member with a live
+    /// same-process owner is drained (indistinguishable
+    /// from mandate — R22-001 pinned-squatter analog; no
+    /// suite flow stages it).
     #[cfg(target_arch = "x86_64")]
     fn retire_stray_group_best_effort(
         pgid: libc::pid_t,
@@ -6956,6 +6976,31 @@ mod tests {
             eprintln!("stray-group {pgid} probe failed (errno {errno}) — vetoed (no signal)");
             return false;
         }
+        // R22-001b: entry snapshot — the drainable set is
+        // fixed BEFORE the drain's own killpg (per-reap
+        // birth verification): our zombies in group `pgid`
+        // (ppid == self — foreign zombies belong to their
+        // owners; state == Z — deaths concurrent with the
+        // drain, including its own killpg victims, are
+        // arrivals-by-construction and are NEVER listed).
+        // The drain reaps only deaths that predate its own
+        // signal; a death it causes (or races) belongs to
+        // its explicit-custody owner, whose specific wait
+        // can no longer lose to a blind group wait here.
+        // Leader-last order (pin held while draining
+        // members — cosmetic for safety (the snapshot
+        // bounds every reap) but principled).
+        // SAFETY: getpid queries only.
+        let me = unsafe { libc::getpid() };
+        let mut drainable: Vec<(libc::pid_t, u64)> = enumerate_group_members(pgid)
+            .into_iter()
+            .filter(|member| member.state == Some('Z'))
+            .filter_map(|member| match member.birth {
+                Some((ppid, tick)) if ppid == me => Some((member.pid, tick)),
+                _ => None,
+            })
+            .collect();
+        drainable.sort_by_key(|(pid, _)| (*pid == pgid) as u8);
         // SAFETY: signal-only to the group; errors ignored
         // (house discipline — the proof below decides).
         unsafe {
@@ -6995,19 +7040,32 @@ mod tests {
             if recheck_vetoed(pgid, started) {
                 return false;
             }
-            // Drain OUR adopted zombies in this group
-            // (subreaper/PID-1 runners adopt the dead
-            // members — a zombie still holds the group
-            // observable; waitpid(-pgid) reaps our children
-            // here, so the rechecks above and below are the
-            // only barrier between the drain and a
-            // same-process reform's status).
-            loop {
+            // R22-001b: specific waits over the REMAINDER
+            // only — never blind waitpid(-pgid) (arrivals
+            // are unlisted and untouchable, so no post-free
+            // pass can steal a replacement's status).
+            // Each attempt birth-gates (a recycled number
+            // drops, never touched — R19-015 doctrine);
+            // ECHILD drops (reaped by its owner/frame
+            // between our gate and wait — owned elsewhere);
+            // anything else unreaped retries next pass
+            // (the deadline bounds the loop). Residual
+            // (S100-µs): a same-tick reborn on a listed
+            // number keeps passing the gate — no atomic
+            // gate-and-reap exists (the R19-008 residual
+            // class, unchanged).
+            let mut idx = 0;
+            while idx < drainable.len() {
+                let (pid, tick) = drainable[idx];
+                if proc_starttime(pid).ok().flatten() != Some(tick) {
+                    drainable.remove(idx);
+                    continue;
+                }
                 let mut status = 0;
-                // SAFETY: -pgid filters to our children in
-                // this group; WNOHANG never blocks.
-                let got = unsafe { libc::waitpid(-pgid, &mut status, libc::WNOHANG) };
-                if got > 0 {
+                // SAFETY: specific birth-gated pid; WNOHANG
+                // never blocks.
+                let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if got == pid {
                     // R19-008 seam (R15-007 shape): the
                     // between-reaps adversary runs here; the
                     // recheck below must observe its plant.
@@ -7020,6 +7078,7 @@ mod tests {
                     if recheck_vetoed(pgid, started) {
                         return false;
                     }
+                    drainable.remove(idx);
                     continue;
                 }
                 if got < 0 {
@@ -7027,8 +7086,12 @@ mod tests {
                     if error.kind() == std::io::ErrorKind::Interrupted {
                         continue;
                     }
+                    if error.raw_os_error() == Some(libc::ECHILD) {
+                        drainable.remove(idx);
+                        continue;
+                    }
                 }
-                break;
+                idx += 1;
             }
             // Between-passes barrier (regression seam; None
             // in production calls). Runs after every reap
@@ -31089,6 +31152,306 @@ time.sleep(30)
         assert_ne!(
             rtick, ltick,
             "reform must be a different birth (stage broken otherwise)"
+        );
+    }
+
+    /// R22-001b probe case (fresh image, confined subreaper):
+    /// plant L (adopted stray-leader zombie, self-grouped) + S
+    /// (own live direct child joined to L's group, parked in
+    /// pause()); drain with a reap hook (fired-flag only);
+    /// demand veto-false + hook-fired + S's SIGKILL-death
+    /// retained by the owner wait + L drained by the drain.
+    /// S is killed BY the drain's own pinned killpg
+    /// (R19-015-compliant residual — a live joined member at
+    /// entry cannot survive SIGKILL), so S's zombie
+    /// necessarily postdates the entry snapshot: an arrival
+    /// by construction, never listed, never reaped. RED
+    /// (blind waitpid(-pgid)): a post-free pass reaps S and
+    /// certifies true over the theft. GREEN (entry snapshot
+    /// + birth-gated specific waits): false at the bound,
+    /// S's true death stays with its owner.
+    #[cfg(target_arch = "x86_64")]
+    fn run_001b_probe_case() {
+        use std::time::{Duration, Instant};
+        // Non-vacuity: the subreaper mark is EFFECTIVE (else
+        // init adopts L and the drain ECHILD-noops to a
+        // false green).
+        let mut marked: libc::c_int = -1;
+        // SAFETY: prctl get-only into a valid local slot.
+        let got = unsafe {
+            libc::prctl(
+                libc::PR_GET_CHILD_SUBREAPER,
+                &mut marked as *mut libc::c_int,
+                0,
+                0,
+                0,
+            )
+        };
+        assert_eq!(got, 0, "subreaper query works");
+        assert_eq!(marked, 1, "probe must be a child subreaper");
+        // M1/L staging via raw fork (no python — gateless):
+        // M1 forks L (self-group, prompt exit), reports L's
+        // pid over a pipe, and exits; the probe adopts L.
+        let mut lpipe = [0 as libc::c_int; 2];
+        assert_eq!(
+            unsafe { libc::pipe(lpipe.as_mut_ptr()) },
+            0,
+            "L-report pipe works"
+        );
+        // SAFETY: fork; parent and child take disjoint
+        // branches; the child never returns (prompt _exit,
+        // no allocating or libc-locking calls post-fork).
+        let m1 = unsafe { libc::fork() };
+        assert!(m1 >= 0, "M1 fork works");
+        if m1 == 0 {
+            unsafe {
+                libc::close(lpipe[0]);
+                let l = libc::fork();
+                if l == 0 {
+                    libc::setpgid(0, 0);
+                    libc::close(lpipe[1]);
+                    libc::_exit(0);
+                }
+                // Report L's pid (8-byte LE; <= 0 means the
+                // L fork failed — stage-broken, loud above).
+                let bytes = (l as i64).to_le_bytes();
+                let mut off = 0;
+                while off < bytes.len() {
+                    let w = libc::write(
+                        lpipe[1],
+                        bytes[off..].as_ptr() as *const libc::c_void,
+                        (bytes.len() - off) as libc::size_t,
+                    );
+                    if w <= 0 {
+                        break;
+                    }
+                    off += w as usize;
+                }
+                libc::close(lpipe[1]);
+                libc::_exit(0);
+            }
+        }
+        unsafe {
+            libc::close(lpipe[1]);
+        }
+        // Read exactly 8 bytes (EOF/short = M1 died
+        // pre-report — stage broken).
+        let mut lbytes = [0u8; 8];
+        let mut off = 0;
+        while off < 8 {
+            let r = unsafe {
+                libc::read(
+                    lpipe[0],
+                    lbytes[off..].as_mut_ptr() as *mut libc::c_void,
+                    (8 - off) as libc::size_t,
+                )
+            };
+            assert!(r > 0, "M1 must report L's pid");
+            off += r as usize;
+        }
+        unsafe {
+            libc::close(lpipe[0]);
+        }
+        let lpid = i64::from_le_bytes(lbytes) as libc::pid_t;
+        assert!(lpid > 0, "L fork must succeed");
+        // Reap M1 specifically (own direct child — custody).
+        let end = Instant::now() + Duration::from_secs(10);
+        let m1_status = loop {
+            let mut st = 0;
+            // SAFETY: specific WNOHANG wait on our known child.
+            let got = unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) };
+            if got == m1 {
+                break st;
+            }
+            assert!(
+                Instant::now() < end,
+                "M1 must exit promptly (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(
+            libc::WIFEXITED(m1_status) && libc::WEXITSTATUS(m1_status) == 0,
+            "M1 must exit 0, got {m1_status}"
+        );
+        // L may still be live (it can exit after M1): poll
+        // it zombie (twins' zombify-poll idiom).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            if proc_state(lpid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "L must zombify (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Non-vacuity: L is OUR adopted zombie, self-grouped
+        // (ppid proves the subreaper adoption — init-adopted
+        // would be ECHILD-vacuous below).
+        let (lppid, ltick) = proc_ppid_and_starttime(lpid)
+            .expect("L stat readable")
+            .expect("L visible");
+        // SAFETY: getpid/getpgid queries only.
+        assert_eq!(
+            lppid,
+            unsafe { libc::getpid() },
+            "L must be adopted by the probe (subreaper effective)"
+        );
+        assert_eq!(
+            unsafe { libc::getpgid(lpid) },
+            lpid,
+            "L must self-group (stage broken otherwise)"
+        );
+        // S: own direct child, joined to L's group, parked in
+        // pause(). S never exits 7 by design — the drain's
+        // pinned killpg SIGKILLs it (residual); a 7 below
+        // means S escaped the killpg (stage-broken, loud).
+        // SAFETY: fork; disjoint branches; the child never
+        // returns (prompt _exit, no allocating or
+        // libc-locking calls post-fork).
+        let s = unsafe { libc::fork() };
+        assert!(s >= 0, "S fork works");
+        if s == 0 {
+            unsafe {
+                if libc::setpgid(0, lpid) != 0 {
+                    libc::_exit(99);
+                }
+                libc::pause();
+                libc::_exit(7);
+            }
+        }
+        // Non-vacuity: S joined (poll getpgid; a dead S is a
+        // failed join — fail fast, never burn the bound).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: getpgid queries only.
+            if unsafe { libc::getpgid(s) } == lpid {
+                break;
+            }
+            assert!(
+                !matches!(proc_state(s), Some('Z') | None),
+                "S died pre-join (setpgid failed — stage broken)"
+            );
+            assert!(
+                Instant::now() < end,
+                "S must join L's group (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Non-vacuity: S is LIVE at drain entry (a pre-dead S
+        // would be snapshot-listed — the arrival under test
+        // must postdate entry).
+        assert_ne!(proc_state(s), Some('Z'), "S must be live at entry");
+        assert!(
+            proc_starttime(s).ok().flatten().is_some(),
+            "S must be statable at entry"
+        );
+        // The drain: the hook is a fired-flag only (S's death
+        // needs no release — the drain's own killpg kills S).
+        let fired = std::cell::Cell::new(false);
+        let retired = retire_stray_group_best_effort_with(
+            lpid,
+            ltick,
+            Instant::now() + Duration::from_secs(5),
+            None,
+            Some(&|| {
+                fired.set(true);
+            }),
+        );
+        // GREEN: veto-false (S holds the group and the drain
+        // refuses the post-entry arrival); RED (blind): true
+        // over the theft.
+        assert!(
+            !retired,
+            "drain must refuse the post-entry arrival, never certify over it"
+        );
+        assert!(fired.get(), "hook must fire (L must reap — else vacuous)");
+        // L was drained by the drain (birth gone from the
+        // number — a zombie would keep it).
+        assert_ne!(
+            proc_starttime(lpid),
+            Ok(Some(ltick)),
+            "L drained by the drain"
+        );
+        // S's status stays with its owner (us, playing
+        // sibling): SIGKILL-death, precisely. ECHILD here is
+        // the theft (only the drain could have reaped S).
+        let end = Instant::now() + Duration::from_secs(10);
+        let s_status = loop {
+            let mut st = 0;
+            // SAFETY: specific WNOHANG wait on our known child.
+            let got = unsafe { libc::waitpid(s, &mut st, libc::WNOHANG) };
+            if got == s {
+                break st;
+            }
+            if got < 0 {
+                let error = std::io::Error::last_os_error();
+                assert!(
+                    error.raw_os_error() != Some(libc::ECHILD),
+                    "S's status was stolen by the drain (ECHILD)"
+                );
+            }
+            assert!(
+                Instant::now() < end,
+                "S must die of the drain's killpg (stage broken otherwise)"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(
+            libc::WIFSIGNALED(s_status) && libc::WTERMSIG(s_status) == libc::SIGKILL,
+            "S must report its true SIGKILL-death, got {s_status}"
+        );
+        eprintln!("R22001B-PROBE-DONE lpid={lpid} spid={s}");
+    }
+
+    /// R22-001b: the stray-group drain must never reap a
+    /// post-entry arrival — a freed number (leader reaped by
+    /// an earlier drain pass) plus a replacement zombie
+    /// (sibling's, unreaped) loses the replacement's status
+    /// to blind waitpid(-pgid), which can then ESRCH-certify
+    /// over the theft (R22-001 mechanism). Runs in a fresh
+    /// image under a confined subreaper (the runner context
+    /// that makes it fire — adoption makes the drain's
+    /// waitpids land). RED (blind): the probe certifies
+    /// true + ECHILDs the owner wait. GREEN (entry
+    /// snapshot): false at the bound, S's SIGKILL-death
+    /// retained. Parent asserts the probe's success +
+    /// completion marker (R19-013 idiom).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stray_group_drain_never_reaps_post_entry_arrivals() {
+        if std::env::var("SCOPEBASE_R22001B_SUBREAPER").is_ok() {
+            // Confined subreaper (fresh image — the
+            // process-global mark stays inside the probe).
+            // SAFETY: prctl on self; marking a fresh probe process.
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                0,
+                "probe must become a child subreaper"
+            );
+            run_001b_probe_case();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::stray_group_drain_never_reaps_post_entry_arrivals")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22001B_SUBREAPER", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must stage + refuse under a subreaper\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22001B-PROBE-DONE"),
+            "probe must cite case completion\n{stderr}"
         );
     }
 
