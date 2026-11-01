@@ -836,12 +836,18 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if !born {
+            // R22-014: discharge BEFORE failing loud — a
+            // wedged middleman pauses indefinitely and the
+            // unwind would strand it (no caller holds
+            // custody yet — the birth never gated).
             match stat_state_pgrp(m1) {
                 Some((st, _)) => {
-                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?)")
+                    retire_reportless_middleman(m1);
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?) (m1 retired before failing loud)")
                 }
                 None => {
-                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} dead pre-report (self-exit? — regression vacuous, failing loud)")
+                    reap_child_bounded(m1, "R21008-JAM");
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} dead pre-report (self-exit? — regression vacuous, failing loud) (corpse reaped before failing loud)")
                 }
             }
         }
@@ -903,6 +909,130 @@ pub fn slots() -> (i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R22-014: unwind custody for a jammed-spawn pair (m1
+    /// known, m2 unknown — the report never arrived). The
+    /// drop retires through the production reportless tail
+    /// (freeze + group-kill + reap — panic-free and
+    /// outage-proof through the fallback), so any pre-tail
+    /// staging panic discharges the pausing middleman AND
+    /// its unknown-pid sleeper instead of stranding them
+    /// (no caller holds custody yet — the birth never
+    /// gated). Disarm after the probe's own tail run.
+    struct ReportlessPairGuard {
+        m1: libc::pid_t,
+        disarmed: bool,
+    }
+
+    impl ReportlessPairGuard {
+        fn armed(m1: libc::pid_t) -> Self {
+            ReportlessPairGuard {
+                m1,
+                disarmed: false,
+            }
+        }
+
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+    }
+
+    impl Drop for ReportlessPairGuard {
+        fn drop(&mut self) {
+            if !self.disarmed {
+                retire_reportless_middleman(self.m1);
+            }
+        }
+    }
+
+    /// R22-014: single-child unwind custody (fork-local —
+    /// audit's `FixtureGuard` is module-private, and this
+    /// file's pairs already ride `MiddlemanPairGuard`).
+    /// Bare pin at birth: the caller must hold the
+    /// unreaped-child reservation (own child, never
+    /// reaped — the number cannot have recycled), so the
+    /// drop's signal is sound even when the pinning read
+    /// failed (falls back to a child-only waitpid probe
+    /// first — ECHILD returns without signaling). A
+    /// pinned birth re-verifies at drop (gone/recycled
+    /// stays silent). Bounded reap (~1 s). Panic-free.
+    /// Disarm after the owned reap.
+    struct ForkChildGuard {
+        pid: libc::pid_t,
+        tick: Option<u64>,
+        disarmed: bool,
+    }
+
+    impl ForkChildGuard {
+        fn new(pid: libc::pid_t) -> Self {
+            let tick = fork_starttime(pid).ok().flatten();
+            ForkChildGuard {
+                pid,
+                tick,
+                disarmed: false,
+            }
+        }
+
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+    }
+
+    impl Drop for ForkChildGuard {
+        fn drop(&mut self) {
+            if self.disarmed {
+                return;
+            }
+            if let Some(tick) = self.tick {
+                if fork_starttime(self.pid) != Ok(Some(tick)) {
+                    return;
+                }
+                let _ = kill_tick_gated_fork(self.pid, tick);
+            } else {
+                let mut status = 0;
+                // SAFETY: WNOHANG probe of a possibly-owned
+                // child; never blocks.
+                let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
+                if got == self.pid {
+                    return;
+                }
+                if std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+                    return;
+                }
+                // SAFETY: our own unreaped child (the bare
+                // reservation — the number cannot have
+                // recycled under us).
+                unsafe {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                let mut status = 0;
+                // SAFETY: WNOHANG reap of our own child.
+                let got = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
+                if got == self.pid
+                    || std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                {
+                    break;
+                }
+                if std::time::Instant::now() >= end {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
+    /// R22-014: fault-leg duration override — legs
+    /// restage under a unique duration (sharing the
+    /// GREEN duration would collide under parallel
+    /// runs: the leg's sweep would murder the GREEN
+    /// sleeper and vice versa). GREEN runs (env absent)
+    /// keep the default.
+    fn r22014_sleep_dur(default: &'static str) -> String {
+        std::env::var("SCOPEBASE_R22014_SLEEP_DUR").unwrap_or_else(|_| default.to_string())
+    }
 
     /// R21-017: call-path audit — no printf-family libc
     /// call in post-fork code (none of it is
@@ -1028,6 +1158,9 @@ mod tests {
                     "noretire(\"",
                     "jam_report(\"",
                     "grandchild_sleep(\"",
+                    // R22-014: duration-override defaults
+                    // (same keys, env-relocatable).
+                    "sleep_dur(\"",
                 ] {
                     let mut rest = *line;
                     while let Some(at) = rest.find(trigger) {
@@ -1653,13 +1786,23 @@ mod tests {
     /// live `sleep 853` survives the probe). Duration 853
     /// is unique to this test.
     fn reportless_fallback_kills_group_unconditionally_probe() {
-        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("853") }
+        let dur = r22014_sleep_dur("853");
+        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire(&dur) }
             .expect("staging broken (pair spawn)");
+        let mut _pair = ReportlessPairGuard::armed(m1);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
         println!("R22008-M1 {m1} {tick1}");
         std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
+        // R22-014 fault leg: staged pre-tail panic (the
+        // pair guard must discharge m1+m2 through the
+        // unwind — post-print, so the leg names the
+        // birth; the pre-print window discharges
+        // identically in-probe).
+        if std::env::var("SCOPEBASE_R22014_PAIR_PANIC").is_ok() {
+            panic!("staged pre-tail panic (R22-014 pair-discharge regression)");
+        }
         let hold = OutageHold::exhaust();
         // Anti-vacuity: the outage bites (live m1's stat
         // unreadable — the freeze-await below burns 5 s of
@@ -1670,6 +1813,7 @@ mod tests {
             "staging broken (stat readable under the hold?)"
         );
         retire_reportless_middleman(m1);
+        _pair.disarm();
         drop(hold);
         eprintln!("R22008-DONE");
     }
@@ -1740,6 +1884,64 @@ mod tests {
         );
     }
 
+    /// R22-014 fault leg: a pre-tail staging panic must
+    /// unwind through the pair guard — m1 AND its
+    /// unknown-pid m2 discharged before the panic
+    /// propagates. Spawns the fallback probe directly
+    /// with the panic env (no wrapper — the leg names
+    /// m1's birth from the custody line itself), restaged
+    /// under sleep-857 (never the GREEN 853 — parallel
+    /// runs would collide). Asserts: probe failed + no
+    /// DONE + m1 birth drained (birth-aware) + no live
+    /// sleep-857. RED (no guard): m1 pauses forever past
+    /// the bound.
+    #[test]
+    fn r22008_pair_panic_discharges_before_unwind() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::fork::tests::reportless_fallback_kills_group_unconditionally")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22008_FALLBACK", "1")
+            .env("SCOPEBASE_R22014_PAIR_PANIC", "1")
+            .env("SCOPEBASE_R22014_SLEEP_DUR", "857")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("leg child runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "leg probe must panic as staged\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("R22008-DONE"),
+            "panicking probe must never cite completion\n{stderr}"
+        );
+        let (m1, tick1): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22008-M1 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("probe must print custody before panicking");
+        match fork_starttime(m1) {
+            Ok(None) => {}
+            Ok(Some(now)) => assert_ne!(
+                now, tick1,
+                "m1 birth must be retired (stranded by the pre-tail panic)"
+            ),
+            Err(error) => panic!("m1 drainage unverifiable: {error}"),
+        }
+        assert!(
+            sleep_pids_with_dur("857").is_empty(),
+            "no live sleep-857 may survive the unwind"
+        );
+    }
+
     /// R22-009 probe-deny probe (fresh image): stage the
     /// jam pair healthy, print custody, THEN seccomp-deny
     /// negative-pid `kill` (the glibc `killpg` lowering)
@@ -1758,6 +1960,11 @@ mod tests {
         use super::super::seccomp::{install_deny_kill_negative_pid, DenyAction};
         let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("855") }
             .expect("staging broken (pair spawn)");
+        // Pre-custody unwinds discharge fully (the filter
+        // installs after the print); post-print unwinds
+        // retire m1 in-probe while the wrapper sweeps m2 by
+        // duration (the M1 line is already flushed).
+        let mut _pair = ReportlessPairGuard::armed(m1);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
@@ -1786,6 +1993,7 @@ mod tests {
             "staging broken (killpg not denied?)"
         );
         retire_reportless_middleman(m1);
+        _pair.disarm();
         eprintln!("R22009-DONE");
     }
 
@@ -2074,6 +2282,14 @@ mod tests {
     /// Duration 859 is unique to this test.
     fn scan_outage_over_live_sleeper_fails_loud_probe() {
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("859") }.expect("pair staged");
+        // Rides every exit (no disarm — the probe panics by
+        // design at THE scan): pre-custody unwinds
+        // discharge fully in-probe; post-print unwinds
+        // retire here AND through the wrapper backstop
+        // (idempotent — the pair is already dead). Drop
+        // order (hold first) restores fds before the
+        // retire runs.
+        let _pair = ReportlessPairGuard::armed(m1);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
@@ -2174,6 +2390,7 @@ mod tests {
             .spawn()
             .expect("live spawns");
         let live_pid = live.id() as libc::pid_t;
+        let mut _lguard = ForkChildGuard::new(live_pid);
         assert_eq!(
             prove_reaped_by_absence(live_pid),
             Ok(false),
@@ -2181,6 +2398,7 @@ mod tests {
         );
         let _ = live.kill();
         let _ = live.wait();
+        _lguard.disarm();
         // Zombie leg: present ⟹ unproven, status retained.
         let mut zombie = std::process::Command::new("/bin/sleep")
             .arg("980")
@@ -2190,6 +2408,7 @@ mod tests {
             .spawn()
             .expect("zombie spawns");
         let zombie_pid = zombie.id() as libc::pid_t;
+        let mut _zguard = ForkChildGuard::new(zombie_pid);
         let _ = zombie.kill();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -2217,6 +2436,7 @@ mod tests {
             Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
             other => panic!("proof stole the zombie's status?! got {other:?}"),
         }
+        _zguard.disarm();
         // Absent leg: freed number ⟹ reaped.
         assert_eq!(
             prove_reaped_by_absence(zombie_pid),
@@ -2432,6 +2652,9 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("probe child spawns");
+        // Covers the timeout-panic below (the child is
+        // killed but unreaped there — the drop reaps it).
+        let mut _cguard = ForkChildGuard::new(child.id() as libc::pid_t);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             if child.try_wait().expect("child waitable").is_some() {
@@ -2443,7 +2666,9 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        child.wait_with_output().expect("probe output readable")
+        let out = child.wait_with_output().expect("probe output readable");
+        _cguard.disarm();
+        out
     }
 
     /// R22-008: timeout-COLLECTING fresh-image probe run —
@@ -2477,6 +2702,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("probe child spawns");
+        let mut _cguard = ForkChildGuard::new(child.id() as libc::pid_t);
         let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let mut timed_out = false;
         loop {
@@ -2491,6 +2717,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let out = child.wait_with_output().expect("probe output readable");
+        _cguard.disarm();
         ProbeOutcome { timed_out, out }
     }
 
@@ -2836,9 +3063,10 @@ mod tests {
     /// 108 is unique to this test. Pre-fix RED
     /// (unguarded): the pair strands (m1 pausing, m2
     /// sleeping) — proven by neutering the guard line.
-    /// Orphan-transient note: a hammer panic orphans the
-    /// RUNNING child — safe (the child is self-sufficient:
-    /// it retires its own pair and exits alone in ms).
+    /// R22-014: the fault child rides a birth guard (a
+    /// hammer-loop panic retires it — no orphan transient;
+    /// the child is additionally self-sufficient: it
+    /// retires its own pair and exits alone in ms).
     #[test]
     fn middleman_pair_guard_discharges_on_first_read_failure() {
         if std::env::var(R22012_FAULT_ENV).is_ok() {
@@ -2858,6 +3086,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("fault child spawns");
+        let mut _cguard = ForkChildGuard::new(child.id() as libc::pid_t);
         // Sibling hammer while the child runs (bounded
         // 60 s — a hung child is killed loud, never an
         // unbounded hang).
@@ -2879,6 +3108,7 @@ mod tests {
             "hammer must pressure the fault window (got {hammered})"
         );
         let out = child.wait_with_output().expect("child reaps");
+        _cguard.disarm();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(out.status.success(), "fault child must exit 0\n{stderr}");
         assert!(

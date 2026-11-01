@@ -4226,12 +4226,17 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if !born {
+            // R22-014 (twin): discharge BEFORE failing loud
+            // (same as lib — the unwind would strand the
+            // wedged middleman with no custody held).
             match stat_state_pgrp(m1) {
                 Some((st, _)) => {
-                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?)")
+                    retire_reportless_middleman(m1);
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?) (m1 retired before failing loud)")
                 }
                 None => {
-                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} dead pre-report (self-exit? — regression vacuous, failing loud)")
+                    reap_child_bounded(m1, "R21008-JAM");
+                    panic!("R21008-JAM: birth-gate timed out with m1 {m1} dead pre-report (self-exit? — regression vacuous, failing loud) (corpse reaped before failing loud)")
                 }
             }
         }
@@ -4785,7 +4790,13 @@ fn sleep_pids_with_dur(dur: &str) -> Vec<(i32, u64)> {
         let mut args = cmdline.split(|b| *b == 0);
         let argv0 = args.next().unwrap_or_default();
         let argv1 = args.next().unwrap_or_default();
-        if argv0 != b"sleep" || argv1 != dur.as_bytes() {
+        // Basename match: fork-exec'd sleeps carry argv0
+        // "sleep", Command-spawned ones (the pair
+        // publisher) "/bin/sleep" — the R12 fallback
+        // sweeps the latter. Unique durations keep both
+        // shapes disjoint.
+        let base = argv0.rsplit(|b| *b == b'/').next().unwrap_or_default();
+        if base != b"sleep" || argv1 != dur.as_bytes() {
             continue;
         }
         let pid: i32 = match name.parse() {
@@ -4827,6 +4838,34 @@ fn kill_sleep_with_dur(dur: &str) -> bool {
     !live_sleep_with_dur(dur)
 }
 
+/// R22-014 (toolchain twin): fault-leg duration
+/// override — mirror of the lib helper (legs restage
+/// under a unique duration; GREEN keeps the default).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn r22014_sleep_dur(default: &'static str) -> String {
+    std::env::var("SCOPEBASE_R22014_SLEEP_DUR").unwrap_or_else(|_| default.to_string())
+}
+
+/// R22-014/R12 (toolchain twin): fallback custody sweep
+/// — mirror of the lib helper (the probe died before
+/// transmitting its SLEEPER line; sweep by the unique
+/// duration). Returns the swept count.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn r22006_fallback_sweep_sleep(dur: &str) -> usize {
+    let swept = sleep_pids_with_dur(dur).len();
+    assert!(
+        kill_sleep_with_dur(dur),
+        "R12 fallback: live sleep-{dur} survived the sweep"
+    );
+    // Basename recheck (kill_'s trailing live_ scan is
+    // fork-shape-exact — blind to "/bin/sleep").
+    assert!(
+        sleep_pids_with_dur(dur).is_empty(),
+        "R12 fallback: live sleep-{dur} survived the sweep"
+    );
+    swept
+}
+
 /// R22-008 fallback probe (toolchain twin): mirror of the
 /// lib probe (healthy staging + custody print + fd-table
 /// exhaustion + reportless tail into the fallback; the
@@ -4835,19 +4874,27 @@ fn kill_sleep_with_dur(dur: &str) -> bool {
 /// unique to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn reportless_fallback_kills_group_unconditionally_probe() {
-    let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("854") }
+    let dur = r22014_sleep_dur("854");
+    let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire(&dur) }
         .expect("staging broken (pair spawn)");
+    let mut _pair = ReportlessPairGuard::armed(m1);
     let tick1 = task_starttime_checked(m1)
         .expect("staging broken (m1 stat)")
         .expect("staging broken (m1 visible)");
     println!("R22008-M1 {m1} {tick1}");
     std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
+    // R22-014 fault leg (twin): staged pre-tail panic
+    // (same as lib — the pair guard must discharge).
+    if std::env::var("SCOPEBASE_R22014_PAIR_PANIC").is_ok() {
+        panic!("staged pre-tail panic (R22-014 pair-discharge regression)");
+    }
     let hold = OutageHold::exhaust();
     assert!(
         stat_state_pgrp(m1).is_none(),
         "staging broken (stat readable under the hold?)"
     );
     retire_reportless_middleman(m1);
+    _pair.disarm();
     drop(hold);
     eprintln!("R22008-DONE");
 }
@@ -4915,6 +4962,58 @@ fn reportless_fallback_kills_group_unconditionally() {
     );
 }
 
+/// R22-014 fault leg (toolchain twin): mirror of the lib
+/// pair-panic leg (restaged under sleep-858; pre-tail
+/// panic discharges m1 + m2 through the unwind; no live
+/// sleep-858 survives).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22008_pair_panic_discharges_before_unwind() {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("reportless_fallback_kills_group_unconditionally")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R22008_FALLBACK_TWIN", "1")
+        .env("SCOPEBASE_R22014_PAIR_PANIC", "1")
+        .env("SCOPEBASE_R22014_SLEEP_DUR", "858")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("leg child runs");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "leg probe must panic as staged\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("R22008-DONE"),
+        "panicking probe must never cite completion\n{stderr}"
+    );
+    let (m1, tick1): (i32, u64) = stdout
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("R22008-M1 ")?;
+            let (pid, tick) = rest.split_once(' ')?;
+            Some((pid.parse().ok()?, tick.parse().ok()?))
+        })
+        .expect("probe must print custody before panicking");
+    match task_starttime_checked(m1) {
+        Ok(None) => {}
+        Ok(Some(now)) => assert_ne!(
+            now, tick1,
+            "m1 birth must be retired (stranded by the pre-tail panic)"
+        ),
+        Err(error) => panic!("m1 drainage unverifiable: {error}"),
+    }
+    assert!(
+        sleep_pids_with_dur("858").is_empty(),
+        "no live sleep-858 may survive the unwind"
+    );
+}
+
 /// R22-009 probe-deny probe (toolchain twin): mirror of
 /// the lib probe (healthy staging + custody print +
 /// negative-pid-kill denial + reportless tail; the
@@ -4927,6 +5026,11 @@ fn reportless_probe_denied_stays_unresolved_probe() {
     use scopebase_testkit::fixture::linux::seccomp::{install_deny_kill_negative_pid, DenyAction};
     let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("856") }
         .expect("staging broken (pair spawn)");
+    // Pre-custody unwinds discharge fully (the filter
+    // installs after the print); post-print unwinds
+    // retire m1 in-probe while the wrapper sweeps m2 by
+    // duration (the M1 line is already flushed).
+    let mut _pair = ReportlessPairGuard::armed(m1);
     let tick1 = task_starttime_checked(m1)
         .expect("staging broken (m1 stat)")
         .expect("staging broken (m1 visible)");
@@ -4948,6 +5052,7 @@ fn reportless_probe_denied_stays_unresolved_probe() {
         "staging broken (killpg not denied?)"
     );
     retire_reportless_middleman(m1);
+    _pair.disarm();
     eprintln!("R22009-DONE");
 }
 
@@ -5181,6 +5286,9 @@ fn reportless_preexec_stall_denied_stays_unresolved() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn scan_outage_over_live_sleeper_fails_loud_probe() {
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("851") }.expect("pair staged");
+    // Rides every exit (no disarm — the probe panics by
+    // design at THE scan; same as lib).
+    let _pair = ReportlessPairGuard::armed(m1);
     let tick1 = task_starttime_checked(m1)
         .expect("staging broken (m1 stat)")
         .expect("staging broken (m1 visible)");
@@ -5270,6 +5378,7 @@ fn reap_proof_by_absence_never_steals() {
         .spawn()
         .expect("live spawns");
     let live_pid = live.id() as i32;
+    let mut _lguard = SilentChildGuard::new(live_pid);
     assert_eq!(
         prove_reaped_by_absence_toolchain(live_pid),
         Ok(false),
@@ -5277,6 +5386,7 @@ fn reap_proof_by_absence_never_steals() {
     );
     let _ = live.kill();
     let _ = live.wait();
+    _lguard.disarm();
     let mut zombie = std::process::Command::new("/bin/sleep")
         .arg("968")
         .stdin(std::process::Stdio::null())
@@ -5285,6 +5395,7 @@ fn reap_proof_by_absence_never_steals() {
         .spawn()
         .expect("zombie spawns");
     let zombie_pid = zombie.id() as i32;
+    let mut _zguard = SilentChildGuard::new(zombie_pid);
     let _ = zombie.kill();
     let end = Instant::now() + Duration::from_secs(5);
     loop {
@@ -5312,6 +5423,7 @@ fn reap_proof_by_absence_never_steals() {
         Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
         other => panic!("proof stole the zombie's status?! got {other:?}"),
     }
+    _zguard.disarm();
     assert_eq!(
         prove_reaped_by_absence_toolchain(zombie_pid),
         Ok(true),
@@ -5550,6 +5662,9 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("fault child spawns");
+    // Covers the hammer-loop expects below (a sibling
+    // fd-op failure must not strand the fault child).
+    let mut _cguard = SilentChildGuard::new(child.id() as i32);
     // Sibling hammer while the child runs (bounded 60 s —
     // a hung child is killed loud, never an unbounded
     // hang).
@@ -5571,6 +5686,7 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
         "hammer must pressure the fault window (got {hammered})"
     );
     let out = child.wait_with_output().expect("child reaps");
+    _cguard.disarm();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "fault child must exit 0\n{stderr}");
     assert!(
@@ -5996,6 +6112,39 @@ fn pin_expected_tick(pid: i32, expected: u64) -> Option<u64> {
 /// SIGKILL even when it is not our child (a staged grandchild
 /// the pin proves ours — toolchain twin of the audit R16-010
 /// fix, same contract).
+/// R22-014 (toolchain twin): unwind custody for a
+/// jammed-spawn pair (m1 known, m2 unknown — mirror of
+/// the lib guard; the drop retires through the panic-free
+/// production reportless tail).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct ReportlessPairGuard {
+    m1: i32,
+    disarmed: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl ReportlessPairGuard {
+    fn armed(m1: i32) -> Self {
+        ReportlessPairGuard {
+            m1,
+            disarmed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for ReportlessPairGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            retire_reportless_middleman(self.m1);
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 struct SilentChildGuard {
     pid: i32,
@@ -6487,6 +6636,10 @@ fn retire_child_silent_probe_first_spares_live_non_child() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("sh parent spawns");
+    let parent_pid = parent.id() as i32;
+    // R22-014: guard at birth (the pid read below must not
+    // strand the sh parent).
+    let mut _parent_guard = SilentChildGuard::new(parent_pid);
     let mut line = String::new();
     std::io::BufReader::new(parent.stdout.take().expect("sh stdout"))
         .read_line(&mut line)
@@ -6495,6 +6648,14 @@ fn retire_child_silent_probe_first_spares_live_non_child() {
     let stick = task_starttime_checked(stranger)
         .expect("stranger stat readable")
         .expect("stranger present");
+    // R22-014: guard at sighting (R16-010 non-child kill —
+    // the sanity probes below must not strand the sleep;
+    // same birth just sighted-live).
+    let mut _stranger_guard = SilentChildGuard::new_expected(stranger, stick);
+    assert!(
+        _stranger_guard.tick.is_some(),
+        "stranger pin must take (staged birth live)"
+    );
     // Sanity: live, and not our child (the probe the fix
     // relies on).
     assert!(
@@ -6551,6 +6712,8 @@ fn retire_child_silent_probe_first_spares_live_non_child() {
         assert!(Instant::now() < end, "sh parent must exit");
         std::thread::sleep(Duration::from_millis(10));
     }
+    _parent_guard.disarm();
+    _stranger_guard.disarm();
     assert!(survived, "silent retire must not murder a live non-child");
 }
 
@@ -7266,6 +7429,9 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
         .spawn()
         .expect("publisher spawns");
     let pubpid = publisher.id() as i32;
+    // R22-014: guard at birth (the children scan + tick
+    // read below must not strand the publisher).
+    let mut _pguard = SilentChildGuard::new(pubpid);
     let sleep = {
         let mut found = None;
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -7287,6 +7453,10 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
     let orig = task_starttime_checked(sleep)
         .expect("sleep stat readable")
         .expect("sleep live");
+    // R22-014: guard at sighting (R16-010 non-child
+    // kill — the zombie poll below must not strand
+    // the sleep; same birth just sighted-live).
+    let mut _sguard = SilentChildGuard::new(sleep);
     // SAFETY: signal-only to the staged sleep.
     assert_eq!(
         unsafe { libc::kill(sleep, libc::SIGKILL) },
@@ -7335,6 +7505,8 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
     );
     assert!(output.status.success(), "publisher must exit 0\n{stderr}");
     assert_sleeper_discharged(sleep, orig);
+    _pguard.disarm();
+    _sguard.disarm();
 }
 
 /// R21-005 (twin mirror): the controlled publisher must
@@ -7367,6 +7539,9 @@ fn pair_publisher_normalizes_inherited_sigchld_ign() {
         .spawn()
         .expect("launcher spawns");
     let pubpid = publisher.id() as i32;
+    // R22-014: guard at birth (the children scan + tick
+    // read below must not strand the publisher).
+    let mut _pguard = SilentChildGuard::new(pubpid);
     let sleep = {
         let mut found = None;
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -7388,6 +7563,10 @@ fn pair_publisher_normalizes_inherited_sigchld_ign() {
     let orig = task_starttime_checked(sleep)
         .expect("sleep stat readable")
         .expect("sleep live");
+    // R22-014: guard at sighting (R16-010 non-child
+    // kill — the zombie poll below must not strand
+    // the sleep; same birth just sighted-live).
+    let mut _sguard = SilentChildGuard::new(sleep);
     // SAFETY: signal-only to the staged sleep.
     assert_eq!(
         unsafe { libc::kill(sleep, libc::SIGKILL) },
@@ -7436,6 +7615,8 @@ fn pair_publisher_normalizes_inherited_sigchld_ign() {
     );
     assert!(output.status.success(), "publisher must exit 0\n{stderr}");
     assert_sleeper_discharged(sleep, orig);
+    _pguard.disarm();
+    _sguard.disarm();
 }
 
 /// R22-020 (toolchain twin): discharge survives
@@ -9338,6 +9519,12 @@ fn custody_oracle_outage_probe() {
         .spawn()
         .expect("sleeper spawns");
     let pid = child.id() as i32;
+    // R22-014: guard at birth (pre-exhaust — the tick
+    // read below must not strand the sleeper; no unwind
+    // path exists under EMFILE here (the oracle is
+    // caught, drop/kill/wait are infallible), so the
+    // drop always verifies).
+    let mut _guard = SilentChildGuard::new(pid);
     let tick = task_starttime_checked(pid)
         .expect("sleeper stat readable")
         .expect("sleeper visible");
@@ -9357,6 +9544,7 @@ fn custody_oracle_outage_probe() {
     drop(held);
     let _ = child.kill();
     let _ = child.wait();
+    _guard.disarm();
     assert!(
         failed_loud,
         "outage must fail loud on unreadable custody, never green-verdict"
@@ -9959,12 +10147,24 @@ fn outage_unparsed_retire_discharges_probe() {
     use std::io::BufRead as _;
     let mut publisher = spawn_self_grouped_publisher("983", "wait", &[]);
     let pubpid = publisher.id() as i32;
+    // R22-014: guard at birth (the pair read below must
+    // not strand the publisher).
+    let mut _pguard = SilentChildGuard::new(pubpid);
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
         .expect("pair readable");
-    let (_stranger, _stick) = try_parse_published_pair(line.trim(), "outage publication")
+    let (stranger, stick) = try_parse_published_pair(line.trim(), "outage publication")
         .expect("pair must parse (valid publication)");
+    // R22-014: guard the transmitted sleep (expected-tick
+    // pin — the sleep is live (can't recycle), so the
+    // pin always takes; a refused pin fails loud here,
+    // never unwinds unguarded past it).
+    let mut _sguard = SilentChildGuard::new_expected(stranger, stick);
+    assert!(
+        _sguard.tick.is_some(),
+        "sleep pin must take (transmitted birth live)"
+    );
     let _confined = confine_fd_table_for_exhaustion();
     let mut held = Vec::new();
     while let Ok(file) = std::fs::File::open("/dev/null") {
@@ -9980,6 +10180,8 @@ fn outage_unparsed_retire_discharges_probe() {
         "staging broken (setup stat readable — outage not biting?)"
     );
     let status = retire_unparsed_publisher_group(&mut publisher);
+    _pguard.disarm();
+    _sguard.disarm();
     let group_errno = {
         // SAFETY: signal 0 probes only.
         let probed = unsafe { libc::killpg(pubpid, 0) };
@@ -10053,6 +10255,9 @@ fn run_fresh_probe_bounded(env: &str, test: &str) -> std::process::Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("probe child spawns");
+    // Covers the timeout-panic below (the child is
+    // killed but unreaped there — the drop reaps it).
+    let mut _cguard = SilentChildGuard::new(child.id() as i32);
     let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         if child.try_wait().expect("child waitable").is_some() {
@@ -10064,7 +10269,9 @@ fn run_fresh_probe_bounded(env: &str, test: &str) -> std::process::Output {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    child.wait_with_output().expect("probe output readable")
+    let out = child.wait_with_output().expect("probe output readable");
+    _cguard.disarm();
+    out
 }
 
 /// R22-008 (toolchain twin): timeout-COLLECTING probe run
@@ -10095,6 +10302,7 @@ fn run_fresh_probe_collect(env: &str, test: &str) -> ProbeOutcome {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("probe child spawns");
+    let mut _cguard = SilentChildGuard::new(child.id() as i32);
     let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut timed_out = false;
     loop {
@@ -10109,6 +10317,7 @@ fn run_fresh_probe_collect(env: &str, test: &str) -> ProbeOutcome {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let out = child.wait_with_output().expect("probe output readable");
+    _cguard.disarm();
     ProbeOutcome { timed_out, out }
 }
 
@@ -10177,8 +10386,9 @@ fn publisher_guard_denied_kill_reports_unresolved_probe() {
     ));
     println!("R22006-ERRLOG {}", errlog.display());
     let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+    let dur = r22014_sleep_dur("986");
     let mut publisher = std::process::Command::new(pair_publisher_bin())
-        .arg("986")
+        .arg(&dur)
         .arg("wait")
         .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
         .stdin(std::process::Stdio::null())
@@ -10192,6 +10402,11 @@ fn publisher_guard_denied_kill_reports_unresolved_probe() {
         .expect("pair readable");
     let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
         .expect("pair must parse (valid transmit)");
+    // R22-014 fault leg (twin): die before transmitting
+    // (same as lib — the R12 fallback must sweep).
+    if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+        std::process::exit(42);
+    }
     println!("R22006-SLEEPER {sleeper} {stick}");
     let status = publisher.wait().expect("publisher waitable");
     println!("R22006-CODE {}", status.code().unwrap_or(-999));
@@ -10216,8 +10431,19 @@ fn publisher_guard_denied_kill_reports_unresolved() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    let (sleeper, stick) =
-        parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
+    // R12 (twin): no transmitted birth ⟹ sweep by the
+    // unique duration, clean the errlog best-effort,
+    // fail loud (same as lib).
+    let (sleeper, stick) = match parse_r22006_sleeper(&stdout) {
+        Some(pair) => pair,
+        None => {
+            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("986"));
+            if let Some(errlog) = parse_r22006_errlog(&stdout) {
+                let _ = std::fs::remove_file(&errlog);
+            }
+            panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
+        }
+    };
     assert!(
         kill_tick_gated(sleeper, stick),
         "sleeper kill must land (staging?)"
@@ -10276,8 +10502,9 @@ fn publisher_guard_denied_wait_reports_unresolved_probe() {
     ));
     println!("R22006-ERRLOG {}", errlog.display());
     let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+    let dur = r22014_sleep_dur("987");
     let mut publisher = std::process::Command::new(pair_publisher_bin())
-        .arg("987")
+        .arg(&dur)
         .arg("wait")
         .env("SCOPEBASE_PUBLISHER_DENY_WAIT", "1")
         .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
@@ -10286,14 +10513,26 @@ fn publisher_guard_denied_wait_reports_unresolved_probe() {
         .stderr(errfile)
         .spawn()
         .expect("publisher spawns");
+    let mut _tpguard = SilentChildGuard::new(publisher.id() as i32);
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
         .expect("pair readable");
     let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
         .expect("pair must parse (valid transmit)");
+    let mut _tsguard = SilentChildGuard::new_expected(sleeper, stick);
+    assert!(
+        _tsguard.tick.is_some(),
+        "wait-denied twin probe: sleeper birth pinned at sighting"
+    );
+    // R22-014 fault leg (twin): die before transmitting
+    // (same as lib — the swept count races here).
+    if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+        std::process::exit(42);
+    }
     println!("R22006-SLEEPER {sleeper} {stick}");
     let status = publisher.wait().expect("publisher waitable");
+    _tpguard.disarm();
     println!("R22006-CODE {}", status.code().unwrap_or(-999));
     let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
@@ -10308,6 +10547,7 @@ fn publisher_guard_denied_wait_reports_unresolved_probe() {
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    _tsguard.disarm();
     eprintln!("R22006-WAIT-DONE");
 }
 
@@ -10327,6 +10567,18 @@ fn publisher_guard_denied_wait_reports_unresolved() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // Custody FIRST (R12 twin): same as lib — sweep,
+    // clean, fail loud before any verdict.
+    let (sleeper, _stick) = match parse_r22006_sleeper(&stdout) {
+        Some(pair) => pair,
+        None => {
+            let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("987"));
+            if let Some(errlog) = parse_r22006_errlog(&stdout) {
+                let _ = std::fs::remove_file(&errlog);
+            }
+            panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
+        }
+    };
     let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
     let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
     let _ = std::fs::remove_file(&errlog);
@@ -10339,8 +10591,6 @@ fn publisher_guard_denied_wait_reports_unresolved() {
         stderr.contains("R22006-WAIT-DONE"),
         "probe must cite completion\n{stderr}"
     );
-    let (sleeper, _stick) =
-        parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
     assert_eq!(
         parse_r22006_code(&stdout),
         Some(3),
@@ -10361,6 +10611,74 @@ fn publisher_guard_denied_wait_reports_unresolved() {
     assert!(
         evidence.contains("reaped=false"),
         "must report unreaped\n{evidence}"
+    );
+}
+
+/// R22-014/R12 fault leg, kill shape (toolchain twin):
+/// mirror of the lib leg (the probe dies pre-transmit;
+/// the fallback sweeps exactly 1 sleep-842 — restaged
+/// from the GREEN 986 — then fails loud).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22006_kill_fallback_sweeps_untransmitted_sleeper() {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("publisher_guard_denied_kill_reports_unresolved")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R22014_EARLY_DEATH", "1")
+        .env("SCOPEBASE_R22014_SLEEP_DUR", "842")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("leg child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "leg must fail loud (no sleeper line)\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R12 fallback swept 1"),
+        "fallback must sweep the untransmitted sleeper\n{stderr}"
+    );
+    assert!(
+        sleep_pids_with_dur("842").is_empty(),
+        "no live sleep-842 may survive the fallback"
+    );
+}
+
+/// R22-014/R12 fault leg, wait shape (toolchain twin):
+/// mirror of the lib leg (restaged under sleep-843; the
+/// swept count races 0/1 — assert the fallback ran +
+/// loud fail + none live).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22006_wait_fallback_sweeps_untransmitted_sleeper() {
+    let exe = std::env::current_exe().expect("own test binary");
+    let out = std::process::Command::new(exe)
+        .arg("--exact")
+        .arg("publisher_guard_denied_wait_reports_unresolved")
+        .arg("--nocapture")
+        .env("SCOPEBASE_R22014_EARLY_DEATH", "1")
+        .env("SCOPEBASE_R22014_SLEEP_DUR", "843")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("leg child runs");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        !out.status.success(),
+        "leg must fail loud (no sleeper line)\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R12 fallback swept"),
+        "fallback must run on the missing line\n{stderr}"
+    );
+    assert!(
+        sleep_pids_with_dur("843").is_empty(),
+        "no live sleep-843 may survive the fallback"
     );
 }
 
@@ -10495,6 +10813,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("writer1 spawns");
+    let mut _w1guard = SilentChildGuard::new(writer1.id() as i32);
     let pipe1 = writer1.stderr.take();
     let start = Instant::now();
     let verdict1 = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -10509,6 +10828,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
     let leg1_time = start.elapsed();
     let _ = writer1.kill();
     let _ = writer1.wait();
+    _w1guard.disarm();
     let message1 = match verdict1 {
         Ok(()) => panic!("leg 1 must panic (stranded verdict)"),
         Err(payload) => message_of(payload),
@@ -10529,6 +10849,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("writer2 spawns");
+    let mut _w2guard = SilentChildGuard::new(writer2.id() as i32);
     let pipe2 = writer2.stderr.take();
     let start = Instant::now();
     let verdict2 = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -10543,6 +10864,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
     let leg2_time = start.elapsed();
     let _ = writer2.kill();
     let _ = writer2.wait();
+    _w2guard.disarm();
     let message2 = match verdict2 {
         Ok(()) => panic!("leg 2 must panic (wedged drain)"),
         Err(payload) => message_of(payload),
@@ -10563,6 +10885,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("writer3 spawns");
+    let mut _w3guard = SilentChildGuard::new(writer3.id() as i32);
     let pipe3 = writer3.stderr.take();
     judge_pub_cell_toolchain(
         "t",
@@ -10572,6 +10895,7 @@ fn judge_pub_cell_verdict_first_and_bounded() {
         "PUBMARK",
     );
     let _ = writer3.wait();
+    _w3guard.disarm();
 }
 
 /// R21-007 + R21-010-tails + R21-009-pair-setup (holistic —
@@ -10608,6 +10932,7 @@ fn pair_setup_holistic_retirement() {
                 drop(publisher.stdout.take());
             }
             let pubpid = publisher.id() as i32;
+            let mut _tpguard = SilentChildGuard::new(pubpid);
             // Birth tick at spawn (live-unreaped — nothing
             // reaped yet — so this first read names OUR
             // birth; every decision below re-verifies it).
@@ -10666,6 +10991,7 @@ fn pair_setup_holistic_retirement() {
                     pubtick,
                 ))
             };
+            _tpguard.disarm();
             judge_pub_cell_toolchain(step, elapsed, outcome, publisher.stderr.take(), marker);
         };
     // Real pause-timeout path (absent flag + short deadline
@@ -10762,6 +11088,7 @@ fn pair_setup_holistic_retirement() {
             ],
         );
         let pubpid = publisher.id() as i32;
+        let mut _tpguard = SilentChildGuard::new(pubpid);
         let start = Instant::now();
         let mut line = String::new();
         let bytes = std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
@@ -10774,6 +11101,7 @@ fn pair_setup_holistic_retirement() {
             "RECV-eof: EOF must arrive promptly, took {elapsed:?}"
         );
         run_recv_fail("eof", &mut publisher, pubpid, &line, "missing pid");
+        _tpguard.disarm();
     }
     // RECV-mangle: real transmit, test-side torn pair (tick
     // dropped — the torn-write class) — the live-leader
@@ -10783,6 +11111,7 @@ fn pair_setup_holistic_retirement() {
         use std::io::BufRead as _;
         let mut publisher = spawn_self_grouped_publisher("949", "wait", &[]);
         let pubpid = publisher.id() as i32;
+        let mut _tpguard = SilentChildGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -10794,6 +11123,7 @@ fn pair_setup_holistic_retirement() {
             .to_string();
         assert!(!mangled.is_empty(), "RECV-mangle: pair must transmit");
         run_recv_fail("mangle", &mut publisher, pubpid, &mangled, "missing tick");
+        _tpguard.disarm();
     }
     // TAIL cells (own fns: a vacuous plant skips only its
     // cell — the R17-003 rule).
@@ -10821,6 +11151,7 @@ fn tail_live_plant_cell() {
         };
         let mut publisher = spawn_self_grouped_publisher("950", "wait", &[]);
         let pubpid = publisher.id() as i32;
+        let mut _tpguard = SilentChildGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -10829,6 +11160,11 @@ fn tail_live_plant_cell() {
         let pubtick = task_starttime_checked(pubpid)
             .expect("publisher stat readable")
             .expect("publisher visible");
+        let mut _tsguard = SilentChildGuard::new_expected(stranger, stick);
+        assert!(
+            _tsguard.tick.is_some(),
+            "TAIL-live: stranger birth pinned at sighting"
+        );
         // Retire OUR pair explicitly (loud): stranger first
         // (its death releases the publisher's wait tail),
         // then reap the publisher.
@@ -10840,6 +11176,7 @@ fn tail_live_plant_cell() {
             await_task_gone_reaping(stranger, stick, Duration::from_secs(5)),
             "TAIL-live: stranger must drain"
         );
+        _tsguard.disarm();
         let start = Instant::now();
         let status = loop {
             match publisher.try_wait() {
@@ -10854,6 +11191,7 @@ fn tail_live_plant_cell() {
             }
         };
         assert!(status.success(), "TAIL-live: publisher must exit clean");
+        _tpguard.disarm();
         // Plant a live replacement on the freed number
         // (vacuous under contention — the R17-003 rule).
         let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
@@ -10928,6 +11266,7 @@ fn tail_zombie_plant_cell() {
         };
         let mut publisher = spawn_self_grouped_publisher("952", "wait", &[]);
         let pubpid = publisher.id() as i32;
+        let mut _tpguard = SilentChildGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -10936,6 +11275,11 @@ fn tail_zombie_plant_cell() {
         let pubtick = task_starttime_checked(pubpid)
             .expect("publisher stat readable")
             .expect("publisher visible");
+        let mut _tsguard = SilentChildGuard::new_expected(stranger, stick);
+        assert!(
+            _tsguard.tick.is_some(),
+            "TAIL-zombie: stranger birth pinned at sighting"
+        );
         assert!(
             retire_tick_gated_toolchain_child(stranger, stick),
             "TAIL-zombie: stranger retire readable"
@@ -10944,6 +11288,7 @@ fn tail_zombie_plant_cell() {
             await_task_gone_reaping(stranger, stick, Duration::from_secs(5)),
             "TAIL-zombie: stranger must drain"
         );
+        _tsguard.disarm();
         let start = Instant::now();
         let status = loop {
             match publisher.try_wait() {
@@ -10958,6 +11303,7 @@ fn tail_zombie_plant_cell() {
             }
         };
         assert!(status.success(), "TAIL-zombie: publisher must exit clean");
+        _tpguard.disarm();
         let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
             Some(pair) => pair,
             None => {
@@ -11018,6 +11364,12 @@ fn group_observation_never_reaps_replacement_children() {
     let pubtick = task_starttime_checked(pubpid)
         .expect("publisher stat readable")
         .expect("publisher visible");
+    let mut _tpguard = SilentChildGuard::new(pubpid);
+    let mut _tsguard = SilentChildGuard::new_expected(stranger, stick);
+    assert!(
+        _tsguard.tick.is_some(),
+        "R22001-leg1: stranger birth pinned at sighting"
+    );
     // Retire OUR pair explicitly (leader reaped via its
     // handle — pin RELEASED).
     assert!(
@@ -11042,6 +11394,8 @@ fn group_observation_never_reaps_replacement_children() {
         }
     };
     assert!(status.success(), "R22001-leg1: publisher must exit clean");
+    _tpguard.disarm();
+    _tsguard.disarm();
     // Plant a SELF-GROUPED replacement on the freed pgid
     // number (steered retake + S100-vacuity, as
     // plant_replacement — with the group flag).
@@ -11566,6 +11920,9 @@ fn tail_helper_skips_recycled_numbers() {
                 .spawn()
                 .expect("birth spawns");
             let pid = birth.id() as i32;
+            // R22-014: guard at birth (the tick read below
+            // must not strand the birth).
+            let mut _bguard = SilentChildGuard::new(pid);
             let tick = task_starttime_checked(pid)
                 .expect("birth stat readable")
                 .expect("birth visible");
@@ -11573,7 +11930,10 @@ fn tail_helper_skips_recycled_numbers() {
             let start = Instant::now();
             loop {
                 match birth.try_wait() {
-                    Ok(Some(_)) => break,
+                    Ok(Some(_)) => {
+                        _bguard.disarm();
+                        break;
+                    }
                     Ok(None) => {
                         if start.elapsed() >= Duration::from_secs(5) {
                             panic!("R22003a-{}: birth must reap", $leg);
@@ -11719,6 +12079,9 @@ fn tail_blocking_wait_wedges_on_live_recycler() {
         .spawn()
         .expect("birth spawns");
     let pid = birth.id() as i32;
+    // R22-014: guard at birth (the tick read below must
+    // not strand the birth).
+    let mut _bguard = SilentChildGuard::new(pid);
     let tick = task_starttime_checked(pid)
         .expect("birth stat readable")
         .expect("birth visible");
@@ -11726,7 +12089,10 @@ fn tail_blocking_wait_wedges_on_live_recycler() {
     let start = Instant::now();
     loop {
         match birth.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => {
+                _bguard.disarm();
+                break;
+            }
             Ok(None) => {
                 if start.elapsed() >= Duration::from_secs(5) {
                     panic!("R22003a-wedge: birth must reap");

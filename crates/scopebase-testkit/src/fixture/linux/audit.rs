@@ -13474,6 +13474,12 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("sh spawns");
+        // R21-009: guard at spawn (before any read).
+        let mut _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
         let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
         let pid: libc::pid_t = lines
             .next()
@@ -13503,6 +13509,7 @@ mod tests {
         let done = lines.next().expect("done line").expect("done readable");
         assert_eq!(done.trim(), "DONE", "script must run to completion");
         let status = sh.wait().expect("shell exit");
+        _shguard.disarm();
         assert!(status.success(), "shell must exit clean");
         let _ = std::fs::remove_file(&flag);
     }
@@ -13666,6 +13673,9 @@ mod tests {
             .spawn()
             .expect("publisher spawns");
         let pubpid = publisher.id() as libc::pid_t;
+        // R22-014: guard at birth (the children scan + tick
+        // read below must not strand the publisher).
+        let mut _pguard = FixtureGuard::new(pubpid);
         // The publisher spawns its sleep, then waits on the
         // absent flag — find the (exactly one) child.
         let sleep = {
@@ -13691,6 +13701,10 @@ mod tests {
         let orig = proc_starttime(sleep)
             .expect("sleep stat readable")
             .expect("sleep live");
+        // R22-014: guard at sighting (R16-010 non-child
+        // kill — the zombie poll below must not strand
+        // the sleep; same birth just sighted-live).
+        let mut _sguard = FixtureGuard::new(sleep);
         // Kill; poll ZOMBIE (dead but still the
         // publisher's — it never reaps before its wait).
         // SAFETY: signal-only to the staged sleep.
@@ -13746,6 +13760,8 @@ mod tests {
         );
         assert!(output.status.success(), "publisher must exit 0\n{stderr}");
         assert_sleeper_discharged(sleep, orig);
+        _pguard.disarm();
+        _sguard.disarm();
     }
 
     /// R21-005: the controlled publisher must normalize an
@@ -13787,6 +13803,9 @@ mod tests {
             .spawn()
             .expect("launcher spawns");
         let pubpid = publisher.id() as libc::pid_t;
+        // R22-014: guard at birth (the children scan + tick
+        // read below must not strand the publisher).
+        let mut _pguard = FixtureGuard::new(pubpid);
         // The publisher spawns its sleep, then waits on the
         // absent flag — find the (exactly one) child.
         let sleep = {
@@ -13812,6 +13831,10 @@ mod tests {
         let orig = proc_starttime(sleep)
             .expect("sleep stat readable")
             .expect("sleep live");
+        // R22-014: guard at sighting (R16-010 non-child
+        // kill — the zombie poll below must not strand
+        // the sleep; same birth just sighted-live).
+        let mut _sguard = FixtureGuard::new(sleep);
         // Kill; poll ZOMBIE (dead but still the
         // publisher's — it must have normalized the
         // inherited SIG_IGN, else the kernel auto-reaps).
@@ -13867,6 +13890,8 @@ mod tests {
         );
         assert!(output.status.success(), "publisher must exit 0\n{stderr}");
         assert_sleeper_discharged(sleep, orig);
+        _pguard.disarm();
+        _sguard.disarm();
     }
 
     /// R22-020: discharge survives replacement — the
@@ -14881,6 +14906,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("writer1 spawns");
+        let mut _w1guard = FixtureGuard::new(writer1.id() as libc::pid_t);
         let pipe1 = writer1.stderr.take();
         let start = Instant::now();
         let verdict1 = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -14895,6 +14921,7 @@ mod tests {
         let leg1_time = start.elapsed();
         let _ = writer1.kill();
         let _ = writer1.wait();
+        _w1guard.disarm();
         let message1 = match verdict1 {
             Ok(()) => panic!("leg 1 must panic (stranded verdict)"),
             Err(payload) => message_of(payload),
@@ -14918,6 +14945,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("writer2 spawns");
+        let mut _w2guard = FixtureGuard::new(writer2.id() as libc::pid_t);
         let pipe2 = writer2.stderr.take();
         let start = Instant::now();
         let verdict2 = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -14932,6 +14960,7 @@ mod tests {
         let leg2_time = start.elapsed();
         let _ = writer2.kill();
         let _ = writer2.wait();
+        _w2guard.disarm();
         let message2 = match verdict2 {
             Ok(()) => panic!("leg 2 must panic (wedged drain)"),
             Err(payload) => message_of(payload),
@@ -14954,6 +14983,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("writer3 spawns");
+        let mut _w3guard = FixtureGuard::new(writer3.id() as libc::pid_t);
         let pipe3 = writer3.stderr.take();
         judge_pub_cell(
             "t",
@@ -14963,6 +14993,7 @@ mod tests {
             "PUBMARK",
         );
         let _ = writer3.wait();
+        _w3guard.disarm();
     }
 
     #[test]
@@ -14982,6 +15013,7 @@ mod tests {
                     drop(publisher.stdout.take());
                 }
                 let pubpid = publisher.id() as libc::pid_t;
+                let mut _pguard = FixtureGuard::new(pubpid);
                 // Birth tick at spawn (live-unreaped — nothing
                 // reaped yet — so this first read names OUR
                 // birth; every decision below re-verifies it).
@@ -15045,6 +15077,7 @@ mod tests {
                         pubtick,
                     ))
                 };
+                _pguard.disarm();
                 judge_pub_cell(step, elapsed, outcome, publisher.stderr.take(), marker);
             };
         // Real pause-timeout path (absent flag + short
@@ -15143,6 +15176,7 @@ mod tests {
                 ],
             );
             let pubpid = publisher.id() as libc::pid_t;
+            let mut _pguard = FixtureGuard::new(pubpid);
             let start = Instant::now();
             let mut line = String::new();
             let bytes = std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
@@ -15155,6 +15189,7 @@ mod tests {
                 "RECV-eof: EOF must arrive promptly, took {elapsed:?}"
             );
             run_recv_fail("eof", &mut publisher, pubpid, &line, "missing pid");
+            _pguard.disarm();
         }
         // RECV-mangle: real transmit, test-side torn pair
         // (tick dropped — the torn-write class) — the
@@ -15164,6 +15199,7 @@ mod tests {
             use std::io::BufRead as _;
             let mut publisher = spawn_self_grouped_publisher("940", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
+            let mut _pguard = FixtureGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15175,6 +15211,7 @@ mod tests {
                 .to_string();
             assert!(!mangled.is_empty(), "RECV-mangle: pair must transmit");
             run_recv_fail("mangle", &mut publisher, pubpid, &mangled, "missing tick");
+            _pguard.disarm();
         }
         // TAIL-live-plant: the pair-setup tail must not murder
         // a recycled occupant — retire OUR pair, plant a live
@@ -15213,6 +15250,7 @@ mod tests {
             };
             let mut publisher = spawn_self_grouped_publisher("941", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
+            let mut _pguard = FixtureGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15221,6 +15259,11 @@ mod tests {
             let pubtick = proc_starttime(pubpid)
                 .expect("publisher stat readable")
                 .expect("publisher visible");
+            let mut _sguard = FixtureGuard::new_expected(stranger, stick);
+            assert!(
+                _sguard.tick.is_some(),
+                "TAIL-live: stranger birth pinned at sighting"
+            );
             // Retire OUR pair explicitly (loud): stranger
             // first (its death releases the publisher's wait
             // tail), then reap the publisher.
@@ -15232,6 +15275,7 @@ mod tests {
                 await_proc_gone_reaping(stranger, stick, Duration::from_secs(5)),
                 "TAIL-live: stranger must drain"
             );
+            _sguard.disarm();
             let start = Instant::now();
             let status = loop {
                 match publisher.try_wait() {
@@ -15246,6 +15290,7 @@ mod tests {
                 }
             };
             assert!(status.success(), "TAIL-live: publisher must exit clean");
+            _pguard.disarm();
             // Plant a live replacement on the freed number
             // (vacuous under contention — the R17-003 rule).
             let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
@@ -15316,6 +15361,7 @@ mod tests {
             };
             let mut publisher = spawn_self_grouped_publisher("951", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
+            let mut _pguard = FixtureGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15324,6 +15370,11 @@ mod tests {
             let pubtick = proc_starttime(pubpid)
                 .expect("publisher stat readable")
                 .expect("publisher visible");
+            let mut _sguard = FixtureGuard::new_expected(stranger, stick);
+            assert!(
+                _sguard.tick.is_some(),
+                "TAIL-zombie: stranger birth pinned at sighting"
+            );
             assert!(
                 retire_tick_gated_audit_child(stranger, stick),
                 "TAIL-zombie: stranger retire readable"
@@ -15332,6 +15383,7 @@ mod tests {
                 await_proc_gone_reaping(stranger, stick, Duration::from_secs(5)),
                 "TAIL-zombie: stranger must drain"
             );
+            _sguard.disarm();
             let start = Instant::now();
             let status = loop {
                 match publisher.try_wait() {
@@ -15346,6 +15398,7 @@ mod tests {
                 }
             };
             assert!(status.success(), "TAIL-zombie: publisher must exit clean");
+            _pguard.disarm();
             let (mut kid, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
                 Some(pair) => pair,
                 None => {
@@ -15411,11 +15464,21 @@ mod tests {
             };
             let mut publisher = spawn_self_grouped_publisher("945", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
+            // R22-014: guard at birth (the pair read below
+            // must not strand the publisher).
+            let mut _pguard = FixtureGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
                 .expect("pair readable");
             let (stranger, stick) = parse_published_pair(line.trim(), "r22001 publication");
+            // R22-014: guard the transmitted sleep
+            // (expected-tick pin — live, so it takes).
+            let mut _sguard = FixtureGuard::new_expected(stranger, stick);
+            assert!(
+                _sguard.tick.is_some(),
+                "R22001-leg1: sleep pin must take (transmitted birth live)"
+            );
             let pubtick = proc_starttime(pubpid)
                 .expect("publisher stat readable")
                 .expect("publisher visible");
@@ -15443,6 +15506,8 @@ mod tests {
                 }
             };
             assert!(status.success(), "R22001-leg1: publisher must exit clean");
+            _pguard.disarm();
+            _sguard.disarm();
             // Plant a SELF-GROUPED replacement on the freed
             // pgid number (steered retake + S100-vacuity, as
             // plant_replacement — with the group flag).
@@ -16137,6 +16202,9 @@ mod tests {
                     .spawn()
                     .expect("birth spawns");
                 let pid = birth.id() as libc::pid_t;
+                // R22-014: guard at birth (the tick read
+                // below must not strand the birth).
+                let mut _bguard = FixtureGuard::new(pid);
                 let tick = proc_starttime(pid)
                     .expect("birth stat readable")
                     .expect("birth visible");
@@ -16144,7 +16212,10 @@ mod tests {
                 let start = std::time::Instant::now();
                 loop {
                     match birth.try_wait() {
-                        Ok(Some(_)) => break,
+                        Ok(Some(_)) => {
+                            _bguard.disarm();
+                            break;
+                        }
                         Ok(None) => {
                             if start.elapsed() >= Duration::from_secs(5) {
                                 panic!("R22003c-{}: birth must reap", $leg);
@@ -23673,11 +23744,23 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("publisher spawns");
+        let pubpid = publisher.id() as libc::pid_t;
+        // R22-014: guard at birth (the pair read below must
+        // not strand the publisher).
+        let mut _pguard = FixtureGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("child pair readable");
         let (child, orig) = parse_published_pair(line.trim(), "child publication");
+        // R22-014: guard the transmitted sleep
+        // (expected-tick pin — the sleep is live (can't
+        // recycle), so the pin always takes).
+        let mut _sguard = FixtureGuard::new_expected(child, orig);
+        assert!(
+            _sguard.tick.is_some(),
+            "sleep pin must take (transmitted birth live)"
+        );
         // Attacker (in-test killer): kill the original; the
         // publisher's wait reaps it and exits; plant a
         // different-birth replacement on the freed number.
@@ -23688,6 +23771,8 @@ mod tests {
             "original signaled"
         );
         let status = publisher.wait().expect("publisher reaps + exits");
+        _pguard.disarm();
+        _sguard.disarm();
         assert!(status.success(), "publisher must exit clean");
         assert_eq!(proc_starttime(child), Ok(None), "number must free");
         let (kid, mut pguard) = match plant_replacement(child, orig) {
@@ -24138,6 +24223,12 @@ mod tests {
             .spawn()
             .expect("sleeper spawns");
         let pid = child.id() as libc::pid_t;
+        // R22-014: guard at birth (pre-exhaust — the tick
+        // read below must not strand the sleeper; no
+        // unwind path exists under EMFILE here (the await
+        // is caught, parks return, drop/kill/wait are
+        // infallible), so the drop always verifies).
+        let mut _guard = FixtureGuard::new(pid);
         let tick = proc_starttime(pid)
             .expect("sleeper stat readable")
             .expect("sleeper visible");
@@ -24161,6 +24252,7 @@ mod tests {
         drop(held);
         let _ = kill_tick_gated(pid, tick);
         let _ = child.wait();
+        _guard.disarm();
         assert!(
             failed_loud,
             "(a) outage must fail loud on unreadable retirement, never certify"
@@ -24222,14 +24314,26 @@ mod tests {
         // 1. Valid publication (fds open).
         let mut publisher = spawn_self_grouped_publisher("982", "wait", &[]);
         let pubpid = publisher.id() as libc::pid_t;
+        // R22-014: guard at birth (the pair read below must
+        // not strand the publisher).
+        let mut _pguard = FixtureGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("pair readable");
         // Parses (valid publication) — but the retire
         // contract takes no stranger (unparsed path).
-        let (_stranger, _stick) = try_parse_published_pair(line.trim(), "outage publication")
+        let (stranger, stick) = try_parse_published_pair(line.trim(), "outage publication")
             .expect("pair must parse (valid publication)");
+        // R22-014: guard the transmitted sleep (expected-tick
+        // pin — the sleep is live (can't recycle), so the
+        // pin always takes; a refused pin fails loud here,
+        // never unwinds unguarded past it).
+        let mut _sguard = FixtureGuard::new_expected(stranger, stick);
+        assert!(
+            _sguard.tick.is_some(),
+            "sleep pin must take (transmitted birth live)"
+        );
         // 2. Persistent EMFILE (confine + fill; held to exit).
         let _confined = confine_fd_table_for_exhaustion();
         let mut held = Vec::new();
@@ -24250,6 +24354,8 @@ mod tests {
         );
         // 5. THE retire (degraded path — must discharge).
         let status = retire_unparsed_publisher_group(&mut publisher);
+        _pguard.disarm();
+        _sguard.disarm();
         // 6. Independent outage-proof verdict: group ESRCH
         // (killpg-0 ⟹ the unknown sleeper is dead).
         let group_errno = {
@@ -24329,6 +24435,9 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("probe child spawns");
+        // Covers the timeout-panic below (the child is
+        // killed but unreaped there — the drop reaps it).
+        let mut _cguard = FixtureGuard::new(child.id() as libc::pid_t);
         let end = Instant::now() + Duration::from_secs(60);
         loop {
             if child.try_wait().expect("child waitable").is_some() {
@@ -24340,7 +24449,9 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        child.wait_with_output().expect("probe output readable")
+        let out = child.wait_with_output().expect("probe output readable");
+        _cguard.disarm();
+        out
     }
 
     /// R22-017: timeout-COLLECTING fresh-image probe run —
@@ -24369,6 +24480,7 @@ mod tests {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("probe child spawns");
+        let mut _cguard = FixtureGuard::new(child.id() as libc::pid_t);
         let end = Instant::now() + Duration::from_secs(60);
         let mut timed_out = false;
         loop {
@@ -24383,6 +24495,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let out = child.wait_with_output().expect("probe output readable");
+        _cguard.disarm();
         ProbeOutcome { timed_out, out }
     }
 
@@ -24443,8 +24556,9 @@ mod tests {
         ));
         println!("R22006-ERRLOG {}", errlog.display());
         let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let dur = r22014_sleep_dur("984");
         let mut publisher = std::process::Command::new(pair_publisher_bin())
-            .arg("984")
+            .arg(&dur)
             .arg("wait")
             .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
             .stdin(std::process::Stdio::null())
@@ -24458,6 +24572,13 @@ mod tests {
             .expect("pair readable");
         let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
             .expect("pair must parse (valid transmit)");
+        // R22-014 fault leg: die before transmitting (the
+        // R12 fallback must sweep the untransmitted
+        // sleeper; the publisher still runs to its fault
+        // alone — kill-denied, so the sleeper survives).
+        if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+            std::process::exit(42);
+        }
         println!("R22006-SLEEPER {sleeper} {stick}");
         // wait4 is ALLOWED (only kill is denied) — the exit
         // code is observed, never self-reported.
@@ -24487,6 +24608,108 @@ mod tests {
         })
     }
 
+    /// R22-014: fault-leg duration override — legs
+    /// restage under a unique duration (sharing the
+    /// GREEN duration would collide under parallel
+    /// runs). GREEN runs (env absent) keep the default.
+    #[cfg(target_arch = "x86_64")]
+    fn r22014_sleep_dur(default: &'static str) -> String {
+        std::env::var("SCOPEBASE_R22014_SLEEP_DUR").unwrap_or_else(|_| default.to_string())
+    }
+
+    /// R22-014/R12: scan (pid, birth) of every LIVE
+    /// (non-zombie) `sleep <dur>` in /proc — the wrapper
+    /// fallback when the probe died before transmitting
+    /// its SLEEPER line. Read-error discipline mirrors
+    /// the custody scans (NotFound skips; any other read
+    /// error fails LOUD — never certify absence over
+    /// unreadable entries).
+    #[cfg(target_arch = "x86_64")]
+    fn r22006_scan_sleep_with_dur(dur: &str) -> Vec<(libc::pid_t, u64)> {
+        let mut found = Vec::new();
+        let entries = std::fs::read_dir("/proc").expect("/proc readable");
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => panic!("R12 fallback: readdir mid-scan failed: {error}"),
+            };
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
+                Ok(cmdline) => cmdline,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    panic!("R12 fallback: /proc/{name}/cmdline unreadable mid-scan: {error}")
+                }
+            };
+            let mut args = cmdline.split(|b| *b == 0);
+            let argv0 = args.next().unwrap_or_default();
+            let argv1 = args.next().unwrap_or_default();
+            // argv0 is "sleep" for execvp'd sleeps,
+            // "/bin/sleep" for Command-spawned ones (the
+            // pair publisher) — match either basename.
+            let base = argv0.rsplit(|b| *b == b'/').next().unwrap_or_default();
+            if base != b"sleep" || argv1 != dur.as_bytes() {
+                continue;
+            }
+            let pid: libc::pid_t = match name.parse() {
+                Ok(pid) => pid,
+                Err(_) => continue,
+            };
+            match proc_starttime(pid) {
+                Ok(Some(tick)) => {
+                    if proc_state(pid) != Some('Z') {
+                        found.push((pid, tick));
+                    }
+                }
+                Ok(None) => continue,
+                Err(error) => panic!("R12 fallback: stat unreadable mid-scan: {error}"),
+            }
+        }
+        found
+    }
+
+    /// R22-014/R12: fallback custody sweep — the probe
+    /// died before transmitting its SLEEPER line (staging
+    /// crash), so the wrapper cannot name the birth. The
+    /// probe's sleep duration is unique per test: kill
+    /// every scanned birth tick-gated, verify drained,
+    /// re-scan. Returns the swept count (0 = nothing
+    /// found — still a loud staging failure upstream,
+    /// never a silent pass).
+    #[cfg(target_arch = "x86_64")]
+    fn r22006_fallback_sweep_sleep(dur: &str) -> usize {
+        let mut swept = 0;
+        for (pid, tick) in r22006_scan_sleep_with_dur(dur) {
+            let _ = kill_tick_gated(pid, tick);
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                match proc_starttime(pid) {
+                    Ok(Some(now)) if now == tick => {}
+                    Ok(_) => break,
+                    Err(error) => {
+                        panic!("R12 fallback: sleeper {pid} death unreadable: {error}")
+                    }
+                }
+                assert!(
+                    Instant::now() < end,
+                    "R12 fallback: sleeper {pid} must die by our kill"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            swept += 1;
+        }
+        assert!(
+            r22006_scan_sleep_with_dur(dur).is_empty(),
+            "R12 fallback: live sleep-{dur} survived the sweep"
+        );
+        swept
+    }
+
     /// R22-006 kill-denied wrapper: the probe runs
     /// fresh-image (seccomp is irreversible). Cleanup rides
     /// the transmitted pair (tick-gated — the probe itself
@@ -24508,8 +24731,19 @@ mod tests {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         // Cleanup FIRST (RED-safe): the kill-denied sleeper
         // survives — retire it via the transmitted birth.
-        let (sleeper, stick) =
-            parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
+        // R12: no transmitted birth (the probe died
+        // pre-transmit) ⟹ sweep by the unique duration,
+        // clean the errlog best-effort, fail loud.
+        let (sleeper, stick) = match parse_r22006_sleeper(&stdout) {
+            Some(pair) => pair,
+            None => {
+                let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("984"));
+                if let Some(errlog) = parse_r22006_errlog(&stdout) {
+                    let _ = std::fs::remove_file(&errlog);
+                }
+                panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
+            }
+        };
         assert!(
             kill_tick_gated(sleeper, stick),
             "sleeper kill must land (staging?)"
@@ -24578,8 +24812,9 @@ mod tests {
         ));
         println!("R22006-ERRLOG {}", errlog.display());
         let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let dur = r22014_sleep_dur("985");
         let mut publisher = std::process::Command::new(pair_publisher_bin())
-            .arg("985")
+            .arg(&dur)
             .arg("wait")
             .env("SCOPEBASE_PUBLISHER_DENY_WAIT", "1")
             .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
@@ -24588,14 +24823,29 @@ mod tests {
             .stderr(errfile)
             .spawn()
             .expect("publisher spawns");
+        let mut _pguard = FixtureGuard::new(publisher.id() as libc::pid_t);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
             .expect("pair readable");
         let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
             .expect("pair must parse (valid transmit)");
+        let mut _sguard = FixtureGuard::new_expected(sleeper, stick);
+        assert!(
+            _sguard.tick.is_some(),
+            "wait-denied probe: sleeper birth pinned at sighting"
+        );
+        // R22-014 fault leg: die before transmitting (the
+        // R12 fallback path must run and fail loud on the
+        // missing line; the swept count races the
+        // publisher's own guard kill here (0 or 1) — only
+        // the kill shape pins it to 1).
+        if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+            std::process::exit(42);
+        }
         println!("R22006-SLEEPER {sleeper} {stick}");
         let status = publisher.wait().expect("publisher waitable");
+        _pguard.disarm();
         println!("R22006-CODE {}", status.code().unwrap_or(-999));
         // The zombie orphans to init at publisher exit —
         // poll its drain (never assume instant).
@@ -24612,6 +24862,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        _sguard.disarm();
         eprintln!("R22006-WAIT-DONE");
     }
 
@@ -24633,6 +24884,21 @@ mod tests {
         );
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // Custody FIRST (R12): a probe that died
+        // pre-transmit leaves no SLEEPER line — sweep by
+        // the unique duration, clean the errlog
+        // best-effort, fail loud (never judge verdicts
+        // over an unretired sleeper).
+        let (sleeper, _stick) = match parse_r22006_sleeper(&stdout) {
+            Some(pair) => pair,
+            None => {
+                let swept = r22006_fallback_sweep_sleep(&r22014_sleep_dur("985"));
+                if let Some(errlog) = parse_r22006_errlog(&stdout) {
+                    let _ = std::fs::remove_file(&errlog);
+                }
+                panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
+            }
+        };
         let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
         let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
         let _ = std::fs::remove_file(&errlog);
@@ -24645,8 +24911,6 @@ mod tests {
             stderr.contains("R22006-WAIT-DONE"),
             "probe must cite completion\n{stderr}"
         );
-        let (sleeper, _stick) =
-            parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
         assert_eq!(
             parse_r22006_code(&stdout),
             Some(3),
@@ -24667,6 +24931,84 @@ mod tests {
         assert!(
             evidence.contains("reaped=false"),
             "must report unreaped\n{evidence}"
+        );
+    }
+
+    /// R22-014/R12 fault leg (kill shape): the probe dies
+    /// before transmitting its SLEEPER line — the
+    /// wrapper's R12 fallback must sweep the untransmitted
+    /// sleeper by its unique duration (exactly 1 — the
+    /// kill-denied publisher cannot discharge it), then
+    /// fail loud (never certify, never strand). Restaged
+    /// under sleep-840 (never the GREEN 984). The
+    /// early-death env flows wrapper → probe by
+    /// inheritance (no forwarding code — `Command`
+    /// inherits). Leg asserts: wrapper failed + swept-1
+    /// citation + no live sleep-840 remains.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r22006_kill_fallback_sweeps_untransmitted_sleeper() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::publisher_guard_denied_kill_reports_unresolved")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22014_EARLY_DEATH", "1")
+            .env("SCOPEBASE_R22014_SLEEP_DUR", "840")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("leg child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "leg must fail loud (no sleeper line)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R12 fallback swept 1"),
+            "fallback must sweep the untransmitted sleeper\n{stderr}"
+        );
+        assert!(
+            r22006_scan_sleep_with_dur("840").is_empty(),
+            "no live sleep-840 may survive the fallback"
+        );
+    }
+
+    /// R22-014/R12 fault leg (wait shape): same as the
+    /// kill leg, except the swept count races the
+    /// publisher's own guard kill (0 or 1 — either is
+    /// correct here): assert the fallback RAN (citation
+    /// present), the wrapper failed loud, and no live
+    /// sleep-841 remains. Restaged under sleep-841
+    /// (never the GREEN 985).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r22006_wait_fallback_sweeps_untransmitted_sleeper() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::publisher_guard_denied_wait_reports_unresolved")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22014_EARLY_DEATH", "1")
+            .env("SCOPEBASE_R22014_SLEEP_DUR", "841")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("leg child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "leg must fail loud (no sleeper line)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R12 fallback swept"),
+            "fallback must run on the missing line\n{stderr}"
+        );
+        assert!(
+            r22006_scan_sleep_with_dur("841").is_empty(),
+            "no live sleep-841 may survive the fallback"
         );
     }
 
@@ -24701,6 +25043,11 @@ mod tests {
             .spawn()
             .expect("stray spawns");
         let pid = stray.id() as libc::pid_t;
+        // Rides to fn end (no disarm): the owned reap
+        // happens inside the frame's first-snapshot hook,
+        // which may never run — the drop stays silent once
+        // reaped and retires the stray otherwise.
+        let _strayguard = FixtureGuard::new(pid);
         let tick = proc_starttime(pid)
             .expect("stray stat readable")
             .expect("stray visible");
@@ -24712,6 +25059,7 @@ mod tests {
             .spawn()
             .expect("orphan spawns");
         let cpid = orphan.id() as libc::pid_t;
+        let mut _cguard = FixtureGuard::new(cpid);
         let ctick = proc_starttime(cpid)
             .expect("orphan stat readable")
             .expect("orphan visible");
@@ -24777,6 +25125,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let _ = orphan.wait();
+        _cguard.disarm();
         assert!(
             !result,
             "denied pin over gone must not certify (union kept, orphan unretired)"
@@ -24898,6 +25247,7 @@ mod tests {
                 .spawn()
                 .expect("stray spawns");
             let pid = stray.id() as libc::pid_t;
+            let _hpguard = FixtureGuard::new(pid);
             let tick = proc_starttime(pid)
                 .expect("stray stat readable")
                 .expect("stray visible");
@@ -24909,10 +25259,15 @@ mod tests {
                 .spawn()
                 .expect("orphan spawns");
             let cpid = orphan.id() as libc::pid_t;
+            let mut _hcguard = FixtureGuard::new(cpid);
             let ctick = proc_starttime(cpid)
                 .expect("orphan stat readable")
                 .expect("orphan visible");
             {
+                // Custody transfers to the main thread at
+                // ready (the orphan must survive helper
+                // return — the frame keeps it).
+                _hcguard.disarm();
                 let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
                 s.p = Some((pid, tick));
                 s.c = Some((cpid, ctick));
@@ -24951,6 +25306,7 @@ mod tests {
                     .stderr(std::process::Stdio::null())
                     .spawn()
                     .expect("replacement spawns");
+                let mut _hrguard = FixtureGuard::new(retake.id() as libc::pid_t);
                 if retake.id() as libc::pid_t != pid {
                     let _ = retake.kill();
                     let _ = retake.wait();
@@ -24959,6 +25315,9 @@ mod tests {
                     let rtick = proc_starttime(pid)
                         .expect("replacement stat readable")
                         .expect("replacement visible");
+                    // Hit: custody transfers to the main
+                    // thread (it arms after the frame).
+                    _hrguard.disarm();
                     let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
                     s.retake_handle = Some(retake);
                     (true, pid, rtick)
@@ -24982,6 +25341,22 @@ mod tests {
             assert!(Instant::now() < end, "helper staging never readied");
             std::thread::sleep(Duration::from_millis(1));
         };
+        // Main-thread custody (transferred births — a
+        // lifecycle gap separates the helper's sighting, so
+        // expected-identity, never bare). All three ride to
+        // fn end: reaps land on the helper (P) or the
+        // cleanup loops (C/R), and the drops stay silent
+        // once gone while retiring on any unwind.
+        let _mpguard = FixtureGuard::new_expected(pid, tick);
+        assert!(
+            _mpguard.tick.is_some(),
+            "denied-reused probe: stray birth pinned at handoff"
+        );
+        let _mcguard = FixtureGuard::new_expected(cpid, ctick);
+        assert!(
+            _mcguard.tick.is_some(),
+            "denied-reused probe: orphan birth pinned at handoff"
+        );
         // Deny pidfd_open on THIS thread only (the helper
         // stays unfiltered for its sudo steer).
         if install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).is_err() {
@@ -25091,6 +25466,11 @@ mod tests {
                 return;
             }
         };
+        let _mrguard = FixtureGuard::new_expected(rpid, rtick);
+        assert!(
+            _mrguard.tick.is_some(),
+            "denied-reused probe: replacement birth pinned at handoff"
+        );
         if rtick == tick {
             // Same-tick retake (S100): untestable this run.
             let _ = kill_tick_gated(cpid, ctick);
@@ -25217,6 +25597,7 @@ mod tests {
             .spawn()
             .expect("parent spawns");
         let pid = parent.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(pid);
         let started = proc_starttime(pid)
             .expect("parent stat readable")
             .expect("parent visible");
@@ -25228,6 +25609,7 @@ mod tests {
             .spawn()
             .expect("fresh child spawns");
         let cpid = child.id() as libc::pid_t;
+        let mut _cguard = FixtureGuard::new(cpid);
         let ctick = proc_starttime(cpid)
             .expect("child stat readable")
             .expect("child visible");
@@ -25296,6 +25678,8 @@ mod tests {
         let _ = kill_tick_gated(cpid, ctick);
         let _ = child.wait();
         let _ = parent.wait();
+        _cguard.disarm();
+        _pguard.disarm();
         eprintln!("R19003-UNREADABLE-DONE");
     }
 
@@ -25915,6 +26299,9 @@ else:
             .spawn()
             .expect("sleeper spawns");
         let pid = child.id() as libc::pid_t;
+        // R22-014: guard at birth (the reads/parks below
+        // must not strand the sleeper).
+        let mut _guard = FixtureGuard::new(pid);
         let tick = proc_starttime(pid)
             .expect("sleeper stat readable")
             .expect("sleeper visible");
@@ -25929,6 +26316,7 @@ else:
         );
         let _ = child.kill();
         let _ = child.wait();
+        _guard.disarm();
         // Absence still certifies: a reaped-away number parks
         // true even with unknown birth.
         assert_eq!(proc_starttime(pid), Ok(None), "number must free");
@@ -25960,6 +26348,9 @@ else:
             .spawn()
             .expect("sleeper spawns");
         let pid = child.id() as libc::pid_t;
+        // R22-014: guard at birth (the park/asserts below
+        // must not strand the sleeper).
+        let mut _guard = FixtureGuard::new(pid);
         let killer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
             // SAFETY: our own child, known identity.
@@ -25974,6 +26365,7 @@ else:
         );
         let status = await_child_exit(&mut child, Duration::from_secs(5))
             .expect("status must remain ours (the park must not reap)");
+        _guard.disarm();
         assert!(!status.success(), "must be our SIGKILLed child");
     }
 
@@ -25997,6 +26389,9 @@ else:
             .spawn()
             .expect("sleeper spawns");
         let pid = child.id() as libc::pid_t;
+        // R22-014: guard at birth (the tick read below must
+        // not strand the sleeper).
+        let mut _guard = FixtureGuard::new(pid);
         let tick = proc_starttime(pid)
             .expect("sleeper stat readable")
             .expect("sleeper visible");
@@ -26042,6 +26437,7 @@ else:
             Ok(None),
             "the park must reap (efficacy)"
         );
+        _guard.disarm();
         assert!(
             child.try_wait().is_err(),
             "status went to the park's assist (ECHILD here)"
@@ -26307,6 +26703,7 @@ time.sleep(30)
             .spawn()
             .expect("victim holder spawns");
         let vpid = victim.id() as libc::pid_t;
+        let mut _vguard = FixtureGuard::new(vpid);
         let vtick = proc_starttime(vpid)
             .expect("victim stat readable")
             .expect("victim visible");
@@ -26399,6 +26796,7 @@ time.sleep(30)
             assert!(Instant::now() < end, "victim must die");
             std::thread::sleep(Duration::from_millis(10));
         }
+        _vguard.disarm();
         let st = reaped.expect("victim status must drain to us (retained, never stolen)");
         assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
@@ -26489,6 +26887,7 @@ time.sleep(30)
         }
         let victim = command.spawn().expect("victim holder spawns");
         let vpid = victim.id() as libc::pid_t;
+        let mut _vguard = FixtureGuard::new(vpid);
         let vtick = proc_starttime(vpid)
             .expect("victim stat readable")
             .expect("victim visible");
@@ -26609,6 +27008,7 @@ time.sleep(30)
             assert!(Instant::now() < end, "victim must die");
             std::thread::sleep(Duration::from_millis(10));
         }
+        _vguard.disarm();
         let st = reaped.expect("victim status must drain to us (retained, never stolen)");
         assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
@@ -29231,6 +29631,7 @@ time.sleep(30)
             .spawn()
             .expect("probe spawns");
         let id = probe.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(id);
         let tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
@@ -29239,6 +29640,7 @@ time.sleep(30)
         // SAFETY: the expiry's raw reap (simulated).
         let got = unsafe { libc::waitpid(id, &mut st, 0) };
         assert_eq!(got, id, "expiry reaps");
+        _pguard.disarm();
         prove_expiry_reaped_probe(id, tick, &mut probe);
         drop(probe);
         // Zombie arm: different-birth replacement, settled
@@ -29255,6 +29657,7 @@ time.sleep(30)
             .spawn()
             .expect("probe spawns");
         let id = probe.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(id);
         let tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
@@ -29262,6 +29665,7 @@ time.sleep(30)
         // SAFETY: the expiry's raw reap (simulated).
         let got = unsafe { libc::waitpid(id, &mut st, 0) };
         assert_eq!(got, id, "expiry reaps");
+        _pguard.disarm();
         let (mut kid, mut guard) = match plant_replacement(id, tick) {
             Some(planted) => planted,
             None => return,
@@ -29295,6 +29699,7 @@ time.sleep(30)
             .spawn()
             .expect("probe spawns");
         let id = probe.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(id);
         let tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
@@ -29302,6 +29707,7 @@ time.sleep(30)
         // SAFETY: the expiry's raw reap (simulated).
         let got = unsafe { libc::waitpid(id, &mut st, 0) };
         assert_eq!(got, id, "expiry reaps");
+        _pguard.disarm();
         let (live, mut lguard) = match plant_replacement(id, tick) {
             Some(planted) => planted,
             None => return,
@@ -29352,6 +29758,7 @@ time.sleep(30)
             .spawn()
             .expect("probe spawns");
         let id = probe.id() as libc::pid_t;
+        let mut _pguard = FixtureGuard::new(id);
         let tick = proc_starttime(id)
             .expect("probe stat readable")
             .expect("probe visible");
@@ -29378,6 +29785,7 @@ time.sleep(30)
             got < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD),
             "ours-zombie must be drained by the proof, got {got}"
         );
+        _pguard.disarm();
         drop(probe);
     }
 
@@ -29412,6 +29820,9 @@ time.sleep(30)
                 .spawn()
                 .expect("probe spawns");
             let id = probe.id() as libc::pid_t;
+            // R22-014: guard at birth (the tick read below
+            // must not strand the probe's zombie).
+            let mut _guard = FixtureGuard::new(id);
             let tick = proc_starttime(id)
                 .expect("probe stat readable")
                 .expect("probe visible");
@@ -29420,6 +29831,7 @@ time.sleep(30)
             // SAFETY: the expiry's raw reap (simulated).
             let got = unsafe { libc::waitpid(id, &mut st, 0) };
             assert_eq!(got, id, "expiry reaps");
+            _guard.disarm();
             drop(probe);
             let (mut kid, mut guard) = match plant_replacement(id, tick) {
                 Some(planted) => planted,
@@ -30166,6 +30578,11 @@ time.sleep(30)
         }
         let leader = leader_cmd.spawn().expect("leader spawns");
         let lpid = leader.id() as libc::pid_t;
+        // Rides to return (no disarm): the miss path's
+        // reap loop can timeout-break with L live (the
+        // drop retires it), and the success path's owned
+        // reap silences the drop.
+        let _lguard = FixtureGuard::new(lpid);
         if lpid != g {
             // Steering miss: retire the misplaced leader
             // (bounded numeric reap — never a blocking wait),
@@ -30209,6 +30626,14 @@ time.sleep(30)
             g,
             "member must join the group (stage broken otherwise)"
         );
+        // Covers the leader-retire asserts below; disarmed
+        // at handoff (the caller arms its own — the gap
+        // holds zero fallible ops).
+        let mut _cguard = FixtureGuard::new_expected(cpid, ctick);
+        assert!(
+            _cguard.tick.is_some(),
+            "reformable-group staging: member birth pinned at handoff"
+        );
         // Leader retires (owned, gated, self-reaped — no
         // drain has run, so the status is ours); the number
         // must free for the reform.
@@ -30235,6 +30660,7 @@ time.sleep(30)
             Ok(None),
             "group number must free for the reform"
         );
+        _cguard.disarm();
         Some((g, ltick, cpid, ctick))
     }
 
@@ -30371,6 +30797,7 @@ time.sleep(30)
             .spawn()
             .expect("sleeper spawns");
         let cpid = child.id() as libc::pid_t;
+        let mut _cguard = FixtureGuard::new(cpid);
         let ctick = proc_starttime(cpid)
             .expect("sleeper stat readable")
             .expect("sleeper visible");
@@ -30393,6 +30820,7 @@ time.sleep(30)
         let _ = kill_tick_gated(cpid, ctick);
         let _ = child.kill();
         let _ = child.wait();
+        _cguard.disarm();
         assert!(failed.is_err(), "outage must fail loud, never skip silent");
         assert!(gone, "outage path must not strand C");
         eprintln!("R20010-SKIP-OUTAGE-DONE");
@@ -30461,11 +30889,15 @@ time.sleep(30)
             .spawn()
             .expect("control spawns");
         let cpid = probe.id() as libc::pid_t;
+        // R22-014: guard at birth (the tick read below must
+        // not strand the control).
+        let mut _cguard = FixtureGuard::new(cpid);
         let ctick = proc_starttime(cpid)
             .expect("control stat readable")
             .expect("control visible");
         retire_and_prove_drained_for_skip(cpid, ctick, SkipCRetireState::Unknown, "control");
         assert_eq!(proc_starttime(cpid), Ok(None), "control C must drain");
+        _cguard.disarm();
         drop(probe);
         for live in [false, true] {
             // Raw-reaped below (simulated pass-1 reap).
@@ -30478,6 +30910,9 @@ time.sleep(30)
                 .spawn()
                 .expect("C spawns");
             let cpid = probe.id() as libc::pid_t;
+            // R22-014: guard at birth (the tick read below
+            // must not strand C).
+            let mut _cguard = FixtureGuard::new(cpid);
             let ctick = proc_starttime(cpid)
                 .expect("C stat readable")
                 .expect("C visible");
@@ -30486,6 +30921,7 @@ time.sleep(30)
             // SAFETY: pass 1's raw reap (simulated).
             let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
             assert_eq!(got, cpid, "pass 1 reaps");
+            _cguard.disarm();
             drop(probe);
             let (mut kid, mut guard) = match plant_replacement(cpid, ctick) {
                 Some(planted) => planted,
@@ -30554,6 +30990,9 @@ time.sleep(30)
                 .spawn()
                 .expect("C spawns");
             let cpid = probe.id() as libc::pid_t;
+            // R22-014: guard at birth (the tick read below
+            // must not strand C).
+            let mut _cguard = FixtureGuard::new(cpid);
             let ctick = proc_starttime(cpid)
                 .expect("C stat readable")
                 .expect("C visible");
@@ -30562,6 +31001,7 @@ time.sleep(30)
             // SAFETY: pass 1's raw reap (simulated).
             let got = unsafe { libc::waitpid(cpid, &mut st, 0) };
             assert_eq!(got, cpid, "pass 1 reaps");
+            _cguard.disarm();
             drop(probe);
             let (mut kid, mut guard) = match plant_replacement(cpid, ctick) {
                 Some(planted) => planted,
@@ -30739,6 +31179,14 @@ time.sleep(30)
             eprintln!("skip: leader steering missed");
             return;
         };
+        // Caller-side member custody (transferred from the
+        // staging helper — rides to fn end: pass 1 reaps C,
+        // silencing the drop; any unwind reaps the zombie).
+        let _ccguard = FixtureGuard::new_expected(cpid, ctick);
+        assert!(
+            _ccguard.tick.is_some(),
+            "anchor-passes: member birth pinned at handoff"
+        );
         // Reform steering (the hook runs on this thread, under
         // the held flock — unlocked steering is sound).
         struct Steer {
@@ -30787,6 +31235,10 @@ time.sleep(30)
                 let reform = reform_cmd.spawn().expect("reform spawns");
                 let rpid = reform.id() as libc::pid_t;
                 drop(reform);
+                // Hook custody: miss/same-tick returns ride
+                // (the drop reaps what the path left); the
+                // record path disarms (custody → main).
+                let mut _rguard = FixtureGuard::new(rpid);
                 if rpid != g {
                     // Steering miss: reap the misplaced reform
                     // (it exits at once) and signal skip.
@@ -30829,6 +31281,7 @@ time.sleep(30)
                     );
                     std::thread::sleep(Duration::from_millis(1));
                 }
+                _rguard.disarm();
                 state.reform = Some((rpid, rtick));
             }),
             None,
@@ -30869,6 +31322,14 @@ time.sleep(30)
         }
         let (rpid, rtick) = guard.reform.expect("reform recorded");
         drop(guard);
+        // Main-side reform custody (transferred from the
+        // hook — covers the verdict asserts; RED runs reap
+        // on unwind instead of stranding the zombie).
+        let mut _rrguard = FixtureGuard::new_expected(rpid, rtick);
+        assert!(
+            _rrguard.tick.is_some(),
+            "anchor-passes: reform birth pinned at handoff"
+        );
         // GREEN fails (must veto): the reformed group is a
         // different birth — retire must be false, provably
         // by recheck, whatever the shape below certifies.
@@ -30884,6 +31345,7 @@ time.sleep(30)
             got, rpid,
             "reform status must stay with its owner (never stolen)"
         );
+        _rrguard.disarm();
         assert!(
             libc::WIFEXITED(st) && libc::WEXITSTATUS(st) == 0,
             "reform must report its true exit-0, got {st}"
@@ -30987,6 +31449,14 @@ time.sleep(30)
             eprintln!("skip: leader steering missed");
             return;
         };
+        // Caller-side member custody (transferred from the
+        // staging helper — rides to fn end: the drain reaps
+        // C, silencing the drop; any unwind reaps it).
+        let _ccguard = FixtureGuard::new_expected(cpid, ctick);
+        assert!(
+            _ccguard.tick.is_some(),
+            "anchor-reaps: member birth pinned at handoff"
+        );
         // Reform steering (the hook runs on this thread, under
         // the held flock — unlocked steering is sound).
         struct Steer {
@@ -31037,6 +31507,12 @@ time.sleep(30)
                 let reform = reform_cmd.spawn().expect("reform spawns");
                 let rpid = reform.id() as libc::pid_t;
                 drop(reform);
+                // Hook custody: miss/same-tick returns ride
+                // (the drop reaps what the path left — the
+                // parked stray included: the main miss path
+                // breaks on already-reaped); the record path
+                // disarms (custody → main).
+                let mut _rguard = FixtureGuard::new(rpid);
                 if rpid != g {
                     let rtick = proc_starttime(rpid).ok().flatten().unwrap_or(0);
                     state.stray = Some((rpid, rtick));
@@ -31066,6 +31542,7 @@ time.sleep(30)
                     );
                     std::thread::sleep(Duration::from_millis(1));
                 }
+                _rguard.disarm();
                 state.reform = Some((rpid, rtick));
             }),
         );
@@ -31093,6 +31570,10 @@ time.sleep(30)
             // before discharging it would false-positive.
             // C's drain-history is untouched by this.
             if let Some((spid, _)) = stray {
+                // Rides the miss block (the loop can
+                // timeout-break with the stray live — the
+                // drop retires it; already-reaped silences).
+                let _strayguard = FixtureGuard::new(spid);
                 let end = Instant::now() + Duration::from_secs(10);
                 loop {
                     let mut st = 0;
@@ -31123,6 +31604,14 @@ time.sleep(30)
         }
         let (rpid, rtick) = guard.reform.expect("reform recorded");
         drop(guard);
+        // Main-side reform custody (transferred from the
+        // hook — covers the verdict asserts; RED runs reap
+        // on unwind instead of stranding the zombie).
+        let mut _rrguard = FixtureGuard::new_expected(rpid, rtick);
+        assert!(
+            _rrguard.tick.is_some(),
+            "anchor-reaps: reform birth pinned at handoff"
+        );
         // The veto is expected — and here RED CERTIFIES TRUE
         // over the theft (fast RED at this very assert).
         assert!(!retired, "reformed group must veto, never certify");
@@ -31145,6 +31634,7 @@ time.sleep(30)
             got, rpid,
             "reform status must stay with its owner (never stolen)"
         );
+        _rrguard.disarm();
         assert!(
             libc::WIFEXITED(st) && libc::WEXITSTATUS(st) == 0,
             "reform must report its true exit-0, got {st}"
@@ -31231,6 +31721,9 @@ time.sleep(30)
                 libc::_exit(0);
             }
         }
+        // Parent-only (the child never returns): covers the
+        // pipe-read + reap-loop asserts below.
+        let mut _m1guard = FixtureGuard::new(m1);
         unsafe {
             libc::close(lpipe[1]);
         }
@@ -31254,6 +31747,10 @@ time.sleep(30)
         }
         let lpid = i64::from_le_bytes(lbytes) as libc::pid_t;
         assert!(lpid > 0, "L fork must succeed");
+        // Rides to fn end (the drain reaps L — silencing
+        // the drop; any pre-drain unwind reaps the adopted
+        // zombie instead of stranding it).
+        let _lguard = FixtureGuard::new(lpid);
         // Reap M1 specifically (own direct child — custody).
         let end = Instant::now() + Duration::from_secs(10);
         let m1_status = loop {
@@ -31273,6 +31770,7 @@ time.sleep(30)
             libc::WIFEXITED(m1_status) && libc::WEXITSTATUS(m1_status) == 0,
             "M1 must exit 0, got {m1_status}"
         );
+        _m1guard.disarm();
         // L may still be live (it can exit after M1): poll
         // it zombie (twins' zombify-poll idiom).
         let end = Instant::now() + Duration::from_secs(10);
@@ -31310,10 +31808,39 @@ time.sleep(30)
         // SAFETY: fork; disjoint branches; the child never
         // returns (prompt _exit, no allocating or
         // libc-locking calls post-fork).
+        // P's pid for the pdeathsig gap guard below
+        // (captured PRE-fork — post-fork it would read S's
+        // own pid in the child and the guard would always
+        // fire (observed)).
+        let me = std::process::id() as libc::pid_t;
         let s = unsafe { libc::fork() };
         assert!(s >= 0, "S fork works");
+        // NO FixtureGuard on S — deliberate (R22-014): S's
+        // unwind discharge IS the pdeathsig under test (a
+        // guard would kill S on unwind and neuter the
+        // mid-park regression — the death must come from
+        // the signal, never from test-side custody).
         if s == 0 {
             unsafe {
+                // Never pin the probe's piped stdio (a parked
+                // S holding the write ends would wedge the
+                // parent's output collection past probe exit —
+                // observed 17-minute hang, R22-014).
+                libc::close(0);
+                libc::close(1);
+                libc::close(2);
+                // Die with the probe (never a parked orphan
+                // past a setup failure / unwind — R22-014).
+                libc::prctl(
+                    libc::PR_SET_PDEATHSIG,
+                    libc::SIGKILL as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
+                if libc::getppid() != me {
+                    libc::_exit(0);
+                }
                 if libc::setpgid(0, lpid) != 0 {
                     libc::_exit(99);
                 }
@@ -31347,6 +31874,13 @@ time.sleep(30)
             proc_starttime(s).ok().flatten().is_some(),
             "S must be statable at entry"
         );
+        // R22-014 unwind-discharge checkpoint: panic mid-park
+        // (after S parks); S must die with the probe
+        // (pdeathsig), never linger as a parked orphan.
+        if std::env::var("SCOPEBASE_R22001B_PANIC_MIDPARK").is_ok() {
+            eprintln!("R22001B-PARKED spid={s}");
+            panic!("staged mid-park panic (R22-014 unwind-discharge regression)");
+        }
         // The drain: the hook is a fired-flag only (S's death
         // needs no release — the drain's own killpg kills S).
         let fired = std::cell::Cell::new(false);
@@ -31434,7 +31968,7 @@ time.sleep(30)
             return;
         }
         let exe = std::env::current_exe().expect("own test binary");
-        let out = std::process::Command::new(exe)
+        let mut probe = std::process::Command::new(exe)
             .arg("--exact")
             .arg("fixture::linux::audit::tests::stray_group_drain_never_reaps_post_entry_arrivals")
             .arg("--nocapture")
@@ -31442,8 +31976,27 @@ time.sleep(30)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
-            .expect("probe child runs");
+            .spawn()
+            .expect("probe child spawns");
+        let mut _probe_guard = FixtureGuard::new(probe.id() as libc::pid_t);
+        // Bounded wait (R22-012 idiom — a wedged probe is
+        // killed loud, never an unbounded hang; S closes
+        // the piped stdio post-fork so collection cannot
+        // wedge past probe exit).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if probe.try_wait().expect("probe waitable").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= end {
+                let _ = probe.kill();
+                let _ = probe.wait();
+                panic!("probe hung past 60 s (killed loud)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let out = probe.wait_with_output().expect("probe output collects");
+        _probe_guard.disarm();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(
             out.status.success(),
@@ -31453,6 +32006,80 @@ time.sleep(30)
             stderr.contains("R22001B-PROBE-DONE"),
             "probe must cite case completion\n{stderr}"
         );
+    }
+
+    /// R22-014: unwind discharge for the 001b plant — the
+    /// probe panics mid-park (after S parks); S must die
+    /// with it (pdeathsig), never linger as a parked
+    /// orphan. RED (no pdeathsig): S stays live-parked
+    /// past the bound. GREEN: S dead-or-gone (reaped by
+    /// init, or an adopted corpse — either proves the
+    /// death signal fired). Parent parses S's pid from
+    /// the probe's PARKED marker.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stray_group_probe_unwind_discharges_parked_sibling() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut probe = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::stray_group_drain_never_reaps_post_entry_arrivals")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22001B_SUBREAPER", "1")
+            .env("SCOPEBASE_R22001B_PANIC_MIDPARK", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let mut _probe_guard = FixtureGuard::new(probe.id() as libc::pid_t);
+        // Bounded wait (R22-012 idiom — a wedged probe is
+        // killed loud, never an unbounded hang).
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            if probe.try_wait().expect("probe waitable").is_some() {
+                break;
+            }
+            if Instant::now() >= end {
+                let _ = probe.kill();
+                let _ = probe.wait();
+                panic!("probe hung past 60 s (killed loud)");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let out = probe.wait_with_output().expect("probe output collects");
+        _probe_guard.disarm();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "probe must panic mid-park as staged\n{stderr}"
+        );
+        // S's pid from the PARKED marker.
+        let spid: libc::pid_t = stderr
+            .lines()
+            .find_map(|line| {
+                line.split_once("R22001B-PARKED spid=").and_then(|(_, rest)| {
+                    rest.split_whitespace().next().and_then(|n| n.parse().ok())
+                })
+            })
+            .expect("probe must report S's pid before panicking");
+        // S must die with the probe (pdeathsig): not
+        // live-parked past the bound (dead-or-gone — init
+        // reaps, or another ancestor adopts the corpse; a
+        // recycle likewise proves death). Stopped counts
+        // as lingering (a stopped orphan still holds out).
+        let end = Instant::now() + Duration::from_secs(10);
+        loop {
+            match proc_state(spid) {
+                Some('R') | Some('S') | Some('T') => {}
+                _ => break,
+            }
+            assert!(
+                Instant::now() < end,
+                "S={spid} must die with the panicking probe (pdeathsig — else a parked orphan leaks)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
