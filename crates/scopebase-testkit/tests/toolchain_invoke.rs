@@ -7225,6 +7225,21 @@ fn pair_publisher_script_renders_golden() {
     assert_eq!((pid, tick), (1234, 5678));
 }
 
+/// R22-020 (toolchain twin): discharge (not vacancy) —
+/// mirror of the lib helper (absent OR recycled to a
+/// different birth; the original tick is always
+/// available at the call sites).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn assert_sleeper_discharged(pid: i32, orig: u64) {
+    match task_starttime_checked(pid) {
+        Ok(None) => {}
+        Ok(Some(now)) if now != orig => {}
+        observed => panic!(
+            "publisher must reap its zombie (wait tail): number {pid} still the original birth ({observed:?} vs orig {orig})"
+        ),
+    }
+}
+
 /// R20-004 (twin mirror): killing the publisher's child
 /// BEFORE the stat must not corrupt the transmitted birth.
 /// Same pause-hook flow as the audit harness: stage the
@@ -7319,11 +7334,7 @@ fn pair_publisher_pause_hook_transmits_original_birth() {
         "transmitted must name the original birth despite pre-stat death\n{stderr}"
     );
     assert!(output.status.success(), "publisher must exit 0\n{stderr}");
-    assert_eq!(
-        task_starttime_checked(sleep),
-        Ok(None),
-        "publisher must reap its zombie (wait tail)"
-    );
+    assert_sleeper_discharged(sleep, orig);
 }
 
 /// R21-005 (twin mirror): the controlled publisher must
@@ -7424,10 +7435,146 @@ fn pair_publisher_normalizes_inherited_sigchld_ign() {
         "transmitted must name the original birth despite pre-stat death\n{stderr}"
     );
     assert!(output.status.success(), "publisher must exit 0\n{stderr}");
-    assert_eq!(
-        task_starttime_checked(sleep),
-        Ok(None),
-        "publisher must reap its zombie (wait tail)"
+    assert_sleeper_discharged(sleep, orig);
+}
+
+/// R22-020 (toolchain twin): discharge survives
+/// replacement — mirror of the lib regression (legs 1-3
+/// everywhere: vacancy passes, live-under-mismatched-tick
+/// passes, still-original fails loud-caught; leg 4 steers
+/// a REAL replacement onto the freed number, best-effort).
+/// Live-child legs run their helper assert under
+/// catch_unwind + cleanup + re-assert (the twin has no
+/// RAII guard type — RED runs stay clean without one).
+/// RED (vacancy-only helper: legs 2 and 4 fail). Duration
+/// 867 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn sleeper_discharge_recognized_across_replacement() {
+    use std::time::{Duration, Instant};
+    // Numeric reap-by-number (own unreaped child — no
+    // pidfd anywhere in this test).
+    let reap_number = |pid: i32, tick: u64, who: &str| {
+        // SAFETY: SIGKILL to our own unreaped child.
+        assert_eq!(
+            unsafe { libc::kill(pid, libc::SIGKILL) },
+            0,
+            "{who} signaled"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG reap of our own killed child.
+            let _ = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
+            if task_starttime_checked(pid) != Ok(Some(tick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "{who} must drain");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    let spawn_sleeper = || {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("867")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as i32;
+        let tick = task_starttime_checked(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        (child, pid, tick)
+    };
+    // Leg 1 (vacancy): reaped number, original tick.
+    let (dead, dpid, dtick) = spawn_sleeper();
+    reap_number(dpid, dtick, "leg-1 sleeper");
+    let _ = dead;
+    assert_sleeper_discharged(dpid, dtick);
+    // Leg 2 (retick): LIVE number under a mismatched
+    // tick (catch + cleanup + re-assert: RED-clean
+    // without a guard type).
+    let (live, lpid, ltick) = spawn_sleeper();
+    let leg2 = std::panic::catch_unwind(|| assert_sleeper_discharged(lpid, ltick.wrapping_add(1)));
+    reap_number(lpid, ltick, "leg-2 sleeper");
+    let _ = live;
+    assert!(
+        leg2.is_ok(),
+        "live number under a mismatched tick is discharged"
+    );
+    // Leg 3 (violation): LIVE number under its OWN tick
+    // (caught, never escaping).
+    let (ours, opid, otick) = spawn_sleeper();
+    let violation = std::panic::catch_unwind(|| assert_sleeper_discharged(opid, otick));
+    reap_number(opid, otick, "leg-3 sleeper");
+    let _ = ours;
+    assert!(
+        violation.is_err(),
+        "original birth must fail the discharge check"
+    );
+    let payload = violation.unwrap_err();
+    let text = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(
+        text.contains("must reap"),
+        "violation must cite the wait tail\n{text}"
+    );
+    // Leg 4 (steered replacement): REAL new birth on leg
+    // 1's freed number (best-effort: skips loud when
+    // unsteerable/stolen/same-jiffy).
+    let last_before = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").ok();
+    let mut placed = None;
+    for _ in 0..5 {
+        if !locked_steer_next_pid(dpid) {
+            break;
+        }
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("867")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("replacement spawns");
+        let rpid = child.id() as i32;
+        if rpid != dpid {
+            let rtick = task_starttime_checked(rpid)
+                .expect("stranger stat readable")
+                .expect("stranger visible");
+            reap_number(rpid, rtick, "stolen placement");
+            continue;
+        }
+        placed = Some(child);
+        break;
+    }
+    if let Some(last) = last_before {
+        locked_restore_hint(last.trim());
+    }
+    let replacement = match placed {
+        Some(child) => child,
+        None => {
+            eprintln!("skip: replacement unplaceable (steering unavailable or number contended)");
+            return;
+        }
+    };
+    let rtick = task_starttime_checked(dpid)
+        .expect("replacement stat readable")
+        .expect("replacement visible");
+    if rtick == dtick {
+        reap_number(dpid, rtick, "same-jiffy replacement");
+        let _ = replacement;
+        eprintln!("skip: replacement shares the original jiffy (tick-granularity residual)");
+        return;
+    }
+    let leg4 = std::panic::catch_unwind(|| assert_sleeper_discharged(dpid, dtick));
+    reap_number(dpid, rtick, "replacement");
+    let _ = replacement;
+    assert!(
+        leg4.is_ok(),
+        "steered replacement is a discharge of the original"
     );
 }
 
@@ -8196,54 +8343,103 @@ fn diag_fifo_swap_never_blocks_read_open() {
 /// R21-016 (toolchain twin): the watchdog's rescue open must
 /// never block — mirror of the audit regression (a
 /// refused-and-closed worker stalled pre-send leaves no
-/// reader; a blocking rescue hangs FOREVER). RED: 5s timeout
-/// → panic (the one RED run leaks its rescue thread).
-/// GREEN (O_NONBLOCK): ENXIO at once.
+/// reader; a blocking rescue hangs FOREVER). R22-021: the
+/// worker/main rendezvous is EXPLICIT — no 100ms/300ms
+/// timing asserts (scheduling skew can neither flake nor
+/// vacate them): the worker signals refusal-established
+/// (proving it RAN and refused — rescue is truly
+/// post-refusal, never never-started-vacuous), then HOLDS
+/// its send until released; the main thread awaits the
+/// signal, rescues, releases, and demands the refused
+/// result. Two schedule cells (delayed receiver / delayed
+/// worker) skew WHO waits — the rendezvous orders
+/// everything causally, so both cells assert the same
+/// outcomes. Rescue still runs in a thread (RED fails
+/// instead of hanging the suite). RED (blocking): 5s
+/// timeout → panic. GREEN (O_NONBLOCK): ENXIO at once.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn diag_fifo_rescue_open_never_blocks() {
     use std::os::unix::ffi::OsStrExt as _;
-    let stem = format!("scopebase-r21016-rescue-{}", std::process::id());
-    let diag = std::env::temp_dir().join(format!("{stem}.log"));
-    let _ = std::fs::remove_file(&diag);
-    let cpath = std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
-    // SAFETY: mkfifo on our own temp path; mode 600.
-    assert_eq!(
-        unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
-        0,
-        "fifo planted"
-    );
-    let (tx, rx) = std::sync::mpsc::channel();
-    let worker_path = diag.clone();
-    let worker = std::thread::spawn(move || {
-        let result = open_diag_read(&worker_path);
-        // Post-refusal pre-send stall (the deschedule
-        // the watchdog deadline can cross).
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = tx.send(result);
-    });
-    match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-        Err(_) => {}
-        Ok(_) => panic!("worker must still be stalled at the watchdog deadline"),
+    use std::time::Duration;
+    // Schedule cells: (worker pre-open delay, main
+    // pre-rescue delay). Cell "rx": the receiver is
+    // late (worker held 300ms+ pre-send). Cell "tx":
+    // the worker is late (refusal awaited, never
+    // assumed).
+    for (cell, worker_pre_delay, main_pre_rescue_delay) in [
+        ("rx", Duration::ZERO, Duration::from_millis(300)),
+        ("tx", Duration::from_millis(300), Duration::ZERO),
+    ] {
+        let stem = format!("scopebase-r21016-rescue-tc-{}-{cell}", std::process::id());
+        let diag = std::env::temp_dir().join(format!("{stem}.log"));
+        let _ = std::fs::remove_file(&diag);
+        let cpath =
+            std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
+        // SAFETY: mkfifo on our own temp path; mode 600.
+        assert_eq!(
+            unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+            0,
+            "cell {cell}: fifo planted"
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (refused_tx, refused_rx) = std::sync::mpsc::channel::<bool>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker_path = diag.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(worker_pre_delay);
+            let result = open_diag_read(&worker_path);
+            // Rendezvous: refusal established (proves the
+            // worker RAN and refused — the rescue below
+            // is truly post-refusal), then HOLD the send
+            // until released (post-refusal pre-send
+            // stall, steered not slept).
+            refused_tx.send(result.is_err()).expect("refusal signaled");
+            release_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("release arrives");
+            let _ = tx.send(result);
+        });
+        // Await refusal-established (bounded — a
+        // never-started worker times out here instead
+        // of passing vacuous).
+        let refused_flag = match refused_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(flag) => flag,
+            Err(_) => panic!(
+                "cell {cell}: worker must establish refusal (never-started workers must not pass vacuous)"
+            ),
+        };
+        assert!(refused_flag, "cell {cell}: worker must have refused");
+        // Delayed-receiver skew lands here (the worker
+        // is held pre-send through the rendezvous).
+        std::thread::sleep(main_pre_rescue_delay);
+        // Rescue in a thread: RED must fail, never hang.
+        let rescue_path = diag.clone();
+        let (rtx, rrx) = std::sync::mpsc::channel();
+        let _rescue = std::thread::spawn(move || {
+            let outcome = open_fifo_rescue_write(&rescue_path).is_ok();
+            let _ = rtx.send(outcome);
+        });
+        if rrx.recv_timeout(Duration::from_secs(5)).is_err() {
+            panic!(
+                "cell {cell}: rescue open must complete (a blocking rescue hangs with no reader)"
+            );
+        }
+        // Release the worker; demand its refused result.
+        if release_tx.send(()).is_err() {
+            panic!("cell {cell}: release sent");
+        }
+        let refused = match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(result) => result,
+            Err(_) => panic!("cell {cell}: worker must still deliver"),
+        };
+        assert!(
+            refused.is_err(),
+            "cell {cell}: worker must have refused, got {refused:?}"
+        );
+        let _ = worker.join();
+        let _ = std::fs::remove_file(&diag);
     }
-    // Rescue in a thread: RED must fail, never hang.
-    let rescue_path = diag.clone();
-    let (rtx, rrx) = std::sync::mpsc::channel();
-    let _rescue = std::thread::spawn(move || {
-        let outcome = open_fifo_rescue_write(&rescue_path).is_ok();
-        let _ = rtx.send(outcome);
-    });
-    rrx.recv_timeout(std::time::Duration::from_secs(5))
-        .expect("rescue open must complete (a blocking rescue hangs with no reader)");
-    let refused = rx
-        .recv_timeout(std::time::Duration::from_secs(10))
-        .expect("worker must still deliver");
-    assert!(
-        refused.is_err(),
-        "worker must have refused, got {refused:?}"
-    );
-    let _ = worker.join();
-    let _ = std::fs::remove_file(&diag);
 }
 
 /// R19-002 (toolchain twin): probe body (fresh image,

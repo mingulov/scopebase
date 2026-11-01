@@ -13553,6 +13553,24 @@ mod tests {
         );
     }
 
+    /// R22-020: discharge (not vacancy) — the sleeper's
+    /// original birth is discharged ⟺ its number is
+    /// absent OR recycled to a different birth. A
+    /// vacancy-only check falsely fails on a
+    /// different-birth replacement (R21-018's repaired
+    /// occupancy error, repeated). The original birth
+    /// tick is always available at the call sites (the
+    /// transmitted pair / pre-death stat).
+    fn assert_sleeper_discharged(pid: libc::pid_t, orig: u64) {
+        match proc_starttime(pid) {
+            Ok(None) => {}
+            Ok(Some(now)) if now != orig => {}
+            observed => panic!(
+                "publisher must reap its zombie (wait tail): number {pid} still the original birth ({observed:?} vs orig {orig})"
+            ),
+        }
+    }
+
     /// R20-004: killing the publisher's child BEFORE the
     /// stat must not corrupt the transmitted birth. The
     /// controlled publisher never auto-reaps (no SIGCHLD
@@ -13664,11 +13682,7 @@ mod tests {
             "transmitted must name the original birth despite pre-stat death\n{stderr}"
         );
         assert!(output.status.success(), "publisher must exit 0\n{stderr}");
-        assert_eq!(
-            proc_starttime(sleep),
-            Ok(None),
-            "publisher must reap its zombie (wait tail)"
-        );
+        assert_sleeper_discharged(sleep, orig);
     }
 
     /// R21-005: the controlled publisher must normalize an
@@ -13789,11 +13803,164 @@ mod tests {
             "transmitted must name the original birth despite pre-stat death\n{stderr}"
         );
         assert!(output.status.success(), "publisher must exit 0\n{stderr}");
-        assert_eq!(
-            proc_starttime(sleep),
-            Ok(None),
-            "publisher must reap its zombie (wait tail)"
+        assert_sleeper_discharged(sleep, orig);
+    }
+
+    /// R22-020: discharge survives replacement — the
+    /// zombie-reap check is gone-or-reticked (the original
+    /// birth tick), never vacancy-only. Legs 1-3 run
+    /// everywhere (no privilege): vacancy passes, a live
+    /// number under a mismatched tick passes (the
+    /// different-birth shape), the still-original birth
+    /// fails loud. Leg 4 places a REAL replacement on the
+    /// freed number (pid steering; skips loud when
+    /// unsteerable) and the original's discharge must
+    /// still be recognized. RED (vacancy-only helper:
+    /// legs 2 and 4 fail on the live number). Duration
+    /// 866 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn sleeper_discharge_recognized_across_replacement() {
+        use std::time::{Duration, Instant};
+        // Numeric reap-by-number (own unreaped child — no
+        // pidfd anywhere in this test, so it runs on
+        // locked runners too).
+        let reap_number = |pid: libc::pid_t, tick: u64, who: &str| {
+            // SAFETY: SIGKILL to our own unreaped child.
+            assert_eq!(
+                unsafe { libc::kill(pid, libc::SIGKILL) },
+                0,
+                "{who} signaled"
+            );
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut st = 0;
+                // SAFETY: WNOHANG reap of our own killed child.
+                let _ = unsafe { libc::waitpid(pid, &mut st, libc::WNOHANG) };
+                if proc_starttime(pid) != Ok(Some(tick)) {
+                    break;
+                }
+                assert!(Instant::now() < end, "{who} must drain");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let spawn_sleeper = || {
+            let child = std::process::Command::new("/bin/sleep")
+                .arg("866")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sleeper spawns");
+            let pid = child.id() as libc::pid_t;
+            let guard = FixtureGuard::new(pid);
+            let tick = proc_starttime(pid)
+                .expect("sleeper stat readable")
+                .expect("sleeper visible");
+            (child, guard, pid, tick)
+        };
+        // Leg 1 (vacancy): reaped number, original tick —
+        // discharged.
+        let (dead, mut dguard, dpid, dtick) = spawn_sleeper();
+        reap_number(dpid, dtick, "leg-1 sleeper");
+        dguard.disarm();
+        let _ = dead;
+        assert_sleeper_discharged(dpid, dtick);
+        // Leg 2 (retick): LIVE number under a mismatched
+        // tick — discharged (the different-birth shape a
+        // vacancy check falsely fails).
+        let (live, mut lguard, lpid, ltick) = spawn_sleeper();
+        assert_sleeper_discharged(lpid, ltick.wrapping_add(1));
+        reap_number(lpid, ltick, "leg-2 sleeper");
+        lguard.disarm();
+        let _ = live;
+        // Leg 3 (violation): LIVE number under its OWN
+        // tick — still the original birth, must fail
+        // loud (caught, never escaping).
+        let (ours, mut oguard, opid, otick) = spawn_sleeper();
+        let violation = std::panic::catch_unwind(|| assert_sleeper_discharged(opid, otick));
+        assert!(
+            violation.is_err(),
+            "original birth must fail the discharge check"
         );
+        let payload = violation.unwrap_err();
+        let text = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(
+            text.contains("must reap"),
+            "violation must cite the wait tail\n{text}"
+        );
+        reap_number(opid, otick, "leg-3 sleeper");
+        oguard.disarm();
+        let _ = ours;
+        // Leg 4 (steered replacement): place a REAL new
+        // birth on leg 1's freed number — discharge must
+        // still be recognized. Best-effort: skips loud
+        // when steering is unavailable or the number is
+        // stolen/contended.
+        let last_before = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").ok();
+        let mut placed = None;
+        for _ in 0..5 {
+            if !audit_locked_steer_next_pid(dpid) {
+                break;
+            }
+            let child = std::process::Command::new("/bin/sleep")
+                .arg("866")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("replacement spawns");
+            let rpid = child.id() as libc::pid_t;
+            if rpid != dpid {
+                // Stolen placement — reap the stranger and retry.
+                let rtick = proc_starttime(rpid)
+                    .expect("stranger stat readable")
+                    .expect("stranger visible");
+                reap_number(rpid, rtick, "stolen placement");
+                continue;
+            }
+            placed = Some(child);
+            break;
+        }
+        if let Some(last) = last_before {
+            audit_locked_restore_hint(last.trim());
+        }
+        let replacement = match placed {
+            Some(child) => child,
+            None => {
+                eprintln!(
+                    "skip: replacement unplaceable (steering unavailable or number contended)"
+                );
+                return;
+            }
+        };
+        let mut rguard = FixtureGuard::new(dpid);
+        let rtick = proc_starttime(dpid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        if rtick == dtick {
+            // Same-jiffy starttime collision (tick
+            // granularity residual — the number is
+            // provably NOT the original birth, but the
+            // tick cannot show it): reap and skip loud (a
+            // respawn past the jiffy would re-race the
+            // steered number for no new predicate
+            // coverage — legs 1-3 already pin the truth
+            // table).
+            reap_number(dpid, rtick, "same-jiffy replacement");
+            rguard.disarm();
+            let _ = replacement;
+            eprintln!("skip: replacement shares the original jiffy (tick-granularity residual)");
+            return;
+        }
+        assert_sleeper_discharged(dpid, dtick);
+        reap_number(dpid, rtick, "replacement");
+        rguard.disarm();
+        let _ = replacement;
     }
 
     /// R16-010: the PINNED path is the twin of IR-002's unpinned
@@ -16827,62 +16994,104 @@ mod tests {
     /// R21-016: the watchdog's rescue open must never block —
     /// a worker that refused-and-closed but is stalled
     /// before its channel send leaves NO reader; a blocking
-    /// rescue then hangs FOREVER (hang, not fail). Stages a
-    /// fifo, stalls the worker 300ms post-refusal pre-send,
-    /// crosses a 100ms watchdog deadline, and demands the
-    /// rescue complete within 5s (in a thread, so RED fails
-    /// instead of hanging the suite — the one RED run leaks
-    /// its rescue thread to process exit). RED (blocking):
+    /// rescue then hangs FOREVER (hang, not fail). R22-021:
+    /// the worker/main rendezvous is EXPLICIT (no
+    /// 100ms/300ms timing asserts — scheduling skew can
+    /// neither flake nor vacate them): the worker signals
+    /// refusal-established (proving it RAN and refused —
+    /// rescue is truly post-refusal, never
+    /// never-started-vacuous), then HOLDS its send until
+    /// released; the main thread awaits the signal,
+    /// rescues, releases, and demands the refused result.
+    /// Two schedule cells (delayed receiver / delayed
+    /// worker) skew WHO waits — the rendezvous orders
+    /// everything causally, so both cells assert the same
+    /// outcomes. Rescue still runs in a thread (RED fails
+    /// instead of hanging the suite). RED (blocking):
     /// timeout → panic. GREEN (O_NONBLOCK): ENXIO at once.
-    /// The worker's own result must still arrive refused
-    /// (the stall scenario staged correctly) and the fifo
-    /// is unlinked (cleanup).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn diag_fifo_rescue_open_never_blocks() {
         use std::os::unix::ffi::OsStrExt as _;
-        let stem = format!("scopebase-r21016-rescue-{}", std::process::id());
-        let diag = std::env::temp_dir().join(format!("{stem}.log"));
-        let _ = std::fs::remove_file(&diag);
-        let cpath =
-            std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
-        // SAFETY: mkfifo on our own temp path; mode 600.
-        assert_eq!(
-            unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
-            0,
-            "fifo planted"
-        );
-        let (tx, rx) = std::sync::mpsc::channel();
-        let worker_path = diag.clone();
-        let worker = std::thread::spawn(move || {
-            let result = open_diag_read(&worker_path);
-            // Post-refusal pre-send stall (the deschedule
-            // the watchdog deadline can cross).
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            let _ = tx.send(result);
-        });
-        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-            Err(_) => {}
-            Ok(_) => panic!("worker must still be stalled at the watchdog deadline"),
+        use std::time::Duration;
+        // Schedule cells: (worker pre-open delay, main
+        // pre-rescue delay). Cell "rx": the receiver is
+        // late (worker held 300ms+ pre-send). Cell "tx":
+        // the worker is late (refusal awaited, never
+        // assumed).
+        for (cell, worker_pre_delay, main_pre_rescue_delay) in [
+            ("rx", Duration::ZERO, Duration::from_millis(300)),
+            ("tx", Duration::from_millis(300), Duration::ZERO),
+        ] {
+            let stem = format!("scopebase-r21016-rescue-{}-{cell}", std::process::id());
+            let diag = std::env::temp_dir().join(format!("{stem}.log"));
+            let _ = std::fs::remove_file(&diag);
+            let cpath =
+                std::ffi::CString::new(diag.as_os_str().as_bytes()).expect("diag path is C-safe");
+            // SAFETY: mkfifo on our own temp path; mode 600.
+            assert_eq!(
+                unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+                0,
+                "cell {cell}: fifo planted"
+            );
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (refused_tx, refused_rx) = std::sync::mpsc::channel::<bool>();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let worker_path = diag.clone();
+            let worker = std::thread::spawn(move || {
+                std::thread::sleep(worker_pre_delay);
+                let result = open_diag_read(&worker_path);
+                // Rendezvous: refusal established (proves the
+                // worker RAN and refused — the rescue below
+                // is truly post-refusal), then HOLD the send
+                // until released (post-refusal pre-send
+                // stall, steered not slept).
+                refused_tx.send(result.is_err()).expect("refusal signaled");
+                release_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("release arrives");
+                let _ = tx.send(result);
+            });
+            // Await refusal-established (bounded — a
+            // never-started worker times out here instead
+            // of passing vacuous).
+            let refused_flag = match refused_rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(flag) => flag,
+                Err(_) => panic!(
+                    "cell {cell}: worker must establish refusal (never-started workers must not pass vacuous)"
+                ),
+            };
+            assert!(refused_flag, "cell {cell}: worker must have refused");
+            // Delayed-receiver skew lands here (the worker
+            // is held pre-send through the rendezvous).
+            std::thread::sleep(main_pre_rescue_delay);
+            // Rescue in a thread: RED must fail, never hang.
+            let rescue_path = diag.clone();
+            let (rtx, rrx) = std::sync::mpsc::channel();
+            let _rescue = std::thread::spawn(move || {
+                let outcome = open_fifo_rescue_write(&rescue_path).is_ok();
+                let _ = rtx.send(outcome);
+            });
+            if rrx.recv_timeout(Duration::from_secs(5)).is_err() {
+                panic!(
+                    "cell {cell}: rescue open must complete (a blocking rescue hangs with no reader)"
+                );
+            }
+            // Release the worker; demand its refused result.
+            if release_tx.send(()).is_err() {
+                panic!("cell {cell}: release sent");
+            }
+            let refused = match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(result) => result,
+                Err(_) => panic!("cell {cell}: worker must still deliver"),
+            };
+            assert!(
+                refused.is_err(),
+                "cell {cell}: worker must have refused, got {refused:?}"
+            );
+            let _ = worker.join();
+            let _ = std::fs::remove_file(&diag);
         }
-        // Rescue in a thread: RED must fail, never hang.
-        let rescue_path = diag.clone();
-        let (rtx, rrx) = std::sync::mpsc::channel();
-        let _rescue = std::thread::spawn(move || {
-            let outcome = open_fifo_rescue_write(&rescue_path).is_ok();
-            let _ = rtx.send(outcome);
-        });
-        rrx.recv_timeout(std::time::Duration::from_secs(5))
-            .expect("rescue open must complete (a blocking rescue hangs with no reader)");
-        let refused = rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("worker must still deliver");
-        assert!(
-            refused.is_err(),
-            "worker must have refused, got {refused:?}"
-        );
-        let _ = worker.join();
-        let _ = std::fs::remove_file(&diag);
     }
 
     /// R19-002: probe body (fresh image, SCOPEBASE_R19002) —
@@ -24071,6 +24280,49 @@ mod tests {
         child.wait_with_output().expect("probe output readable")
     }
 
+    /// R22-017: timeout-COLLECTING fresh-image probe run —
+    /// port of the fork helper (kill + reap + read the
+    /// pipes to EOF on timeout; early-flushed custody
+    /// lines survive for wrapper-side backstop — never
+    /// panic away the output).
+    struct ProbeOutcome {
+        timed_out: bool,
+        out: std::process::Output,
+    }
+
+    /// R22-017: run a fresh-image probe child, collecting
+    /// its output EVEN on timeout. The wrapper judges
+    /// completion via `timed_out` + a DONE marker, never
+    /// by output presence alone.
+    fn run_fresh_probe_collect(env: &str, test: &str) -> ProbeOutcome {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(format!("fixture::linux::audit::tests::{test}"))
+            .arg("--nocapture")
+            .env(env, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let end = Instant::now() + Duration::from_secs(60);
+        let mut timed_out = false;
+        loop {
+            if child.try_wait().expect("child waitable").is_some() {
+                break;
+            }
+            if Instant::now() >= end {
+                let _ = child.kill();
+                timed_out = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let out = child.wait_with_output().expect("probe output readable");
+        ProbeOutcome { timed_out, out }
+    }
+
     /// R22-006: parse a `R22006-SLEEPER pid tick` line from
     /// probe stdout (the publisher's transmitted pair,
     /// forwarded for parent-side cleanup).
@@ -25941,6 +26193,12 @@ else:
     fn discovery_verifies_slot_across_mode_read() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when discovery attribution is unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         if !staged_probe_python3() {
             eprintln!("skip: python3 unavailable");
             return;
@@ -26110,6 +26368,12 @@ time.sleep(30)
         use std::os::unix::io::AsRawFd as _;
         use std::os::unix::process::CommandExt as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when discovery attribution is unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         if !staged_probe_python3() {
             eprintln!("skip: python3 unavailable");
             return;
@@ -26288,6 +26552,56 @@ time.sleep(30)
         let _ = std::fs::remove_file(&flag_done);
     }
 
+    /// R22-017: independent pidfd-grab capability gate —
+    /// `pidfd_open(self)` + `pidfd_getfd` on an own fd
+    /// must BOTH succeed. Direct-probe-positive tests
+    /// (asserting `Some(true)`/`Some(false)`/`Holds`
+    /// through the pidfd-pinned grab) skip loud when
+    /// incapable — a pidfd-locked runner (Yama /
+    /// deny-profile / old kernel) would otherwise fail
+    /// in setup instead of exercising the unresolved
+    /// path. The globally-denied regression below covers
+    /// the unresolved legs without this gate.
+    ///
+    /// Kernel floor: 5.3 (pidfd_open) for the suite
+    /// pervasively; 5.6 (pidfd_getfd) for the pinned-grab
+    /// positives (old kernels were already out of scope —
+    /// no per-test gating beyond the direct-probe
+    /// positives). hidepid posture (unchanged): our own
+    /// tasks stay stat-visible under every hidepid level.
+    /// Residuals: (a) transient ambient EMFILE at gate
+    /// time spuriously skips (loud — fail-closed);
+    /// (b) a Yama-3 self-vs-child asymmetry (self-getfd
+    /// passing while child-getfd fails) is untested here
+    /// and would fail gated tests instead of skipping
+    /// (no Yama-3 runner observed; seccomp / old-kernel /
+    /// Yama-0-2 shapes are exact).
+    fn pidfd_grab_capable() -> bool {
+        use std::os::unix::io::AsRawFd as _;
+        // Scratch fd (owned — validity certain; open
+        // failure ⟹ incapable — fail-closed).
+        let scratch = match std::fs::File::open("/dev/null") {
+            Ok(file) => file,
+            Err(_) => return false,
+        };
+        // SAFETY: direct syscalls; fds owned by this scope
+        // (closed below on every path).
+        let pidfd = match super::super::seccomp::pidfd_open_raw(std::process::id() as libc::pid_t) {
+            Ok(fd) => fd,
+            Err(_) => return false,
+        };
+        let grabbed = super::super::seccomp::pidfd_getfd_raw(pidfd, scratch.as_raw_fd());
+        // SAFETY: both fds owned by this scope (the dup
+        // only exists on success).
+        unsafe {
+            if let Ok(dup) = grabbed {
+                libc::close(dup);
+            }
+            libc::close(pidfd);
+        }
+        grabbed.is_ok()
+    }
+
     /// R21-004 (alternation leg): an alternating slot NEVER
     /// grants — mode+identity must describe ONE open file
     /// description. The alternator's slot 2 flips between
@@ -26310,6 +26624,13 @@ time.sleep(30)
     fn alternating_slot_never_grants_write() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the Some(false) positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         if !staged_probe_python3() {
             eprintln!("skip: python3 unavailable");
             return;
@@ -26440,6 +26761,14 @@ time.sleep(30)
     fn pidfd_unavailable_probe_stays_unresolved() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the baseline Some(true) is unverifiable;
+        // the globally-denied regression covers the
+        // unresolved legs without this gate).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         let (read, write) = std::io::pipe().expect("collection pipe");
         let read_fd = read.as_raw_fd();
         // The seccomp-skip early return below retires via
@@ -26589,6 +26918,215 @@ time.sleep(30)
         assert!(libc::WIFSIGNALED(st), "holder must die by our signal");
         hguard.disarm();
         let _ = holder;
+    }
+
+    /// R22-017 global-denial regression probe (fresh
+    /// image): seccomp-deny BOTH pidfd syscalls for the
+    /// whole probe (the globally-denied shape), then:
+    /// (a) the denial bites (direct pidfd_open is EPERM —
+    /// anti-vacuity); (b) the capability gate reports
+    /// INCAPABLE (gate-negative leg); (c) the strict
+    /// probe reports None over a genuine holder
+    /// (unresolved — never a false grant, never a false
+    /// non-hold); (d) the bool fold reports false
+    /// (unattributed — never killed by number). Custody:
+    /// FixtureGuard at birth (disarmed after numeric
+    /// kill+reap — the guard's pidfd-based drop must not
+    /// run denied) PLUS a printed birth for wrapper-side
+    /// backstop (a staging panic before disarm would
+    /// otherwise strand past the denied drop). Duration
+    /// 900 is unique to this test.
+    fn pidfd_globally_denied_probe_stays_unresolved_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::os::unix::io::AsRawFd as _;
+        use std::time::{Duration, Instant};
+        install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).expect("deny open installs");
+        install_deny_one(libc::SYS_pidfd_getfd, DenyAction::Eperm).expect("deny getfd installs");
+        // Anti-vacuity: the denial bites.
+        assert_eq!(
+            super::super::seccomp::pidfd_open_raw(std::process::id() as libc::pid_t),
+            Err(libc::EPERM),
+            "staging broken (pidfd_open not denied?)"
+        );
+        // Gate-negative leg.
+        assert!(
+            !pidfd_grab_capable(),
+            "RED: gate must report incapable under pidfd denial"
+        );
+        eprintln!("R22017-GATE-INCAPABLE");
+        let (read, write) = std::io::pipe().expect("collection pipe");
+        let read_fd = read.as_raw_fd();
+        let holder = std::process::Command::new("/bin/sleep")
+            .arg("900")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(write))
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("holder spawns");
+        let hpid = holder.id() as libc::pid_t;
+        let mut hguard = FixtureGuard::new(hpid);
+        let htick = proc_starttime(hpid)
+            .expect("holder stat readable")
+            .expect("holder visible");
+        println!("R22017-HOLDER {hpid} {htick}");
+        std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
+        let want = collection_pipe_ids(Some(read_fd), None);
+        assert!(!want.is_empty(), "collection pipe must identify");
+        let fds = std::fs::read_dir(format!("/proc/{hpid}/fd")).expect("holder fd table readable");
+        let mut slot = None;
+        for entry in fds.flatten() {
+            if entry.file_name().to_string_lossy() == "1" {
+                slot = Some(entry);
+                break;
+            }
+        }
+        let slot = slot.expect("holder slot 1 present");
+        // Unresolved legs (the strict probe + bool fold
+        // under global denial).
+        assert_eq!(
+            fd_holds_wanted_write_end_strict(&slot, hpid, &want, None),
+            None,
+            "RED: denied probe must stay unresolved (never grant, never false-deny)"
+        );
+        eprintln!("R22017-PROBE-NONE");
+        assert!(
+            !fd_holds_wanted_write_end(&slot, hpid, &want, None),
+            "denied fold must stay unattributed (false)"
+        );
+        eprintln!("R22017-FOLD-FALSE");
+        // Cleanup under denial: numeric kill + reap by
+        // number (own unreaped child — no pidfd needed),
+        // then disarm (pidfd-based drop must not run).
+        // SAFETY: SIGKILL to our own unreaped child.
+        assert_eq!(
+            unsafe { libc::kill(hpid, libc::SIGKILL) },
+            0,
+            "holder signaled"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut reaped = None;
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG reap of our own killed child.
+            if unsafe { libc::waitpid(hpid, &mut st, libc::WNOHANG) } == hpid {
+                reaped = Some(st);
+            }
+            if proc_starttime(hpid) != Ok(Some(htick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "holder must drain");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let st = reaped.expect("holder status must drain to us");
+        assert!(libc::WIFSIGNALED(st), "holder must die by our signal");
+        hguard.disarm();
+        let _ = holder;
+        eprintln!("R22017-DONE");
+    }
+
+    /// R22-017 global-denial regression wrapper: the probe
+    /// runs fresh-image (seccomp is irreversible) and
+    /// green-lights the unresolved legs in a
+    /// globally-denied env (no capability gate HERE —
+    /// this test must RUN, not skip, where pidfd is
+    /// gone). Wrapper-side custody (printed birth,
+    /// tick-gated) backstops a staging panic before the
+    /// probe's disarm; it no-ops on the clean path (the
+    /// probe self-reaps).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pidfd_globally_denied_probe_stays_unresolved() {
+        if std::env::var("SCOPEBASE_R22017_DENIED").is_ok() {
+            pidfd_globally_denied_probe_stays_unresolved_probe();
+            return;
+        }
+        let outcome = run_fresh_probe_collect(
+            "SCOPEBASE_R22017_DENIED",
+            "pidfd_globally_denied_probe_stays_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&outcome.out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&outcome.out.stderr).into_owned();
+        // Backstop custody (optional line: the probe may
+        // die before staging — e.g. the gate-negative
+        // RED — in which case nothing needs draining and
+        // the verdicts below surface the probe's
+        // failure).
+        if let Some((hpid, htick)) = stdout.lines().find_map(|line| {
+            let rest = line.strip_prefix("R22017-HOLDER ")?;
+            let (pid, tick) = rest.split_once(' ')?;
+            let pid: libc::pid_t = pid.parse().ok()?;
+            let tick: u64 = tick.parse().ok()?;
+            Some((pid, tick))
+        }) {
+            kill_tick_gated(hpid, htick);
+            assert!(
+                await_proc_gone_reaping(hpid, htick, std::time::Duration::from_secs(5)),
+                "wrapper must drain the holder"
+            );
+        }
+        assert!(!outcome.timed_out, "probe must complete\n{stderr}");
+        assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
+        assert!(
+            stderr.contains("R22017-GATE-INCAPABLE"),
+            "probe must pin gate-incapable\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22017-PROBE-NONE"),
+            "probe must pin strict-None\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22017-FOLD-FALSE"),
+            "probe must pin fold-false\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22017-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R22-017 wiring audit: every direct-probe-positive
+    /// test calls the capability gate (a refactor that
+    /// drops a gate call fails here instead of failing
+    /// locked runners in setup). The ten: R21-004 ×2
+    /// (direct Some(false)/Some(true)), R19-006 ×2
+    /// (discovery attribution halves), bigtable (R21-013;
+    /// Holds/Shed controls), R21-003 + R22-010/011 frame
+    /// tests ×5 (pre-prove Holds + Holds cells).
+    #[test]
+    fn pidfd_capability_gates_wired() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let audit_rs = std::fs::read_to_string(root.join("src/fixture/linux/audit.rs"))
+            .expect("audit.rs readable");
+        for name in [
+            "alternating_slot_never_grants_write",
+            "pidfd_unavailable_probe_stays_unresolved",
+            "discovery_verifies_slot_across_mode_read",
+            "discovery_mode_reread_excludes_same_pipe_end_swap",
+            "reverify_budget_bounds_bigtable_and_reports",
+            "retire_frame_shed_during_snapshot_survives",
+            "retire_frame_shed_first_writer_second_retires_writer",
+            "retire_frame_expired_deadline_entry_kills_nothing",
+            "retire_frame_exhausted_screen_remainder_kills_nothing",
+            "retire_frame_screen_spends_aggregate_across_family",
+        ] {
+            let head = format!("    fn {name}(");
+            let start = audit_rs
+                .find(&head)
+                .unwrap_or_else(|| panic!("gated test {name} must exist (anti-vacuity)"));
+            let rest = &audit_rs[start..];
+            let tail = rest[head.len()..].find("\n    fn ").unwrap_or_else(|| {
+                panic!("gated test {name} body must end at a sibling fn (anti-vacuity)")
+            });
+            let body = &rest[..head.len() + tail];
+            assert!(
+                body.len() > 500,
+                "gated test {name} body implausibly small (extraction broken?)"
+            );
+            assert!(
+                body.contains("pidfd_grab_capable()"),
+                "RED: gated test {name} must call pidfd_grab_capable()"
+            );
+        }
     }
 
     /// R19-009: pipe-holder discovery is budgeted — the walk
@@ -26877,10 +27415,28 @@ time.sleep(30)
     fn reverify_budget_bounds_bigtable_and_reports() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the Holds/Shed controls are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         if !staged_probe_python3() {
             eprintln!("skip: python3 unavailable");
             return;
         }
+        // R22-013: serialize with the discovery population
+        // (R19-009 precedent — one-sided exclusion is
+        // broken: our 150k table would otherwise overlap
+        // `discovery_scan_budget_truncates_loud`'s
+        // default-budget complete-discovery assert and
+        // truncate its scan). Bound first (drops last —
+        // every holder/guard below dies before release)
+        // and held for the holders' whole lifetime.
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Collection pipe: we keep the READ end; one KNOWN
         // writer holds the write end.
         let (read, write) = std::io::pipe().expect("collection pipe");
@@ -27126,6 +27682,62 @@ time.sleep(30)
         drop(writer);
         let _ = std::fs::remove_file(&flag_count);
         let _ = std::fs::remove_file(&flag_big);
+    }
+
+    /// R22-013: the bigtable regression stages its 150k
+    /// fd-holder under `DISCOVERY_POPULATION_SERIAL`
+    /// (bound before the first spawn, held to fn end —
+    /// the R19-009 precedent): without it the holder's
+    /// table overlaps
+    /// `discovery_scan_budget_truncates_loud`'s
+    /// default-budget complete-discovery assert
+    /// (one-sided exclusion is broken — the holder must
+    /// serialize too, not just the control). Structural
+    /// pin (a behavioral overlap race is nondeterministic
+    /// by nature — the suite-green pairing of both tests
+    /// is the behavioral leg): the bigtable body must
+    /// bind `_pop` from the serial BEFORE the first
+    /// holder spawn and never drop it early (held-to-end
+    /// covers the holders' whole lifetime — guards and
+    /// explicit kills all land before fn end, and `_pop`
+    /// is declared first so it drops last). RED: no
+    /// acquisition in the body.
+    #[test]
+    fn bigtable_holder_serial_exclusion_audited() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let audit_rs = std::fs::read_to_string(root.join("src/fixture/linux/audit.rs"))
+            .expect("audit.rs readable");
+        let head = "    fn reverify_budget_bounds_bigtable_and_reports() {";
+        let start = audit_rs
+            .find(head)
+            .expect("bigtable test must exist (anti-vacuity)");
+        let rest = &audit_rs[start..];
+        let tail = rest[head.len()..]
+            .find("\n    fn ")
+            .expect("bigtable body must end at a sibling fn (anti-vacuity)");
+        let body = &rest[..head.len() + tail];
+        assert!(
+            body.len() > 3000,
+            "bigtable body implausibly small (extraction broken?)"
+        );
+        assert!(
+            body.contains("stage_holder(\"big\""),
+            "bigtable body must stage the 150k holder (anti-vacuity)"
+        );
+        let acquire = body
+            .find("_pop = DISCOVERY_POPULATION_SERIAL")
+            .expect("RED: bigtable must acquire DISCOVERY_POPULATION_SERIAL");
+        let first_spawn = body
+            .find("stage_holder(\"count\"")
+            .expect("bigtable body must stage the count holder (anti-vacuity)");
+        assert!(
+            acquire < first_spawn,
+            "RED: serial must be bound BEFORE the first holder spawn"
+        );
+        assert!(
+            !body.contains("drop(_pop"),
+            "serial must be held to fn end (never dropped early)"
+        );
     }
 
     /// R21-002(a) outage probe (fresh image only — the
@@ -27383,6 +27995,13 @@ time.sleep(30)
         use std::io::{Read as _, Write as _};
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the pre-prove/Cell-2 Holds positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         // Cell 1: the shedder. sh holds the target write
         // end on fd 1; the first snapshot call hands it a
         // control byte, it closes fd 1 (the shed), echoes
@@ -27542,6 +28161,13 @@ time.sleep(30)
         use std::io::{Read as _, Write as _};
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the pre-prove Holds positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         let (target_read, target_write) = std::io::pipe().expect("target pipe");
         let target_fd = target_read.as_raw_fd();
         let root_out = target_write.try_clone().expect("root clone");
@@ -27690,6 +28316,13 @@ time.sleep(30)
     fn retire_frame_expired_deadline_entry_kills_nothing() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the pre-prove Holds positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         let (target_read, target_write) = std::io::pipe().expect("target pipe");
         let target_fd = target_read.as_raw_fd();
         let holder = std::process::Command::new("/bin/sleep")
@@ -27764,6 +28397,13 @@ time.sleep(30)
     fn retire_frame_exhausted_screen_remainder_kills_nothing() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the pre-prove Holds positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         let (target_read, target_write) = std::io::pipe().expect("target pipe");
         let target_fd = target_read.as_raw_fd();
         let holder = std::process::Command::new("/bin/sleep")
@@ -27848,6 +28488,13 @@ time.sleep(30)
     fn retire_frame_screen_spends_aggregate_across_family() {
         use std::os::unix::io::AsRawFd as _;
         use std::time::{Duration, Instant};
+        // R22-017: pidfd-grab capability gate (skip loud
+        // when the pre-prove Holds positives are
+        // unverifiable).
+        if !pidfd_grab_capable() {
+            eprintln!("skip: pidfd grab unavailable (Yama/deny-profile/old kernel)");
+            return;
+        }
         fn hit_position(pid: libc::pid_t, target: &str) -> Option<usize> {
             for (position, entry) in std::fs::read_dir(format!("/proc/{pid}/fd"))
                 .ok()?
@@ -28869,7 +29516,11 @@ time.sleep(30)
     /// fcntl. Fresh-image probes clamped to 4999 / 5000 /
     /// 6000. RED: the 5000 probe panics in the fcntl
     /// assert. GREEN: 4999 and 5000 cite the skip, 6000
-    /// stages fd ≥ 5000.
+    /// stages fd ≥ 5000. R22-018: each cell is
+    /// attainability-gated on OUR hard cap first —
+    /// raising hard is EPERM, so a clamp above hard is
+    /// REPORTED unattainable, never attempted (no raising
+    /// anywhere, no setup panic on constrained runners).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn high_fd_gate_boundary_5000_skips() {
@@ -28885,7 +29536,23 @@ time.sleep(30)
             }
             return;
         }
+        // R22-018: our hard cap bounds every cell (raising
+        // hard is EPERM — a clamp above it is reported,
+        // never attempted).
+        let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+            0,
+            "own hard cap readable"
+        );
+        let hard = rlim.rlim_max;
         for (clamp, staged) in [(4999u64, false), (5000, false), (6000, true)] {
+            if hard < clamp {
+                eprintln!(
+                    "R21015-UNATTAINABLE clamp={clamp} hard={hard} (runner cap cannot reach this cell — reported, not staged)"
+                );
+                continue;
+            }
             let exe = std::env::current_exe().expect("own test binary");
             let mut cmd = std::process::Command::new(exe);
             cmd.arg("--exact")
@@ -28931,6 +29598,74 @@ time.sleep(30)
                 );
             }
         }
+    }
+
+    /// R22-018: launch the boundary test itself with low
+    /// soft+hard NOFILE (≤1024 — absolute, so this
+    /// deterministically forces the EPERM shape even on a
+    /// generous host): every cell clamp (4999/5000/6000)
+    /// exceeds the runner hard cap, so each cell must
+    /// REPORT unattainable (no setup panic, the boundary
+    /// test passes). RED (pre-fix: the wrapper's
+    /// pre_exec raise attempt fails EPERM and
+    /// `output().expect` panics in setup). No probe body
+    /// ever runs here (all cells gated) — absence of
+    /// STAGED/SKIPPED markers pins that.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn high_fd_gate_boundary_unattainable_cells_reported() {
+        use std::os::unix::process::CommandExt as _;
+        // Our hard cap (lower-or-keep only below — never
+        // raised, even in the child).
+        let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) },
+            0,
+            "own hard cap readable"
+        );
+        let target = rlim.rlim_max.min(1024);
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--exact")
+            .arg("fixture::linux::audit::tests::high_fd_gate_boundary_5000_skips")
+            .arg("--nocapture")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: setrlimit on the child pre-exec (lower-or-keep —
+        // target ≤ our hard by construction).
+        unsafe {
+            cmd.pre_exec(move || {
+                let lim = libc::rlimit {
+                    rlim_cur: target,
+                    rlim_max: target,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &lim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let out = cmd.output().expect("constrained boundary child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "RED: constrained boundary test must pass (cells reported, not panicked)\n{stderr}"
+        );
+        for clamp in [4999, 5000, 6000] {
+            assert!(
+                stderr.contains(&format!("R21015-UNATTAINABLE clamp={clamp}")),
+                "clamp {clamp} must report unattainable\n{stderr}"
+            );
+        }
+        assert!(
+            !stderr.contains("R21015-STAGED"),
+            "no cell may stage under the constraint\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("R21015-SKIPPED"),
+            "no probe body may run under the constraint\n{stderr}"
+        );
     }
 
     /// R19-007: a fork-only inheritor must not be murdered at

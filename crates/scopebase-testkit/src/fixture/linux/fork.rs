@@ -1125,15 +1125,21 @@ mod tests {
         );
         assert!(fork_keys.len() >= 5, "fork scan-key set implausibly small");
         assert!(twin_keys.len() >= 5, "twin scan-key set implausibly small");
-        for key in fork_keys.intersection(&audit_keys) {
-            panic!("fork scan key {key} collides with an audit sleep argv (re-key repo-wide)");
-        }
-        for key in twin_keys.intersection(&audit_keys) {
-            panic!("twin scan key {key} collides with an audit sleep argv (re-key repo-wide)");
-        }
-        for key in fork_keys.intersection(&twin_keys) {
-            panic!("scan key {key} shared by fork lib + toolchain twin (re-key repo-wide)");
-        }
+        let fork_audit_dupes: Vec<_> = fork_keys.intersection(&audit_keys).collect();
+        assert!(
+            fork_audit_dupes.is_empty(),
+            "fork scan keys {fork_audit_dupes:?} collide with audit sleep argv (re-key repo-wide)"
+        );
+        let twin_audit_dupes: Vec<_> = twin_keys.intersection(&audit_keys).collect();
+        assert!(
+            twin_audit_dupes.is_empty(),
+            "twin scan keys {twin_audit_dupes:?} collide with audit sleep argv (re-key repo-wide)"
+        );
+        let fork_twin_dupes: Vec<_> = fork_keys.intersection(&twin_keys).collect();
+        assert!(
+            fork_twin_dupes.is_empty(),
+            "scan keys {fork_twin_dupes:?} shared by fork lib + toolchain twin (re-key repo-wide)"
+        );
     }
 
     /// R22-019: one allocator-hammer body (CPU + allocator
