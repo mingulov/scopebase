@@ -4834,6 +4834,27 @@ fn retire_tick_gated_toolchain_child(pid: i32, tick: u64) -> bool {
     }
 }
 
+/// R22-003(a): birth-custody tail — skip when already
+/// retired, else gated retire + WNOHANG-only (never a
+/// blind `Child::kill` + BLOCKING `Child::wait` on a
+/// possibly-stale handle: after the guard raw-reaped, the
+/// number may host a live recycled child (kill murders) or
+/// a zombie one (blocking wait steals its status — or
+/// wedges on a live recycler)). `retired` is the custody
+/// verdict (skip needs no re-verification — our birth gone
+/// means nothing of ours to clean, ever); the unretired
+/// arm re-verifies by tick inside the gated retire
+/// (belt-and-braces over the single-waiter pin). Loud on
+/// the unretired arm (RED-path-only evidence).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn retire_tail_unless_retired(pid: i32, tick: u64, retired: bool, what: &str) {
+    if retired {
+        return;
+    }
+    eprintln!("{what}: tail retiring unretired fixture {pid}");
+    let _ = retire_tick_gated_toolchain_child(pid, tick);
+}
+
 /// R15-004: birth-tick pin with transient retry — a single
 /// EMFILE-class blip at guard construction must not leave the
 /// guard unpinned (an unpinned drop murders a recycled
@@ -7668,7 +7689,7 @@ fn expected_pin_refusal_preserves_zombie_owned_child() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn birth_custody_cleans_failed_first_observation_probe() {
     // Phase (a): pinned guard, injected failure.
-    let mut child = std::process::Command::new("/bin/sleep")
+    let child = std::process::Command::new("/bin/sleep")
         .arg("923")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -7713,13 +7734,12 @@ fn birth_custody_cleans_failed_first_observation_probe() {
         panic!("R20010 injected post-guard failure");
     }));
     let gone_a = custody_retired_or_fail(pid, tick, "phase (a) fixture");
-    let _ = child.kill();
-    let _ = child.wait();
+    retire_tail_unless_retired(pid, tick, gone_a, "phase (a) tail");
     assert!(failed.is_err(), "phase (a) must inject the failure");
     assert!(gone_a, "phase (a) unwind must retire the fixture");
     // Phase (b): unpinned guard under EMFILE, failing read.
     let _confined = confine_fd_table_for_exhaustion();
-    let mut child2 = std::process::Command::new("/bin/sleep")
+    let child2 = std::process::Command::new("/bin/sleep")
         .arg("924")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -7746,8 +7766,7 @@ fn birth_custody_cleans_failed_first_observation_probe() {
     }));
     drop(held);
     let gone_b = custody_retired_or_fail(pid2, tick2, "phase (b) fixture");
-    let _ = child2.kill();
-    let _ = child2.wait();
+    retire_tail_unless_retired(pid2, tick2, gone_b, "phase (b) tail");
     assert!(failed2.is_err(), "phase (b) observation must fail");
     assert!(gone_b, "phase (b) unwind must retire the fixture");
     eprintln!("R20010-BIRTH-CUSTODY-DONE");
@@ -9468,6 +9487,269 @@ fn hung_and_exited_branches_refuse_discharged_numbers() {
         }
         squatter_guard.disarm();
     }
+}
+
+/// R22-003(a) plants (toolchain twin, steered — vacuous
+/// under contention): the tail helper must never touch a
+/// recycled number — a live plant survives unsignaled
+/// (settled-spared) and a zombie plant's status stays with
+/// its owner, under BOTH retired flags (true skips at the
+/// verdict gate; false re-verifies by tick inside the
+/// gated retire — both layers proven on one staging each).
+/// RED (neuter: unconditional kill + WNOHANG waitpid —
+/// murder + steal). Duration 969 (staging) is unique to
+/// this test (plants are steered sleep-31 standins).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn tail_helper_skips_recycled_numbers() {
+    use std::time::{Duration, Instant};
+    let _hold = match steer_hold() {
+        Some(hold) => hold,
+        None => {
+            eprintln!("R22003a: vacuous (no reuse control)");
+            return;
+        }
+    };
+    // Stage: spawn, retire OUR birth explicitly (number
+    // freed), steer a plant onto it. Returns the freed
+    // number + original tick + plant parts, or None when
+    // vacuous.
+    macro_rules! stage_plant {
+        ($leg:expr, $zombie:expr) => {{
+            let mut birth = std::process::Command::new("/bin/sleep")
+                .arg("969")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("birth spawns");
+            let pid = birth.id() as i32;
+            let tick = task_starttime_checked(pid)
+                .expect("birth stat readable")
+                .expect("birth visible");
+            let _ = birth.kill();
+            let start = Instant::now();
+            loop {
+                match birth.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!("R22003a-{}: birth must reap", $leg);
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("R22003a-{}: wait failed: {error:?}", $leg),
+                }
+            }
+            let mut plant = match steer_sleep_onto(pid, false) {
+                Some(kid) => kid,
+                None => {
+                    eprintln!("R22003a-{}: vacuous (plant contended)", $leg);
+                    return;
+                }
+            };
+            let mut guard = SilentChildGuard::new(pid);
+            let ptick = match task_starttime_checked(pid) {
+                Ok(Some(tick)) => tick,
+                _ => {
+                    let _ = plant.kill();
+                    let _ = plant.wait();
+                    guard.disarm();
+                    eprintln!("R22003a-{}: vacuous (plant unreadable)", $leg);
+                    return;
+                }
+            };
+            if ptick == tick {
+                let _ = plant.kill();
+                let _ = plant.wait();
+                guard.disarm();
+                eprintln!("R22003a-{}: vacuous (same-tick retake — S100)", $leg);
+                return;
+            }
+            if $zombie {
+                assert!(
+                    settle_replacement_zombie(&mut plant, pid),
+                    "R22003a-{}: staging broken (plant never zombified)",
+                    $leg
+                );
+            }
+            (pid, tick, plant, guard, ptick)
+        }};
+    }
+    // Live leg: both flags skip, plant unsignaled.
+    {
+        let (pid, tick, mut plant, mut guard, ptick) = stage_plant!("live", false);
+        retire_tail_unless_retired(pid, tick, true, "R22003a-live");
+        retire_tail_unless_retired(pid, tick, false, "R22003a-live");
+        assert!(settle_spared(pid), "R22003a-live: plant murdered?!");
+        assert_eq!(
+            task_starttime_checked(pid).expect("plant readable"),
+            Some(ptick),
+            "R22003a-live: plant birth must persist"
+        );
+        let _ = plant.kill();
+        let _ = plant.wait();
+        guard.disarm();
+    }
+    // Zombie leg: both flags skip, owner retains.
+    {
+        let (pid, tick, mut plant, mut guard, _ptick) = stage_plant!("zombie", true);
+        retire_tail_unless_retired(pid, tick, true, "R22003a-zombie");
+        retire_tail_unless_retired(pid, tick, false, "R22003a-zombie");
+        match plant.try_wait() {
+            Ok(Some(status)) => assert!(
+                !status.success(),
+                "R22003a-zombie: plant must be our SIGKILLed zombie"
+            ),
+            other => panic!("R22003a-zombie: status stolen?! got {other:?}"),
+        }
+        guard.disarm();
+    }
+}
+
+/// R22-003(a) working path (toolchain twin, no steering —
+/// always runs): the tail helper still retires a live
+/// unretired birth (gated kill + bounded WNOHANG reap —
+/// prompt, gone after). RED (neuter: the unretired arm
+/// no-ops — the birth survives). Duration 970 is unique to
+/// this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn tail_helper_retires_live_birth() {
+    use std::time::{Duration, Instant};
+    let birth = std::process::Command::new("/bin/sleep")
+        .arg("970")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("birth spawns");
+    let pid = birth.id() as i32;
+    let mut guard = SilentChildGuard::new(pid);
+    let tick = task_starttime_checked(pid)
+        .expect("birth stat readable")
+        .expect("birth visible");
+    let start = Instant::now();
+    retire_tail_unless_retired(pid, tick, false, "R22003a-working");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "R22003a-working: retire must be prompt"
+    );
+    assert!(
+        await_task_gone_reaping(pid, tick, Duration::from_secs(1)),
+        "R22003a-working: birth must drain"
+    );
+    // The gated retire reaped via raw waitpid — the handle
+    // is stale (ECHILD); drop it without waiting.
+    drop(birth);
+    guard.disarm();
+}
+
+/// R22-003(a) wedge demo (toolchain twin, steered —
+/// vacuous under contention): the OLD tail shape (blocking
+/// wait on the stale number after the guard raw-reaped +
+/// the number recycled to a live our-child) WEDGES — a
+/// scoped thread parked in raw blocking waitpid is still
+/// blocked after 2s (the sleeper lives ~15min; a prompt
+/// tail returns in ms). The join then proves the waitpid
+/// was genuinely parked on our number (it reaps the plant
+/// — the steal half), while the NEW tail is prompt AND
+/// harmless on the same live recycler. DEMO (always
+/// passes — it locks the defect mechanism, not the fix;
+/// the fix is locked by the skip/working tests above).
+/// Duration 974 (birth) is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn tail_blocking_wait_wedges_on_live_recycler() {
+    use std::time::{Duration, Instant};
+    let _hold = match steer_hold() {
+        Some(hold) => hold,
+        None => {
+            eprintln!("R22003a-wedge: vacuous (no reuse control)");
+            return;
+        }
+    };
+    let mut birth = std::process::Command::new("/bin/sleep")
+        .arg("974")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("birth spawns");
+    let pid = birth.id() as i32;
+    let tick = task_starttime_checked(pid)
+        .expect("birth stat readable")
+        .expect("birth visible");
+    let _ = birth.kill();
+    let start = Instant::now();
+    loop {
+        match birth.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(5) {
+                    panic!("R22003a-wedge: birth must reap");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("R22003a-wedge: wait failed: {error:?}"),
+        }
+    }
+    drop(birth);
+    let mut plant = match steer_sleep_onto(pid, false) {
+        Some(kid) => kid,
+        None => {
+            eprintln!("R22003a-wedge: vacuous (plant contended)");
+            return;
+        }
+    };
+    let mut guard = SilentChildGuard::new(pid);
+    match task_starttime_checked(pid) {
+        Ok(Some(ptick)) if ptick != tick => {}
+        _ => {
+            let _ = plant.kill();
+            let _ = plant.wait();
+            guard.disarm();
+            eprintln!("R22003a-wedge: vacuous (plant unreadable/same-tick)");
+            return;
+        }
+    }
+    // OLD shape: blocking wait on the stale number (what
+    // `Child::wait` does once the status was consumed
+    // externally — waitpid(number, 0) on the live recycler).
+    let wedged = std::thread::spawn(move || {
+        let mut status = 0;
+        // SAFETY: blocking reap of the staged live plant
+        // (the demo's whole point — joined below).
+        let got = unsafe { libc::waitpid(pid, &mut status, 0) };
+        (got, status)
+    });
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !wedged.is_finished(),
+        "R22003a-wedge: old blocking wait returned?! (wedge not demonstrated)"
+    );
+    eprintln!("R22003a-wedge: old shape still blocked after 2s (wedge proved)");
+    // NEW shape on the SAME live recycler: prompt + harmless.
+    let start = Instant::now();
+    retire_tail_unless_retired(pid, tick, true, "R22003a-wedge");
+    retire_tail_unless_retired(pid, tick, false, "R22003a-wedge");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "R22003a-wedge: new tail must be prompt"
+    );
+    assert!(settle_spared(pid), "R22003a-wedge: plant murdered?!");
+    // Release the wedge: the parked waitpid reaps the plant
+    // (proving it was genuinely parked on our number — the
+    // steal half of the old shape's harm).
+    let _ = plant.kill();
+    let (got, _status) = wedged.join().expect("wedge thread joins");
+    assert_eq!(got, pid, "R22003a-wedge: waitpid must reap our plant");
+    assert!(
+        plant.try_wait().is_err(),
+        "R22003a-wedge: status must have gone to the parked wait (ECHILD here)"
+    );
+    drop(plant);
+    guard.disarm();
 }
 
 /// R19-014 (toolchain twin): sensitivity lock — the shared

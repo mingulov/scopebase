@@ -10103,6 +10103,150 @@ mod tests {
         panic!("{mode}: no parsable `{prefix}` line\n{stderr}");
     }
 
+    /// R22-003(c): children of `pid` (pids from
+    /// /proc/{pid}/task/{pid}/children; None when unreadable
+    /// (exited or outage — unverifiable, never assumed
+    /// empty) or unparseable (fail-closed)).
+    #[cfg(target_arch = "x86_64")]
+    fn proc_children(pid: libc::pid_t) -> Option<Vec<libc::pid_t>> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+        let mut kids = Vec::new();
+        for word in text.split_whitespace() {
+            kids.push(word.parse().ok()?);
+        }
+        Some(kids)
+    }
+
+    /// R22-003(c): gated cleanup for a faulted placement
+    /// pair that FAILED its drainage check — every kill
+    /// gated on re-verified distinguishing evidence, loud
+    /// skip where unverifiable (the old blind kills assumed
+    /// "check failed ⟹ never retired ⟹ unreaped" — S100
+    /// -unsound: retired-then-same-tick-squatted ALSO fails
+    /// the check (same-tick reads as still-ours), and
+    /// outage-Err fails with the pair possibly
+    /// retired+recycled — the blind waitpid-probe then
+    /// murdered a sibling live recycler (probe 0) or stole
+    /// a squatter zombie's status, and the blind fm2 kill
+    /// murdered its number's occupant). Decision procedure:
+    /// fm1 (middleman, our child): tick re-read —
+    /// mismatch/gone/unreadable skips loud (not ours); match
+    /// needs children CONTAINING (fm2, ft2) (our grandchild
+    /// present — decisive: a same-tick sleeper-squatter is
+    /// childless, and a squatter-with-children doesn't host
+    /// OUR grandchild) — proven ⟹ kill fm1, else skip loud
+    /// (same-tick-squatter-or-childless-ours — unverifiable;
+    /// state-gating was considered and REJECTED — a
+    /// SIGSTOP'd squatter-sleeper defeats it, and STOP
+    /// tails exist in-suite (R21-008)). fm2 (grandchild,
+    /// init's): only when fm1 proven — tick + ppid==fm1 ⟹
+    /// kill (killed BEFORE fm1 — killing the parent first
+    /// would orphan fm2 and break the parentage proof);
+    /// else skip loud (parentage through an unproven number
+    /// proves nothing). Reap fm1 ONLY when proven-ours (a
+    /// squatter-zombie's status belongs to its owner —
+    /// our ambiguous zombie leaks to process exit:
+    /// leak-vs-steal ⟹ leak). Kills are plain tick-gated
+    /// (suite-consistent µs-TOCTOU class — pidfd would make
+    /// this stricter than all ~50 sibling kills; no libc
+    /// binding exists anyway). Never panics (cleanup
+    /// context — the oracle panics after).
+    #[cfg(target_arch = "x86_64")]
+    fn retire_faulted_pair_cleanup(fm1: libc::pid_t, ft1: u64, fm2: libc::pid_t, ft2: u64) {
+        use std::time::{Duration, Instant};
+        let fm1_proven = match proc_starttime(fm1) {
+            Ok(Some(now)) if now == ft1 => match proc_children(fm1) {
+                Some(kids)
+                    if kids
+                        .iter()
+                        .any(|kid| *kid == fm2 && proc_starttime(fm2) == Ok(Some(ft2))) =>
+                {
+                    true
+                }
+                Some(kids) => {
+                    eprintln!(
+                        "R22003c: fm1 {fm1} tick-matched but children {kids:?} lack \
+                         (fm2 {fm2}, ft2 {ft2}) — kill skipped \
+                         (same-tick-squatter-or-childless-ours, unverifiable)"
+                    );
+                    false
+                }
+                None => {
+                    eprintln!(
+                        "R22003c: fm1 {fm1} children unreadable — kill skipped (unverifiable)"
+                    );
+                    false
+                }
+            },
+            Ok(_) => {
+                eprintln!("R22003c: fm1 {fm1} tick-mismatch/gone — kill skipped (not ours)");
+                false
+            }
+            Err(error) => {
+                eprintln!(
+                    "R22003c: fm1 {fm1} unreadable ({error:?}) — kill skipped (unverifiable)"
+                );
+                false
+            }
+        };
+        let fm2_proven = if fm1_proven {
+            match proc_ppid_and_starttime(fm2) {
+                Ok(Some((ppid, now))) if ppid == fm1 && now == ft2 => true,
+                Ok(_) => {
+                    eprintln!(
+                        "R22003c: fm2 {fm2} parentage/tick not-ours — kill skipped (proves nothing)"
+                    );
+                    false
+                }
+                Err(error) => {
+                    eprintln!(
+                        "R22003c: fm2 {fm2} unreadable ({error:?}) — kill skipped (unverifiable)"
+                    );
+                    false
+                }
+            }
+        } else {
+            eprintln!(
+                "R22003c: fm2 {fm2} skipped (parent unproven — parentage through an unproven number proves nothing)"
+            );
+            false
+        };
+        // Child before parent (killing fm1 first would orphan
+        // fm2 and break the proof just made).
+        if fm2_proven {
+            // SAFETY: birth- + parentage-proven (parent proven above).
+            unsafe {
+                libc::kill(fm2, libc::SIGKILL);
+            }
+        }
+        if fm1_proven {
+            // SAFETY: birth- + containment-proven own child.
+            unsafe {
+                libc::kill(fm1, libc::SIGKILL);
+            }
+        }
+        if !fm1_proven {
+            eprintln!(
+                "R22003c: fm1 {fm1} reap skipped (unproven — a squatter-zombie's status belongs to its owner)"
+            );
+            return;
+        }
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG reap of the proven-own child.
+            let got = unsafe { libc::waitpid(fm1, &mut st, libc::WNOHANG) };
+            if got != 0 {
+                return;
+            }
+            if Instant::now() >= end {
+                eprintln!("R22003c: fm1 {fm1} unreapable after SIGKILL (D-state?) — left for exit");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// R21-009: the faulted placement attempt's pair
     /// must have drained before the retry — birth-aware
     /// (gone or recycled proves the original drained; the
@@ -10111,10 +10255,19 @@ mod tests {
     /// orphaned grandchild asynchronously); an unreadable
     /// read fails loud (unverifiable, never a pass).
     /// No-op when no attempt faulted. Observe-before-cleanup:
-    /// on failure the pair is retired before re-raising
-    /// (the check failed ⟹ the fix never retired this pair
-    /// ⟹ m1 is our unreaped child, so m2's number is pinned
-    /// and the blind kill is sound) so RED runs stay clean.
+    /// on failure the gated cleanup above runs before
+    /// re-raising (each kill re-verified — retired-then
+    /// -recycled and outage-ambiguous pairs skip loud
+    /// instead of murdering) so RED runs stay clean where
+    /// provable. S100 note (accepted): a same-tick
+    /// squatter fails the check (reads as still-ours) even
+    /// though the pair drained — a false RED that needs
+    /// sub-jiffy steered reuse onto the exact number during
+    /// the 5s window (theoretical-only in-suite — no
+    /// steerer aims here; sequential wrap is slow) — while
+    /// passing childless would mask REAL childless-ours
+    /// strays (worse). The check stays as-is; the cleanup
+    /// never murders either way.
     #[cfg(target_arch = "x86_64")]
     fn assert_r21009_faulted_pair_drained(
         faulted: &std::cell::Cell<Option<(libc::pid_t, u64, libc::pid_t, u64)>>,
@@ -10145,32 +10298,7 @@ mod tests {
             }
         }));
         if outcome.is_err() {
-            // m1 is our unreaped child (nothing retired
-            // this pair) — probe-first for robustness.
-            let mut st = 0;
-            // SAFETY: WNOHANG probe of our own child.
-            if unsafe { libc::waitpid(fm1, &mut st, libc::WNOHANG) } == 0 {
-                // SAFETY: signal-only to the pinned grandchild.
-                unsafe {
-                    libc::kill(fm2, libc::SIGKILL);
-                }
-                // SAFETY: signal-only to our own child.
-                unsafe {
-                    libc::kill(fm1, libc::SIGKILL);
-                }
-            }
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                // SAFETY: WNOHANG reap of our own child.
-                let got = unsafe { libc::waitpid(fm1, &mut st, libc::WNOHANG) };
-                if got != 0 {
-                    break;
-                }
-                if std::time::Instant::now() >= end {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
+            retire_faulted_pair_cleanup(fm1, ft1, fm2, ft2);
             panic!("faulted placement pair stranded (must drain before retry) — see above");
         }
     }
@@ -15127,6 +15255,251 @@ mod tests {
             }
             squatter_guard.disarm();
         }
+    }
+
+    /// R22-003(c) always-runs (no steering): the gated
+    /// faulted-pair cleanup kills PROVEN pairs and skips
+    /// ambiguous ones. Working leg: a real middleman (sh
+    /// with a sleep child — ours) retires fully (both
+    /// killed, m1 reaped — GREEN pre-fix too (the old blind
+    /// kills were correct here): non-vacuity). Forged leg:
+    /// a live sleeper driven with its OWN tick forged as
+    /// the middleman birth (deterministic S100 simulation —
+    /// tick-match + childless + not-ours, exactly the
+    /// fn's view of a same-tick squatter; no jiffy racing)
+    /// → skipped loud, sleeper survives unsignaled.
+    /// Zombie leg: a pinned-ours zombie driven with its own
+    /// tick (the ambiguous case — ours-zombie vs
+    /// squatter-zombie indistinguishable) → skip (no kill,
+    /// no reap — leak-vs-steal ⟹ leak), owner retains.
+    /// RED (neuter: blind kills + unconditional reap —
+    /// murder + steal). Durations 971 (middleman's sleep),
+    /// 972 (forged sleeper), 973 (ambiguous zombie) are
+    /// unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn faulted_pair_cleanup_kills_proven_skips_ambiguous() {
+        use std::time::{Duration, Instant};
+        // Working leg: real middleman + grandchild (ours).
+        {
+            let m1 = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg("sleep 971 & wait")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("middleman spawns");
+            let fm1 = m1.id() as libc::pid_t;
+            let mut g1 = FixtureGuard::new(fm1);
+            let ft1 = proc_starttime(fm1)
+                .expect("middleman stat readable")
+                .expect("middleman visible");
+            // Discover the grandchild (m1's only child).
+            let (fm2, ft2) = {
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let kids = proc_children(fm1).unwrap_or_default();
+                    if kids.len() == 1 {
+                        let tick = proc_starttime(kids[0])
+                            .expect("grandchild stat readable")
+                            .expect("grandchild visible");
+                        break (kids[0], tick);
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "R22003c-working: staging broken (grandchild never appeared)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            };
+            let mut g2 = FixtureGuard::new(fm2);
+            let start = Instant::now();
+            retire_faulted_pair_cleanup(fm1, ft1, fm2, ft2);
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "R22003c-working: cleanup must be prompt"
+            );
+            assert!(
+                await_proc_gone_reaping(fm1, ft1, Duration::from_secs(1)),
+                "R22003c-working: middleman must drain"
+            );
+            assert!(
+                await_proc_gone_reaping(fm2, ft2, Duration::from_secs(5)),
+                "R22003c-working: grandchild must drain"
+            );
+            // m1 reaped via raw waitpid (handle stale);
+            // drop without waiting.
+            drop(m1);
+            g1.disarm();
+            g2.disarm();
+        }
+        // Forged leg: live sleeper + its own tick forged as
+        // the middleman birth (S100 simulation).
+        {
+            let mut sleeper = std::process::Command::new("/bin/sleep")
+                .arg("972")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("sleeper spawns");
+            let spid = sleeper.id() as libc::pid_t;
+            let mut guard = FixtureGuard::new(spid);
+            let stick = proc_starttime(spid)
+                .expect("sleeper stat readable")
+                .expect("sleeper visible");
+            retire_faulted_pair_cleanup(spid, stick, spid, stick);
+            assert!(settle_spared(spid), "R22003c-forged: sleeper murdered?!");
+            assert_eq!(
+                proc_starttime(spid).expect("sleeper readable"),
+                Some(stick),
+                "R22003c-forged: sleeper birth must persist"
+            );
+            let _ = sleeper.kill();
+            let _ = sleeper.wait();
+            guard.disarm();
+        }
+        // Zombie leg: pinned-ours zombie + its own tick
+        // (ambiguous — skip, owner retains).
+        {
+            let mut zombie = std::process::Command::new("/bin/sleep")
+                .arg("973")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("zombie spawns");
+            let zpid = zombie.id() as libc::pid_t;
+            let mut guard = FixtureGuard::new(zpid);
+            let ztick = proc_starttime(zpid)
+                .expect("zombie stat readable")
+                .expect("zombie visible");
+            let _ = zombie.kill();
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                if proc_state(zpid) == Some('Z') {
+                    break;
+                }
+                assert!(
+                    Instant::now() < end,
+                    "R22003c-zombie: staging broken (never zombified)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            retire_faulted_pair_cleanup(zpid, ztick, zpid, ztick);
+            // Still a zombie (not reaped — leak accepted),
+            // status with the owner (not stolen).
+            assert_eq!(
+                proc_state(zpid),
+                Some('Z'),
+                "R22003c-zombie: must stay unreaped (leak-vs-steal)"
+            );
+            match zombie.try_wait() {
+                Ok(Some(status)) => assert!(
+                    !status.success(),
+                    "R22003c-zombie: must be our SIGKILLed zombie"
+                ),
+                other => panic!("R22003c-zombie: status stolen?! got {other:?}"),
+            }
+            guard.disarm();
+        }
+    }
+
+    /// R22-003(c) steered (vacuous under contention):
+    /// retired-then-recycled numbers with DIFFERENT ticks
+    /// (the easy case — tick-mismatch) skip loud and both
+    /// live squatters survive unsignaled. RED (neuter: blind
+    /// kills murder both). Durations 974/975 (staging
+    /// births) are unique to this test (squatters are
+    /// steered sleep-31 standins).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn faulted_pair_cleanup_skips_recycled_numbers() {
+        use std::time::Duration;
+        let _hold = match steer_hold() {
+            Some(hold) => hold,
+            None => {
+                eprintln!("R22003c: vacuous (no reuse control)");
+                return;
+            }
+        };
+        macro_rules! stage_squatter {
+            ($leg:expr, $secs:expr) => {{
+                let mut birth = std::process::Command::new("/bin/sleep")
+                    .arg($secs)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("birth spawns");
+                let pid = birth.id() as libc::pid_t;
+                let tick = proc_starttime(pid)
+                    .expect("birth stat readable")
+                    .expect("birth visible");
+                let _ = birth.kill();
+                let start = std::time::Instant::now();
+                loop {
+                    match birth.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => {
+                            if start.elapsed() >= Duration::from_secs(5) {
+                                panic!("R22003c-{}: birth must reap", $leg);
+                            }
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("R22003c-{}: wait failed: {error:?}", $leg),
+                    }
+                }
+                let mut squatter = match steer_sleep_onto(pid, false) {
+                    Some(kid) => kid,
+                    None => {
+                        eprintln!("R22003c-{}: vacuous (squatter contended)", $leg);
+                        return;
+                    }
+                };
+                let mut guard = FixtureGuard::new(pid);
+                let squat_tick = match proc_starttime(pid) {
+                    Ok(Some(tick)) => tick,
+                    _ => {
+                        let _ = squatter.kill();
+                        let _ = squatter.wait();
+                        guard.disarm();
+                        eprintln!("R22003c-{}: vacuous (squatter unreadable)", $leg);
+                        return;
+                    }
+                };
+                if squat_tick == tick {
+                    let _ = squatter.kill();
+                    let _ = squatter.wait();
+                    guard.disarm();
+                    eprintln!("R22003c-{}: vacuous (same-tick retake — S100)", $leg);
+                    return;
+                }
+                (pid, tick, squatter, guard, squat_tick)
+            }};
+        }
+        let (p1, t1, mut s1, mut g1, st1) = stage_squatter!("fm1", "974");
+        let (p2, t2, mut s2, mut g2, st2) = stage_squatter!("fm2", "975");
+        retire_faulted_pair_cleanup(p1, t1, p2, t2);
+        assert!(settle_spared(p1), "R22003c-fm1: squatter murdered?!");
+        assert!(settle_spared(p2), "R22003c-fm2: squatter murdered?!");
+        assert_eq!(
+            proc_starttime(p1).expect("squatter readable"),
+            Some(st1),
+            "R22003c-fm1: squatter birth must persist"
+        );
+        assert_eq!(
+            proc_starttime(p2).expect("squatter readable"),
+            Some(st2),
+            "R22003c-fm2: squatter birth must persist"
+        );
+        let _ = s1.kill();
+        let _ = s1.wait();
+        let _ = s2.kill();
+        let _ = s2.wait();
+        g1.disarm();
+        g2.disarm();
     }
 
     /// R19-014: sensitivity lock — the shared verdict must
