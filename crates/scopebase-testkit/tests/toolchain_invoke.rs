@@ -11356,6 +11356,7 @@ fn group_observation_never_reaps_replacement_children() {
     };
     let mut publisher = spawn_self_grouped_publisher("960", "wait", &[]);
     let pubpid = publisher.id() as i32;
+    let mut _tpguard = SilentChildGuard::new(pubpid);
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
@@ -11364,7 +11365,6 @@ fn group_observation_never_reaps_replacement_children() {
     let pubtick = task_starttime_checked(pubpid)
         .expect("publisher stat readable")
         .expect("publisher visible");
-    let mut _tpguard = SilentChildGuard::new(pubpid);
     let mut _tsguard = SilentChildGuard::new_expected(stranger, stick);
     assert!(
         _tsguard.tick.is_some(),

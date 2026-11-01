@@ -25216,6 +25216,11 @@ mod tests {
             outcome: Option<(bool, libc::pid_t, u64)>,
             orphan_handle: Option<std::process::Child>,
             retake_handle: Option<std::process::Child>,
+            // R custody rides the handle (moved, never
+            // disarmed — zero-gap transfer: parked before
+            // ack, taken after the frame; any unwind in
+            // between drops it here and retires R).
+            retake_guard: Option<FixtureGuard>,
         }
         let shared = Arc::new(Mutex::new(Shared {
             ready: false,
@@ -25227,6 +25232,7 @@ mod tests {
             outcome: None,
             orphan_handle: None,
             retake_handle: None,
+            retake_guard: None,
         }));
         // Placement exclusion across the frame AND the
         // helper's steer+spawn (POSIX locks are per-process:
@@ -25247,7 +25253,7 @@ mod tests {
                 .spawn()
                 .expect("stray spawns");
             let pid = stray.id() as libc::pid_t;
-            let _hpguard = FixtureGuard::new(pid);
+            let mut _hpguard = FixtureGuard::new(pid);
             let tick = proc_starttime(pid)
                 .expect("stray stat readable")
                 .expect("stray visible");
@@ -25296,6 +25302,11 @@ mod tests {
             assert!(kill_tick_gated(pid, tick), "stray signaled");
             let _ = stray.wait();
             assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+            // P reaped — disarm BEFORE the retake (a
+            // same-tick S100 retake would otherwise match
+            // the pin and be murdered by the drop at
+            // helper return).
+            _hpguard.disarm();
             let outcome = if !audit_steer_next_pid_unlocked(pid) {
                 (false, -1, 0)
             } else {
@@ -25306,7 +25317,7 @@ mod tests {
                     .stderr(std::process::Stdio::null())
                     .spawn()
                     .expect("replacement spawns");
-                let mut _hrguard = FixtureGuard::new(retake.id() as libc::pid_t);
+                let _hrguard = FixtureGuard::new(retake.id() as libc::pid_t);
                 if retake.id() as libc::pid_t != pid {
                     let _ = retake.kill();
                     let _ = retake.wait();
@@ -25315,11 +25326,12 @@ mod tests {
                     let rtick = proc_starttime(pid)
                         .expect("replacement stat readable")
                         .expect("replacement visible");
-                    // Hit: custody transfers to the main
-                    // thread (it arms after the frame).
-                    _hrguard.disarm();
+                    // Hit: custody moves into shared
+                    // (taken by the main thread after the
+                    // frame — never disarmed, never gapped).
                     let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
                     s.retake_handle = Some(retake);
+                    s.retake_guard = Some(_hrguard);
                     (true, pid, rtick)
                 }
             };
@@ -25466,11 +25478,16 @@ mod tests {
                 return;
             }
         };
-        let _mrguard = FixtureGuard::new_expected(rpid, rtick);
-        assert!(
-            _mrguard.tick.is_some(),
-            "denied-reused probe: replacement birth pinned at handoff"
-        );
+        // Take R's parked custody (moved helper →
+        // shared → here; rides to fn end — the cleanup
+        // loops can timeout-break, so no disarm: gone
+        // silences the drop).
+        let _mrguard = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retake_guard
+            .take()
+            .expect("replacement guard transferred");
         if rtick == tick {
             // Same-tick retake (S100): untestable this run.
             let _ = kill_tick_gated(cpid, ctick);
