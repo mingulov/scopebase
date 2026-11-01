@@ -45,6 +45,11 @@
 //!   staging: hold the publisher pre-spawn, prove the
 //!   wrapper retires it before any sleeper can appear).
 //!   Unset env = no-op.
+//! Hook: SCOPEBASE_PUBLISHER_GARBAGE_PAIR=1 — print a
+//!   malformed pair line instead of the transmit (R23-011
+//!   regression staging: the receiver's parse panics; the
+//!   tree guard must still discharge both births). Unset
+//!   env = no-op.
 //! Hook: SCOPEBASE_PUBLISHER_FAULT_STEP=step — force the
 //!   named post-spawn step to fail (regression only: prove
 //!   each producer step fails loud + discharged). One of
@@ -363,10 +368,17 @@ fn main() {
         // Checked transmit (R21-007: the old `println!`
         // panicked on EPIPE past the Child handle — Drop
         // never killed. Now a broken stdout fails loud
-        // through the guard).
+        // through the guard). R23-011: GARBAGE_PAIR swaps
+        // in a malformed line (the stranger EXISTS —
+        // post-spawn — but the receiver's parse panics).
+        let line = if std::env::var("SCOPEBASE_PUBLISHER_GARBAGE_PAIR").is_ok() {
+            "not-a-pair".to_string()
+        } else {
+            format!("{pid} {tick}")
+        };
         {
             let mut out = std::io::stdout().lock();
-            if let Err(error) = writeln!(out, "{pid} {tick}") {
+            if let Err(error) = writeln!(out, "{line}") {
                 return Err(format!("stdout broken (receiver gone?): {error}"));
             }
             if let Err(error) = out.flush() {

@@ -244,6 +244,33 @@ fn stat_state_pgrp(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
     Some((state, pgrp))
 }
 
+/// R21-009: starttime read for the regression's
+/// birth-aware checks (fork-local — audit's helper is
+/// out of reach). `Ok(None)` is proven absence
+/// (ENOENT); anything else unreadable is `Err`.
+/// Parent scope (moved up for R23-019 — the jam
+/// birth-gate stakes m2's birth pre-tail; tests reach
+/// it via `super::*` as before).
+#[cfg(test)]
+fn fork_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
+    let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let after = text
+        .rsplit_once(") ")
+        .map(|pair| pair.1)
+        .ok_or_else(|| "comm shape".to_string())?;
+    after
+        .split_whitespace()
+        .nth(19)
+        .ok_or_else(|| "starttime field".to_string())?
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 /// R21-008: full retirement of a REPORTLESS middleman
 /// (m1, our unreaped child — the number is PINNED while
 /// unreaped, which anchors every group operation below).
@@ -515,32 +542,63 @@ pub unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(libc::pid_t, l
 /// (panics loud if m2 is not provably born — a jam without
 /// a born grandchild would be a VACUOUS retirement
 /// regression), then runs the production report-failure
-/// tail. Returns the helper result (None — the tail ran)
-/// plus m1 for the caller's INDEPENDENT reap proof
-/// (waitpid-ECHILD — the tail's own claim is not
-/// evidence). m2's pid stays unknown by design (the
-/// finding's contract — the caller proves m2's death by
-/// scanning for the unique sleep duration).
+/// R23-019: jammed-report outcome — the helper result
+/// plus the pre-tail birth observations (the gate proved
+/// both live — `None` ticks only on the spawn-failure
+/// path, where `m1` is already negative).
+#[cfg(test)]
+pub struct JamReportOutcome {
+    /// None — the tail ran (the helper result).
+    pub result: Option<(libc::pid_t, libc::pid_t)>,
+    /// The middleman pid (for the caller's INDEPENDENT
+    /// reap proof — the tail's own claim is not evidence).
+    pub m1: libc::pid_t,
+    /// m1's birth (the caller proves m1's reap
+    /// gone-or-recycled over it — never vacancy-only).
+    pub tick1: Option<u64>,
+    /// m2's birth stake (m2's pid stays UNREPORTED by
+    /// design — the finding's contract — but the stake
+    /// lets the caller prove m2's death birth-aware).
+    pub m2_stake: Option<(libc::pid_t, u64)>,
+}
+
+/// R21-008: jammed-report variant — drops the report read
+/// end before polling (the middleman's write fails EPIPE —
+/// SIGPIPE is ignored — and it pauses with the grandchild
+/// born), birth-gates on the middleman's children file
+/// (panics loud if m2 is not provably born — a jam without
+/// a born grandchild would be a VACUOUS retirement
+/// regression), then runs the production report-failure
+/// tail. Returns [`JamReportOutcome`] (result None — the
+/// tail ran — plus m1 and both pre-tail births).
 ///
 /// # Safety
 ///
 /// Same fork contract as
 /// [`fork_pausing_grandchild_sleep`].
 #[cfg(test)]
-pub unsafe fn fork_pausing_grandchild_sleep_jam_report(
-    dur: &str,
-) -> (Option<(libc::pid_t, libc::pid_t)>, libc::pid_t) {
+pub unsafe fn fork_pausing_grandchild_sleep_jam_report(dur: &str) -> JamReportOutcome {
     // SAFETY: same contract as the inner helper.
-    unsafe { fork_pausing_grandchild_sleep_inner(dur, true, true) }
+    let (result, m1, tick1, m2_stake) =
+        unsafe { fork_pausing_grandchild_sleep_inner(dur, true, true) };
+    JamReportOutcome {
+        result,
+        m1,
+        tick1,
+        m2_stake,
+    }
 }
 
 /// R22-008/009: jammed-report SPAWN ONLY — the jam arm's
 /// spawn + birth-gate WITHOUT the production tail (fault
 /// probes stage the pair healthy, print custody, THEN
 /// inject the fault before running the tail themselves).
-/// Returns `Some(m1)` (m2 born-proven, pids unknown) or
-/// `None` on spawn failure; the birth-gate still panics
-/// loud on an unborn m2 (never a vacuous staging).
+/// Returns `Some((m1, m2, tick2))` (m2 born-proven and
+/// birth-staked pre-return — R23-019: the probe prints
+/// the stake as custody and the wrapper proves m2's
+/// fate birth-aware) or `None` on spawn failure; the
+/// birth-gate still panics loud on an unborn m2 (never
+/// a vacuous staging).
 ///
 /// Custody: the caller owns the live pair on return (m1
 /// pauses forever, m2 sleeps `dur`) — print the pids (or
@@ -552,10 +610,19 @@ pub unsafe fn fork_pausing_grandchild_sleep_jam_report(
 /// Same fork contract as
 /// [`fork_pausing_grandchild_sleep`].
 #[cfg(test)]
-pub unsafe fn fork_pausing_grandchild_sleep_jam_noretire(dur: &str) -> Option<libc::pid_t> {
+pub unsafe fn fork_pausing_grandchild_sleep_jam_noretire(
+    dur: &str,
+) -> Option<(libc::pid_t, libc::pid_t, u64)> {
     // SAFETY: same contract as the inner helper.
-    let (_, m1) = unsafe { fork_pausing_grandchild_sleep_inner(dur, true, false) };
-    (m1 > 0).then_some(m1)
+    // R23-019: m1's tick discarded (noretire callers pin
+    // their own — m1 is live on return).
+    let (_, m1, _, stake) = unsafe { fork_pausing_grandchild_sleep_inner(dur, true, false) };
+    if m1 > 0 {
+        let (m2, tick2) = stake.expect("jam gate stakes m2 pre-return (unreachable)");
+        Some((m1, m2, tick2))
+    } else {
+        None
+    }
 }
 
 /// R22-016(b): PRE-EXEC-STALL pair spawn — m1 self-groups
@@ -598,11 +665,24 @@ pub unsafe fn fork_prestall_grandchild_jam_noretire(
     dur: &str,
 ) -> Option<(libc::pid_t, libc::pid_t)> {
     let _ = dur;
+    // R23-011 fault staging, decided parent-side (no
+    // allocator use in the fork child — the child arms
+    // read the stack copies): NO_STUB pauses stub-less
+    // (birth gate times out, m1 alive); EXIT_M1 exits at
+    // once (gate times out, m1 dead). Unset = normal.
+    let no_stub = std::env::var("SCOPEBASE_PRESTALL_NO_STUB").is_ok();
+    let exit_m1 = std::env::var("SCOPEBASE_PRESTALL_EXIT_M1").is_ok();
     // SAFETY: fork itself is always safe; both children
     // uphold the syscall-only contract below.
     let m1 = unsafe { libc::fork() };
     if m1 == 0 {
         unsafe {
+            // R23-011 dead-arm staging: exit before
+            // anything is staged (the birth gate times out
+            // over the corpse).
+            if exit_m1 {
+                libc::_exit(127);
+            }
             // Self-group FIRST (same as the jam spawner —
             // the tail's only channel to the stub).
             // Syscall-only; failure exits pre-stub with
@@ -624,6 +704,13 @@ pub unsafe fn fork_prestall_grandchild_jam_noretire(
             }
             if null > 2 {
                 libc::close(null);
+            }
+            // R23-011 alive-arm staging: pause stub-less
+            // (the birth gate times out with m1 alive).
+            if no_stub {
+                loop {
+                    libc::pause();
+                }
             }
             let stub = libc::fork();
             if stub == 0 {
@@ -664,10 +751,15 @@ pub unsafe fn fork_prestall_grandchild_jam_noretire(
         if std::time::Instant::now() >= gate_end {
             match stat_state_pgrp(m1) {
                 Some((st, _)) => {
-                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?)")
+                    // R23-011: retire BEFORE failing loud
+                    // (mirror of the R21008-JAM sibling — a
+                    // timeout panic must never strand m1).
+                    retire_reportless_middleman(m1);
+                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} alive-childless (state {st} — wedged pre-fork? box wedged?) (m1 retired before failing loud)")
                 }
                 None => {
-                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} dead pre-stub (self-exit? — regression vacuous, failing loud)")
+                    reap_child_bounded(m1, "R22016B-JAM");
+                    panic!("R22016B-JAM: birth-gate timed out with m1 {m1} dead pre-stub (self-exit? — regression vacuous, failing loud) (corpse reaped before failing loud)")
                 }
             }
         }
@@ -680,13 +772,18 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
     dur: &str,
     jam: bool,
     retire_on_jam: bool,
-) -> (Option<(libc::pid_t, libc::pid_t)>, libc::pid_t) {
+) -> (
+    Option<(libc::pid_t, libc::pid_t)>,
+    libc::pid_t,
+    Option<u64>,
+    Option<(libc::pid_t, u64)>,
+) {
     use std::os::unix::io::FromRawFd as _;
     // Report pipe (CLOEXEC — out of the exec'd grandchild).
     let mut pipe = [0; 2];
     // SAFETY: pipe2 fills both ends.
     if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return (None, -1);
+        return (None, -1, None, None);
     }
     let (read_fd, write_fd) = (pipe[0], pipe[1]);
     assert!(
@@ -701,7 +798,7 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
                 libc::close(read_fd);
                 libc::close(write_fd);
             }
-            return (None, -1);
+            return (None, -1, None, None);
         }
     };
     // SAFETY: fork itself is always safe; the middleman
@@ -801,7 +898,7 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
             libc::close(read_fd);
             libc::close(write_fd);
         }
-        return (None, -1);
+        return (None, -1, None, None);
     }
     // SAFETY: write end owned by this scope (the middleman
     // holds its own copy).
@@ -826,14 +923,35 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
         }
         let gate_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut born = false;
+        // R23-019: the gate's children read already names
+        // m2 (m1's only child) — parse it here so the
+        // stake below pins the SAME observation (no
+        // re-read between gate and stake).
+        let mut gated_m2: Option<libc::pid_t> = None;
+        let mut gate_corrupt = false;
         while std::time::Instant::now() < gate_end {
             if let Ok(kids) = std::fs::read_to_string(format!("/proc/{m1}/task/{m1}/children")) {
-                if !kids.split_whitespace().next().is_none() {
-                    born = true;
-                    break;
+                if let Some(first) = kids.split_whitespace().next() {
+                    match first.parse::<libc::pid_t>() {
+                        Ok(m2) if m2 > 0 => {
+                            gated_m2 = Some(m2);
+                            born = true;
+                            break;
+                        }
+                        _ => {
+                            gate_corrupt = true;
+                            break;
+                        }
+                    }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if gate_corrupt {
+            // R22-014 discipline (retire before failing
+            // loud — the pausing m1 would strand).
+            retire_reportless_middleman(m1);
+            panic!("R21008-JAM: children file pid unparsable (kernel shape?) (m1 retired before failing loud)");
         }
         if !born {
             // R22-014: discharge BEFORE failing loud — a
@@ -851,10 +969,49 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
                 }
             }
         }
+        // R23-019: stake m2's birth PRE-TAIL (m2 sleeps
+        // `dur` — nothing kills it before the tail runs,
+        // so a recycle between the gate read and this read
+        // is impossible and no R23-009 re-verify is needed;
+        // pre-exec is fine — the tick is fork-assigned).
+        // The caller proves m2's death by birth-gone AND
+        // scan-empty (either channel alone goes blind:
+        // the scan under argv-shape lies (pre-exec or
+        // exec-away staging — row-errors already panic
+        // loud, never vacuous), the birth under same-tick
+        // retake — the conjunction fails loud on any
+        // single-channel lie).
+        let m2 = gated_m2.expect("R21008-JAM: gate passed with no parsed m2 (unreachable)");
+        let tick2 = match fork_starttime(m2) {
+            Ok(Some(tick2)) => tick2,
+            Ok(None) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m2 {m2} dead before the tail ran (nothing targets it — box wedged?) (pair retired before failing loud)");
+            }
+            Err(error) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m2 {m2} birth unreadable pre-tail: {error} (pair retired before failing loud)");
+            }
+        };
+        // R23-019: retain m1's birth pre-tail (the gate
+        // proved m1 live — nothing kills it before the
+        // tail — so this read names OUR m1; the caller
+        // proves m1's reap gone-or-recycled over it).
+        let tick1 = match fork_starttime(m1) {
+            Ok(Some(tick1)) => tick1,
+            Ok(None) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m1 {m1} dead before the tail ran (nothing targets it — box wedged?) (pair retired before failing loud)");
+            }
+            Err(error) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m1 {m1} birth unreadable pre-tail: {error} (pair retired before failing loud)");
+            }
+        };
         if retire_on_jam {
             retire_reportless_middleman(m1);
         }
-        return (None, m1);
+        return (None, m1, Some(tick1), Some((m2, tick2)));
     }
     // Bounded report read (the middleman reports in µs).
     let mut poller = libc::pollfd {
@@ -884,14 +1041,19 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
         None
     };
     match m2 {
-        Some(m2) if m2 > 0 => (Some((m1, m2)), m1),
+        // R23-019: the birth observations are JAM-arm
+        // products (gated pre-tail) — the report arm names
+        // m2's pid but pins no ticks (non-jam callers pin
+        // their own; report-time liveness is the report's
+        // own claim).
+        Some(m2) if m2 > 0 => (Some((m1, m2)), m1, None, None),
         _ => {
             // Report failure: FULL retirement before None
             // (R21-008 — the old kill + single-WNOHANG tail
             // stranded m1 as a zombie and never touched
             // the unknown-pid m2).
             retire_reportless_middleman(m1);
-            (None, m1)
+            (None, m1, None, None)
         }
     }
 }
@@ -1205,12 +1367,54 @@ mod tests {
             .expect("toolchain twin readable");
         let audit_rs = std::fs::read_to_string(root.join("src/fixture/linux/audit.rs"))
             .expect("audit.rs readable");
+        // R23-019: first quoted 3-digit literal on a line
+        // (publisher positionals put the dur before the
+        // mode and envs, so FIRST is the dur; lines
+        // without one contribute nothing).
+        let first_quoted3 = |line: &str| -> Option<String> {
+            let bytes = line.as_bytes();
+            let mut i = 0;
+            while i + 4 < bytes.len() + 1 {
+                if bytes[i] == b'"'
+                    && bytes[i + 1].is_ascii_digit()
+                    && bytes[i + 2].is_ascii_digit()
+                    && bytes[i + 3].is_ascii_digit()
+                    && bytes.get(i + 4) == Some(&b'"')
+                {
+                    return Some(line[i + 1..i + 4].to_string());
+                }
+                i += 1;
+            }
+            None
+        };
+        // R23-019: first dot-arg triple on a line (direct
+        // publisher spawns pass dur first, mode second).
+        let first_dotarg3 = |line: &str| -> Option<String> {
+            let at = line.find(".arg(\"")?;
+            let after = &line[at + 6..];
+            if after.len() >= 4
+                && after.as_bytes()[..3].iter().all(|b| b.is_ascii_digit())
+                && after.as_bytes()[3] == b'"'
+            {
+                Some(after[..3].to_string())
+            } else {
+                None
+            }
+        };
         // 3-digit argv at a fork/twin sleep call site:
         // helper-mediated (`*_with_dur("NNN")`,
         // `*noretire("NNN")`, `*jam_report("NNN")`,
         // `*grandchild_sleep("NNN")`) or direct
         // (`Command::new("/bin/sleep")` + `.arg("NNN")`
-        // within 3 lines).
+        // within 3 lines). R23-019: publisher leaf durs
+        // too — every publisher spawn births a sleep leaf
+        // carrying the publisher's dur, so a scan key
+        // matching a publisher dur would read a foreign
+        // leaf. The arms below cover the spawn shapes
+        // (single-line, multi-line, direct, sh-wrapped,
+        // cell-runner, cell-table). Wording here stays
+        // trigger-free — this file is scanned text, so
+        // doc examples never carry live call shapes.
         let scan_keys = |text: &str| -> BTreeSet<String> {
             let mut keys = BTreeSet::new();
             let lines: Vec<&str> = text.lines().collect();
@@ -1223,6 +1427,11 @@ mod tests {
                     // R22-014: duration-override defaults
                     // (same keys, env-relocatable).
                     "sleep_dur(\"",
+                    // R23-019 P1: single-line publisher
+                    // spawns (the dur literal follows the
+                    // call's open paren; multi-line spawns
+                    // ride the peer arm below).
+                    "publisher(\"",
                 ] {
                     let mut rest = *line;
                     while let Some(at) = rest.find(trigger) {
@@ -1249,6 +1458,78 @@ mod tests {
                                 && after.as_bytes()[3] == b'"'
                             {
                                 keys.insert(after[..3].to_string());
+                            }
+                        }
+                    }
+                }
+                // R23-019 P2: multi-line publisher spawn —
+                // the dur sits on a following line. The
+                // peer scan runs ONLY when this line holds
+                // no dur itself, so a following test's
+                // literal is never misattributed here.
+                if line.contains("publisher(") && first_quoted3(line).is_none() {
+                    for peer in lines.iter().skip(index + 1).take(3) {
+                        if let Some(dur) = first_quoted3(peer) {
+                            keys.insert(dur);
+                            break;
+                        }
+                    }
+                }
+                // R23-019 P3: direct publisher spawn — the
+                // dur is the first dot-arg (variable durs
+                // contribute nothing; their default literals
+                // ride the override trigger or the table).
+                if line.contains("Command::new(pair_publisher_bin())") {
+                    for peer in lines.iter().skip(index + 1).take(5) {
+                        if let Some(dur) = first_dotarg3(peer) {
+                            keys.insert(dur);
+                            break;
+                        }
+                    }
+                }
+                // R23-019 P4: shell-wrapped publisher spawn
+                // (the bin path rides dot-arg — the dur
+                // dot-arg follows it).
+                if line.contains(".arg(pair_publisher_bin())") {
+                    for peer in lines.iter().skip(index + 1).take(2) {
+                        if let Some(dur) = first_dotarg3(peer) {
+                            keys.insert(dur);
+                            break;
+                        }
+                    }
+                }
+                // R23-019 P5: cell-runner calls (the secs
+                // parameter is second — the step name is
+                // never numeric and envs trail secs, so the
+                // first triple on these lines is the dur;
+                // variable-secs calls contribute nothing —
+                // their literals ride the table below).
+                if line.contains("run_pub_cell(") {
+                    if let Some(dur) = first_quoted3(line) {
+                        keys.insert(dur);
+                    } else {
+                        for peer in lines.iter().skip(index + 1).take(5) {
+                            if let Some(dur) = first_quoted3(peer) {
+                                keys.insert(dur);
+                                break;
+                            }
+                        }
+                    }
+                }
+                // R23-019 P6: fault-cell table rows —
+                // lowercase step names only (uppercase env
+                // tuples are excluded by the lowercase
+                // gate; a future lowercase triple tuple is
+                // collected conservatively — a collision
+                // RED means re-key or narrow this arm).
+                if let Some(open) = line.find("(\"") {
+                    let name_start = open + 2;
+                    if let Some(name_end) = line[name_start..].find('"') {
+                        let name = &line[name_start..name_start + name_end];
+                        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase()) {
+                            let rest = &line[name_start + name_end + 1..];
+                            if let Some(dur) = first_quoted3(rest) {
+                                keys.insert(dur);
                             }
                         }
                     }
@@ -1318,6 +1599,32 @@ mod tests {
             "collector must find audit sleep argv (got {} keys)",
             audit_keys.len()
         );
+        // R23-019: the publisher arms find known durs
+        // (single-line, multi-line, direct, sh-wrapped,
+        // cell single + multi, table).
+        for (arm, dur) in [
+            ("P1", "829"),
+            ("P2", "828"),
+            ("P3", "908"),
+            ("P4", "105"),
+            ("P5-single", "827"),
+            ("P5-multi", "822"),
+            ("P6-staying", "943"),
+            ("P6-moved", "824"),
+        ] {
+            assert!(
+                twin_keys.contains(dur),
+                "collector {arm} must find twin publisher dur {dur} (got {twin_keys:?})"
+            );
+        }
+        // R23-019: the cell peer-scan stops at the FIRST
+        // triple (the dur precedes the envs — a timeout
+        // collection would mean the env leaked in; audit
+        // holds that triple, so the leak would also dupe).
+        assert!(
+            !twin_keys.contains("200"),
+            "collector must not collect the cell timeout env (got {twin_keys:?})"
+        );
         assert!(fork_keys.len() >= 5, "fork scan-key set implausibly small");
         assert!(twin_keys.len() >= 5, "twin scan-key set implausibly small");
         let fork_audit_dupes: Vec<_> = fork_keys.intersection(&audit_keys).collect();
@@ -1328,12 +1635,12 @@ mod tests {
         let twin_audit_dupes: Vec<_> = twin_keys.intersection(&audit_keys).collect();
         assert!(
             twin_audit_dupes.is_empty(),
-            "twin scan keys {twin_audit_dupes:?} collide with audit sleep argv (re-key repo-wide)"
+            "twin scan/publisher keys {twin_audit_dupes:?} collide with audit sleep argv (re-key repo-wide)"
         );
         let fork_twin_dupes: Vec<_> = fork_keys.intersection(&twin_keys).collect();
         assert!(
             fork_twin_dupes.is_empty(),
-            "scan keys {fork_twin_dupes:?} shared by fork lib + toolchain twin (re-key repo-wide)"
+            "scan/publisher keys {fork_twin_dupes:?} shared by fork lib + toolchain twin (re-key repo-wide)"
         );
     }
 
@@ -1632,8 +1939,29 @@ mod tests {
                     Ok(pin) => {
                         // SAFETY: pidfd_send_signal to our
                         // pinned grandchild-birth only.
-                        unsafe {
-                            libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                        let sent = unsafe {
+                            libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0)
+                        };
+                        // R23-013: a successful pidfd_open does
+                        // not guarantee signaling is permitted
+                        // — a denied signal silently abandoned
+                        // m2. ESRCH ⟹ m2 already drained
+                        // (harmless, silent); anything else
+                        // goes loud with m2's identity (the
+                        // caller retires the survivor via
+                        // transmitted custody).
+                        if sent != 0 {
+                            let errno = std::io::Error::last_os_error()
+                                .raw_os_error()
+                                .unwrap_or(-999);
+                            if errno != libc::ESRCH {
+                                eprintln!(
+                                    "R22007-PIN-DENIED middleman m1={} zombie-reaped, m2={} signal denied \
+                                     (errno {errno}) — m2 birth surviving, custody unresolved \
+                                     (caller owns the residual via transmitted custody)",
+                                    self.m1, self.m2
+                                );
+                            }
                         }
                     }
                     Err(errno) => {
@@ -1664,16 +1992,33 @@ mod tests {
                 // touch it — recycle-murder), but the m2
                 // pin (when held) is still sound — kill
                 // through it, then report loud.
+                // R23-013: same denied-signal discipline as the
+                // zombie arm above (this arm is ~unstageable
+                // — EINTR-ish waitpid failure — so the leg
+                // covers the zombie arm; the shape is shared).
                 if let Ok(pin) = &self.m2pin {
                     // SAFETY: pidfd_send_signal to our
                     // pinned grandchild-birth only.
-                    unsafe {
-                        libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                    let sent = unsafe {
+                        libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0)
+                    };
+                    if sent != 0 {
+                        let sig_errno = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(-999);
+                        if sig_errno != libc::ESRCH {
+                            eprintln!(
+                                "R22007-PIN-DENIED middleman m1={} probe-error, m2={} signal denied \
+                                 (errno {sig_errno}) — m2 birth surviving, custody unresolved \
+                                 (caller owns the residual via transmitted custody)",
+                                self.m1, self.m2
+                            );
+                        }
                     }
                 }
                 eprintln!(
                     "R22007-PROBE m1={} probe failed (errno {errno} — m1 state unknown, \
-                     number untouched); m2={} pin-killed when pinned",
+                     number untouched); m2={} pin-kill attempted when pinned",
                     self.m1, self.m2
                 );
                 return;
@@ -1819,18 +2164,36 @@ mod tests {
     /// GREEN never strands.)
     #[test]
     fn jammed_report_retires_both_before_none() {
-        let (result, m1) = unsafe { fork_pausing_grandchild_sleep_jam_report("957") };
-        assert!(result.is_none(), "jammed report must yield None (tail ran)");
-        assert!(m1 > 0, "jam exposes m1 for the reap proof");
-        // m1 reaped — the INDEPENDENT proof (the tail's
-        // own claim is not evidence; /proc absence, never
-        // a wait — a recycled sibling zombie would lose
-        // its status to a waitpid here: R22-004(a)).
-        assert_eq!(
-            prove_reaped_by_absence(m1),
-            Ok(true),
-            "m1 must be reaped already (/proc gone — present means our unreaped zombie (RED) or a recycled occupant (unproven))"
+        let outcome = unsafe { fork_pausing_grandchild_sleep_jam_report("957") };
+        assert!(
+            outcome.result.is_none(),
+            "jammed report must yield None (tail ran)"
         );
+        assert!(outcome.m1 > 0, "jam exposes m1 for the reap proof");
+        let m1 = outcome.m1;
+        // R23-019: the pre-tail births (the gate proved
+        // both live — always Some here, panicking rather
+        // than returning unstaked).
+        let tick1 = outcome
+            .tick1
+            .expect("jam gate retains m1 pre-tail (staging?)");
+        let (m2, tick2) = outcome
+            .m2_stake
+            .expect("jam gate stakes m2 pre-tail (staging?)");
+        // m1 reaped — the INDEPENDENT proof (the tail's
+        // own claim is not evidence; gone-or-recycled over
+        // the retained birth, never a wait — a recycled
+        // sibling zombie would lose its status to a waitpid
+        // here: R22-004(a)).
+        match prove_reaped_gone_or_recycled(m1, tick1) {
+            ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+            ReapedProof::StillOurs => panic!(
+                "RED: our m1 birth {m1}/{tick1} still present (tail did not reap?)"
+            ),
+            ReapedProof::Unreadable(error) => {
+                panic!("inconclusive (m1 unreadable: {error}) — refusing to certify")
+            }
+        }
         // m2 dead: poll for no LIVE sleep-957 (bounded —
         // the tail's post-reap probe already proved the
         // group empty; this scan is the independent leg,
@@ -1844,6 +2207,69 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // R23-019: birth-gone (the scan poll above is ONE
+        // channel — a scan blinded by argv-shape lies
+        // (pre-exec/exec-away) would pass it over a live
+        // m2; the gate-staked birth is the second channel).
+        // Recorded BEFORE cleanup (a live m2 here is RED —
+        // retired below so RED runs stay clean; the verdict
+        // judges the recorded proof, never the post-cleanup
+        // state).
+        let m2_proof = prove_reaped_gone_or_recycled(m2, tick2);
+        kill_tick_gated_fork(m2, tick2);
+        birth_drained(m2, tick2, std::time::Duration::from_secs(5));
+        match m2_proof {
+            ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+            ReapedProof::StillOurs => panic!(
+                "RED: staked m2 birth {m2}/{tick2} still live past the jammed report (scan said empty — blind?)"
+            ),
+            ReapedProof::Unreadable(error) => panic!(
+                "inconclusive (m2 birth unreadable: {error}) — refusing to certify"
+            ),
+        }
+        // R23-019 recycle leg: a different-birth occupant on
+        // the freed m1 number keeps retirement evidence valid
+        // (the proof reads Recycled) while the vacancy-only
+        // check reports inconclusive (never certified, never
+        // a cleanup defect).
+        let _serial = match fork_steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        let (mut plant, plant_tick) = match fork_plant_sleep_onto(m1, "31", tick1) {
+            Some(placed) => placed,
+            None => {
+                eprintln!("R23019-LEG[957] vacuous (plant contended)");
+                return;
+            }
+        };
+        eprintln!("R23019-LEG[957] plant {m1}/{plant_tick} (victim tick {tick1})");
+        assert!(
+            plant_tick != tick1,
+            "staging broken (plant shares the victim tick?)"
+        );
+        let mut _pguard = ForkChildGuard::new(m1);
+        match prove_reaped_gone_or_recycled(m1, tick1) {
+            ReapedProof::Recycled(now) if now == plant_tick => {}
+            ReapedProof::Recycled(now) => panic!(
+                "staging broken (stranger birth {now} on our steered number {m1}?)"
+            ),
+            ReapedProof::StillOurs => panic!(
+                "RED: our reaped birth {m1}/{tick1} reads present (tick collision?)"
+            ),
+            ReapedProof::Gone => panic!("staging broken (plant vanished?)"),
+            ReapedProof::Unreadable(error) => {
+                panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+            }
+        }
+        assert_eq!(
+            prove_reaped_by_absence(m1),
+            Ok(false),
+            "vacancy-only check must read inconclusive over the recycled occupant (never certified, never defect)"
+        );
+        let _ = plant.kill();
+        let _ = plant.wait();
+        _pguard.disarm();
     }
 
     /// R22-008 fallback probe (fresh image): stage the jam
@@ -1861,13 +2287,18 @@ mod tests {
     /// is unique to this test.
     fn reportless_fallback_kills_group_unconditionally_probe() {
         let dur = r22014_sleep_dur("853");
-        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire(&dur) }
-            .expect("staging broken (pair spawn)");
+        let (m1, m2, tick2) =
+            unsafe { fork_pausing_grandchild_sleep_jam_noretire(&dur) }
+                .expect("staging broken (pair spawn)");
         let mut _pair = ReportlessPairGuard::armed(m1);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
         println!("R22008-M1 {m1} {tick1}");
+        // R23-019: the gate-staked m2 birth rides stdout
+        // with M1 (pre-outage — the wrapper proves m2's
+        // death birth-aware instead of scan-only).
+        println!("R22008-M2 {m2} {tick2}");
         std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
         // R22-014 fault leg: staged pre-tail panic (the
         // pair guard must discharge m1+m2 through the
@@ -1921,6 +2352,17 @@ mod tests {
                 Some((pid.parse().ok()?, tick.parse().ok()?))
             })
             .expect("staging broken (no m1 line?)");
+        // R23-019: the gate-staked m2 birth (printed
+        // pre-outage with M1 — present in GREEN and RED;
+        // the tail runs after the print either way).
+        let (m2, tick2): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22008-M2 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m2 line?)");
         // Settle: the tail's kill lands in ms; a stranded
         // m2 (RED) stays live past the bound.
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1931,15 +2373,29 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let retired_by_tail = !live_sleep_with_dur("853");
-        // Custody BEFORE verdicts (RED runs stay clean).
+        // R23-019: the birth channel, recorded BEFORE
+        // custody kills (a scan blinded by argv-shape lies
+        // would certify a live m2 above — the staked birth
+        // refuses that false absence; row-errors already
+        // panic loud).
+        let m2_proof = prove_reaped_gone_or_recycled(m2, tick2);
+        // Custody BEFORE verdicts (RED runs stay clean):
+        // m1 tick-gated, then m2 by its STAKED birth (no
+        // scan — the stake names the exact birth), then
+        // the scan backstop asserting nothing 853 remains.
         kill_tick_gated_fork(m1, tick1);
         assert!(
             birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
             "wrapper must drain m1"
         );
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "wrapper must drain m2"
+        );
         assert!(
             kill_sleep_with_dur("853", anchor),
-            "wrapper must drain the residual sleep 853"
+            "scan backstop must find no residual sleep 853"
         );
         assert!(!outcome.timed_out, "probe must complete\n{stderr}");
         assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
@@ -1951,6 +2407,15 @@ mod tests {
             retired_by_tail,
             "RED: fallback suppressed the group-kill (live m2 past the tail)"
         );
+        match m2_proof {
+            ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+            ReapedProof::StillOurs => panic!(
+                "RED: staked m2 birth {m2}/{tick2} still live past the tail (scan said empty — blind?)"
+            ),
+            ReapedProof::Unreadable(error) => panic!(
+                "inconclusive (m2 birth unreadable: {error}) — refusing to certify"
+            ),
+        }
         assert!(
             stderr.contains("R22008-DONE"),
             "probe must cite completion\n{stderr}"
@@ -2120,28 +2585,12 @@ mod tests {
         use std::time::Duration;
         // Steering serial hold + writability proof (skip
         // when unsteerable — established precedent).
-        let _serial = FORK_STEER_SERIAL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let last_path = "/proc/sys/kernel/ns_last_pid";
-        let last_before = match std::fs::read_to_string(last_path) {
-            Ok(text) => text.trim().to_string(),
-            Err(_) => {
-                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
-                return;
-            }
+        // R23-019: shared prologue (behavior-identical to
+        // the inline shape it replaces).
+        let _serial = match fork_steer_hold() {
+            Some(guard) => guard,
+            None => return,
         };
-        {
-            // Writability probe (locked steer + restore —
-            // mirrors audit's `steer_hold` prologue; the
-            // restore is best-effort, never load-bearing).
-            let _probe = fork_pid_flock();
-            if !fork_steer_next_pid_unlocked(last_before.parse::<i32>().unwrap_or(0) + 1) {
-                eprintln!("skip: ns_last_pid unwritable (no reuse control)");
-                return;
-            }
-            let _ = std::fs::write(last_path, &last_before);
-        }
         // Anchor pre-staging (candidate + replacement both
         // in-window — the window must not interfere with
         // the binding proof).
@@ -2320,17 +2769,23 @@ mod tests {
     /// unique to this test.
     fn reportless_probe_denied_stays_unresolved_probe() {
         use super::super::seccomp::{install_deny_kill_negative_pid, DenyAction};
-        let m1 = unsafe { fork_pausing_grandchild_sleep_jam_noretire("855") }
-            .expect("staging broken (pair spawn)");
+        let (m1, m2, tick2) =
+            unsafe { fork_pausing_grandchild_sleep_jam_noretire("855") }
+                .expect("staging broken (pair spawn)");
         // Pre-custody unwinds discharge fully (the filter
         // installs after the print); post-print unwinds
-        // retire m1 in-probe while the wrapper sweeps m2 by
-        // duration (the M1 line is already flushed).
+        // retire m1 in-probe while the wrapper drains m2 by
+        // its staked birth (both lines already flushed).
         let mut _pair = ReportlessPairGuard::armed(m1);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
         println!("R22009-M1 {m1} {tick1}");
+        // R23-019: the gate-staked m2 birth (the wrapper
+        // proves m2's survival birth-aware — the scan
+        // presence below is the second channel, not the
+        // only one).
+        println!("R22009-M2 {m2} {tick2}");
         std::io::Write::flush(&mut std::io::stdout()).expect("custody line flushed");
         // Selective denial: negative-pid kill (the glibc
         // killpg lowering) → EPERM, positive-pid kill
@@ -2400,23 +2855,47 @@ mod tests {
                 Some((pid.parse().ok()?, tick.parse().ok()?))
             })
             .expect("staging broken (no m1 line?)");
+        // R23-019: the gate-staked m2 birth.
+        let (m2, tick2): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22009-M2 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m2 line?)");
         // Load-bearing anti-vacuity: m2 SURVIVED the tail
         // (both group-kills denied — nothing else targets
         // it). A dead m2 here would make the probe's
-        // evidence untestable.
+        // evidence untestable. Birth-live is the PRIMARY
+        // channel (the staked birth names the exact m2 —
+        // a same-dur stranger can't exonerate it); the
+        // scan presence below is the second channel.
+        assert_eq!(
+            fork_starttime(m2),
+            Ok(Some(tick2)),
+            "staging broken (staked m2 birth {m2}/{tick2} dead pre-custody — the denial staged nothing?)"
+        );
         assert!(
             live_sleep_with_dur("855"),
-            "staging broken (m2 dead pre-custody — the denial staged nothing?)"
+            "staging broken (m2 birth live but scan-blind pre-custody?)"
         );
-        // Custody BEFORE verdicts (m2 live by design).
+        // Custody BEFORE verdicts (m2 live by design):
+        // m2 by its STAKED birth (no scan — the stake
+        // names the exact birth), then the scan backstop.
         kill_tick_gated_fork(m1, tick1);
         assert!(
             birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
             "wrapper must drain m1"
         );
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "wrapper must drain m2"
+        );
         assert!(
             kill_sleep_with_dur("855", anchor),
-            "wrapper must drain the live sleep 855"
+            "scan backstop must find no residual sleep 855"
         );
         // R23-002: explicit unsupported_arch skip (custody
         // above still proves clean — the probe staged and
@@ -2669,6 +3148,93 @@ mod tests {
         );
     }
 
+    /// R23-011 site 3: the pre-exec birth gate times out —
+    /// the helper must retire m1 (alive arm) or reap the
+    /// corpse (dead arm) BEFORE failing loud. Fresh-image
+    /// probe per arm (5 s gate burn each); the probe
+    /// catches the timeout panic, prints its payload, and
+    /// marks DISCHARGED only when its own children set
+    /// holds no new birth (a live pauser or an unreaped
+    /// corpse both fail the mark). RED (old code: both
+    /// arms panic with m1 unretired).
+    #[test]
+    fn prestall_birth_gate_timeout_retires_middleman() {
+        if std::env::var("SCOPEBASE_R23011_PRESTALL_TIMEOUT").is_ok() {
+            prestall_birth_gate_timeout_retires_middleman_probe();
+            return;
+        }
+        for fault in ["SCOPEBASE_PRESTALL_NO_STUB", "SCOPEBASE_PRESTALL_EXIT_M1"] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg("fixture::linux::fork::tests::prestall_birth_gate_timeout_retires_middleman")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R23011_PRESTALL_TIMEOUT", "1")
+                .env(fault, "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe runs");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "probe must exit 0 (measurement, never verdict)\n{stderr}"
+            );
+            assert!(
+                stdout.contains("R23011-PRESTALL-DISCHARGED"),
+                "birth-gate timeout must retire m1 ({fault})\n{stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains("R22016B-JAM: birth-gate timed out"),
+                "probe must cite the timeout panic ({fault})\n{stdout}"
+            );
+        }
+    }
+
+    /// R23-011 site-3 probe (fresh image): snapshot own
+    /// children, run the faulted helper through a caught
+    /// unwind, print the panic payload, and mark
+    /// DISCHARGED only when no new birth remains.
+    fn prestall_birth_gate_timeout_retires_middleman_probe() {
+        use std::collections::HashSet;
+        use std::panic::AssertUnwindSafe;
+        let read_children = || -> HashSet<i32> {
+            // Per-task path with the real tid (`self` does
+            // not resolve under task/; the per-process
+            // children file is absent on some kernels).
+            // SAFETY: gettid queries only.
+            let tid = unsafe { libc::gettid() };
+            // Must SUCCEED (an unreadable children file
+            // would vacate the discharge proof).
+            std::fs::read_to_string(format!("/proc/self/task/{tid}/children"))
+                .expect("staging broken (own children unreadable)")
+                .split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect()
+        };
+        let before = read_children();
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = unsafe { fork_prestall_grandchild_jam_noretire("850") };
+        }));
+        assert!(outcome.is_err(), "staging broken (gate must time out)");
+        let payload = outcome.unwrap_err();
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "<non-string panic>".to_string());
+        println!("R23011-PRESTALL-PANIC {message}");
+        let after = read_children();
+        let stranded: Vec<i32> = after.difference(&before).copied().collect();
+        if stranded.is_empty() {
+            println!("R23011-PRESTALL-DISCHARGED");
+        } else {
+            println!("R23011-PRESTALL-STRANDED {stranded:?}");
+        }
+    }
+
     /// R22-016(a) scan-outage probe (fresh image): stage
     /// the REPORTED pair (m1 pauses, m2 sleeps `859` —
     /// both kept alive, never retired), print custody,
@@ -2812,6 +3378,11 @@ mod tests {
             .expect("zombie spawns");
         let zombie_pid = zombie.id() as libc::pid_t;
         let mut _zguard = ForkChildGuard::new(zombie_pid);
+        // R23-019: retain the victim birth (the post-reap
+        // proof is gone-or-recycled over THIS tick).
+        let zombie_tick = fork_starttime(zombie_pid)
+            .expect("zombie stat readable")
+            .expect("zombie visible");
         let _ = zombie.kill();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
@@ -2835,17 +3406,75 @@ mod tests {
             Ok(false),
             "zombie occupant must read unproven (never certified)"
         );
+        // R23-019: the tick-aware proof reads our unreaped
+        // birth StillOurs (present + same tick ⟹ NOT
+        // reaped — the RED shape).
+        assert!(
+            matches!(
+                prove_reaped_gone_or_recycled(zombie_pid, zombie_tick),
+                ReapedProof::StillOurs
+            ),
+            "unreaped zombie birth must read StillOurs (never Gone/Recycled)"
+        );
         match zombie.try_wait() {
             Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
             other => panic!("proof stole the zombie's status?! got {other:?}"),
         }
         _zguard.disarm();
-        // Absent leg: freed number ⟹ reaped.
+        // Absent leg: freed number ⟹ reaped (gone-or-recycled —
+        // a different-birth occupant keeps the evidence valid).
+        match prove_reaped_gone_or_recycled(zombie_pid, zombie_tick) {
+            ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+            ReapedProof::StillOurs => panic!(
+                "RED: our zombie birth {zombie_pid}/{zombie_tick} still present after the owned reap"
+            ),
+            ReapedProof::Unreadable(error) => panic!(
+                "inconclusive (freed number unreadable: {error}) — refusing to certify"
+            ),
+        }
+        // R23-019 recycle leg: a different-birth occupant on
+        // the freed number keeps retirement evidence valid
+        // (the proof reads Recycled) while the vacancy-only
+        // check reports inconclusive (never certified, never
+        // a cleanup defect).
+        let _serial = match fork_steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        let (mut plant, plant_tick) = match fork_plant_sleep_onto(zombie_pid, "31", zombie_tick) {
+            Some(placed) => placed,
+            None => {
+                eprintln!("R23019-LEG vacuous (plant contended)");
+                return;
+            }
+        };
+        eprintln!("R23019-LEG[self] plant {zombie_pid}/{plant_tick} (victim tick {zombie_tick})");
+        assert!(
+            plant_tick != zombie_tick,
+            "staging broken (plant shares the victim tick?)"
+        );
+        let mut _pguard = ForkChildGuard::new(zombie_pid);
+        match prove_reaped_gone_or_recycled(zombie_pid, zombie_tick) {
+            ReapedProof::Recycled(now) if now == plant_tick => {}
+            ReapedProof::Recycled(now) => panic!(
+                "staging broken (stranger birth {now} on our steered number {zombie_pid}?)"
+            ),
+            ReapedProof::StillOurs => panic!(
+                "RED: our reaped birth {zombie_pid}/{zombie_tick} reads present (tick collision?)"
+            ),
+            ReapedProof::Gone => panic!("staging broken (plant vanished?)"),
+            ReapedProof::Unreadable(error) => {
+                panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+            }
+        }
         assert_eq!(
             prove_reaped_by_absence(zombie_pid),
-            Ok(true),
-            "freed number must read reaped"
+            Ok(false),
+            "vacancy-only check must read inconclusive over the recycled occupant (never certified, never defect)"
         );
+        let _ = plant.kill();
+        let _ = plant.wait();
+        _pguard.disarm();
     }
 
     /// R22-007: settle to zombie (staging — the guard's
@@ -2912,11 +3541,19 @@ mod tests {
     fn middleman_guard_zombie_m1_retires_m2_via_pin() {
         use std::panic::AssertUnwindSafe;
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("988") }.expect("pair staged");
+        // R23-011: arm BEFORE the stat read (a failing
+        // observation must unwind through the guard, never
+        // strand the pair).
+        let _pair = MiddlemanPairGuard::armed(m1, m2);
+        // R23-019: retain the m1 birth (the post-unwind
+        // proof is gone-or-recycled over THIS tick).
+        let tick1 = fork_starttime(m1)
+            .expect("m1 stat readable")
+            .expect("m1 visible");
         let tick2 = fork_starttime(m2)
             .expect("m2 stat readable")
             .expect("m2 visible");
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _pair = MiddlemanPairGuard::armed(m1, m2);
             assert_eq!(
                 unsafe { libc::kill(m1, libc::SIGKILL) },
                 0,
@@ -2925,18 +3562,68 @@ mod tests {
             settle_zombie(m1);
             panic!("simulated observation failure");
         }));
+        drop(_pair);
         assert!(outcome.is_err(), "staging broken (must unwind)");
-        assert_eq!(
-            fork_starttime(m1),
-            Ok(None),
-            "m1 must be reaped by the probe"
-        );
+        // R23-019: gone-or-recycled (a different-birth
+        // occupant keeps the evidence valid).
+        match prove_reaped_gone_or_recycled(m1, tick1) {
+            ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+            ReapedProof::StillOurs => {
+                panic!("RED: our m1 birth {m1}/{tick1} still present (guard did not reap?)")
+            }
+            ReapedProof::Unreadable(error) => {
+                panic!("inconclusive (m1 unreadable: {error}) — refusing to certify")
+            }
+        }
         let retired = birth_drained(m2, tick2, std::time::Duration::from_secs(5));
         // RED-safe cleanup (tick-gated — the verdict above
         // is already recorded).
         kill_tick_gated_fork(m2, tick2);
         birth_drained(m2, tick2, std::time::Duration::from_secs(5));
         assert!(retired, "m2 must retire via the pin (abandoned?!)");
+        // R23-019 recycle leg: a different-birth occupant on
+        // the freed m1 number keeps retirement evidence valid
+        // (the proof reads Recycled) while the vacancy-only
+        // check reports inconclusive (never certified, never
+        // a cleanup defect).
+        let _serial = match fork_steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        let (mut plant, plant_tick) = match fork_plant_sleep_onto(m1, "31", tick1) {
+            Some(placed) => placed,
+            None => {
+                eprintln!("R23019-LEG[988] vacuous (plant contended)");
+                return;
+            }
+        };
+        eprintln!("R23019-LEG[988] plant {m1}/{plant_tick} (victim tick {tick1})");
+        assert!(
+            plant_tick != tick1,
+            "staging broken (plant shares the victim tick?)"
+        );
+        let mut _pguard = ForkChildGuard::new(m1);
+        match prove_reaped_gone_or_recycled(m1, tick1) {
+            ReapedProof::Recycled(now) if now == plant_tick => {}
+            ReapedProof::Recycled(now) => panic!(
+                "staging broken (stranger birth {now} on our steered number {m1}?)"
+            ),
+            ReapedProof::StillOurs => panic!(
+                "RED: our reaped birth {m1}/{tick1} reads present (tick collision?)"
+            ),
+            ReapedProof::Gone => panic!("staging broken (plant vanished?)"),
+            ReapedProof::Unreadable(error) => {
+                panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+            }
+        }
+        assert_eq!(
+            prove_reaped_by_absence(m1),
+            Ok(false),
+            "vacancy-only check must read inconclusive over the recycled occupant (never certified, never defect)"
+        );
+        let _ = plant.kill();
+        let _ = plant.wait();
+        _pguard.disarm();
     }
 
     /// R22-007: the ECHILD path (tail-honored contract —
@@ -2948,10 +3635,12 @@ mod tests {
     #[test]
     fn middleman_guard_echild_after_tail_returns_clean() {
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("989") }.expect("pair staged");
+        // R23-011: arm BEFORE the stat read (a failing
+        // observation must unwind through the guard).
+        let pair = MiddlemanPairGuard::armed(m1, m2);
         let tick2 = fork_starttime(m2)
             .expect("m2 stat readable")
             .expect("m2 visible");
-        let pair = MiddlemanPairGuard::armed(m1, m2);
         // The tail's contract: m2 dead first (zombie under
         // the live middleman — never reaped until it dies).
         assert_eq!(
@@ -3003,12 +3692,14 @@ mod tests {
     fn middleman_guard_unpinned_zombie_leaves_m2_for_caller() {
         use std::panic::AssertUnwindSafe;
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("990") }.expect("pair staged");
+        // R23-011: arm BEFORE the stat read (a failing
+        // observation must unwind through the guard).
+        let mut pair = MiddlemanPairGuard::armed(m1, m2);
+        pair.m2pin = Err(libc::EPERM);
         let tick2 = fork_starttime(m2)
             .expect("m2 stat readable")
             .expect("m2 visible");
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut pair = MiddlemanPairGuard::armed(m1, m2);
-            pair.m2pin = Err(libc::EPERM);
             assert_eq!(
                 unsafe { libc::kill(m1, libc::SIGKILL) },
                 0,
@@ -3017,6 +3708,7 @@ mod tests {
             settle_zombie(m1);
             panic!("simulated observation failure");
         }));
+        drop(pair);
         assert!(outcome.is_err(), "staging broken (must unwind)");
         // Survives (nothing killed it — the only killer in
         // this leg is the pin, which is denied).
@@ -3252,6 +3944,37 @@ mod tests {
                 libc::close(self.fd);
             }
         }
+    }
+
+    /// R23-019: steering prologue — fork twin of
+    /// audit's `steer_hold`: whole-test in-process serial
+    /// hold plus ns_last_pid writability proof. Returns the
+    /// held guard (keeps serializing for the caller's whole
+    /// test) or None after printing the skip reason (caller
+    /// returns).
+    fn fork_steer_hold() -> Option<std::sync::MutexGuard<'static, ()>> {
+        let serial = FORK_STEER_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let last_path = "/proc/sys/kernel/ns_last_pid";
+        let last_before = match std::fs::read_to_string(last_path) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => {
+                eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+                return None;
+            }
+        };
+        {
+            // Writability probe (locked steer + restore —
+            // the restore is best-effort, never load-bearing).
+            let _probe = fork_pid_flock();
+            if !fork_steer_next_pid_unlocked(last_before.parse::<i32>().unwrap_or(0) + 1) {
+                eprintln!("skip: ns_last_pid unwritable (no reuse control)");
+                return None;
+            }
+            let _ = std::fs::write(last_path, &last_before);
+        }
+        Some(serial)
     }
 
     /// R23-009: unlocked allocator steer — port of
@@ -3496,12 +4219,14 @@ mod tests {
             "staging broken (pidfd_open not denied?)"
         );
         let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("991") }.expect("pair staged");
+        // R23-011: arm BEFORE the stat read (a failing
+        // observation must unwind through the guard).
+        let _pair = MiddlemanPairGuard::armed(m1, m2);
         let tick2 = fork_starttime(m2)
             .expect("m2 stat readable")
             .expect("m2 visible");
         println!("R22007-M2 {m2} {tick2}");
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _pair = MiddlemanPairGuard::armed(m1, m2);
             assert_eq!(
                 unsafe { libc::kill(m1, libc::SIGKILL) },
                 0,
@@ -3510,6 +4235,7 @@ mod tests {
             settle_zombie(m1);
             panic!("simulated observation failure");
         }));
+        drop(_pair);
         assert!(outcome.is_err(), "staging broken (must unwind)");
         eprintln!("R22007-PIN-DONE");
     }
@@ -3563,8 +4289,271 @@ mod tests {
         );
     }
 
+    /// R23-013 denied-signal probe (fresh image): mirror of
+    /// the denied-pin probe — seccomp-deny
+    /// `pidfd_send_signal` in SELF (the pin genuinely
+    /// acquires — realistic denial plumbing, not a forged
+    /// failure), then zombie-m1 + unwind; the drop must go
+    /// LOUD (R22007-PIN-DENIED naming m2) and m2 survives
+    /// for the parent (wrapper custody via the transmitted
+    /// birth). RED (old code: bare signal, result ignored —
+    /// no marker, silent abandon). Duration 996 is unique
+    /// to this test.
+    fn middleman_guard_denied_signal_reports_unresolved_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::panic::AssertUnwindSafe;
+        // R23-002: `unsupported_arch` skips explicitly
+        // (seccomp denial is x86-only — exit 0 with the
+        // SKIP marker; the wrapper judges the marker,
+        // never the install). Any other install failure
+        // is still staging-broken.
+        if let Err(error) = install_deny_one(libc::SYS_pidfd_send_signal, DenyAction::Eperm) {
+            if error.stage() == "unsupported_arch" {
+                eprintln!("R22007-SKIP unsupported_arch (seccomp denial unavailable)");
+                return;
+            }
+            panic!("deny installs (staging): {error}");
+        }
+        // Anti-vacuity: the pin ACQUIRES (open allowed) but
+        // the signal is DENIED (self-probe, signal 0 —
+        // queries only, sends nothing).
+        let selfpin =
+            super::super::seccomp::pidfd_open_raw(std::process::id() as libc::pid_t)
+                .expect("staging broken (pin acquisition must be allowed)");
+        // SAFETY: signal 0 queries only (denial probe).
+        let sent = unsafe { libc::syscall(libc::SYS_pidfd_send_signal, selfpin, 0, 0, 0) };
+        let denied_errno = std::io::Error::last_os_error().raw_os_error();
+        // SAFETY: fd owned by this probe.
+        unsafe { libc::close(selfpin) };
+        assert_eq!(
+            (sent, denied_errno),
+            (-1, Some(libc::EPERM)),
+            "staging broken (send-signal not denied?)"
+        );
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("996") }.expect("pair staged");
+        // R23-011: arm BEFORE the stat read (a failing
+        // observation must unwind through the guard).
+        let _pair = MiddlemanPairGuard::armed(m1, m2);
+        let tick2 = fork_starttime(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+        println!("R22007-M2 {m2} {tick2}");
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            assert_eq!(
+                unsafe { libc::kill(m1, libc::SIGKILL) },
+                0,
+                "staging broken (m1 kill)"
+            );
+            settle_zombie(m1);
+            panic!("simulated observation failure");
+        }));
+        drop(_pair);
+        assert!(outcome.is_err(), "staging broken (must unwind)");
+        eprintln!("R22007-PIN-DONE");
+    }
+
+    /// R23-013 denied-signal wrapper: mirror of the
+    /// denied-pin wrapper (fresh image; cleanup before
+    /// verdict).
+    #[test]
+    fn middleman_guard_denied_signal_reports_unresolved() {
+        if std::env::var("SCOPEBASE_R23013_DENY_SIGNAL").is_ok() {
+            middleman_guard_denied_signal_reports_unresolved_probe();
+            return;
+        }
+        let out = run_fresh_probe_bounded(
+            "SCOPEBASE_R23013_DENY_SIGNAL",
+            "middleman_guard_denied_signal_reports_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // R23-002: explicit unsupported_arch skip (the
+        // probe stages nothing on this path — no custody
+        // to run — so the check precedes the M2 parse).
+        if stderr.contains("R22007-SKIP") {
+            eprintln!(
+                "skip: seccomp send-signal denial unsupported on this arch (see probe stderr)"
+            );
+            return;
+        }
+        let (m2, tick2): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22007-M2 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m2 line?)");
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "parent must retire the survivor"
+        );
+        assert!(out.status.success(), "probe must complete\n{stderr}");
+        assert!(
+            stderr.contains("R22007-PIN-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22007-PIN-DENIED"),
+            "drop must go loud when the pin signal is denied\n{stderr}"
+        );
+    }
+
+    /// R23-011 site 1: the grandchild stat read fails (fd
+    /// outage) AFTER the pair guard armed — the unwind
+    /// must discharge the pair (m1 reaped by the drop, m2
+    /// killed, orphan drained via init). Fresh-image probe
+    /// (the outage is process-global); the probe runs
+    /// twice — the unguarded bad control (must STRAND,
+    /// proving the leg discriminates — swept loud after)
+    /// and the guarded shape (must discharge clean).
+    /// Duration 878 is unique to this test.
+    #[test]
+    fn r22007_stat_failure_discharges_through_guard() {
+        if std::env::var("SCOPEBASE_R23011_STAT_OUTAGE").is_ok() {
+            r22007_stat_failure_discharges_through_guard_probe();
+            return;
+        }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before either probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+        for no_arm in [true, false] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("--exact")
+                .arg("fixture::linux::fork::tests::r22007_stat_failure_discharges_through_guard")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R23011_STAT_OUTAGE", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if no_arm {
+                cmd.env("SCOPEBASE_R23011_NO_ARM", "1");
+            }
+            let out = cmd.output().expect("probe runs");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            assert!(
+                out.status.success(),
+                "probe must exit 0 (measurement, never verdict)\n{stderr}"
+            );
+            let (m1, tick1, m2, tick2): (libc::pid_t, u64, libc::pid_t, u64) = stdout
+                .lines()
+                .find_map(|line| {
+                    let rest = line.strip_prefix("R23011-PAIR ")?;
+                    let mut words = rest.split_whitespace();
+                    Some((
+                        words.next()?.parse().ok()?,
+                        words.next()?.parse().ok()?,
+                        words.next()?.parse().ok()?,
+                        words.next()?.parse().ok()?,
+                    ))
+                })
+                .expect("probe must print custody");
+            let marked = if stdout.contains("R23011-DISCHARGED") {
+                true
+            } else {
+                assert!(
+                    stdout.contains("R23011-STRANDED"),
+                    "probe must mark the outcome\n{stdout}"
+                );
+                false
+            };
+            if no_arm {
+                // Bad control: unguarded MUST strand (else
+                // the leg is vacuous) — then sweep loud.
+                assert!(!marked, "bad control must strand (vacuous otherwise)");
+                kill_tick_gated_fork(m1, tick1);
+                assert!(
+                    birth_drained(m1, tick1, std::time::Duration::from_secs(5)),
+                    "wrapper must drain the stranded m1"
+                );
+                assert!(
+                    kill_sleep_with_dur("878", anchor),
+                    "wrapper must drain the stranded sleep 878"
+                );
+                eprintln!("R23011: bad control stranded + swept as designed");
+            } else {
+                // Guarded: must discharge — wrapper
+                // re-verifies birth-aware (absent OR
+                // different-birth — never vacancy-only).
+                assert!(marked, "guarded probe must discharge\n{stdout}\n{stderr}");
+                match fork_starttime(m1) {
+                    Ok(Some(now)) => assert_ne!(now, tick1, "m1 birth must be retired"),
+                    Ok(None) => {}
+                    Err(error) => panic!("m1 drainage unverifiable: {error}"),
+                }
+                match fork_starttime(m2) {
+                    Ok(Some(now)) => assert_ne!(now, tick2, "m2 birth must be retired"),
+                    Ok(None) => {}
+                    Err(error) => panic!("m2 drainage unverifiable: {error}"),
+                }
+                assert!(
+                    !live_sleep_with_dur("878"),
+                    "no live sleep-878 may survive the guarded probe"
+                );
+            }
+        }
+    }
+
+    /// R23-011 site-1 probe (fresh image): stage the pair,
+    /// arm unless the bad-control env is set, transmit
+    /// custody, exhaust fds, and fail the grandchild stat
+    /// read through a caught unwind (the guard drops
+    /// during the unwind — the outage hold drops first,
+    /// so the drop's verify reads work). Marks
+    /// DISCHARGED/STRANDED after a settle (init latency);
+    /// exits 0 either way (the wrapper judges).
+    fn r22007_stat_failure_discharges_through_guard_probe() {
+        use std::panic::AssertUnwindSafe;
+        use std::time::{Duration, Instant};
+        let no_arm = std::env::var("SCOPEBASE_R23011_NO_ARM").is_ok();
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("878") }.expect("pair staged");
+        let tick1 = fork_starttime(m1)
+            .expect("staging broken (m1 stat)")
+            .expect("staging broken (m1 visible)");
+        let tick2 = fork_starttime(m2)
+            .expect("staging broken (m2 stat)")
+            .expect("staging broken (m2 visible)");
+        println!("R23011-PAIR {m1} {tick1} {m2} {tick2}");
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            // Guard BEFORE the hold (unwind drops the hold
+            // first, then the guard with working fds).
+            let _pair = (!no_arm).then(|| MiddlemanPairGuard::armed(m1, m2));
+            let _hold = OutageHold::exhaust();
+            // Anti-vacuity: the outage bites exactly here.
+            assert!(
+                fork_starttime(m2).is_err(),
+                "staging broken (stat readable under hold?)"
+            );
+            fork_starttime(m2)
+                .expect("m2 stat readable")
+                .expect("m2 visible");
+        }));
+        assert!(outcome.is_err(), "staging broken (stat must fail under outage)");
+        // Settle + mark (m2 orphans to init on discharge —
+        // init latency, polled; a strand stays live past
+        // the bound).
+        let end = Instant::now() + Duration::from_secs(5);
+        let (mut m1gone, mut m2gone) = (false, false);
+        while Instant::now() < end {
+            m1gone = fork_starttime(m1) != Ok(Some(tick1));
+            m2gone = fork_starttime(m2) != Ok(Some(tick2));
+            if m1gone && m2gone {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if m1gone && m2gone {
+            println!("R23011-DISCHARGED");
+        } else {
+            println!("R23011-STRANDED");
+        }
+    }
+
     /// R22-004(a): reap proof by /proc ABSENCE —
-    /// zombies retain /proc entries, so absence ⟺ reaped
+    /// zombies retain /proc entries, so absence ⟹ reaped
     /// (no waitpid — a wait would steal a recycled sibling
     /// zombie's status: R21-001-class). `Ok(true)` = absent
     /// ⟹ reaped; `Ok(false)` = present ⟹ UNPROVEN (our
@@ -3574,7 +4563,12 @@ mod tests {
     /// mapping with no cheap fault (a non-NotFound /proc
     /// read error needs EMFILE — fresh-image-only per
     /// R22-012); the absence/presence/no-steal legs carry
-    /// the regression below.
+    /// the regression below. R23-019: vacancy-only — a
+    /// recycled occupant reads `Ok(false)` (inconclusive,
+    /// never a cleanup defect); post-reap retirement
+    /// claims use [`prove_reaped_gone_or_recycled`]
+    /// (tick-aware — a different-birth occupant keeps the
+    /// evidence valid instead of failing the test).
     fn prove_reaped_by_absence(pid: libc::pid_t) -> Result<bool, String> {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
@@ -3583,27 +4577,35 @@ mod tests {
         }
     }
 
-    /// R21-009: starttime read for the regression's
-    /// birth-aware checks (fork-local — audit's helper is
-    /// out of reach). `Ok(None)` is proven absence
-    /// (ENOENT); anything else unreadable is `Err`.
-    fn fork_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
-        let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
-        let after = text
-            .rsplit_once(") ")
-            .map(|pair| pair.1)
-            .ok_or_else(|| "comm shape".to_string())?;
-        after
-            .split_whitespace()
-            .nth(19)
-            .ok_or_else(|| "starttime field".to_string())?
-            .parse::<u64>()
-            .map(Some)
-            .map_err(|error| error.to_string())
+    /// R23-019: tick-aware reap proof — the vacancy-only
+    /// bool above fails a correctly retired birth when a
+    /// different-birth occupant reuses the number. `Gone`
+    /// = absent ⟹ reaped; `Recycled` = a different birth
+    /// holds the number ⟹ OUR birth reaped (retirement
+    /// valid, vacancy unproven); `StillOurs` = our birth
+    /// present ⟹ NOT reaped (RED); `Unreadable` = outage
+    /// ⟹ inconclusive (loud, never certified). Callers
+    /// match explicitly (never `== Gone` — a recycled
+    /// occupant must keep the evidence valid, and an
+    /// unreadable birth must refuse to certify).
+    enum ReapedProof {
+        Gone,
+        Recycled(u64),
+        StillOurs,
+        Unreadable(String),
+    }
+
+    /// R23-019: prove the `tick` birth on `pid` reaped
+    /// (gone-or-recycled — see [`ReapedProof`]). No
+    /// waitpid (same R21-001-class no-steal contract as
+    /// [`prove_reaped_by_absence`]).
+    fn prove_reaped_gone_or_recycled(pid: libc::pid_t, tick: u64) -> ReapedProof {
+        match fork_starttime(pid) {
+            Ok(None) => ReapedProof::Gone,
+            Ok(Some(now)) if now == tick => ReapedProof::StillOurs,
+            Ok(Some(now)) => ReapedProof::Recycled(now),
+            Err(error) => ReapedProof::Unreadable(error),
+        }
     }
 
     /// R21-009: tight EMFILE hold (confine soft NOFILE
@@ -3736,19 +4738,25 @@ mod tests {
     /// (in-process EMFILE breaks descriptor siblings and
     /// bypasses audit's confinement bookkeeping — the hold
     /// must never live in the suite process). The wrapper
-    /// spawns self `--exact` with the env flag, hammers
-    /// sibling fd-ops while the child runs (all must
-    /// succeed — the child's table is its own), then
-    /// asserts exit 0 + discharge markers + holder-pid !=
+    /// spawns self `--exact` with the env flag, rendezvouses
+    /// (R23-020: ENTER when the child opens the fault window,
+    /// exactly 101 sibling fd-ops INSIDE it, GO to release —
+    /// overlap by construction, never by scheduling luck),
+    /// then asserts exit 0 + discharge markers + holder-pid !=
     /// self (STRUCTURAL: an in-process reintroduction
-    /// fails here deterministically) + rlimit preserved.
+    /// fails here deterministically) + GO-MISSING absent
+    /// (the child saw the hammered window) + the child's
+    /// own rlimit-restore marker (R23-021: the confine lives
+    /// in the child — proven there, where no sibling can
+    /// interleave; the old parent-side equality
+    /// misattributed concurrent sibling transitions).
     /// The child stages its OWN pair (it is the parent —
-    /// kill+reap both work there), arms the guard, faults
-    /// the first read under its own EMFILE hold (inside
-    /// catch_unwind), then proves both original births
-    /// drained (birth-aware; unreadable fails). Duration
-    /// 108 is unique to this test. Pre-fix RED
-    /// (unguarded): the pair strands (m1 pausing, m2
+    /// kill+reap both work there), arms the guard, blocks on
+    /// GO inside its EMFILE hold, faults the first read,
+    /// then proves both original births drained
+    /// (birth-aware; unreadable fails) and its rlimit
+    /// restored. Duration 108 is unique to this test. Pre-fix
+    /// RED (unguarded): the pair strands (m1 pausing, m2
     /// sleeping) — proven by neutering the guard line.
     /// R22-014: the fault child rides a birth guard (a
     /// hammer-loop panic retires it — no orphan transient;
@@ -3761,32 +4769,70 @@ mod tests {
             return;
         }
         let me = std::process::id();
-        let limit_before = nofile_soft_limit();
         let exe = std::env::current_exe().expect("own test binary");
+        // R23-020: stdin piped (the GO byte rides it — the
+        // child blocks in the fault window until the parent
+        // has hammered INSIDE it).
         let mut child = std::process::Command::new(exe)
             .arg("--exact")
             .arg("fixture::linux::fork::tests::middleman_pair_guard_discharges_on_first_read_failure")
             .arg("--nocapture")
             .env(R22012_FAULT_ENV, "1")
-            .stdin(std::process::Stdio::null())
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("fault child spawns");
         let mut _cguard = ForkChildGuard::new(child.id() as libc::pid_t);
-        // Sibling hammer while the child runs (bounded
-        // 60 s — a hung child is killed loud, never an
-        // unbounded hang).
-        let mut hammered = 0u64;
+        let mut child_stdin = child.stdin.take().expect("fault child stdin piped");
+        let mut child_stdout = child.stdout.take().expect("fault child stdout piped");
+        let child_stderr = child.stderr.take().expect("fault child stderr piped");
+        // SAFETY: fcntl O_NONBLOCK on our own pipe fd only.
+        use std::os::unix::io::AsRawFd as _;
+        let flags = unsafe { libc::fcntl(child_stderr.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "stderr fcntl F_GETFL failed");
+        assert_eq!(
+            unsafe { libc::fcntl(child_stderr.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0,
+            "stderr fcntl O_NONBLOCK failed"
+        );
+        use std::io::BufRead as _;
+        let mut stderr_lines = std::io::BufReader::new(child_stderr);
+        let mut stderr = String::new();
+        // R23-020 phase 1: ENTER (the child staged its pair
+        // and opened the fault window — hold alive, pair
+        // guarded, blocked on our GO). EOF/deadline fail
+        // loud (a child that never ENTERs never runs the
+        // hammered window — never a silent pass).
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
-            if child.try_wait().expect("child waitable").is_some() {
+            if stderr.contains("R22012-FAULT-ENTER") {
                 break;
             }
-            if std::time::Instant::now() >= deadline {
-                let _ = child.kill();
-                panic!("fault child hung past 60 s (killed loud)");
+            let mut chunk = String::new();
+            match stderr_lines.read_line(&mut chunk) {
+                Ok(0) => {
+                    let _ = child.wait();
+                    _cguard.disarm();
+                    panic!("fault child died before ENTER\n{stderr}");
+                }
+                Ok(_) => stderr.push_str(&chunk),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        panic!("fault child hung pre-ENTER past 60 s (killed loud)");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => panic!("fault child stderr unreadable: {error}"),
             }
+        }
+        // R23-020: the hammer lands INSIDE the window by
+        // construction (the child is blocked on our GO
+        // below — overlap needs no scheduling luck). The
+        // count is exact (tripwire against loop edits).
+        let mut hammered = 0u64;
+        for _ in 0..101 {
             hammer_sibling_fd_op().expect("sibling fd-op succeeds during fresh-image fault");
             hammered += 1;
         }
@@ -3794,13 +4840,57 @@ mod tests {
             hammered > 100,
             "hammer must pressure the fault window (got {hammered})"
         );
-        let out = child.wait_with_output().expect("child reaps");
+        // R23-020 phase 2: GO (the child faults + discharges)
+        // then EOF (markers collected above + below).
+        use std::io::Write as _;
+        child_stdin
+            .write_all(b"G")
+            .expect("GO lands");
+        drop(child_stdin);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let mut chunk = String::new();
+            match stderr_lines.read_line(&mut chunk) {
+                Ok(0) => break,
+                Ok(_) => stderr.push_str(&chunk),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        panic!("fault child hung mid-scenario past 60 s (killed loud)");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => panic!("fault child stderr unreadable: {error}"),
+            }
+        }
+        // Harness chatter (small — EOF already, drains at once).
+        let mut _stdout_buf = Vec::new();
+        use std::io::Read as _;
+        child_stdout
+            .read_to_end(&mut _stdout_buf)
+            .expect("stdout drains");
+        let status = child.wait().expect("child reaps");
         _cguard.disarm();
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        assert!(out.status.success(), "fault child must exit 0\n{stderr}");
+        assert!(status.success(), "fault child must exit 0\n{stderr}");
         assert!(
             stderr.contains("R22012-DISCHARGED"),
             "discharge marker\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("R22012-GO-MISSING"),
+            "GO must land (the child saw the hammered window)\n{stderr}"
+        );
+        // R23-021: the confine lives in the CHILD (proven by
+        // its own marker below) — the old parent-side exact
+        // equality misattributed concurrent sibling
+        // transitions to this child (a sibling hold between
+        // the snapshots fails it with no fault at all).
+        // Child non-interference stays pinned structurally
+        // (holder != self here — a separate image cannot
+        // touch our rlimit).
+        assert!(
+            stderr.contains("R22012-RLIMIT-OK"),
+            "rlimit-restore marker\n{stderr}"
         );
         let holder: u32 = stderr
             .lines()
@@ -3812,11 +4902,6 @@ mod tests {
         assert_ne!(
             holder, me,
             "fault must run in the child image (in-process reintroduction fails here)"
-        );
-        assert_eq!(
-            nofile_soft_limit(),
-            limit_before,
-            "rlimit preserved across the fault"
         );
     }
 
@@ -3913,9 +4998,28 @@ mod tests {
             .expect("grandchild stat readable")
             .expect("grandchild visible");
         outer.disarm();
+        // R23-021: snapshot OUR rlimit (the confine lives in
+        // THIS image — the restore is proven here, where no
+        // sibling can interleave).
+        let rlim_before = nofile_soft_limit();
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pair = MiddlemanPairGuard::armed(m1, m2);
             let _hold = OutageHold::exhaust();
+            // R23-020: rendezvous — the fault window is OPEN
+            // (hold alive, pair guarded); the parent hammers
+            // INSIDE it (101 ops between this line and the GO
+            // below — overlap by construction, never by
+            // scheduling luck). The stdin read needs no new
+            // fd (holds under EMFILE); EOF (parent died
+            // pre-hammer) marks GO-MISSING (the parent
+            // asserts the marker absent — a missing GO never
+            // passes silently).
+            eprintln!("R22012-FAULT-ENTER");
+            let mut go = [0u8; 1];
+            if std::io::Read::read_exact(&mut std::io::stdin().lock(), &mut go).is_err() {
+                eprintln!("R22012-GO-MISSING");
+                panic!("staging broken (GO unreadable — parent died pre-hammer?)");
+            }
             std::fs::read_to_string(format!("/proc/{m2}/stat")).expect("first read");
         }));
         assert!(failed.is_err(), "faulted first read must panic");
@@ -3934,6 +5038,16 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+        // R23-021: the hold applied + restored between OUR
+        // snapshots (the controlled transition the parent
+        // cannot observe attribution-correctly — fresh
+        // image, no siblings: deterministic).
+        let rlim_after = nofile_soft_limit();
+        assert_eq!(
+            rlim_after, rlim_before,
+            "rlimit must restore across the fault (in-child confine leaked?)"
+        );
+        eprintln!("R22012-RLIMIT-OK {rlim_before} {rlim_after}");
         eprintln!("R22012-DISCHARGED");
     }
 }

@@ -3742,8 +3742,29 @@ impl Drop for MiddlemanPairGuard {
                 Ok(pin) => {
                     // SAFETY: pidfd_send_signal to our
                     // pinned grandchild-birth only.
-                    unsafe {
-                        libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                    let sent = unsafe {
+                        libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0)
+                    };
+                    // R23-013 (twin mirror): a successful
+                    // pidfd_open does not guarantee signaling
+                    // is permitted — a denied signal silently
+                    // abandoned m2. ESRCH ⟹ m2 already
+                    // drained (harmless, silent); anything
+                    // else goes loud with m2's identity (the
+                    // caller retires the survivor via
+                    // transmitted custody).
+                    if sent != 0 {
+                        let errno = std::io::Error::last_os_error()
+                            .raw_os_error()
+                            .unwrap_or(-999);
+                        if errno != libc::ESRCH {
+                            eprintln!(
+                                "R22007-PIN-DENIED middleman m1={} zombie-reaped, m2={} signal denied \
+                                 (errno {errno}) — m2 birth surviving, custody unresolved \
+                                 (caller owns the residual via transmitted custody)",
+                                self.m1, self.m2
+                            );
+                        }
                     }
                 }
                 Err(errno) => {
@@ -3769,16 +3790,34 @@ impl Drop for MiddlemanPairGuard {
             // Unexpected probe errno: m1's number unpinned
             // (never touch it); pin-kill m2 when held,
             // then report loud.
+            // R23-013 (twin mirror): same denied-signal
+            // discipline as the zombie arm above (this arm
+            // is ~unstageable — EINTR-ish waitpid failure —
+            // so the leg covers the zombie arm; the shape is
+            // shared).
             if let Ok(pin) = &self.m2pin {
                 // SAFETY: pidfd_send_signal to our pinned
                 // grandchild-birth only.
-                unsafe {
-                    libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                let sent = unsafe {
+                    libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0)
+                };
+                if sent != 0 {
+                    let sig_errno = std::io::Error::last_os_error()
+                        .raw_os_error()
+                        .unwrap_or(-999);
+                    if sig_errno != libc::ESRCH {
+                        eprintln!(
+                            "R22007-PIN-DENIED middleman m1={} probe-error, m2={} signal denied \
+                             (errno {sig_errno}) — m2 birth surviving, custody unresolved \
+                             (caller owns the residual via transmitted custody)",
+                            self.m1, self.m2
+                        );
+                    }
                 }
             }
             eprintln!(
                 "R22007-PROBE m1={} probe failed (errno {errno} — m1 state unknown, \
-                 number untouched); m2={} pin-killed when pinned",
+                 number untouched); m2={} pin-kill attempted when pinned",
                 self.m1, self.m2
             );
             return;
@@ -4003,13 +4042,14 @@ unsafe fn fork_pausing_grandchild_sleep(dur: &str) -> Option<(i32, i32)> {
 /// jammed-report variant — drops the report read end,
 /// birth-gates m2 (panics loud when unborn — never
 /// vacuous), runs the production tail. Returns the helper
-/// result plus m1 for the independent reap proof.
+/// result plus m1 plus m1's pre-tail birth for the
+/// independent reap proof (R23-019: gone-or-recycled).
 ///
 /// # Safety
 ///
 /// Same fork contract as the twin helper above.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
-unsafe fn fork_pausing_grandchild_sleep_jam_report(dur: &str) -> (Option<(i32, i32)>, i32) {
+unsafe fn fork_pausing_grandchild_sleep_jam_report(dur: &str) -> (Option<(i32, i32)>, i32, Option<u64>) {
     // SAFETY: same contract as the inner helper.
     unsafe { fork_pausing_grandchild_sleep_inner(dur, true, true) }
 }
@@ -4024,7 +4064,9 @@ unsafe fn fork_pausing_grandchild_sleep_jam_report(dur: &str) -> (Option<(i32, i
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 unsafe fn fork_pausing_grandchild_sleep_jam_noretire(dur: &str) -> Option<i32> {
     // SAFETY: same contract as the inner helper.
-    let (_, m1) = unsafe { fork_pausing_grandchild_sleep_inner(dur, true, false) };
+    // R23-019: m1's tick discarded (noretire callers pin
+    // their own — m1 is live on return).
+    let (_, m1, _) = unsafe { fork_pausing_grandchild_sleep_inner(dur, true, false) };
     (m1 > 0).then_some(m1)
 }
 
@@ -4107,12 +4149,12 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
     dur: &str,
     jam: bool,
     retire_on_jam: bool,
-) -> (Option<(i32, i32)>, i32) {
+) -> (Option<(i32, i32)>, i32, Option<u64>) {
     use std::os::unix::io::FromRawFd as _;
     let mut pipe = [0; 2];
     // SAFETY: pipe2 fills both ends.
     if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        return (None, -1);
+        return (None, -1, None);
     }
     let (read_fd, write_fd) = (pipe[0], pipe[1]);
     assert!(
@@ -4127,7 +4169,7 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
                 libc::close(read_fd);
                 libc::close(write_fd);
             }
-            return (None, -1);
+            return (None, -1, None);
         }
     };
     // SAFETY: fork itself is always safe; the middleman
@@ -4223,7 +4265,7 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
             libc::close(read_fd);
             libc::close(write_fd);
         }
-        return (None, -1);
+        return (None, -1, None);
     }
     // SAFETY: write end owned by this scope (the middleman
     // holds its own copy).
@@ -4265,10 +4307,25 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
                 }
             }
         }
+        // R23-019 (toolchain twin): retain m1's birth
+        // pre-tail (the gate proved m1 live — nothing kills
+        // it before the tail — so this read names OUR m1;
+        // the caller proves m1's reap gone-or-recycled).
+        let tick1 = match task_starttime_checked(m1) {
+            Ok(Some(tick1)) => tick1,
+            Ok(None) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m1 {m1} dead before the tail ran (nothing targets it — box wedged?) (pair retired before failing loud)");
+            }
+            Err(error) => {
+                retire_reportless_middleman(m1);
+                panic!("R21008-JAM: m1 {m1} birth unreadable pre-tail: {error} (pair retired before failing loud)");
+            }
+        };
         if retire_on_jam {
             retire_reportless_middleman(m1);
         }
-        return (None, m1);
+        return (None, m1, Some(tick1));
     }
     // Bounded report read (the middleman reports in µs).
     let mut poller = libc::pollfd {
@@ -4298,12 +4355,15 @@ unsafe fn fork_pausing_grandchild_sleep_inner(
         None
     };
     match m2 {
-        Some(m2) if m2 > 0 => (Some((m1, m2)), m1),
+        // R23-019 (toolchain twin): the birth retention
+        // is a JAM-arm product (non-jam callers pin their
+        // own).
+        Some(m2) if m2 > 0 => (Some((m1, m2)), m1, None),
         _ => {
             // Report failure: FULL retirement before None
             // (R21-008, same as lib).
             retire_reportless_middleman(m1);
-            (None, m1)
+            (None, m1, None)
         }
     }
 }
@@ -4438,11 +4498,13 @@ fn middleman_guard_zombie_m1_retires_m2_via_pin() {
     use std::panic::AssertUnwindSafe;
     use std::time::Duration;
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("992") }.expect("pair staged");
+    // R23-011: arm BEFORE the stat read (a failing
+    // observation must unwind through the guard).
+    let _pair = MiddlemanPairGuard::armed(m1, m2);
     let tick2 = task_starttime_checked(m2)
         .expect("m2 stat readable")
         .expect("m2 visible");
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let _pair = MiddlemanPairGuard::armed(m1, m2);
         assert_eq!(
             unsafe { libc::kill(m1, libc::SIGKILL) },
             0,
@@ -4451,6 +4513,7 @@ fn middleman_guard_zombie_m1_retires_m2_via_pin() {
         settle_zombie_007(m1);
         panic!("simulated observation failure");
     }));
+    drop(_pair);
     assert!(outcome.is_err(), "staging broken (must unwind)");
     assert_eq!(
         task_starttime_checked(m1),
@@ -4471,10 +4534,12 @@ fn middleman_guard_zombie_m1_retires_m2_via_pin() {
 fn middleman_guard_echild_after_tail_returns_clean() {
     use std::time::{Duration, Instant};
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("993") }.expect("pair staged");
+    // R23-011: arm BEFORE the stat read (a failing
+    // observation must unwind through the guard).
+    let pair = MiddlemanPairGuard::armed(m1, m2);
     let tick2 = task_starttime_checked(m2)
         .expect("m2 stat readable")
         .expect("m2 visible");
-    let pair = MiddlemanPairGuard::armed(m1, m2);
     assert_eq!(
         unsafe { libc::kill(m2, libc::SIGKILL) },
         0,
@@ -4515,12 +4580,14 @@ fn middleman_guard_unpinned_zombie_leaves_m2_for_caller() {
     use std::panic::AssertUnwindSafe;
     use std::time::Duration;
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("994") }.expect("pair staged");
+    // R23-011: arm BEFORE the stat read (a failing
+    // observation must unwind through the guard).
+    let mut pair = MiddlemanPairGuard::armed(m1, m2);
+    pair.m2pin = Err(libc::EPERM);
     let tick2 = task_starttime_checked(m2)
         .expect("m2 stat readable")
         .expect("m2 visible");
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let mut pair = MiddlemanPairGuard::armed(m1, m2);
-        pair.m2pin = Err(libc::EPERM);
         assert_eq!(
             unsafe { libc::kill(m1, libc::SIGKILL) },
             0,
@@ -4529,6 +4596,7 @@ fn middleman_guard_unpinned_zombie_leaves_m2_for_caller() {
         settle_zombie_007(m1);
         panic!("simulated observation failure");
     }));
+    drop(pair);
     assert!(outcome.is_err(), "staging broken (must unwind)");
     // SAFETY: signal 0 probes only.
     assert_eq!(
@@ -4575,12 +4643,14 @@ fn middleman_guard_denied_pin_reports_unpinned_probe() {
         "staging broken (pidfd_open not denied?)"
     );
     let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("995") }.expect("pair staged");
+    // R23-011: arm BEFORE the stat read (a failing
+    // observation must unwind through the guard).
+    let _pair = MiddlemanPairGuard::armed(m1, m2);
     let tick2 = task_starttime_checked(m2)
         .expect("m2 stat readable")
         .expect("m2 visible");
     println!("R22007-M2 {m2} {tick2}");
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let _pair = MiddlemanPairGuard::armed(m1, m2);
         assert_eq!(
             unsafe { libc::kill(m1, libc::SIGKILL) },
             0,
@@ -4589,6 +4659,7 @@ fn middleman_guard_denied_pin_reports_unpinned_probe() {
         settle_zombie_007(m1);
         panic!("simulated observation failure");
     }));
+    drop(_pair);
     assert!(outcome.is_err(), "staging broken (must unwind)");
     eprintln!("R22007-PIN-DONE");
 }
@@ -4638,6 +4709,265 @@ fn middleman_guard_denied_pin_reports_unpinned() {
         stderr.contains("R22007-UNPINNED"),
         "drop must go loud when unpinned\n{stderr}"
     );
+}
+
+/// R23-013 denied-signal probe (toolchain twin, fresh
+/// image): mirror of the lib probe — seccomp-deny
+/// `pidfd_send_signal` in SELF (the pin genuinely
+/// acquires), then zombie-m1 + unwind; the drop must go
+/// LOUD (R22007-PIN-DENIED naming m2) and m2 survives for
+/// the parent (wrapper custody via the transmitted
+/// birth). Duration 844 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn middleman_guard_denied_signal_reports_unresolved_probe() {
+    use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
+    use std::panic::AssertUnwindSafe;
+    // R23-002: `unsupported_arch` skips explicitly
+    // (seccomp denial is x86-only — exit 0 with the SKIP
+    // marker; the wrapper judges the marker, never the
+    // install). Any other install failure is still
+    // staging-broken.
+    if let Err(error) = install_deny_one(libc::SYS_pidfd_send_signal, DenyAction::Eperm) {
+        if error.stage() == "unsupported_arch" {
+            eprintln!("R22007-SKIP unsupported_arch (seccomp denial unavailable)");
+            return;
+        }
+        panic!("deny installs (staging): {error}");
+    }
+    // Anti-vacuity: the pin ACQUIRES (open allowed) but
+    // the signal is DENIED (self-probe, signal 0 —
+    // queries only, sends nothing).
+    let selfpin = scopebase_testkit::fixture::linux::seccomp::pidfd_open_raw(
+        std::process::id() as i32,
+    )
+    .expect("staging broken (pin acquisition must be allowed)");
+    // SAFETY: signal 0 queries only (denial probe).
+    let sent = unsafe { libc::syscall(libc::SYS_pidfd_send_signal, selfpin, 0, 0, 0) };
+    let denied_errno = std::io::Error::last_os_error().raw_os_error();
+    // SAFETY: fd owned by this probe.
+    unsafe { libc::close(selfpin) };
+    assert_eq!(
+        (sent, denied_errno),
+        (-1, Some(libc::EPERM)),
+        "staging broken (send-signal not denied?)"
+    );
+    let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("844") }.expect("pair staged");
+    // R23-011: arm BEFORE the stat read (a failing
+    // observation must unwind through the guard).
+    let _pair = MiddlemanPairGuard::armed(m1, m2);
+    let tick2 = task_starttime_checked(m2)
+        .expect("m2 stat readable")
+        .expect("m2 visible");
+    println!("R22007-M2 {m2} {tick2}");
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        assert_eq!(
+            unsafe { libc::kill(m1, libc::SIGKILL) },
+            0,
+            "staging broken (m1 kill)"
+        );
+        settle_zombie_007(m1);
+        panic!("simulated observation failure");
+    }));
+    drop(_pair);
+    assert!(outcome.is_err(), "staging broken (must unwind)");
+    eprintln!("R22007-PIN-DONE");
+}
+
+/// R23-013 denied-signal wrapper (toolchain twin): mirror
+/// of the lib wrapper (fresh image; cleanup before
+/// verdict).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn middleman_guard_denied_signal_reports_unresolved() {
+    use std::time::Duration;
+    if std::env::var("SCOPEBASE_R23013_DENY_SIGNAL_TWIN").is_ok() {
+        middleman_guard_denied_signal_reports_unresolved_probe();
+        return;
+    }
+    let out = run_fresh_probe_bounded(
+        "SCOPEBASE_R23013_DENY_SIGNAL_TWIN",
+        "middleman_guard_denied_signal_reports_unresolved",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // R23-002: explicit unsupported_arch skip (the probe
+    // stages nothing on this path — no custody to run —
+    // so the check precedes the M2 parse).
+    if stderr.contains("R22007-SKIP") {
+        eprintln!("skip: seccomp send-signal denial unsupported on this arch (see probe stderr)");
+        return;
+    }
+    let (m2, tick2): (i32, u64) = stdout
+        .lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("R22007-M2 ")?;
+            let (pid, tick) = rest.split_once(' ')?;
+            Some((pid.parse().ok()?, tick.parse().ok()?))
+        })
+        .expect("staging broken (no m2 line?)");
+    kill_tick_gated(m2, tick2);
+    assert!(
+        birth_drained_007(m2, tick2, Duration::from_secs(5)),
+        "parent must retire the survivor"
+    );
+    assert!(out.status.success(), "probe must complete\n{stderr}");
+    assert!(
+        stderr.contains("R22007-PIN-DONE"),
+        "probe must cite completion\n{stderr}"
+    );
+    assert!(
+        stderr.contains("R22007-PIN-DENIED"),
+        "drop must go loud when the pin signal is denied\n{stderr}"
+    );
+}
+
+/// R23-011 site 1 (toolchain twin): mirror of the lib
+/// leg — the grandchild stat read fails (fd outage)
+/// AFTER the pair guard armed; the unwind must
+/// discharge the pair. Fresh-image probe; unguarded bad
+/// control (must strand, swept loud after) + guarded
+/// shape (must discharge clean). Duration 880 is unique
+/// to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r22007_stat_failure_discharges_through_guard() {
+    if std::env::var("SCOPEBASE_R23011_STAT_OUTAGE_TWIN").is_ok() {
+        r22007_stat_failure_discharges_through_guard_probe();
+        return;
+    }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before either probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+    for no_arm in [true, false] {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--exact")
+            .arg("r22007_stat_failure_discharges_through_guard")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R23011_STAT_OUTAGE_TWIN", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if no_arm {
+            cmd.env("SCOPEBASE_R23011_NO_ARM", "1");
+        }
+        let out = cmd.output().expect("probe runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must exit 0 (measurement, never verdict)\n{stderr}"
+        );
+        let (m1, tick1, m2, tick2): (i32, u64, i32, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R23011-PAIR ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                ))
+            })
+            .expect("probe must print custody");
+        let marked = if stdout.contains("R23011-DISCHARGED") {
+            true
+        } else {
+            assert!(
+                stdout.contains("R23011-STRANDED"),
+                "probe must mark the outcome\n{stdout}"
+            );
+            false
+        };
+        if no_arm {
+            // Bad control: unguarded MUST strand (else the
+            // leg is vacuous) — then sweep loud.
+            assert!(!marked, "bad control must strand (vacuous otherwise)");
+            kill_tick_gated(m1, tick1);
+            assert!(
+                birth_drained_007(m1, tick1, std::time::Duration::from_secs(5)),
+                "wrapper must drain the stranded m1"
+            );
+            assert!(
+                kill_sleep_with_dur("880", anchor),
+                "wrapper must drain the stranded sleep 880"
+            );
+            eprintln!("R23011: bad control stranded + swept as designed");
+        } else {
+            // Guarded: must discharge — wrapper re-verifies
+            // birth-aware (absent OR different-birth).
+            assert!(marked, "guarded probe must discharge\n{stdout}\n{stderr}");
+            match task_starttime_checked(m1) {
+                Ok(Some(now)) => assert_ne!(now, tick1, "m1 birth must be retired"),
+                Ok(None) => {}
+                Err(error) => panic!("m1 drainage unverifiable: {error}"),
+            }
+            match task_starttime_checked(m2) {
+                Ok(Some(now)) => assert_ne!(now, tick2, "m2 birth must be retired"),
+                Ok(None) => {}
+                Err(error) => panic!("m2 drainage unverifiable: {error}"),
+            }
+            assert!(
+                !live_sleep_with_dur("880"),
+                "no live sleep-880 may survive the guarded probe"
+            );
+        }
+    }
+}
+
+/// R23-011 site-1 probe (toolchain twin, fresh image):
+/// mirror of the lib probe (stage, arm unless bad
+/// control, transmit custody, exhaust fds, fail the
+/// grandchild stat through a caught unwind). Marks
+/// DISCHARGED/STRANDED after a settle; exits 0 either
+/// way (the wrapper judges).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn r22007_stat_failure_discharges_through_guard_probe() {
+    use std::panic::AssertUnwindSafe;
+    use std::time::{Duration, Instant};
+    let no_arm = std::env::var("SCOPEBASE_R23011_NO_ARM").is_ok();
+    let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("880") }.expect("pair staged");
+    let tick1 = task_starttime_checked(m1)
+        .expect("staging broken (m1 stat)")
+        .expect("staging broken (m1 visible)");
+    let tick2 = task_starttime_checked(m2)
+        .expect("staging broken (m2 stat)")
+        .expect("staging broken (m2 visible)");
+    println!("R23011-PAIR {m1} {tick1} {m2} {tick2}");
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        // Guard BEFORE the hold (unwind drops the hold
+        // first, then the guard with working fds).
+        let _pair = (!no_arm).then(|| MiddlemanPairGuard::armed(m1, m2));
+        let _hold = OutageHold::exhaust();
+        // Anti-vacuity: the outage bites exactly here.
+        assert!(
+            task_starttime_checked(m2).is_err(),
+            "staging broken (stat readable under hold?)"
+        );
+        task_starttime_checked(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+    }));
+    assert!(outcome.is_err(), "staging broken (stat must fail under outage)");
+    // Settle + mark (m2 orphans to init on discharge —
+    // init latency, polled; a strand stays live past the
+    // bound).
+    let end = Instant::now() + Duration::from_secs(5);
+    let (mut m1gone, mut m2gone) = (false, false);
+    while Instant::now() < end {
+        m1gone = task_starttime_checked(m1) != Ok(Some(tick1));
+        m2gone = task_starttime_checked(m2) != Ok(Some(tick2));
+        if m1gone && m2gone {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if m1gone && m2gone {
+        println!("R23011-DISCHARGED");
+    } else {
+        println!("R23011-STRANDED");
+    }
 }
 
 /// R21-008 (toolchain twin): faithful port of the lib
@@ -4699,16 +5029,46 @@ fn live_sleep_with_dur(dur: &str) -> bool {
 
 /// R22-004(a) (toolchain twin): mirror of the lib
 /// absence-proof — zombies retain /proc entries, so
-/// absence ⟺ reaped (no waitpid — a wait would steal a
+/// absence ⟹ reaped (no waitpid — a wait would steal a
 /// recycled sibling zombie's status). `Ok(true)` = absent
 /// ⟹ reaped; `Ok(false)` = present ⟹ UNPROVEN (fail
-/// closed); `Err` = outage (fails loud).
+/// closed); `Err` = outage (fails loud). R23-019:
+/// vacancy-only — a recycled occupant reads `Ok(false)`
+/// (inconclusive, never a cleanup defect); post-reap
+/// retirement claims use the tick-aware proof below.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn prove_reaped_by_absence_toolchain(pid: i32) -> Result<bool, String> {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(error) => Err(error.to_string()),
         Ok(_) => Ok(false),
+    }
+}
+
+/// R23-019 (toolchain twin): mirror of the lib tick-aware
+/// reap proof — `Gone` = absent ⟹ reaped; `Recycled` = a
+/// different birth holds the number ⟹ OUR birth reaped
+/// (retirement valid, vacancy unproven); `StillOurs` = our
+/// birth present ⟹ NOT reaped (RED); `Unreadable` = outage
+/// ⟹ inconclusive (loud, never certified).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+enum ReapedProofToolchain {
+    Gone,
+    Recycled(u64),
+    StillOurs,
+    Unreadable(String),
+}
+
+/// R23-019 (toolchain twin): prove the `tick` birth on
+/// `pid` reaped (gone-or-recycled). No waitpid (same
+/// no-steal contract as the bool proof above).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn prove_reaped_gone_or_recycled_toolchain(pid: i32, tick: u64) -> ReapedProofToolchain {
+    match task_starttime_checked(pid) {
+        Ok(None) => ReapedProofToolchain::Gone,
+        Ok(Some(now)) if now == tick => ReapedProofToolchain::StillOurs,
+        Ok(Some(now)) => ReapedProofToolchain::Recycled(now),
+        Err(error) => ReapedProofToolchain::Unreadable(error),
     }
 }
 
@@ -4720,16 +5080,25 @@ fn prove_reaped_by_absence_toolchain(pid: i32) -> Result<bool, String> {
 #[test]
 fn jammed_report_retires_both_before_none() {
     use std::time::{Duration, Instant};
-    let (result, m1) = unsafe { fork_pausing_grandchild_sleep_jam_report("958") };
+    let (result, m1, tick1) = unsafe { fork_pausing_grandchild_sleep_jam_report("958") };
     assert!(result.is_none(), "jammed report must yield None (tail ran)");
     assert!(m1 > 0, "jam exposes m1 for the reap proof");
-    // R22-004(a): /proc absence, never a wait (a recycled
-    // sibling zombie would lose its status to a waitpid).
-    assert_eq!(
-        prove_reaped_by_absence_toolchain(m1),
-        Ok(true),
-        "m1 must be reaped already (/proc gone — present means RED or unproven)"
-    );
+    // R23-019: the pre-tail m1 birth (the gate proved m1
+    // live — always Some here, panicking rather than
+    // returning unstaked).
+    let tick1 = tick1.expect("jam gate retains m1 pre-tail (staging?)");
+    // R22-004(a): gone-or-recycled over the retained birth,
+    // never a wait (a recycled sibling zombie would lose
+    // its status to a waitpid).
+    match prove_reaped_gone_or_recycled_toolchain(m1, tick1) {
+        ReapedProofToolchain::Gone | ReapedProofToolchain::Recycled(_) => {}
+        ReapedProofToolchain::StillOurs => panic!(
+            "RED: our m1 birth {m1}/{tick1} still present (tail did not reap?)"
+        ),
+        ReapedProofToolchain::Unreadable(error) => {
+            panic!("inconclusive (m1 unreadable: {error}) — refusing to certify")
+        }
+    }
     let end = Instant::now() + Duration::from_secs(10);
     while live_sleep_with_dur("958") {
         assert!(
@@ -4738,6 +5107,52 @@ fn jammed_report_retires_both_before_none() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    // R23-019 recycle leg (toolchain twin): a different-birth
+    // occupant on the freed m1 number keeps retirement evidence
+    // valid (the proof reads Recycled) while the vacancy-only
+    // check reports inconclusive (never certified, never a
+    // cleanup defect).
+    let _serial = match steer_hold() {
+        Some(guard) => guard,
+        None => return,
+    };
+    let (mut plant, mut plant_guard) = match plant_replacement(m1, tick1) {
+        Some(placed) => placed,
+        None => {
+            eprintln!("R23019-LEG[958] vacuous (plant contended)");
+            return;
+        }
+    };
+    let plant_tick = match task_starttime_checked(m1) {
+        Ok(Some(tick)) => tick,
+        other => panic!("staging broken (plant unreadable post-place: {other:?})"),
+    };
+    eprintln!("R23019-LEG[958] plant {m1}/{plant_tick} (victim tick {tick1})");
+    assert!(
+        plant_tick != tick1,
+        "staging broken (plant shares the victim tick?)"
+    );
+    match prove_reaped_gone_or_recycled_toolchain(m1, tick1) {
+        ReapedProofToolchain::Recycled(now) if now == plant_tick => {}
+        ReapedProofToolchain::Recycled(now) => panic!(
+            "staging broken (stranger birth {now} on our steered number {m1}?)"
+        ),
+        ReapedProofToolchain::StillOurs => panic!(
+            "RED: our reaped birth {m1}/{tick1} reads present (tick collision?)"
+        ),
+        ReapedProofToolchain::Gone => panic!("staging broken (plant vanished?)"),
+        ReapedProofToolchain::Unreadable(error) => {
+            panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+        }
+    }
+    assert_eq!(
+        prove_reaped_by_absence_toolchain(m1),
+        Ok(false),
+        "vacancy-only check must read inconclusive over the recycled occupant (never certified, never defect)"
+    );
+    let _ = plant.kill();
+    let _ = plant.wait();
+    plant_guard.disarm();
 }
 
 /// R22-008 (toolchain twin): tight EMFILE hold — port of
@@ -5650,6 +6065,11 @@ fn reap_proof_by_absence_never_steals() {
         .expect("zombie spawns");
     let zombie_pid = zombie.id() as i32;
     let mut _zguard = SilentChildGuard::new(zombie_pid);
+    // R23-019: retain the victim birth (the post-reap proof
+    // is gone-or-recycled over THIS tick).
+    let zombie_tick = task_starttime_checked(zombie_pid)
+        .expect("zombie stat readable")
+        .expect("zombie visible");
     let _ = zombie.kill();
     let end = Instant::now() + Duration::from_secs(5);
     loop {
@@ -5673,16 +6093,78 @@ fn reap_proof_by_absence_never_steals() {
         Ok(false),
         "zombie occupant must read unproven (never certified)"
     );
+    // R23-019: the tick-aware proof reads our unreaped birth
+    // StillOurs (present + same tick ⟹ NOT reaped — the RED
+    // shape).
+    assert!(
+        matches!(
+            prove_reaped_gone_or_recycled_toolchain(zombie_pid, zombie_tick),
+            ReapedProofToolchain::StillOurs
+        ),
+        "unreaped zombie birth must read StillOurs (never Gone/Recycled)"
+    );
     match zombie.try_wait() {
         Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
         other => panic!("proof stole the zombie's status?! got {other:?}"),
     }
     _zguard.disarm();
+    // Absent leg: freed number ⟹ reaped (gone-or-recycled —
+    // a different-birth occupant keeps the evidence valid).
+    match prove_reaped_gone_or_recycled_toolchain(zombie_pid, zombie_tick) {
+        ReapedProofToolchain::Gone | ReapedProofToolchain::Recycled(_) => {}
+        ReapedProofToolchain::StillOurs => panic!(
+            "RED: our zombie birth {zombie_pid}/{zombie_tick} still present after the owned reap"
+        ),
+        ReapedProofToolchain::Unreadable(error) => panic!(
+            "inconclusive (freed number unreadable: {error}) — refusing to certify"
+        ),
+    }
+    // R23-019 recycle leg (toolchain twin): a different-birth
+    // occupant on the freed number keeps retirement evidence
+    // valid (the proof reads Recycled) while the vacancy-only
+    // check reports inconclusive (never certified, never a
+    // cleanup defect).
+    let _serial = match steer_hold() {
+        Some(guard) => guard,
+        None => return,
+    };
+    let (mut plant, mut plant_guard) = match plant_replacement(zombie_pid, zombie_tick) {
+        Some(placed) => placed,
+        None => {
+            eprintln!("R23019-LEG[twin-self] vacuous (plant contended)");
+            return;
+        }
+    };
+    let plant_tick = match task_starttime_checked(zombie_pid) {
+        Ok(Some(tick)) => tick,
+        other => panic!("staging broken (plant unreadable post-place: {other:?})"),
+    };
+    eprintln!("R23019-LEG[twin-self] plant {zombie_pid}/{plant_tick} (victim tick {zombie_tick})");
+    assert!(
+        plant_tick != zombie_tick,
+        "staging broken (plant shares the victim tick?)"
+    );
+    match prove_reaped_gone_or_recycled_toolchain(zombie_pid, zombie_tick) {
+        ReapedProofToolchain::Recycled(now) if now == plant_tick => {}
+        ReapedProofToolchain::Recycled(now) => panic!(
+            "staging broken (stranger birth {now} on our steered number {zombie_pid}?)"
+        ),
+        ReapedProofToolchain::StillOurs => panic!(
+            "RED: our reaped birth {zombie_pid}/{zombie_tick} reads present (tick collision?)"
+        ),
+        ReapedProofToolchain::Gone => panic!("staging broken (plant vanished?)"),
+        ReapedProofToolchain::Unreadable(error) => {
+            panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+        }
+    }
     assert_eq!(
         prove_reaped_by_absence_toolchain(zombie_pid),
-        Ok(true),
-        "freed number must read reaped"
+        Ok(false),
+        "vacancy-only check must read inconclusive over the recycled occupant (never certified, never defect)"
     );
+    let _ = plant.kill();
+    let _ = plant.wait();
+    plant_guard.disarm();
 }
 
 /// R22-019 (toolchain twin): one allocator-hammer body.
@@ -5935,7 +6417,13 @@ fn nofile_soft_limit() -> u64 {
 /// guard — both retired before the panic propagates
 /// (mirror of the lib regression; R22-012: fresh-image
 /// child holds the fault, birth-aware drainage checks).
-/// Duration 109 is unique to this test.
+/// R23-020: rendezvous (ENTER when the child opens the fault
+/// window, exactly 101 sibling fd-ops INSIDE it, GO to
+/// release — overlap by construction). R23-021: the confine
+/// lives in the child — proven by its own rlimit-restore
+/// marker (the old parent-side equality misattributed
+/// concurrent sibling transitions). Duration 109 is unique
+/// to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn middleman_pair_guard_discharges_on_first_read_failure() {
@@ -5944,14 +6432,16 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
         return;
     }
     let me = std::process::id();
-    let limit_before = nofile_soft_limit();
     let exe = std::env::current_exe().expect("own test binary");
+    // R23-020 (toolchain twin): stdin piped (the GO byte
+    // rides it — the child blocks in the fault window until
+    // the parent has hammered INSIDE it).
     let mut child = std::process::Command::new(exe)
         .arg("--exact")
         .arg("middleman_pair_guard_discharges_on_first_read_failure")
         .arg("--nocapture")
         .env(R22012_FAULT_ENV, "1")
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -5959,19 +6449,52 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
     // Covers the hammer-loop expects below (a sibling
     // fd-op failure must not strand the fault child).
     let mut _cguard = SilentChildGuard::new(child.id() as i32);
-    // Sibling hammer while the child runs (bounded 60 s —
-    // a hung child is killed loud, never an unbounded
-    // hang).
-    let mut hammered = 0u64;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut child_stdin = child.stdin.take().expect("fault child stdin piped");
+    let mut child_stdout = child.stdout.take().expect("fault child stdout piped");
+    let child_stderr = child.stderr.take().expect("fault child stderr piped");
+    // SAFETY: fcntl O_NONBLOCK on our own pipe fd only.
+    use std::os::unix::io::AsRawFd as _;
+    let flags = unsafe { libc::fcntl(child_stderr.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0, "stderr fcntl F_GETFL failed");
+    assert_eq!(
+        unsafe { libc::fcntl(child_stderr.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0,
+        "stderr fcntl O_NONBLOCK failed"
+    );
+    use std::io::BufRead as _;
+    let mut stderr_lines = std::io::BufReader::new(child_stderr);
+    let mut stderr = String::new();
+    // R23-020 phase 1 (toolchain twin): ENTER (the child
+    // staged its pair and opened the fault window) or loud
+    // (EOF/deadline — never a silent pass).
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if child.try_wait().expect("child waitable").is_some() {
+        if stderr.contains("R22012-FAULT-ENTER") {
             break;
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            panic!("fault child hung past 60 s (killed loud)");
+        let mut chunk = String::new();
+        match stderr_lines.read_line(&mut chunk) {
+            Ok(0) => {
+                let _ = child.wait();
+                _cguard.disarm();
+                panic!("fault child died before ENTER\n{stderr}");
+            }
+            Ok(_) => stderr.push_str(&chunk),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    panic!("fault child hung pre-ENTER past 60 s (killed loud)");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("fault child stderr unreadable: {error}"),
         }
+    }
+    // R23-020 (toolchain twin): the hammer lands INSIDE the
+    // window by construction (the child is blocked on our GO
+    // below). The count is exact (tripwire against loop edits).
+    let mut hammered = 0u64;
+    for _ in 0..101 {
         hammer_sibling_fd_op().expect("sibling fd-op succeeds during fresh-image fault");
         hammered += 1;
     }
@@ -5979,13 +6502,53 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
         hammered > 100,
         "hammer must pressure the fault window (got {hammered})"
     );
-    let out = child.wait_with_output().expect("child reaps");
+    // R23-020 phase 2 (toolchain twin): GO (the child faults
+    // + discharges) then EOF (markers collected above + below).
+    use std::io::Write as _;
+    child_stdin.write_all(b"G").expect("GO lands");
+    drop(child_stdin);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut chunk = String::new();
+        match stderr_lines.read_line(&mut chunk) {
+            Ok(0) => break,
+            Ok(_) => stderr.push_str(&chunk),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    panic!("fault child hung mid-scenario past 60 s (killed loud)");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("fault child stderr unreadable: {error}"),
+        }
+    }
+    // Harness chatter (small — EOF already, drains at once).
+    let mut _stdout_buf = Vec::new();
+    use std::io::Read as _;
+    child_stdout
+        .read_to_end(&mut _stdout_buf)
+        .expect("stdout drains");
+    let status = child.wait().expect("child reaps");
     _cguard.disarm();
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(out.status.success(), "fault child must exit 0\n{stderr}");
+    assert!(status.success(), "fault child must exit 0\n{stderr}");
     assert!(
         stderr.contains("R22012-DISCHARGED"),
         "discharge marker\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("R22012-GO-MISSING"),
+        "GO must land (the child saw the hammered window)\n{stderr}"
+    );
+    // R23-021 (toolchain twin): the confine lives in the CHILD
+    // (proven by its own marker below) — the old parent-side
+    // exact equality misattributed concurrent sibling
+    // transitions to this child. Child non-interference stays
+    // pinned structurally (holder != self — a separate image
+    // cannot touch our rlimit).
+    assert!(
+        stderr.contains("R22012-RLIMIT-OK"),
+        "rlimit-restore marker\n{stderr}"
     );
     let holder: u32 = stderr
         .lines()
@@ -5997,11 +6560,6 @@ fn middleman_pair_guard_discharges_on_first_read_failure() {
     assert_ne!(
         holder, me,
         "fault must run in the child image (in-process reintroduction fails here)"
-    );
-    assert_eq!(
-        nofile_soft_limit(),
-        limit_before,
-        "rlimit preserved across the fault"
     );
 }
 
@@ -6024,6 +6582,10 @@ fn r22012_fault_child_scenario() {
         .expect("grandchild stat readable")
         .expect("grandchild visible");
     outer.disarm();
+    // R23-021 (toolchain twin): snapshot OUR rlimit (the
+    // confine lives in THIS image — the restore is proven
+    // here, where no sibling can interleave).
+    let rlim_before = nofile_soft_limit();
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _pair = MiddlemanPairGuard::armed(m1, m2);
         let _confined = confine_fd_table_for_exhaustion();
@@ -6032,6 +6594,19 @@ fn r22012_fault_child_scenario() {
             held.push(file);
         }
         assert!(!held.is_empty(), "exhaustion must consume fds");
+        // R23-020 (toolchain twin): rendezvous — the fault
+        // window is OPEN (confined + exhausted, pair
+        // guarded); the parent hammers INSIDE it (101 ops
+        // between this line and the GO below). The stdin
+        // read needs no new fd (holds under EMFILE); EOF
+        // marks GO-MISSING (the parent asserts the marker
+        // absent — a missing GO never passes silently).
+        eprintln!("R22012-FAULT-ENTER");
+        let mut go = [0u8; 1];
+        if std::io::Read::read_exact(&mut std::io::stdin().lock(), &mut go).is_err() {
+            eprintln!("R22012-GO-MISSING");
+            panic!("staging broken (GO unreadable — parent died pre-hammer?)");
+        }
         std::fs::read_to_string(format!("/proc/{m2}/stat")).expect("first read");
     }));
     assert!(failed.is_err(), "faulted first read must panic");
@@ -6050,6 +6625,15 @@ fn r22012_fault_child_scenario() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
+    // R23-021 (toolchain twin): the confine applied + restored
+    // between OUR snapshots (deterministic — fresh image, no
+    // siblings).
+    let rlim_after = nofile_soft_limit();
+    assert_eq!(
+        rlim_after, rlim_before,
+        "rlimit must restore across the fault (in-child confine leaked?)"
+    );
+    eprintln!("R22012-RLIMIT-OK {rlim_before} {rlim_after}");
     eprintln!("R22012-DISCHARGED");
 }
 
@@ -6624,6 +7208,113 @@ impl Drop for SilentChildGuard {
                 Err(error) => drop_unresolved_custody(self.pid, tick, &error),
             },
         }
+    }
+}
+
+/// R23-011: panic-free snapshot of a task's direct children
+/// (for the publisher-tree guard's drop — no expect, unwrap,
+/// or indexing anywhere on this path).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn tree_children_pids(pid: i32) -> Option<Vec<i32>> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+    Some(
+        text.split_whitespace()
+            .filter_map(|word| word.parse::<i32>().ok())
+            .filter(|kid| *kid > 0)
+            .collect(),
+    )
+}
+
+/// R23-011: publisher-TREE guard — armed at publisher spawn,
+/// before any line is read. The drop retires the publisher
+/// AND its live subtree: a read/parse panic between spawn
+/// and the pair parse leaves the stranger's birth unknown,
+/// so NO expected-identity guard can arm over it — the bare
+/// publisher guard alone would orphan the stranger's sleep.
+/// Composition: the publisher itself retires through the
+/// proven `SilentChildGuard` logic (field drop runs after
+/// this drop, so the children die FIRST while the live
+/// publisher's unreaped hold pins their numbers — a
+/// snapshot-kill then cannot hit a recycle). Liveness gate:
+/// the tree arm runs only while the publisher's tick reads
+/// live (its wait/reap tail runs at exit, so a live publisher
+/// has reaped no one); a dead publisher means its tail
+/// already reaped the children (wait tail), and numeric kills
+/// there would be unsound, so the tree arm is skipped on
+/// dead/unreadable — the inner guard still retires the
+/// publisher, and an exit-0 orphan stays the established
+/// loud gap. Never panics (fallible stderr writes only).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+struct PublisherTreeGuard {
+    inner: SilentChildGuard,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl PublisherTreeGuard {
+    /// R23-011: custody AT spawn — same reservation contract
+    /// as the bare constructor (own unreaped child only).
+    fn new(pid: i32) -> Self {
+        PublisherTreeGuard {
+            inner: SilentChildGuard::new(pid),
+        }
+    }
+
+    /// R23-011: stand down after an explicit loud retire
+    /// (same double-retire rule as the inner guard).
+    fn disarm(&mut self) {
+        self.inner.disarm();
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+impl Drop for PublisherTreeGuard {
+    fn drop(&mut self) {
+        use std::io::Write as _;
+        if self.inner.disarmed {
+            return;
+        }
+        let pid = self.inner.pid;
+        // Reachability: the None arm below is defensive-only
+        // (a zombie publisher keeps an EMPTY children file —
+        // Some([]) — so None needs stat-readable PLUS
+        // children-unreadable: the exit race between the two
+        // opens, or an outage lifting mid-drop). Its
+        // fallthrough (skip tree, inner retires) is the
+        // outage-leg-covered shape; only the static line
+        // differs.
+        match task_starttime_checked(pid) {
+            Ok(Some(_)) => match tree_children_pids(pid) {
+                Some(kids) => {
+                    for kid in kids {
+                        // SAFETY: SIGKILL to a number the live
+                        // publisher's unreaped hold pins — ESRCH
+                        // (exited since the snapshot) is harmless.
+                        let _ = unsafe { libc::kill(kid, libc::SIGKILL) };
+                    }
+                }
+                None => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "scopebase publisher-tree pid={pid} children-unreadable \
+                         (unresolved — publisher still retired)"
+                    );
+                }
+            },
+            // Dead: the exit tail reaped the children (wait
+            // tail) or orphaned them (exit-0 tail — the
+            // established loud gap); numeric kills here would
+            // be unsound, so the tree arm is skipped.
+            Ok(None) => {}
+            Err(error) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "scopebase publisher-tree pid={pid} publisher-unverifiable \
+                     read_err={error} (tree skipped — inner guard still retires)"
+                );
+            }
+        }
+        // The inner field drops next (fields drop after
+        // `Drop::drop`), retiring the publisher second.
     }
 }
 
@@ -10930,6 +11621,45 @@ fn parse_r22006_errlog(stdout: &str) -> Option<std::path::PathBuf> {
     })
 }
 
+/// R23-015 (toolchain twin): twin-port of the audit
+/// `read_diag_bounded` — O_NOFOLLOW + O_NONBLOCK open,
+/// fstat-on-fd must be regular, capped read (1 MiB, the
+/// audit PROBE_OUTPUT_CAP value).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn read_diag_bounded(path: &std::path::Path, what: &str) -> Result<String, String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("{what} {path:?} open refused: {error}"))?;
+    let ftype = file
+        .metadata()
+        .map_err(|error| format!("{what} {path:?} fstat failed: {error}"))?
+        .file_type();
+    if !ftype.is_file() {
+        return Err(format!("{what} {path:?} refused: not a regular file"));
+    }
+    use std::io::Read as _;
+    let mut buf = Vec::new();
+    file.take(1 << 20)
+        .read_to_end(&mut buf)
+        .map_err(|error| format!("{what} {path:?} read failed: {error}"))?;
+    String::from_utf8(buf).map_err(|error| format!("{what} {path:?} not UTF-8: {error}"))
+}
+
+/// R23-015 (toolchain twin): twin-port of the audit
+/// `read_r22006_evidence` — parse + swap-safe read.
+/// Shared by the twin wrappers so the consumption path
+/// can't drift from the legged shape.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn read_r22006_evidence(stdout: &str) -> Result<(std::path::PathBuf, String), String> {
+    let errlog =
+        parse_r22006_errlog(stdout).ok_or("staging broken (no errlog line?)".to_string())?;
+    let evidence = read_diag_bounded(&errlog, "errlog")?;
+    Ok((errlog, evidence))
+}
+
 /// R22-006 (toolchain twin): nonce for probe errlog names.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn errlog_nonce() -> u64 {
@@ -10968,13 +11698,20 @@ fn publisher_guard_denied_kill_reports_unresolved_probe() {
         Some(libc::EPERM),
         "staging broken (wrong denial errno?)"
     );
-    let errlog = std::env::temp_dir().join(format!(
-        "scopebase-r22006-kill-twin-{}-{}.log",
-        std::process::id(),
-        errlog_nonce()
-    ));
+    // R23-014 (twin mirror): forced path (plant-refusal
+    // leg) or the default nonce path; claimed O_EXCL (a
+    // planted symlink refuses — never followed into its
+    // target).
+    let errlog = match std::env::var("SCOPEBASE_R22006_ERRLOG_PATH") {
+        Ok(forced) => std::path::PathBuf::from(forced),
+        Err(_) => std::env::temp_dir().join(format!(
+            "scopebase-r22006-kill-twin-{}-{}.log",
+            std::process::id(),
+            errlog_nonce()
+        )),
+    };
     println!("R22006-ERRLOG {}", errlog.display());
-    let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+    let errfile = claim_excl_file(&errlog, "errlog").expect("errlog claimed (staging)");
     let dur = r22014_sleep_dur("986");
     let mut publisher = std::process::Command::new(pair_publisher_bin())
         .arg(&dur)
@@ -11057,8 +11794,10 @@ fn publisher_guard_denied_kill_reports_unresolved() {
         assert!(Instant::now() < end, "sleeper must die by our kill");
         std::thread::sleep(Duration::from_millis(10));
     }
-    let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
-    let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+    // R23-015 (twin mirror): swap-safe consumption (a
+    // FIFO/symlink swapped in post-probe refuses promptly).
+    let (errlog, evidence) =
+        read_r22006_evidence(&stdout).expect("errlog readable (staging?)");
     let _ = std::fs::remove_file(&errlog);
     assert!(out.status.success(), "probe must complete\n{stderr}");
     assert!(
@@ -11094,13 +11833,20 @@ fn publisher_guard_denied_kill_reports_unresolved() {
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn publisher_guard_denied_wait_reports_unresolved_probe() {
     use std::io::BufRead as _;
-    let errlog = std::env::temp_dir().join(format!(
-        "scopebase-r22006-wait-twin-{}-{}.log",
-        std::process::id(),
-        errlog_nonce()
-    ));
+    // R23-014 (twin mirror): forced path (plant-refusal
+    // leg) or the default nonce path; claimed O_EXCL (a
+    // planted symlink refuses — never followed into its
+    // target).
+    let errlog = match std::env::var("SCOPEBASE_R22006_ERRLOG_PATH") {
+        Ok(forced) => std::path::PathBuf::from(forced),
+        Err(_) => std::env::temp_dir().join(format!(
+            "scopebase-r22006-wait-twin-{}-{}.log",
+            std::process::id(),
+            errlog_nonce()
+        )),
+    };
     println!("R22006-ERRLOG {}", errlog.display());
-    let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+    let errfile = claim_excl_file(&errlog, "errlog").expect("errlog claimed (staging)");
     let dur = r22014_sleep_dur("987");
     let mut publisher = std::process::Command::new(pair_publisher_bin())
         .arg(&dur)
@@ -11112,7 +11858,10 @@ fn publisher_guard_denied_wait_reports_unresolved_probe() {
         .stderr(errfile)
         .spawn()
         .expect("publisher spawns");
-    let mut _tpguard = SilentChildGuard::new(publisher.id() as i32);
+    // R23-011: TREE guard at spawn (parse-gap coverage —
+    // a read/parse panic before `_tsguard` arms must not
+    // orphan the stranger's sleep).
+    let mut _tpguard = PublisherTreeGuard::new(publisher.id() as i32);
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
@@ -11181,8 +11930,10 @@ fn publisher_guard_denied_wait_reports_unresolved() {
             panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
         }
     };
-    let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
-    let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+    // R23-015 (twin mirror): swap-safe consumption (a
+    // FIFO/symlink swapped in post-probe refuses promptly).
+    let (errlog, evidence) =
+        read_r22006_evidence(&stdout).expect("errlog readable (staging?)");
     let _ = std::fs::remove_file(&errlog);
     assert!(
         !evidence.contains("deny-wait install failed"),
@@ -11214,6 +11965,198 @@ fn publisher_guard_denied_wait_reports_unresolved() {
         evidence.contains("reaped=false"),
         "must report unreaped\n{evidence}"
     );
+}
+
+/// R23-014 (toolchain twin): mirror of the lib leg —
+/// the denied twin probes must refuse a planted errlog
+/// symlink (never follow it into its target, never remove
+/// the foreign plant). Per probe (kill + wait): stage a
+/// victim with a sentinel in an owned non-sticky dir,
+/// plant a ROOT-owned symlink at the forced errlog path
+/// (sudo-gated), run the probe with the forced path — the
+/// claim must refuse with the plant's inode and the victim
+/// intact. Skips as root and without passwordless sudo.
+/// No fixture durations (the claim precedes any spawn).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r23014_errlog_symlink_plant_refuses_without_touching_target() {
+    use std::os::unix::fs::MetadataExt as _;
+    // IR-007 discipline: as root the sudo plant is
+    // own-uid (no foreign discriminator) — skip.
+    // SAFETY: getuid queries only.
+    if unsafe { libc::getuid() } == 0 {
+        eprintln!("skip: root-owned plant is not foreign to root");
+        return;
+    }
+    for (tag, probe, env) in [
+        (
+            "kill",
+            "publisher_guard_denied_kill_reports_unresolved",
+            "SCOPEBASE_R22006_DENY_KILL_TWIN",
+        ),
+        (
+            "wait",
+            "publisher_guard_denied_wait_reports_unresolved",
+            "SCOPEBASE_R22006_DENY_WAIT_TWIN",
+        ),
+    ] {
+        let stem = format!("scopebase-r23014-twin-{tag}-{}", std::process::id());
+        let dir = std::env::temp_dir().join(format!("{stem}.dir"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("plant dir created");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "r23014-sentinel").expect("victim staged");
+        let link = dir.join("errlog.log");
+        // FOREIGN plant: root-owned symlink (sudo-gated).
+        let planted = std::process::Command::new("sudo")
+            .arg("-n")
+            .arg("ln")
+            .arg("-s")
+            .arg(&victim)
+            .arg(&link)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !planted {
+            let _ = std::fs::remove_dir_all(&dir);
+            eprintln!("skip: passwordless sudo unavailable (no foreign plant)");
+            return;
+        }
+        // SAFETY: getuid queries only.
+        let me = unsafe { libc::getuid() };
+        let before = std::fs::symlink_metadata(&link).expect("plant statted");
+        assert!(
+            before.file_type().is_symlink(),
+            "{tag}: staging broken (plant must be a symlink)"
+        );
+        assert_ne!(
+            before.uid(),
+            me,
+            "{tag}: staging broken (plant must be foreign-owned)"
+        );
+        // Run the probe against the forced plant path.
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(probe)
+            .arg("--nocapture")
+            .env(env, "1")
+            .env("SCOPEBASE_R22006_ERRLOG_PATH", &link)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // Observe BEFORE cleanup (R15-001 order).
+        let after = std::fs::symlink_metadata(&link).ok();
+        let content = std::fs::read(&victim).unwrap_or_default();
+        // Cleanup rides along (a verdict failure must not
+        // strand the root-owned plant — our own dir lets
+        // us unlink it).
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+        // Verdicts: refusal cited, plant + victim intact.
+        assert!(
+            !out.status.success(),
+            "{tag}: probe must refuse the planted errlog\n{stderr}"
+        );
+        assert!(
+            stderr.contains("preplanted by another owner"),
+            "{tag}: probe must cite foreign refusal\n{stderr}"
+        );
+        let after = after.unwrap_or_else(|| panic!("{tag}: plant must survive the refusal"));
+        assert!(
+            after.file_type().is_symlink(),
+            "{tag}: plant must remain a symlink"
+        );
+        assert_eq!(after.ino(), before.ino(), "{tag}: plant inode must survive");
+        assert_eq!(content, b"r23014-sentinel", "{tag}: victim must be intact");
+    }
+}
+
+/// R23-015 (toolchain twin): mirror of the lib leg —
+/// errlog consumption must refuse swapped-in plants
+/// promptly (never block, never follow). Four cases
+/// through the REAL twin wrapper helper: regular reads
+/// content; writerless FIFO refuses promptly; symlink
+/// refuses (never followed); missing refuses. Each
+/// refusal bounded (5s). No privilege, no durations.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r23015_errlog_consumption_refuses_swapped_plants_promptly() {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::time::{Duration, Instant};
+    let stem = format!("scopebase-r23015-twin-{}", std::process::id());
+    let dir = std::env::temp_dir().join(format!("{stem}.dir"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).expect("plant dir created");
+    let log = dir.join("errlog.log");
+    let stdout = format!("R22006-ERRLOG {}\n", log.display());
+    // Case 1: regular log reads content.
+    std::fs::write(&log, "r23015-evidence").expect("log staged");
+    let (path, evidence) = read_r22006_evidence(&stdout).expect("regular log must read");
+    assert_eq!(path, log, "path must round-trip");
+    assert_eq!(evidence, "r23015-evidence", "content must round-trip");
+    // Case 2: writerless FIFO swapped in refuses promptly.
+    std::fs::remove_file(&log).expect("swap unlinks own log");
+    let cpath =
+        std::ffi::CString::new(log.as_os_str().as_bytes()).expect("log path is C-safe");
+    // SAFETY: mkfifo on our own temp path; mode 600.
+    assert_eq!(
+        unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+        0,
+        "fifo planted"
+    );
+    let start = Instant::now();
+    let refused = read_r22006_evidence(&stdout);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "FIFO refusal must be prompt"
+    );
+    match refused {
+        Err(cause) => assert!(
+            cause.contains("not a regular file"),
+            "FIFO must refuse as non-regular, got {cause:?}"
+        ),
+        Ok(_) => panic!("FIFO-swapped log must refuse (never block, never read)"),
+    }
+    // Case 3: symlink swapped in refuses (never followed).
+    std::fs::remove_file(&log).expect("swap unlinks own fifo");
+    let victim = dir.join("victim");
+    std::fs::write(&victim, "r23015-sentinel").expect("victim staged");
+    std::os::unix::fs::symlink(&victim, &log).expect("symlink planted");
+    let start = Instant::now();
+    let refused = read_r22006_evidence(&stdout);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "symlink refusal must be prompt"
+    );
+    match refused {
+        Err(cause) => assert!(
+            cause.contains("open refused"),
+            "symlink must refuse at open, got {cause:?}"
+        ),
+        Ok(_) => panic!("symlink-swapped log must refuse (never follow)"),
+    }
+    assert_eq!(
+        std::fs::read(&victim).expect("victim readable"),
+        b"r23015-sentinel",
+        "refusal must not touch the link target"
+    );
+    // Case 4: missing path refuses.
+    std::fs::remove_file(&log).expect("swap unlinks own symlink");
+    let _ = std::fs::remove_file(&victim);
+    match read_r22006_evidence(&stdout) {
+        Err(cause) => assert!(
+            cause.contains("open refused"),
+            "missing path must refuse at open, got {cause:?}"
+        ),
+        Ok(_) => panic!("missing log must refuse"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// R22-014/R12 fault leg, kill shape (toolchain twin):
@@ -11733,7 +12676,13 @@ fn judge_pub_cell_toolchain(
         post_empty,
         "PUB-{step}: group must prove ESRCH-empty after retire (squatter?; drain refused)"
     );
-    let err = drain_pipe_bounded_toolchain(stderr_pipe, std::time::Duration::from_secs(5), step);
+    // R23-018: 5 s idle + 60 s overall (dribble) ceilings.
+    let err = drain_pipe_bounded_toolchain(
+        stderr_pipe,
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(60),
+        step,
+    );
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "PUB-{step}: must fail promptly, took {elapsed:?}\nstderr: {err}"
@@ -11752,10 +12701,17 @@ fn judge_pub_cell_toolchain(
 /// R22-015 (toolchain twin): mirror of the lib bounded
 /// pipe drain (nonblocking + deadline + 1MB cap; wedge
 /// past the deadline panics loud with a partial preview).
+/// R23-018 (toolchain twin): twin-port of the lib
+/// bounded drain — 5 s idle + `overall` dribble ceilings
+/// (a steady dribble never produces WouldBlock, so the
+/// idle deadline alone can't bound it); flowing bytes
+/// past `overall` ⟹ loud drain-corrupt panic (distinct
+/// attribution from the idle wedge AND from probe-death).
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn drain_pipe_bounded_toolchain(
     pipe: Option<std::process::ChildStderr>,
     timeout: std::time::Duration,
+    overall: std::time::Duration,
     what: &str,
 ) -> String {
     use std::io::Read as _;
@@ -11773,6 +12729,9 @@ fn drain_pipe_bounded_toolchain(
     let mut total: usize = 0;
     let mut capped = false;
     let end = std::time::Instant::now() + timeout;
+    // R23-018: overall (dribble) ceiling — checked on
+    // EVERY flowing read.
+    let end_overall = std::time::Instant::now() + overall;
     loop {
         let mut chunk = [0u8; 8192];
         match pipe.read(&mut chunk) {
@@ -11784,6 +12743,14 @@ fn drain_pipe_bounded_toolchain(
                     buf.extend_from_slice(&chunk[..n.min(room)]);
                 } else {
                     capped = true;
+                }
+                if std::time::Instant::now() >= end_overall {
+                    let preview = String::from_utf8_lossy(&buf[..buf.len().min(500)]).into_owned();
+                    panic!(
+                        "PUB-{what}: stderr drain exceeded overall {overall:?} ({total} bytes, \
+                         EOF never arrived — drain-corrupt, a writer survived?!) — \
+                         partial: {preview:?}",
+                    );
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -11804,6 +12771,58 @@ fn drain_pipe_bounded_toolchain(
         out.push_str("\n[TRUNCATED at 1MB]");
     }
     out
+}
+
+/// R23-018 (toolchain twin): mirror of the lib leg —
+/// a steadily dribbling writer must trip the OVERALL
+/// ceiling with drain-corrupt attribution (5 s idle /
+/// 2 s overall; pre-fix it hung forever). Cleanup kills
+/// the dribbler. No fixture durations.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn drain_pipe_dribble_trips_overall_ceiling() {
+    use std::time::{Duration, Instant};
+    let message_of = |payload: Box<dyn std::any::Any + Send>| {
+        payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut dribbler = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("while true; do printf x >&2; sleep 0.1; done")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("dribbler spawns");
+    let stderr_pipe = dribbler.stderr.take();
+    let start = Instant::now();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drain_pipe_bounded_toolchain(
+            stderr_pipe,
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+            "r23018",
+        );
+    }));
+    let elapsed = start.elapsed();
+    // Cleanup FIRST: the dribbler outlives the verdict.
+    let _ = dribbler.kill();
+    let _ = dribbler.wait();
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "dribble must trip the ceiling promptly (pre-fix: forever)"
+    );
+    match outcome {
+        Err(payload) => assert!(
+            message_of(payload).contains("drain-corrupt"),
+            "dribble must cite drain-corrupt (distinct from wedge/probe-death)"
+        ),
+        Ok(_) => panic!("dribble past the overall ceiling must panic (never return)"),
+    }
 }
 
 /// R22-015 (toolchain twin): mirror of the lib judge
@@ -11957,7 +12976,10 @@ fn pair_setup_holistic_retirement() {
                 drop(publisher.stdout.take());
             }
             let pubpid = publisher.id() as i32;
-            let mut _tpguard = SilentChildGuard::new(pubpid);
+            // R23-011: TREE guard at spawn (this cell never
+            // sights the stranger — a panic before the judge
+            // must not orphan the unsighted sleep).
+            let mut _tpguard = PublisherTreeGuard::new(pubpid);
             // Birth tick at spawn (live-unreaped — nothing
             // reaped yet — so this first read names OUR
             // birth; every decision below re-verifies it).
@@ -12024,7 +13046,7 @@ fn pair_setup_holistic_retirement() {
     let pause_flag = format!("/tmp/scopebase-r21holistic-absent-{}", std::process::id());
     run_pub_cell(
         "pause",
-        "942",
+        "822",
         &[
             ("SCOPEBASE_PUBLISHER_PAUSE_FILE", pause_flag.as_str()),
             ("SCOPEBASE_PUBLISHER_PAUSE_TIMEOUT_MS", "200"),
@@ -12033,11 +13055,13 @@ fn pair_setup_holistic_retirement() {
         "pause flag never appeared",
     );
     // Fault-hook cells (each forced error branch post-spawn).
+    // R23-019: 943 predates the 82x re-key and never collided
+    // (no audit 943) — left in place (minimal churn).
     for (step, secs) in [
         ("stat", "943"),
-        ("comm", "944"),
-        ("tick", "945"),
-        ("wait", "946"),
+        ("comm", "824"),
+        ("tick", "825"),
+        ("wait", "826"),
     ] {
         run_pub_cell(
             step,
@@ -12050,7 +13074,7 @@ fn pair_setup_holistic_retirement() {
     // Real EPIPE path (no env): the read end drops at once —
     // the transmit write must fail loud, not panic, and the
     // sleep must be retired, not stranded.
-    run_pub_cell("epipe", "947", &[], true, "stdout broken");
+    run_pub_cell("epipe", "827", &[], true, "stdout broken");
     // Receiver pre-parse-failure runner: the setup shape
     // under test — try-parse, and on failure group-retire
     // BEFORE any reap (the leader is still unreaped, so the
@@ -12105,7 +13129,7 @@ fn pair_setup_holistic_retirement() {
     {
         use std::io::BufRead as _;
         let mut publisher = spawn_self_grouped_publisher(
-            "948",
+            "828",
             "wait",
             &[
                 ("SCOPEBASE_PUBLISHER_PAUSE_FILE", pause_flag.as_str()),
@@ -12113,7 +13137,10 @@ fn pair_setup_holistic_retirement() {
             ],
         );
         let pubpid = publisher.id() as i32;
-        let mut _tpguard = SilentChildGuard::new(pubpid);
+        // R23-011: TREE guard at spawn (the eof stranger
+        // stays unknown throughout — a panic must not
+        // orphan its sleep).
+        let mut _tpguard = PublisherTreeGuard::new(pubpid);
         let start = Instant::now();
         let mut line = String::new();
         let bytes = std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
@@ -12134,9 +13161,12 @@ fn pair_setup_holistic_retirement() {
     // stranger stays unknown throughout).
     {
         use std::io::BufRead as _;
-        let mut publisher = spawn_self_grouped_publisher("949", "wait", &[]);
+        let mut publisher = spawn_self_grouped_publisher("829", "wait", &[]);
         let pubpid = publisher.id() as i32;
-        let mut _tpguard = SilentChildGuard::new(pubpid);
+        // R23-011: TREE guard at spawn (the torn pair keeps
+        // the stranger unknown throughout — a panic must
+        // not orphan its sleep).
+        let mut _tpguard = PublisherTreeGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -12174,9 +13204,12 @@ fn tail_live_plant_cell() {
                 return;
             }
         };
-        let mut publisher = spawn_self_grouped_publisher("950", "wait", &[]);
+        let mut publisher = spawn_self_grouped_publisher("820", "wait", &[]);
         let pubpid = publisher.id() as i32;
-        let mut _tpguard = SilentChildGuard::new(pubpid);
+        // R23-011: TREE guard at spawn (parse-gap coverage —
+        // a read/parse panic before `_tsguard` arms must not
+        // orphan the stranger's sleep).
+        let mut _tpguard = PublisherTreeGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -12289,9 +13322,12 @@ fn tail_zombie_plant_cell() {
                 return;
             }
         };
-        let mut publisher = spawn_self_grouped_publisher("952", "wait", &[]);
+        let mut publisher = spawn_self_grouped_publisher("821", "wait", &[]);
         let pubpid = publisher.id() as i32;
-        let mut _tpguard = SilentChildGuard::new(pubpid);
+        // R23-011: TREE guard at spawn (parse-gap coverage —
+        // a read/parse panic before `_tsguard` arms must not
+        // orphan the stranger's sleep).
+        let mut _tpguard = PublisherTreeGuard::new(pubpid);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -12381,7 +13417,10 @@ fn group_observation_never_reaps_replacement_children() {
     };
     let mut publisher = spawn_self_grouped_publisher("960", "wait", &[]);
     let pubpid = publisher.id() as i32;
-    let mut _tpguard = SilentChildGuard::new(pubpid);
+    // R23-011: TREE guard at spawn — a read/parse panic below
+    // (before `_tsguard` can arm over the unknown stranger)
+    // must not orphan the stranger's sleep.
+    let mut _tpguard = PublisherTreeGuard::new(pubpid);
     let mut line = String::new();
     std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
         .read_line(&mut line)
@@ -12615,6 +13654,342 @@ fn group_observation_never_reaps_joined_mid_probe() {
     pguard.disarm();
 }
 
+/// R23-011 leg (twin, in-process): a garbage-pair publisher
+/// panics the pair parse INSIDE a caught unwind with the
+/// TREE guard armed — the drop must retire BOTH the
+/// publisher and the unknown stranger (no expected-identity
+/// guard CAN arm — the birth never parsed). Bad variant: the
+/// same shape with a BARE publisher guard strands the
+/// stranger's sleep (proven by the owned duration scan, then
+/// swept loud). The stranger's number is unknown (parse
+/// failed), so the owned duration scan is the only channel:
+/// dur 847 is unique to this test and the scan is
+/// ownership-scoped, so an empty scan after the settle names
+/// OUR discharge (a foreign sleep-847 is excluded; nothing
+/// else spawns it). A stale publisher binary (fault env
+/// ignored) transmits a VALID pair — the parse succeeds, the
+/// closure returns Ok, and the is_err assert fails loud.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r23011_tree_guard_retires_unknown_stranger_on_parse_panic() {
+    use std::io::BufRead as _;
+    use std::panic::AssertUnwindSafe;
+    use std::time::{Duration, Instant};
+    let anchor = boot_ticks_now().expect("tick reads");
+    // GOOD arm: tree guard.
+    let mut publisher = spawn_self_grouped_publisher(
+        "847",
+        "wait",
+        &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+    );
+    let pubpid = publisher.id() as i32;
+    let stdout = publisher.stdout.take().expect("publisher stdout");
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut _tguard = PublisherTreeGuard::new(pubpid);
+        let mut line = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .expect("pair readable");
+        let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+    }));
+    assert!(
+        outcome.is_err(),
+        "R23011-parse: garbage pair must panic the parse"
+    );
+    // Publisher: our child — reap whatever the drop left
+    // (kill-only or already-reaped both converge) and prove
+    // the number gone.
+    let _ = publisher.wait();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match task_starttime_checked(pubpid) {
+            Ok(None) => break,
+            Ok(Some(_)) => {}
+            Err(error) => panic!("R23011-parse: publisher drain unreadable: {error}"),
+        }
+        assert!(
+            Instant::now() < end,
+            "R23011-parse: tree guard failed to retire the publisher"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Stranger: unknown number — scan-absence after the
+    // settle is the discharge proof (dur unique + owned).
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if sleep_owned_pids_with_dur("847", anchor).is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "R23011-parse: tree guard failed to retire the unknown stranger"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // BAD arm: bare publisher guard — the stranger MUST
+    // strand (orphaned to init when the drop kills the
+    // publisher alone), or the leg is vacuous. Swept loud.
+    let mut publisher = spawn_self_grouped_publisher(
+        "847",
+        "wait",
+        &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+    );
+    let pubpid = publisher.id() as i32;
+    let stdout = publisher.stdout.take().expect("publisher stdout");
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut _tguard = SilentChildGuard::new(pubpid);
+        let mut line = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .expect("pair readable");
+        let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+    }));
+    assert!(
+        outcome.is_err(),
+        "R23011-parse-bad: garbage pair must panic the parse"
+    );
+    let _ = publisher.wait();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        match task_starttime_checked(pubpid) {
+            Ok(None) => break,
+            Ok(Some(_)) => {}
+            Err(error) => panic!("R23011-parse-bad: publisher drain unreadable: {error}"),
+        }
+        assert!(
+            Instant::now() < end,
+            "R23011-parse-bad: bare guard failed to retire the publisher"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // THE bad assertion: the stranger strands.
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        if !sleep_owned_pids_with_dur("847", anchor).is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "R23011-parse-bad: bad variant must strand the stranger (else the leg is vacuous)"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        kill_sleep_with_dur("847", anchor),
+        "R23011-parse-bad: sweep must drain the stranded stranger"
+    );
+}
+
+/// R23-011 site-4 read leg (twin): the tree guard drops
+/// UNDER a held outage (fd exhaustion) — the liveness
+/// check fails, the tree arm is SKIPPED loud (no blind
+/// snapshot-kill of an unverifiable subtree), the inner
+/// unpinned arm still retires the publisher via the fd-less
+/// waitpid probe, and the unknown stranger strands
+/// (orphaned to init — the wrapper sweeps it loud).
+/// Fresh-image probe; unguarded bad control (must strand
+/// the PAIR — publisher included — proving the guarded
+/// discharge comes from the guard) + guarded shape (must
+/// print PUB-GONE + SLEEP-STRANDED with the loud line).
+/// Duration 898 is unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn r23011_tree_guard_skips_tree_loud_under_outage() {
+    if std::env::var("SCOPEBASE_R23011_TREE_OUTAGE_TWIN").is_ok() {
+        r23011_tree_guard_outage_probe();
+        return;
+    }
+    // R23-008: ownership-window anchor — wrapper entry
+    // (before either probe stages anything).
+    let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+    for no_arm in [true, false] {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--exact")
+            .arg("r23011_tree_guard_skips_tree_loud_under_outage")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R23011_TREE_OUTAGE_TWIN", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if no_arm {
+            cmd.env("SCOPEBASE_R23011_NO_ARM", "1");
+        }
+        let out = cmd.output().expect("probe runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must exit 0 (measurement, never verdict)\n{stderr}"
+        );
+        let (pubpid, pubtick): (i32, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R23011-TREE-PAIR ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                ))
+            })
+            .expect("probe must print custody");
+        if no_arm {
+            // Bad control: unguarded MUST strand the pair
+            // (else the leg is vacuous) — then sweep loud.
+            assert!(
+                stdout.contains("R23011-TREE-PUB-LIVE"),
+                "bad control must strand the publisher\n{stdout}"
+            );
+            assert!(
+                stdout.contains("R23011-TREE-SLEEP-STRANDED"),
+                "bad control must strand the stranger\n{stdout}"
+            );
+            assert!(
+                !stderr.contains("publisher-tree"),
+                "unguarded probe must not emit the tree line"
+            );
+            kill_tick_gated(pubpid, pubtick);
+            assert!(
+                birth_drained_007(pubpid, pubtick, std::time::Duration::from_secs(5)),
+                "wrapper must drain the stranded publisher"
+            );
+            assert!(
+                kill_sleep_with_dur("898", anchor),
+                "wrapper must drain the stranded sleep 898"
+            );
+            eprintln!("R23011: bad control stranded + swept as designed");
+        } else {
+            // Guarded: the skip must go LOUD (the arm is
+            // reachable + wired, not dead code), the
+            // publisher must be gone (inner fd-less arm),
+            // and the unknown stranger must strand (no
+            // blind kill) for the wrapper to sweep.
+            assert!(
+                stderr.contains("publisher-tree")
+                    && stderr.contains("publisher-unverifiable"),
+                "guarded probe must go loud on the skipped tree\n{stderr}"
+            );
+            // Arm precision: the liveness check (not the
+            // children read) must be what failed — a freed
+            // fd slot ahead of the guard would take the
+            // exit-race arm instead.
+            assert!(
+                !stderr.contains("children-unreadable"),
+                "guarded probe must fail the liveness check, not the children read\n{stderr}"
+            );
+            assert!(
+                stdout.contains("R23011-TREE-PUB-GONE"),
+                "guarded probe must retire the publisher\n{stdout}\n{stderr}"
+            );
+            assert!(
+                stdout.contains("R23011-TREE-SLEEP-STRANDED"),
+                "guarded probe must strand the unknown stranger\n{stdout}\n{stderr}"
+            );
+            match task_starttime_checked(pubpid) {
+                Ok(Some(now)) => assert_ne!(now, pubtick, "publisher birth must be retired"),
+                Ok(None) => {}
+                Err(error) => panic!("publisher drainage unverifiable: {error}"),
+            }
+            assert!(
+                kill_sleep_with_dur("898", anchor),
+                "wrapper must drain the stranded sleep 898"
+            );
+        }
+    }
+}
+
+/// R23-011 site-4 read probe (twin, fresh image): garbage-pair
+/// publisher + the tree guard dropped UNDER a held outage.
+/// The hold is declared BEFORE the guard (reverse of the
+/// R22007 order) so unwind reaches the guard first with
+/// fds still exhausted: the pin fails at construction, the
+/// liveness check fails at drop (loud skip — no blind
+/// tree-kill), and the inner unpinned arm retires the
+/// publisher through the fd-less waitpid probe. Marks
+/// PUB-GONE/PUB-LIVE (birth-aware) + SLEEP-STRANDED/GONE;
+/// exits 0 either way (the wrapper judges + sweeps).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn r23011_tree_guard_outage_probe() {
+    use std::io::BufRead as _;
+    use std::panic::AssertUnwindSafe;
+    use std::time::{Duration, Instant};
+    let no_arm = std::env::var("SCOPEBASE_R23011_NO_ARM").is_ok();
+    // R23-008: ownership-window anchor at probe entry
+    // (before staging — a post-staging anchor would push
+    // the stranger's birth outside the window).
+    let anchor = boot_ticks_now().expect("tick reads");
+    let mut publisher = spawn_self_grouped_publisher(
+        "898",
+        "wait",
+        &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+    );
+    let pubpid = publisher.id() as i32;
+    let pubtick = task_starttime_checked(pubpid)
+        .expect("staging broken (publisher stat)")
+        .expect("staging broken (publisher visible)");
+    println!("R23011-TREE-PAIR {pubpid} {pubtick}");
+    let stdout = publisher.stdout.take().expect("publisher stdout");
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        // Read BEFORE the hold (staging — the pipe fd must
+        // close before exhaustion: a reader dropped during
+        // unwind would free a slot ahead of the guard and
+        // the liveness check would wrongly succeed).
+        let mut line = String::new();
+        std::io::BufReader::new(stdout)
+            .read_line(&mut line)
+            .expect("pair readable");
+        // Hold BEFORE the guard: unwind reaches the guard
+        // first, fds still exhausted (this probe covers the
+        // loud skip). `line` drops last (declared first) —
+        // a String frees no fd anyway.
+        let _hold = OutageHold::exhaust();
+        let mut _tguard = (!no_arm).then(|| PublisherTreeGuard::new(pubpid));
+        // Anti-vacuity: the outage bites exactly here.
+        assert!(
+            task_starttime_checked(pubpid).is_err(),
+            "staging broken (stat readable under hold?)"
+        );
+        let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+    }));
+    assert!(outcome.is_err(), "staging broken (parse must panic)");
+    // Guarded only: reap whatever the drop left (kill-only
+    // or already-reaped). The bad control must NOT wait —
+    // its publisher is live in the wait tail (898s) and the
+    // wrapper retires it via custody (a wait here would
+    // wedge the probe).
+    if !no_arm {
+        let _ = publisher.wait();
+    }
+    // Settle + mark (birth-aware publisher; scan stranger).
+    let end = Instant::now() + Duration::from_secs(5);
+    let (mut pubgone, mut sleepstranded) = (false, false);
+    while Instant::now() < end {
+        pubgone = task_starttime_checked(pubpid) != Ok(Some(pubtick));
+        sleepstranded = !sleep_owned_pids_with_dur("898", anchor).is_empty();
+        // Guarded shape converges on (gone, stranded); the
+        // bad control on (live, stranded) — either way the
+        // stranger mark decides the loop, the publisher mark
+        // is read off the converged state.
+        if sleepstranded {
+            // One more publisher poll after the stranger is
+            // confirmed (kills land before the scan sees).
+            pubgone = task_starttime_checked(pubpid) != Ok(Some(pubtick));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if pubgone {
+        println!("R23011-TREE-PUB-GONE");
+    } else {
+        println!("R23011-TREE-PUB-LIVE");
+    }
+    if sleepstranded {
+        println!("R23011-TREE-SLEEP-STRANDED");
+    } else {
+        println!("R23011-TREE-SLEEP-GONE");
+    }
+}
+
 /// R22-002 working paths (toolchain twin, no steering —
 /// always runs): mirror of the lib regression (hung retires
 /// a live publisher; exited records stranded + retires a
@@ -12634,8 +14009,65 @@ fn hung_and_exited_branches_retire_while_pinned() {
         let pubtick = task_starttime_checked(pubpid)
             .expect("publisher stat readable")
             .expect("publisher visible");
+        // R23-022 (toolchain twin): the tree guard covers the
+        // staging below (a staging panic retires the pair —
+        // never strands; disarmed once the retire below reaps).
+        let mut _tguard = PublisherTreeGuard::new(pubpid);
+        // R23-022 (toolchain twin): await EXACTLY ONE live
+        // sleep child — striking pre-spawn retires an empty
+        // group (vacuous — a no-strike mutant passes).
+        // Pre-exec and transient counts keep polling; a second
+        // child or a dead sleeper is staging-broken (loud).
+        let (spid, stick) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let kids = tree_children_pids(pubpid).unwrap_or_default();
+                if kids.len() > 1 {
+                    panic!(
+                        "R22002-hung: staging broken (publisher birthed {} children, want 1)",
+                        kids.len()
+                    );
+                }
+                let mut sleeps = Vec::new();
+                for kid in &kids {
+                    let cmdline = match std::fs::read(format!("/proc/{kid}/cmdline")) {
+                        Ok(cmdline) => cmdline,
+                        Err(_) => continue,
+                    };
+                    if !cmdline_matches_sleep_dur(&cmdline, "966") {
+                        continue;
+                    }
+                    let tick = match task_starttime_checked(*kid) {
+                        Ok(Some(tick)) => tick,
+                        _ => continue,
+                    };
+                    let cmdline2 = match std::fs::read(format!("/proc/{kid}/cmdline")) {
+                        Ok(cmdline) => cmdline,
+                        Err(_) => continue,
+                    };
+                    if !cmdline_matches_sleep_dur(&cmdline2, "966") {
+                        continue;
+                    }
+                    if task_state(*kid) == Some('Z') {
+                        panic!(
+                            "R22002-hung: staging broken (sleeper {kid} dead pre-strike — nothing targets it?)"
+                        );
+                    }
+                    sleeps.push((*kid, tick));
+                }
+                if sleeps.len() == 1 {
+                    break sleeps[0];
+                }
+                assert!(
+                    Instant::now() < end,
+                    "R22002-hung: staging broken (sleep child never appeared)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
         let start = Instant::now();
         let status = retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
+        _tguard.disarm();
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "R22002-hung: retire must be prompt"
@@ -12644,6 +14076,12 @@ fn hung_and_exited_branches_retire_while_pinned() {
         assert!(
             await_group_empty(pubpid, Duration::from_secs(1)),
             "R22002-hung: group must be ESRCH-empty"
+        );
+        // R23-022 (toolchain twin): the strike retired THE
+        // proven drain (birth-bound).
+        assert!(
+            await_task_gone_reaping(spid, stick, Duration::from_secs(5)),
+            "R22002-hung: proven sleeper {spid} must drain (strike missed?)"
         );
     }
     // Exited cell: zombie sh-leader (pin held) + live sleep

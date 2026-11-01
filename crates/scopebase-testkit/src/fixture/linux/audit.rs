@@ -2056,6 +2056,13 @@ mod tests {
     /// the default-budget `!truncated` asserts assume no
     /// concurrent giant table, and the big-table tests
     /// assume no concurrent default-budget assert.
+    /// R23-FLAKE10: the two probe WRAPPERS
+    /// (`discovery_skip_discharges_staged_processes`,
+    /// `miss_skip_faults_discharge_before_loud_failure`)
+    /// hold it too — across their whole probe sequence:
+    /// each probe child asserts `!truncated`, and only the
+    /// PARENT's in-process hold excludes the giant table
+    /// (the child's own mutex is fresh-process).
     /// R19003-FLAKE01: no suite test parks a giant table —
     /// EMFILE exhausters (fresh-image probes AND the two
     /// in-process frame tests) confine the soft NOFILE
@@ -12095,6 +12102,111 @@ mod tests {
         }
     }
 
+    /// R23-011: publisher-TREE guard — audit twin of the
+    /// toolchain's `PublisherTreeGuard` (separate harnesses,
+    /// same contract): armed at publisher spawn, before any
+    /// line is read. The drop retires the publisher AND its
+    /// live subtree: a read/parse panic between spawn and
+    /// the pair parse leaves the stranger's birth unknown,
+    /// so NO expected-identity guard can arm over it — the
+    /// bare publisher guard alone would orphan the
+    /// stranger's sleep. Composition: the publisher itself
+    /// retires through the proven `FixtureGuard` logic
+    /// (field drop runs after this drop, so the children
+    /// die FIRST while the live publisher's unreaped hold
+    /// pins their numbers — a snapshot-kill then cannot hit
+    /// a recycle). Liveness gate: the tree arm runs only
+    /// while the publisher's tick reads live (its wait/reap
+    /// tail runs at exit, so a live publisher has reaped no
+    /// one); a dead publisher means its tail already reaped
+    /// the children (wait tail), and numeric kills there
+    /// would be unsound, so the tree arm is skipped on
+    /// dead/unreadable — the inner guard still retires the
+    /// publisher, and an exit-0 orphan stays the established
+    /// loud gap. Reuses [`proc_children`] (fail-closed on an
+    /// unparseable word — conservative: skip loud rather
+    /// than kill partial). Never panics (fallible stderr
+    /// writes only).
+    #[cfg(target_arch = "x86_64")]
+    struct PublisherTreeGuard {
+        inner: FixtureGuard,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl PublisherTreeGuard {
+        /// R23-011: custody AT spawn — same reservation
+        /// contract as the bare constructor (own unreaped
+        /// child only).
+        fn new(pid: libc::pid_t) -> Self {
+            PublisherTreeGuard {
+                inner: FixtureGuard::new(pid),
+            }
+        }
+
+        /// R23-011: stand down after an explicit loud retire
+        /// (same double-retire rule as the inner guard).
+        fn disarm(&mut self) {
+            self.inner.disarm();
+        }
+    }
+
+    // R23-002: the Drop impl of the x86-gated
+    // PublisherTreeGuard is itself x86-gated (an ungated
+    // impl is an unresolved type on other architectures).
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for PublisherTreeGuard {
+        fn drop(&mut self) {
+            use std::io::Write as _;
+            if self.inner.disarmed {
+                return;
+            }
+            let pid = self.inner.pid;
+            // Reachability: the None arm below is
+            // defensive-only (a zombie publisher keeps an
+            // EMPTY children file — Some([]) — so None needs
+            // stat-readable PLUS children-unreadable: the
+            // exit race between the two opens, or an outage
+            // lifting mid-drop). Its fallthrough (skip tree,
+            // inner retires) is the outage-leg-covered shape;
+            // only the static line differs.
+            match proc_starttime(pid) {
+                Ok(Some(_)) => match proc_children(pid) {
+                    Some(kids) => {
+                        for kid in kids {
+                            // SAFETY: SIGKILL to a number the
+                            // live publisher's unreaped hold
+                            // pins — ESRCH (exited since the
+                            // snapshot) is harmless.
+                            let _ = unsafe { libc::kill(kid, libc::SIGKILL) };
+                        }
+                    }
+                    None => {
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "scopebase publisher-tree pid={pid} children-unreadable \
+                             (unresolved — publisher still retired)"
+                        );
+                    }
+                },
+                // Dead: the exit tail reaped the children
+                // (wait tail) or orphaned them (exit-0 tail —
+                // the established loud gap); numeric kills
+                // here would be unsound, so the tree arm is
+                // skipped.
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "scopebase publisher-tree pid={pid} publisher-unverifiable \
+                         read_err={error} (tree skipped — inner guard still retires)"
+                    );
+                }
+            }
+            // The inner field drops next (fields drop after
+            // `Drop::drop`), retiring the publisher second.
+        }
+    }
+
     /// R14-012: SIGKILL + bounded silent reap of an owned child
     /// (staging cleanup and guard drops). Never panics — a
     /// stuck child reports through the caller's loud verify,
@@ -13846,14 +13958,17 @@ mod tests {
             }
             found.expect("publisher must stage exactly one sleep child")
         };
+        // R23-011: guard at sighting, BEFORE the birth
+        // read (a failing observation must unwind through
+        // the guard — the publisher guard alone would
+        // orphan the sleep). R22-014: R16-010 non-child
+        // kill — the zombie poll below must not strand
+        // the sleep; same birth just sighted-live.
+        let mut _sguard = FixtureGuard::new(sleep);
         // Original tick while live.
         let orig = proc_starttime(sleep)
             .expect("sleep stat readable")
             .expect("sleep live");
-        // R22-014: guard at sighting (R16-010 non-child
-        // kill — the zombie poll below must not strand
-        // the sleep; same birth just sighted-live).
-        let mut _sguard = FixtureGuard::new(sleep);
         // Kill; poll ZOMBIE (dead but still the
         // publisher's — it never reaps before its wait).
         // SAFETY: signal-only to the staged sleep.
@@ -13976,14 +14091,17 @@ mod tests {
             }
             found.expect("publisher must stage exactly one sleep child")
         };
+        // R23-011: guard at sighting, BEFORE the birth
+        // read (a failing observation must unwind through
+        // the guard — the publisher guard alone would
+        // orphan the sleep). R22-014: R16-010 non-child
+        // kill — the zombie poll below must not strand
+        // the sleep; same birth just sighted-live.
+        let mut _sguard = FixtureGuard::new(sleep);
         // Original tick while live.
         let orig = proc_starttime(sleep)
             .expect("sleep stat readable")
             .expect("sleep live");
-        // R22-014: guard at sighting (R16-010 non-child
-        // kill — the zombie poll below must not strand
-        // the sleep; same birth just sighted-live).
-        let mut _sguard = FixtureGuard::new(sleep);
         // Kill; poll ZOMBIE (dead but still the
         // publisher's — it must have normalized the
         // inherited SIG_IGN, else the kernel auto-reaps).
@@ -14041,6 +14159,180 @@ mod tests {
         assert_sleeper_discharged(sleep, orig);
         _pguard.disarm();
         _sguard.disarm();
+    }
+
+    /// R23-011 site 2: the sleeper birth read fails (a REAL
+    /// fd outage) AFTER the sighting guard armed — the
+    /// outage heals (transient) before the faithful
+    /// expect-reproduction panics with the captured error,
+    /// and the unwind must discharge BOTH births (the
+    /// publisher guard alone would orphan the sleep).
+    /// Fresh-image probe (the outage is process-global);
+    /// the probe runs twice — the sguard-less bad control
+    /// (must strand the sleep, swept loud after) and the
+    /// guarded shape (must discharge clean). Duration 869
+    /// is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn sighting_birth_read_failure_discharges_sleep() {
+        if std::env::var("SCOPEBASE_R23011_NORM_OUTAGE").is_ok() {
+            sighting_birth_read_failure_discharges_sleep_probe();
+            return;
+        }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before either probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+        for no_sguard in [true, false] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("--exact")
+                .arg("fixture::linux::audit::tests::sighting_birth_read_failure_discharges_sleep")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R23011_NORM_OUTAGE", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if no_sguard {
+                cmd.env("SCOPEBASE_R23011_NO_SGUARD", "1");
+            }
+            let out = cmd.output().expect("probe runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            // The probe panics by design (faithful
+            // expect-reproduction with the real outage
+            // error); custody rides stderr (unbuffered —
+            // survives the panic).
+            assert!(
+                !out.status.success(),
+                "probe must panic on the birth read\n{stderr}"
+            );
+            assert!(
+                stderr.contains("sleep stat readable"),
+                "probe must cite the birth-read panic\n{stderr}"
+            );
+            let (pubpid, pubtick, sleep, sleeptick): (libc::pid_t, u64, libc::pid_t, u64) =
+                stderr
+                    .lines()
+                    .find_map(|line| {
+                        let rest = line.strip_prefix("R23011-NORM ")?;
+                        let mut words = rest.split_whitespace();
+                        Some((
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                        ))
+                    })
+                    .expect("probe must print custody");
+            if no_sguard {
+                // Bad control: the SAME birth must still be
+                // live (stranded — else vacuous), then sweep
+                // loud.
+                assert_eq!(
+                    proc_starttime(sleep),
+                    Ok(Some(sleeptick)),
+                    "bad control must strand the same birth (vacuous otherwise)"
+                );
+                let _ = kill_tick_gated(pubpid, pubtick);
+                let swept = r22006_fallback_sweep_sleep("869", anchor);
+                assert_eq!(swept, 1, "wrapper must sweep the stranded sleep");
+                eprintln!("R23011: bad control stranded + swept as designed");
+            } else {
+                // Guarded: both births discharged (settle —
+                // the orphaned sleep drains via init).
+                let end =
+                    std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let pubgone = proc_starttime(pubpid) != Ok(Some(pubtick));
+                    let sleepgone = proc_starttime(sleep) != Ok(Some(sleeptick));
+                    if pubgone && sleepgone {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < end,
+                        "guarded probe must discharge both births"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(
+                    r22006_scan_sleep_with_dur("869").is_empty(),
+                    "no live sleep-869 may survive the guarded probe"
+                );
+            }
+        }
+    }
+
+    /// R23-011 site-2 probe (fresh image): stage the
+    /// publisher, sight the sleep via the children scan,
+    /// arm the sighting guard unless the bad-control env
+    /// is set, transmit custody, exhaust fds, and fail the
+    /// birth read for REAL — then heal (drop the fill)
+    /// and panic with the captured error (the transient
+    /// shape: failure real, drops verifying). The panic
+    /// unwinds through the guards; the wrapper judges.
+    #[cfg(target_arch = "x86_64")]
+    fn sighting_birth_read_failure_discharges_sleep_probe() {
+        let no_sguard = std::env::var("SCOPEBASE_R23011_NO_SGUARD").is_ok();
+        let publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("869")
+            .arg("wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (publisher spawn)");
+        let pubpid = publisher.id() as libc::pid_t;
+        let _pguard = FixtureGuard::new(pubpid);
+        // Children scan (mirror of the normalization
+        // staging — the sleep appears in ms).
+        let sleep = {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut found = None;
+            while std::time::Instant::now() < end {
+                if let Ok(text) =
+                    std::fs::read_to_string(format!("/proc/{pubpid}/task/{pubpid}/children"))
+                {
+                    let kids: Vec<libc::pid_t> = text
+                        .split_whitespace()
+                        .filter_map(|w| w.parse().ok())
+                        .collect();
+                    if kids.len() == 1 {
+                        found = Some(kids[0]);
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            found.expect("publisher must stage exactly one sleep child")
+        };
+        // THE FIXED ORDER (arm before the birth read).
+        let _sguard = (!no_sguard).then(|| FixtureGuard::new(sleep));
+        // Custody transmit (pre-hold staging reads).
+        let pubtick = proc_starttime(pubpid)
+            .expect("staging broken (publisher stat)")
+            .expect("staging broken (publisher visible)");
+        let sleeptick = proc_starttime(sleep)
+            .expect("staging broken (sleep stat)")
+            .expect("staging broken (sleep visible)");
+        eprintln!("R23011-NORM {pubpid} {pubtick} {sleep} {sleeptick}");
+        // Real outage (confine + fill — the established
+        // audit shape), then the birth read MUST fail.
+        let _confine = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        let err = match proc_starttime(sleep) {
+            Err(error) => error,
+            other => panic!("staging broken (birth read must fail: {other:?})"),
+        };
+        // Heal (transient outage — the drops below verify
+        // with working fds).
+        drop(held);
+        drop(_confine);
+        // Faithful expect-reproduction with the REAL outage
+        // error — unwinds through the guards.
+        panic!("sleep stat readable: {err}");
     }
 
     /// R22-020: discharge survives replacement — the
@@ -14929,7 +15221,13 @@ mod tests {
             post_empty,
             "PUB-{step}: group must prove ESRCH-empty after retire (squatter?; drain refused)"
         );
-        let err = drain_pipe_bounded(stderr_pipe, Duration::from_secs(5), step);
+        // R23-018: 5 s idle + 60 s overall (dribble) ceilings.
+        let err = drain_pipe_bounded(
+            stderr_pipe,
+            Duration::from_secs(5),
+            Duration::from_secs(60),
+            step,
+        );
         assert!(
             elapsed < Duration::from_secs(5),
             "PUB-{step}: must fail promptly, took {elapsed:?}\nstderr: {err}"
@@ -14954,11 +15252,17 @@ mod tests {
     /// writer survived the verdict?! — with a partial
     /// preview); past 1MB ⟹ stops appending (drains on to
     /// EOF-or-deadline, discarding) and marks [TRUNCATED].
-    /// `None` ⟹ empty.
+    /// `None` ⟹ empty. R23-018: `overall` is the SECOND
+    /// ceiling — the idle deadline fires only on WouldBlock,
+    /// so a steady dribble (bytes every wake-up, EOF never)
+    /// would hang past it; flowing bytes past `overall` ⟹
+    /// loud drain-corrupt panic (distinct attribution from
+    /// the idle wedge AND from probe-death).
     #[cfg(target_arch = "x86_64")]
     fn drain_pipe_bounded(
         pipe: Option<std::process::ChildStderr>,
         timeout: Duration,
+        overall: Duration,
         what: &str,
     ) -> String {
         use std::io::Read as _;
@@ -14978,6 +15282,11 @@ mod tests {
         let mut total: usize = 0;
         let mut capped = false;
         let end = Instant::now() + timeout;
+        // R23-018: overall (dribble) ceiling — checked on
+        // EVERY flowing read (the idle deadline below only
+        // fires on WouldBlock, which a steady dribble never
+        // produces).
+        let end_overall = Instant::now() + overall;
         loop {
             let mut chunk = [0u8; 8192];
             match pipe.read(&mut chunk) {
@@ -14989,6 +15298,15 @@ mod tests {
                         buf.extend_from_slice(&chunk[..n.min(room)]);
                     } else {
                         capped = true;
+                    }
+                    if Instant::now() >= end_overall {
+                        let preview =
+                            String::from_utf8_lossy(&buf[..buf.len().min(500)]).into_owned();
+                        panic!(
+                            "PUB-{what}: stderr drain exceeded overall {overall:?} ({total} bytes, \
+                             EOF never arrived — drain-corrupt, a writer survived?!) — \
+                             partial: {preview:?}",
+                        );
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -15010,6 +15328,62 @@ mod tests {
             out.push_str("\n[TRUNCATED at 1MB]");
         }
         out
+    }
+
+    /// R23-018: a steadily dribbling writer (bytes every
+    /// wake-up, EOF never) must trip the OVERALL ceiling
+    /// with drain-corrupt attribution (the idle deadline
+    /// alone never fires — no WouldBlock). Shell dribbler
+    /// (1 byte/100ms on stderr, never EOFs) + 5 s idle /
+    /// 2 s overall: the drain must panic ~2s citing
+    /// drain-corrupt (pre-fix it hung forever). Cleanup
+    /// kills the dribbler. No fixture durations (sh, no
+    /// sleep).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn drain_pipe_dribble_trips_overall_ceiling() {
+        use std::time::{Duration, Instant};
+        let message_of = |payload: Box<dyn std::any::Any + Send>| {
+            payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("")
+                .to_string()
+        };
+        let mut dribbler = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("while true; do printf x >&2; sleep 0.1; done")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("dribbler spawns");
+        let stderr_pipe = dribbler.stderr.take();
+        let start = Instant::now();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drain_pipe_bounded(
+                stderr_pipe,
+                Duration::from_secs(5),
+                Duration::from_secs(2),
+                "r23018",
+            );
+        }));
+        let elapsed = start.elapsed();
+        // Cleanup FIRST: the dribbler outlives the verdict.
+        let _ = dribbler.kill();
+        let _ = dribbler.wait();
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "dribble must trip the ceiling promptly (pre-fix: forever)"
+        );
+        match outcome {
+            Err(payload) => assert!(
+                message_of(payload).contains("drain-corrupt"),
+                "dribble must cite drain-corrupt (distinct from wedge/probe-death)"
+            ),
+            Ok(_) => panic!("dribble past the overall ceiling must panic (never return)"),
+        }
     }
 
     /// R22-015: the pub-cell judge pins verdict-first +
@@ -15162,7 +15536,10 @@ mod tests {
                     drop(publisher.stdout.take());
                 }
                 let pubpid = publisher.id() as libc::pid_t;
-                let mut _pguard = FixtureGuard::new(pubpid);
+                // R23-011: TREE guard at spawn (this cell never
+                // sights the stranger — a panic before the judge
+                // must not orphan the unsighted sleep).
+                let mut _pguard = PublisherTreeGuard::new(pubpid);
                 // Birth tick at spawn (live-unreaped — nothing
                 // reaped yet — so this first read names OUR
                 // birth; every decision below re-verifies it).
@@ -15325,7 +15702,10 @@ mod tests {
                 ],
             );
             let pubpid = publisher.id() as libc::pid_t;
-            let mut _pguard = FixtureGuard::new(pubpid);
+            // R23-011: TREE guard at spawn (the eof stranger
+            // stays unknown throughout — a panic must not
+            // orphan its sleep).
+            let mut _pguard = PublisherTreeGuard::new(pubpid);
             let start = Instant::now();
             let mut line = String::new();
             let bytes = std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
@@ -15348,7 +15728,10 @@ mod tests {
             use std::io::BufRead as _;
             let mut publisher = spawn_self_grouped_publisher("940", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
-            let mut _pguard = FixtureGuard::new(pubpid);
+            // R23-011: TREE guard at spawn (the torn pair keeps
+            // the stranger unknown throughout — a panic must
+            // not orphan its sleep).
+            let mut _pguard = PublisherTreeGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15399,7 +15782,10 @@ mod tests {
             };
             let mut publisher = spawn_self_grouped_publisher("941", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
-            let mut _pguard = FixtureGuard::new(pubpid);
+            // R23-011: TREE guard at spawn (parse-gap coverage —
+            // a read/parse panic before `_sguard` arms must not
+            // orphan the stranger's sleep).
+            let mut _pguard = PublisherTreeGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15510,7 +15896,10 @@ mod tests {
             };
             let mut publisher = spawn_self_grouped_publisher("951", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
-            let mut _pguard = FixtureGuard::new(pubpid);
+            // R23-011: TREE guard at spawn (parse-gap coverage —
+            // a read/parse panic before `_sguard` arms must not
+            // orphan the stranger's sleep).
+            let mut _pguard = PublisherTreeGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15614,8 +16003,11 @@ mod tests {
             let mut publisher = spawn_self_grouped_publisher("945", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
             // R22-014: guard at birth (the pair read below
-            // must not strand the publisher).
-            let mut _pguard = FixtureGuard::new(pubpid);
+            // must not strand the publisher). R23-011: TREE
+            // guard — a read/parse panic before `_sguard`
+            // can arm over the unknown stranger must not
+            // orphan the stranger's sleep.
+            let mut _pguard = PublisherTreeGuard::new(pubpid);
             let mut line = String::new();
             std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
                 .read_line(&mut line)
@@ -15858,6 +16250,306 @@ mod tests {
         }
     }
 
+    /// R23-011 leg (audit, in-process): mirror of the
+    /// toolchain leg — a garbage-pair publisher panics the
+    /// pair parse INSIDE a caught unwind with the TREE guard
+    /// armed; the drop must retire BOTH the publisher and
+    /// the unknown stranger (no expected-identity guard CAN
+    /// arm — the birth never parsed). Bad variant: the same
+    /// shape with a BARE publisher guard strands the
+    /// stranger's sleep (proven by the owned duration scan,
+    /// then swept loud). Dur 852 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23011_tree_guard_retires_unknown_stranger_on_parse_panic() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let anchor = boot_ticks_now().expect("tick reads");
+        // GOOD arm: tree guard.
+        let mut publisher = spawn_self_grouped_publisher(
+            "852",
+            "wait",
+            &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+        );
+        let pubpid = publisher.id() as libc::pid_t;
+        let stdout = publisher.stdout.take().expect("publisher stdout");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut _tguard = PublisherTreeGuard::new(pubpid);
+            let mut line = String::new();
+            std::io::BufReader::new(stdout)
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+        }));
+        assert!(
+            outcome.is_err(),
+            "R23011-parse: garbage pair must panic the parse"
+        );
+        // Publisher: our child — reap whatever the drop left
+        // (kill-only or already-reaped both converge) and
+        // prove the number gone.
+        let _ = publisher.wait();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match proc_starttime(pubpid) {
+                Ok(None) => break,
+                Ok(Some(_)) => {}
+                Err(error) => panic!("R23011-parse: publisher drain unreadable: {error}"),
+            }
+            assert!(
+                Instant::now() < end,
+                "R23011-parse: tree guard failed to retire the publisher"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Stranger: unknown number — scan-absence after the
+        // settle is the discharge proof (dur unique + owned).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if r22006_scan_owned_sleep_with_dur("852", anchor).is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "R23011-parse: tree guard failed to retire the unknown stranger"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // BAD arm: bare publisher guard — the stranger MUST
+        // strand (orphaned to init when the drop kills the
+        // publisher alone), or the leg is vacuous. Swept loud.
+        let mut publisher = spawn_self_grouped_publisher(
+            "852",
+            "wait",
+            &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+        );
+        let pubpid = publisher.id() as libc::pid_t;
+        let stdout = publisher.stdout.take().expect("publisher stdout");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut _tguard = FixtureGuard::new(pubpid);
+            let mut line = String::new();
+            std::io::BufReader::new(stdout)
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+        }));
+        assert!(
+            outcome.is_err(),
+            "R23011-parse-bad: garbage pair must panic the parse"
+        );
+        let _ = publisher.wait();
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match proc_starttime(pubpid) {
+                Ok(None) => break,
+                Ok(Some(_)) => {}
+                Err(error) => panic!("R23011-parse-bad: publisher drain unreadable: {error}"),
+            }
+            assert!(
+                Instant::now() < end,
+                "R23011-parse-bad: bare guard failed to retire the publisher"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // THE bad assertion: the stranger strands.
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if !r22006_scan_owned_sleep_with_dur("852", anchor).is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "R23011-parse-bad: bad variant must strand the stranger (else the leg is vacuous)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            r22006_fallback_sweep_sleep("852", anchor),
+            1,
+            "R23011-parse-bad: sweep must drain exactly the stranded stranger"
+        );
+    }
+
+    /// R23-011 site-4 read leg (audit): mirror of the
+    /// toolchain leg — the tree guard drops UNDER a held
+    /// outage (real fd exhaustion via confine+fill): the
+    /// liveness check fails, the tree arm is SKIPPED loud
+    /// (no blind snapshot-kill of an unverifiable subtree),
+    /// the inner unpinned arm still retires the publisher
+    /// via the fd-less waitpid probe, and the unknown
+    /// stranger strands (the wrapper sweeps it loud).
+    /// Fresh-image probe (the outage is process-global); the
+    /// probe panics by design with custody on stderr.
+    /// Unguarded bad control (must strand the PAIR —
+    /// publisher included) + guarded shape (loud line +
+    /// publisher gone + stranger stranded). Duration 845 is
+    /// unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23011_tree_guard_skips_tree_loud_under_outage() {
+        if std::env::var("SCOPEBASE_R23011_TREE_OUTAGE_AUDIT").is_ok() {
+            r23011_tree_guard_outage_probe();
+            return;
+        }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before either probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+        for no_arm in [true, false] {
+            let exe = std::env::current_exe().expect("own test binary");
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("--exact")
+                .arg("fixture::linux::audit::tests::r23011_tree_guard_skips_tree_loud_under_outage")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R23011_TREE_OUTAGE_AUDIT", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if no_arm {
+                cmd.env("SCOPEBASE_R23011_NO_ARM", "1");
+            }
+            let out = cmd.output().expect("probe runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            // The probe panics by design (the parse panic
+            // unwinds through the guard); custody rides
+            // stderr (unbuffered — survives the panic).
+            assert!(
+                !out.status.success(),
+                "probe must panic on the parse\n{stderr}"
+            );
+            assert!(
+                stderr.contains("garbage publication"),
+                "probe must cite the parse panic\n{stderr}"
+            );
+            let (pubpid, pubtick): (libc::pid_t, u64) = stderr
+                .lines()
+                .find_map(|line| {
+                    let rest = line.strip_prefix("R23011-TREE-PAIR ")?;
+                    let mut words = rest.split_whitespace();
+                    Some((
+                        words.next()?.parse().ok()?,
+                        words.next()?.parse().ok()?,
+                    ))
+                })
+                .expect("probe must print custody");
+            if no_arm {
+                // Bad control: the SAME publisher birth must
+                // still be live (else vacuous) and the
+                // stranger stranded — then sweep loud (the
+                // adopted publisher zombie rides the suite
+                // process like the site-2 shape).
+                assert_eq!(
+                    proc_starttime(pubpid),
+                    Ok(Some(pubtick)),
+                    "bad control must strand the publisher (vacuous otherwise)"
+                );
+                assert!(
+                    !r22006_scan_owned_sleep_with_dur("845", anchor).is_empty(),
+                    "bad control must strand the stranger"
+                );
+                assert!(
+                    !stderr.contains("publisher-tree"),
+                    "unguarded probe must not emit the tree line"
+                );
+                let _ = kill_tick_gated(pubpid, pubtick);
+                assert_eq!(
+                    r22006_fallback_sweep_sleep("845", anchor),
+                    1,
+                    "wrapper must sweep the stranded sleep"
+                );
+                eprintln!("R23011: bad control stranded + swept as designed");
+            } else {
+                // Guarded: the skip must go LOUD (the arm is
+                // reachable + wired, not dead code), the
+                // publisher must be gone (inner fd-less arm),
+                // and the unknown stranger must strand (no
+                // blind kill) for the wrapper to sweep.
+                assert!(
+                    stderr.contains("publisher-tree")
+                        && stderr.contains("publisher-unverifiable"),
+                    "guarded probe must go loud on the skipped tree\n{stderr}"
+                );
+                // Arm precision: the liveness check (not the
+                // children read) must be what failed.
+                assert!(
+                    !stderr.contains("children-unreadable"),
+                    "guarded probe must fail the liveness check, not the children read\n{stderr}"
+                );
+                let end =
+                    std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if proc_starttime(pubpid) != Ok(Some(pubtick)) {
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < end,
+                        "guarded probe must retire the publisher"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                assert!(
+                    !r22006_scan_owned_sleep_with_dur("845", anchor).is_empty(),
+                    "guarded probe must strand the unknown stranger"
+                );
+                assert_eq!(
+                    r22006_fallback_sweep_sleep("845", anchor),
+                    1,
+                    "wrapper must sweep the stranded sleep"
+                );
+            }
+        }
+    }
+
+    /// R23-011 site-4 read probe (fresh image):
+    /// garbage-pair publisher + the tree guard dropped UNDER
+    /// a held outage. Read pre-hold (staging — the pipe fd
+    /// must close before exhaustion: a reader dropped during
+    /// unwind would free a slot ahead of the guard and the
+    /// liveness check would wrongly succeed); confine+fill;
+    /// guard (unless bad control — declared after the fill
+    /// so unwind reaches it first, fds still exhausted);
+    /// the parse then panics BY DESIGN — unwind takes the
+    /// loud skip + inner fd-less publisher retire, and the
+    /// probe dies nonzero with custody on stderr (the
+    /// wrapper judges + sweeps).
+    #[cfg(target_arch = "x86_64")]
+    fn r23011_tree_guard_outage_probe() {
+        use std::io::BufRead as _;
+        let no_arm = std::env::var("SCOPEBASE_R23011_NO_ARM").is_ok();
+        let mut publisher = spawn_self_grouped_publisher(
+            "845",
+            "wait",
+            &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+        );
+        let pubpid = publisher.id() as libc::pid_t;
+        let pubtick = proc_starttime(pubpid)
+            .expect("staging broken (publisher stat)")
+            .expect("staging broken (publisher visible)");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        eprintln!("R23011-TREE-PAIR {pubpid} {pubtick}");
+        // Real outage (confine + fill — the established
+        // audit shape).
+        let _confine = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        // Guard UNDER the outage (drops with fds exhausted —
+        // this probe covers the loud skip).
+        let mut _tguard = (!no_arm).then(|| PublisherTreeGuard::new(pubpid));
+        // Anti-vacuity: the outage bites exactly here.
+        assert!(
+            proc_starttime(pubpid).is_err(),
+            "staging broken (stat readable under hold?)"
+        );
+        // THE panic (by design — unwinds through the guard;
+        // the wrapper judges the stderr).
+        let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+    }
+
     /// R22-002 working paths (no steering — always runs):
     /// the hung branch retires a live publisher group and
     /// the exited branch retires a zombie-leader group with
@@ -15888,8 +16580,70 @@ mod tests {
             let pubtick = proc_starttime(pubpid)
                 .expect("publisher stat readable")
                 .expect("publisher visible");
+            // R23-022: the tree guard covers the staging
+            // below (a staging panic retires the pair —
+            // never strands; disarmed once the retire
+            // below reaps).
+            let mut _tguard = PublisherTreeGuard::new(pubpid);
+            // R23-022: await EXACTLY ONE live sleep child —
+            // the publisher births its sleeper async, and
+            // striking pre-spawn retires an empty group
+            // (vacuous — a no-strike mutant passes). Pre-exec
+            // (publisher argv, not sleep yet) and transient
+            // counts keep polling; a second child or a dead
+            // sleeper is staging-broken (loud — the
+            // publisher births exactly one sleeper and
+            // nothing targets it pre-strike).
+            let (spid, stick) = {
+                let end = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let kids = proc_children(pubpid).unwrap_or_default();
+                    if kids.len() > 1 {
+                        panic!(
+                            "R22002-hung: staging broken (publisher birthed {} children, want 1)",
+                            kids.len()
+                        );
+                    }
+                    let mut sleeps = Vec::new();
+                    for kid in &kids {
+                        let cmdline = match std::fs::read(format!("/proc/{kid}/cmdline")) {
+                            Ok(cmdline) => cmdline,
+                            Err(_) => continue,
+                        };
+                        if !r22006_cmdline_matches_sleep_dur(&cmdline, "963") {
+                            continue;
+                        }
+                        let tick = match proc_starttime(*kid) {
+                            Ok(Some(tick)) => tick,
+                            _ => continue,
+                        };
+                        let cmdline2 = match std::fs::read(format!("/proc/{kid}/cmdline")) {
+                            Ok(cmdline) => cmdline,
+                            Err(_) => continue,
+                        };
+                        if !r22006_cmdline_matches_sleep_dur(&cmdline2, "963") {
+                            continue;
+                        }
+                        if proc_state(*kid) == Some('Z') {
+                            panic!(
+                                "R22002-hung: staging broken (sleeper {kid} dead pre-strike — nothing targets it?)"
+                            );
+                        }
+                        sleeps.push((*kid, tick));
+                    }
+                    if sleeps.len() == 1 {
+                        break sleeps[0];
+                    }
+                    assert!(
+                        Instant::now() < end,
+                        "R22002-hung: staging broken (sleep child never appeared)"
+                    );
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            };
             let start = Instant::now();
             let status = retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
+            _tguard.disarm();
             assert!(
                 start.elapsed() < Duration::from_secs(5),
                 "R22002-hung: retire must be prompt"
@@ -15898,6 +16652,13 @@ mod tests {
             assert!(
                 await_group_empty(pubpid, Duration::from_secs(1)),
                 "R22002-hung: group must be ESRCH-empty"
+            );
+            // R23-022: the strike retired THE proven drain
+            // (birth-bound — a surviving same-number stranger
+            // fails here even if the group reads empty).
+            assert!(
+                await_proc_gone_reaping(spid, stick, Duration::from_secs(5)),
+                "R22002-hung: proven sleeper {spid} must drain (strike missed?)"
             );
         }
         // Exited cell: zombie sh-leader (pin held) + live
@@ -25008,13 +25769,20 @@ mod tests {
             Some(libc::EPERM),
             "staging broken (wrong denial errno?)"
         );
-        let errlog = std::env::temp_dir().join(format!(
-            "scopebase-r22006-kill-{}-{}.log",
-            std::process::id(),
-            errlog_nonce()
-        ));
+        // R23-014: forced path (plant-refusal leg) or the
+        // default nonce path; claimed O_EXCL (a planted
+        // symlink refuses — never followed into its
+        // target).
+        let errlog = match std::env::var("SCOPEBASE_R22006_ERRLOG_PATH") {
+            Ok(forced) => std::path::PathBuf::from(forced),
+            Err(_) => std::env::temp_dir().join(format!(
+                "scopebase-r22006-kill-{}-{}.log",
+                std::process::id(),
+                errlog_nonce()
+            )),
+        };
         println!("R22006-ERRLOG {}", errlog.display());
-        let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let errfile = claim_excl_file(&errlog, "errlog").expect("errlog claimed (staging)");
         let dur = r22014_sleep_dur("984");
         let mut publisher = std::process::Command::new(pair_publisher_bin())
             .arg(&dur)
@@ -25036,6 +25804,12 @@ mod tests {
         // sleeper; the publisher still runs to its fault
         // alone — kill-denied, so the sleeper survives).
         if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+            // R23-019: the birth rides the STDERR side
+            // channel (stdout stays SLEEPER-less — the R12
+            // regression is intact); the wrapper forwards
+            // it verbatim so the fault leg proves the
+            // swept birth gone, not just the scan empty.
+            eprintln!("R22014-S {sleeper} {stick}");
             std::process::exit(42);
         }
         println!("R22006-SLEEPER {sleeper} {stick}");
@@ -25065,6 +25839,52 @@ mod tests {
             line.strip_prefix("R22006-ERRLOG ")
                 .map(std::path::PathBuf::from)
         })
+    }
+
+    /// R23-015: read a diagnostic file that may have been
+    /// swapped (symlink/FIFO) after the probe completed.
+    /// O_NOFOLLOW (a swapped-in symlink refuses ELOOP —
+    /// never followed) + O_NONBLOCK (a swapped-in FIFO
+    /// opens without waiting for a writer) + fstat on the
+    /// OPEN fd must be a regular file (a FIFO refuses —
+    /// never read; the fd pins the inode, so a swap racing
+    /// the check can't redirect the read) + capped read
+    /// (regular files can't wedge — the cap bounds memory
+    /// only, reusing PROBE_OUTPUT_CAP).
+    #[cfg(target_arch = "x86_64")]
+    fn read_diag_bounded(path: &std::path::Path, what: &str) -> Result<String, String> {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|error| format!("{what} {path:?} open refused: {error}"))?;
+        let ftype = file
+            .metadata()
+            .map_err(|error| format!("{what} {path:?} fstat failed: {error}"))?
+            .file_type();
+        if !ftype.is_file() {
+            return Err(format!("{what} {path:?} refused: not a regular file"));
+        }
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        file.take(PROBE_OUTPUT_CAP as u64)
+            .read_to_end(&mut buf)
+            .map_err(|error| format!("{what} {path:?} read failed: {error}"))?;
+        String::from_utf8(buf).map_err(|error| format!("{what} {path:?} not UTF-8: {error}"))
+    }
+
+    /// R23-015: parse the errlog path from probe stdout and
+    /// read it through the swap-safe bounded reader. Shared
+    /// by the wrappers so the consumption path can't drift
+    /// from the legged shape. Returns the path alongside
+    /// the content (wrappers delete the log after reading).
+    #[cfg(target_arch = "x86_64")]
+    fn read_r22006_evidence(stdout: &str) -> Result<(std::path::PathBuf, String), String> {
+        let errlog =
+            parse_r22006_errlog(stdout).ok_or("staging broken (no errlog line?)".to_string())?;
+        let evidence = read_diag_bounded(&errlog, "errlog")?;
+        Ok((errlog, evidence))
     }
 
     /// R22-014: fault-leg duration override — legs
@@ -25414,6 +26234,17 @@ mod tests {
                 if let Some(errlog) = parse_r22006_errlog(&stdout) {
                     let _ = std::fs::remove_file(&errlog);
                 }
+                // R23-019: forward the probe's side-channel
+                // birth verbatim (early-death mode only —
+                // other no-sleeper staging breakage has no
+                // R22014-S and panics as before; the panic
+                // message itself is untouched).
+                if let Some(rest) = stderr
+                    .lines()
+                    .find_map(|line| line.strip_prefix("R22014-S "))
+                {
+                    eprintln!("R22014-S {rest}");
+                }
                 panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
             }
         };
@@ -25434,8 +26265,10 @@ mod tests {
         // Evidence: read the publisher's errlog, then delete
         // it (content lands in every message below, so no
         // failure needs the file itself — zero litter).
-        let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
-        let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+        // R23-015: swap-safe consumption (a FIFO/symlink
+        // swapped in post-probe refuses promptly).
+        let (errlog, evidence) =
+            read_r22006_evidence(&stdout).expect("errlog readable (staging?)");
         let _ = std::fs::remove_file(&errlog);
         assert!(out.status.success(), "probe must complete\n{stderr}");
         assert!(
@@ -25478,13 +26311,20 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn publisher_guard_denied_wait_reports_unresolved_probe() {
         use std::io::BufRead as _;
-        let errlog = std::env::temp_dir().join(format!(
-            "scopebase-r22006-wait-{}-{}.log",
-            std::process::id(),
-            errlog_nonce()
-        ));
+        // R23-014: forced path (plant-refusal leg) or the
+        // default nonce path; claimed O_EXCL (a planted
+        // symlink refuses — never followed into its
+        // target).
+        let errlog = match std::env::var("SCOPEBASE_R22006_ERRLOG_PATH") {
+            Ok(forced) => std::path::PathBuf::from(forced),
+            Err(_) => std::env::temp_dir().join(format!(
+                "scopebase-r22006-wait-{}-{}.log",
+                std::process::id(),
+                errlog_nonce()
+            )),
+        };
         println!("R22006-ERRLOG {}", errlog.display());
-        let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let errfile = claim_excl_file(&errlog, "errlog").expect("errlog claimed (staging)");
         let dur = r22014_sleep_dur("985");
         let mut publisher = std::process::Command::new(pair_publisher_bin())
             .arg(&dur)
@@ -25496,7 +26336,10 @@ mod tests {
             .stderr(errfile)
             .spawn()
             .expect("publisher spawns");
-        let mut _pguard = FixtureGuard::new(publisher.id() as libc::pid_t);
+        // R23-011: TREE guard at spawn (parse-gap coverage —
+        // a read/parse panic before `_sguard` arms must not
+        // orphan the stranger's sleep).
+        let mut _pguard = PublisherTreeGuard::new(publisher.id() as libc::pid_t);
         let mut line = String::new();
         std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
             .read_line(&mut line)
@@ -25514,6 +26357,12 @@ mod tests {
         // publisher's own guard kill here (0 or 1) — only
         // the kill shape pins it to 1).
         if std::env::var("SCOPEBASE_R22014_EARLY_DEATH").is_ok() {
+            // R23-019: the birth rides the STDERR side
+            // channel (stdout stays SLEEPER-less — the R12
+            // regression is intact); the wrapper forwards
+            // it verbatim so the fault leg proves the
+            // swept birth gone, not just the scan empty.
+            eprintln!("R22014-S {sleeper} {stick}");
             std::process::exit(42);
         }
         println!("R22006-SLEEPER {sleeper} {stick}");
@@ -25572,11 +26421,24 @@ mod tests {
                 if let Some(errlog) = parse_r22006_errlog(&stdout) {
                     let _ = std::fs::remove_file(&errlog);
                 }
+                // R23-019: forward the probe's side-channel
+                // birth verbatim (early-death mode only —
+                // other no-sleeper staging breakage has no
+                // R22014-S and panics as before; the panic
+                // message itself is untouched).
+                if let Some(rest) = stderr
+                    .lines()
+                    .find_map(|line| line.strip_prefix("R22014-S "))
+                {
+                    eprintln!("R22014-S {rest}");
+                }
                 panic!("staging broken (no sleeper line — R12 fallback swept {swept})");
             }
         };
-        let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
-        let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+        // R23-015: swap-safe consumption (a FIFO/symlink
+        // swapped in post-probe refuses promptly).
+        let (errlog, evidence) =
+            read_r22006_evidence(&stdout).expect("errlog readable (staging?)");
         let _ = std::fs::remove_file(&errlog);
         assert!(
             !evidence.contains("deny-wait install failed"),
@@ -25608,6 +26470,209 @@ mod tests {
             evidence.contains("reaped=false"),
             "must report unreaped\n{evidence}"
         );
+    }
+
+    /// R23-014: the denied probes must refuse a planted
+    /// errlog symlink (never follow it into its target,
+    /// never remove the foreign plant). Per probe (kill +
+    /// wait): stage a victim with a sentinel in an owned
+    /// non-sticky dir, plant a ROOT-owned symlink at the
+    /// forced errlog path (sudo-gated), run the probe with
+    /// the forced path — the claim must refuse (probe fails
+    /// citing foreign refusal) with the plant's inode and
+    /// the victim intact. Sudo-gated (the plant); skips as
+    /// root (own-uid — reclaim path, not refusal) and
+    /// without passwordless sudo. RED (old File::create):
+    /// the open follows the link and truncates the victim.
+    /// No fixture durations (the claim precedes any spawn).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23014_errlog_symlink_plant_refuses_without_touching_target() {
+        use std::os::unix::fs::MetadataExt as _;
+        // IR-007 discipline: as root the sudo plant is
+        // own-uid (no foreign discriminator) — skip.
+        if running_as_root() {
+            eprintln!("skip: root-owned plant is not foreign to root");
+            return;
+        }
+        for (tag, probe, env) in [
+            (
+                "kill",
+                "fixture::linux::audit::tests::publisher_guard_denied_kill_reports_unresolved",
+                "SCOPEBASE_R22006_DENY_KILL",
+            ),
+            (
+                "wait",
+                "fixture::linux::audit::tests::publisher_guard_denied_wait_reports_unresolved",
+                "SCOPEBASE_R22006_DENY_WAIT",
+            ),
+        ] {
+            let stem = format!("scopebase-r23014-{tag}-{}", std::process::id());
+            let dir = std::env::temp_dir().join(format!("{stem}.dir"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir(&dir).expect("plant dir created");
+            let victim = dir.join("victim");
+            std::fs::write(&victim, "r23014-sentinel").expect("victim staged");
+            let link = dir.join("errlog.log");
+            // FOREIGN plant: root-owned symlink (sudo-gated).
+            let planted = std::process::Command::new("sudo")
+                .arg("-n")
+                .arg("ln")
+                .arg("-s")
+                .arg(&victim)
+                .arg(&link)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !planted {
+                let _ = std::fs::remove_dir_all(&dir);
+                eprintln!("skip: passwordless sudo unavailable (no foreign plant)");
+                return;
+            }
+            // SAFETY: getuid queries only.
+            let me = unsafe { libc::getuid() };
+            let before = std::fs::symlink_metadata(&link).expect("plant statted");
+            assert!(
+                before.file_type().is_symlink(),
+                "{tag}: staging broken (plant must be a symlink)"
+            );
+            assert_ne!(
+                before.uid(),
+                me,
+                "{tag}: staging broken (plant must be foreign-owned)"
+            );
+            // Run the probe against the forced plant path.
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg(probe)
+                .arg("--nocapture")
+                .env(env, "1")
+                .env("SCOPEBASE_R22006_ERRLOG_PATH", &link)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            // Observe BEFORE cleanup (R15-001 order).
+            let after = std::fs::symlink_metadata(&link).ok();
+            let content = std::fs::read(&victim).unwrap_or_default();
+            // Cleanup rides along (a verdict failure must
+            // not strand the root-owned plant — our own dir
+            // lets us unlink it).
+            let _ = std::fs::remove_file(&link);
+            let _ = std::fs::remove_dir_all(&dir);
+            // Verdicts: refusal cited, plant + victim intact.
+            assert!(
+                !out.status.success(),
+                "{tag}: probe must refuse the planted errlog\n{stderr}"
+            );
+            assert!(
+                stderr.contains("preplanted by another owner"),
+                "{tag}: probe must cite foreign refusal\n{stderr}"
+            );
+            let after = after.unwrap_or_else(|| panic!("{tag}: plant must survive the refusal"));
+            assert!(
+                after.file_type().is_symlink(),
+                "{tag}: plant must remain a symlink"
+            );
+            assert_eq!(
+                after.ino(),
+                before.ino(),
+                "{tag}: plant inode must survive"
+            );
+            assert_eq!(
+                content, b"r23014-sentinel",
+                "{tag}: victim must be intact"
+            );
+        }
+    }
+
+    /// R23-015: errlog consumption must refuse swapped-in
+    /// plants promptly (never block, never follow). Four
+    /// cases through the REAL wrapper helper
+    /// (`read_r22006_evidence`, synthetic probe stdout —
+    /// same line format the probes print): a regular log
+    /// reads content; a writerless FIFO swapped in refuses
+    /// promptly (the old blocking open hung forever); a
+    /// symlink refuses ELOOP (never followed); a missing
+    /// path refuses. Each refusal bounded (5s — a wedge
+    /// would hang past it; normal is ms). No privilege
+    /// (own-uid plants — the refusal arms don't
+    /// discriminate ownership) and no fixture durations.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r23015_errlog_consumption_refuses_swapped_plants_promptly() {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::time::{Duration, Instant};
+        let stem = format!("scopebase-r23015-{}", std::process::id());
+        let dir = std::env::temp_dir().join(format!("{stem}.dir"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("plant dir created");
+        let log = dir.join("errlog.log");
+        let stdout = format!("R22006-ERRLOG {}\n", log.display());
+        // Case 1: regular log reads content.
+        std::fs::write(&log, "r23015-evidence").expect("log staged");
+        let (path, evidence) = read_r22006_evidence(&stdout).expect("regular log must read");
+        assert_eq!(path, log, "path must round-trip");
+        assert_eq!(evidence, "r23015-evidence", "content must round-trip");
+        // Case 2: writerless FIFO swapped in refuses promptly.
+        std::fs::remove_file(&log).expect("swap unlinks own log");
+        let cpath =
+            std::ffi::CString::new(log.as_os_str().as_bytes()).expect("log path is C-safe");
+        // SAFETY: mkfifo on our own temp path; mode 600.
+        assert_eq!(
+            unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) },
+            0,
+            "fifo planted"
+        );
+        let start = Instant::now();
+        let refused = read_r22006_evidence(&stdout);
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(5), "FIFO refusal must be prompt");
+        match refused {
+            Err(cause) => assert!(
+                cause.contains("not a regular file"),
+                "FIFO must refuse as non-regular, got {cause:?}"
+            ),
+            Ok(_) => panic!("FIFO-swapped log must refuse (never block, never read)"),
+        }
+        // Case 3: symlink swapped in refuses (never followed).
+        std::fs::remove_file(&log).expect("swap unlinks own fifo");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "r23015-sentinel").expect("victim staged");
+        std::os::unix::fs::symlink(&victim, &log).expect("symlink planted");
+        let start = Instant::now();
+        let refused = read_r22006_evidence(&stdout);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "symlink refusal must be prompt"
+        );
+        match refused {
+            Err(cause) => assert!(
+                cause.contains("open refused"),
+                "symlink must refuse at open, got {cause:?}"
+            ),
+            Ok(_) => panic!("symlink-swapped log must refuse (never follow)"),
+        }
+        assert_eq!(
+            std::fs::read(&victim).expect("victim readable"),
+            b"r23015-sentinel",
+            "refusal must not touch the link target"
+        );
+        // Case 4: missing path refuses.
+        std::fs::remove_file(&log).expect("swap unlinks own symlink");
+        let _ = std::fs::remove_file(&victim);
+        match read_r22006_evidence(&stdout) {
+            Err(cause) => assert!(
+                cause.contains("open refused"),
+                "missing path must refuse at open, got {cause:?}"
+            ),
+            Ok(_) => panic!("missing log must refuse"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// R22-014/R12 fault leg (kill shape): the probe dies
@@ -25645,10 +26710,35 @@ mod tests {
             stderr.contains("R12 fallback swept 1"),
             "fallback must sweep the untransmitted sleeper\n{stderr}"
         );
+        // R23-019: the swept birth (side-channel custody —
+        // probe stderr → wrapper forward; the fallback
+        // swept by duration, but the DEATH verdict is
+        // birth-aware — a scan blinded by argv-shape lies
+        // would certify a live sleeper below (row-errors
+        // already panic loud — never vacuous).
+        let (sleeper840, stick840): (libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22014-S ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no forwarded R22014-S birth?)");
         assert!(
             r22006_scan_sleep_with_dur("840").is_empty(),
             "no live sleep-840 may survive the fallback"
         );
+        // R23-019: gone-or-recycled over the swept birth
+        // (unreadable refuses to certify — never a pass).
+        match prove_reaped_gone_or_recycled_audit(sleeper840, stick840) {
+            ReapedProofAudit::Gone | ReapedProofAudit::Recycled(_) => {}
+            ReapedProofAudit::StillOurs => panic!(
+                "swept birth {sleeper840}/{stick840} still live past the fallback (scan said empty — blind?)"
+            ),
+            ReapedProofAudit::Unreadable(error) => panic!(
+                "inconclusive (swept birth unreadable: {error}) — refusing to certify"
+            ),
+        }
     }
 
     /// R23-008: a STALE unrelated `sleep 870` (born before
@@ -26003,10 +27093,35 @@ mod tests {
             stderr.contains("R12 fallback swept"),
             "fallback must run on the missing line\n{stderr}"
         );
+        // R23-019: the swept birth (side-channel custody —
+        // probe stderr → wrapper forward; the fallback
+        // swept by duration, but the DEATH verdict is
+        // birth-aware — a scan blinded by argv-shape lies
+        // would certify a live sleeper below (row-errors
+        // already panic loud — never vacuous).
+        let (sleeper841, stick841): (libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22014-S ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no forwarded R22014-S birth?)");
         assert!(
             r22006_scan_sleep_with_dur("841").is_empty(),
             "no live sleep-841 may survive the fallback"
         );
+        // R23-019: gone-or-recycled over the swept birth
+        // (unreadable refuses to certify — never a pass).
+        match prove_reaped_gone_or_recycled_audit(sleeper841, stick841) {
+            ReapedProofAudit::Gone | ReapedProofAudit::Recycled(_) => {}
+            ReapedProofAudit::StillOurs => panic!(
+                "swept birth {sleeper841}/{stick841} still live past the fallback (scan said empty — blind?)"
+            ),
+            ReapedProofAudit::Unreadable(error) => panic!(
+                "inconclusive (swept birth unreadable: {error}) — refusing to certify"
+            ),
+        }
     }
 
     /// R20-006: a denied pin over a gone number must KEEP
@@ -26475,6 +27590,17 @@ mod tests {
                 return;
             }
         };
+        // R23-011 site 5: fault injection for the
+        // replacement-transfer interval (the guard is
+        // parked in shared, the helper has exited — an
+        // unwind here must drop shared and retire R).
+        // Custody rides stderr (unbuffered — survives the
+        // panic); the hammer wrapper judges.
+        if std::env::var("SCOPEBASE_R23011_TRANSFER_PANIC").is_ok() {
+            eprintln!("R23011-TRANSFER {rpid} {rtick} {cpid} {ctick}");
+            eprintln!("R23011-TRANSFER-INJECTED");
+            panic!("R23011 site-5 fault: panic in the replacement-transfer interval");
+        }
         // Take R's parked custody (moved helper →
         // shared → here; rides to fn end — the cleanup
         // loops can timeout-break, so no disarm: gone
@@ -26578,6 +27704,237 @@ mod tests {
             stderr.contains("R20006-DENIED-REUSED-DONE"),
             "probe must cite completion\n{stderr}"
         );
+    }
+
+    /// R23-011 site 5 (replacement-transfer interval): the
+    /// denied-reused probe with a panic injected between
+    /// restoration and the parked-guard takeover — the
+    /// unwind must drop shared and retire the parked R
+    /// (plus the expected-identity C). Hammer loop: the
+    /// probe steers R onto the freed number and MISSES
+    /// under contention (no R parked — nothing to inject);
+    /// retry until the INJECTED mark (bounded) so the leg
+    /// tests the interval instead of skipping it. All-miss
+    /// skips loud (R17-003). Complete discharge: R's exact
+    /// birth gone (custody) + C's birth gone + no owned
+    /// sleep-104/106 survive.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn replacement_transfer_panic_discharges_parked_replacement() {
+        if std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").is_err() {
+            eprintln!("skip: ns_last_pid unreadable (no reuse control)");
+            return;
+        }
+        // R23-008: ownership-window anchor — wrapper entry
+        // (before any probe stages anything).
+        let anchor = boot_ticks_now().expect("custody anchor needs the boot clock");
+        // Hammer: up to 5 probes until one injects (a miss
+        // exits 0 with no mark; an injection panics).
+        let mut injected: Option<(libc::pid_t, u64, libc::pid_t, u64)> = None;
+        for attempt in 1..=5 {
+            let exe = std::env::current_exe().expect("own test binary");
+            let out = std::process::Command::new(exe)
+                .arg("--exact")
+                .arg("fixture::linux::audit::tests::frame_denied_pin_reused_reports_unresolved")
+                .arg("--nocapture")
+                .env("SCOPEBASE_R20006_DENIED_REUSED", "1")
+                .env("SCOPEBASE_R23011_TRANSFER_PANIC", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .expect("probe child runs");
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            if stderr.contains("skip: seccomp unavailable") {
+                eprintln!("skip: seccomp unavailable (no pin denial)");
+                return;
+            }
+            if !out.status.success() && stderr.contains("R23011-TRANSFER-INJECTED") {
+                let custody: Option<(libc::pid_t, u64, libc::pid_t, u64)> = stderr
+                    .lines()
+                    .find_map(|line| {
+                        let rest = line.strip_prefix("R23011-TRANSFER ")?;
+                        let mut words = rest.split_whitespace();
+                        Some((
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                            words.next()?.parse().ok()?,
+                        ))
+                    });
+                injected = Some(custody.expect("injected probe must print custody"));
+                eprintln!("attempt {attempt}: injected in the transfer interval — verifying discharge");
+                break;
+            }
+            // Miss: exit 0, no mark — the probe cleaned
+            // itself; hammer again. A NONZERO exit without
+            // the mark is a real probe failure (not a miss)
+            // — fail loud, never swallow.
+            assert!(
+                out.status.success(),
+                "attempt {attempt}: probe failed without injecting\n{stderr}"
+            );
+            eprintln!("attempt {attempt}: steering missed (no R parked) — hammering again");
+        }
+        let (rpid, rtick, cpid, ctick) = match injected {
+            Some(found) => found,
+            None => {
+                eprintln!("skip: steering missed 5/5 (contended — interval untested this run)");
+                return;
+            }
+        };
+        // Complete discharge: R's exact birth gone (the
+        // transfer subject) + C's birth gone (unwind
+        // collateral). Waitpid-assist each poll: the probe's
+        // exit adopts lingering zombies to us (our children
+        // post-adoption — reaping them is sound).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG assist only — our own (possibly
+            // adopted) children.
+            unsafe {
+                libc::waitpid(rpid, &mut status, libc::WNOHANG);
+                libc::waitpid(cpid, &mut status, libc::WNOHANG);
+            }
+            let rgone = proc_starttime(rpid) != Ok(Some(rtick));
+            let cgone = proc_starttime(cpid) != Ok(Some(ctick));
+            if rgone && cgone {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "transfer panic must discharge R ({rpid}/{rtick}) and C ({cpid}/{ctick})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            r22006_scan_owned_sleep_with_dur("106", anchor).is_empty(),
+            "no owned sleep-106 may survive the transfer panic"
+        );
+        assert!(
+            r22006_scan_owned_sleep_with_dur("104", anchor).is_empty(),
+            "no owned sleep-104 may survive the transfer panic"
+        );
+    }
+
+    /// R23-012: a same-tick retake must survive helper
+    /// return (the helper guard disarms after reaping P —
+    /// a same-tick S100 retake matches the pin and an
+    /// armed drop would murder it, then trip the
+    /// replacement-pin assert). Hammer: up to 20 attempts
+    /// of spawn-P/kill+reap/disarm/steer-R; on a same-tick
+    /// hit the helper-return drop must leave R live (tick
+    /// + R/S state), then R retires by custody. RED (armed
+    /// drop): the pin matches and R dies. DIRECT steering
+    /// only (a sudo round-trip spans several jiffies — R
+    /// can never share P's tick through sudo; vacuous-skip
+    /// loud there). Vacuous-skip loud when no hit lands
+    /// (timing luck). Duration 830 (P + R — sequential,
+    /// never coexisting; direct custody, never scanned).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn helper_guard_disarm_preserves_same_tick_retake() {
+        let _hold = match steer_hold() {
+            Some(hold) => hold,
+            None => {
+                eprintln!("R23012: vacuous (no reuse control)");
+                return;
+            }
+        };
+        // Same-tick forcing needs DIRECT steering (a
+        // writeback probe — an open-only probe lies: the
+        // mode allows open but the write EPERMs without
+        // privilege). The writeback is harmless (same
+        // value; a racing spawn makes it stale-safe — the
+        // allocator skips live numbers).
+        let direct = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid")
+            .map(|cur| std::fs::write("/proc/sys/kernel/ns_last_pid", cur.trim()).is_ok())
+            .unwrap_or(false);
+        if !direct {
+            eprintln!("R23012: vacuous (ns_last_pid needs sudo — same-tick unforceable)");
+            return;
+        }
+        for _attempt in 0..20 {
+            // Stage P + arm the helper guard (pins P's tick).
+            let mut p = std::process::Command::new("/bin/sleep")
+                .arg("830")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("P spawns");
+            let ppid = p.id() as libc::pid_t;
+            let mut _hpguard = FixtureGuard::new(ppid);
+            let ptick = proc_starttime(ppid)
+                .expect("staging broken (P stat)")
+                .expect("staging broken (P visible)");
+            // Kill + reap P, then disarm (THE fix — helper
+            // return discipline).
+            assert!(kill_tick_gated(ppid, ptick), "staging broken (P kill)");
+            let _ = p.wait();
+            assert_eq!(
+                proc_starttime(ppid),
+                Ok(None),
+                "staging broken (P number not freed)"
+            );
+            _hpguard.disarm();
+            // Steer R onto P's number — SINGLE try (the
+            // flock+retry helper costs ms per call and a
+            // same-tick hit needs P→R inside one jiffy;
+            // the hammer loop already retries, so a miss
+            // just continues).
+            if !audit_steer_next_pid_unlocked(ppid) {
+                continue;
+            }
+            let mut r = std::process::Command::new("/bin/sleep")
+                .arg("830")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("R spawns");
+            if r.id() as libc::pid_t != ppid {
+                let _ = r.kill();
+                let _ = r.wait();
+                continue;
+            }
+            let mut _hrguard = FixtureGuard::new(ppid);
+            let rtick = proc_starttime(ppid)
+                .expect("staging broken (R stat)")
+                .expect("staging broken (R visible)");
+            if rtick != ptick {
+                // Different-tick retake — retire + next attempt.
+                let _ = r.kill();
+                let _ = r.wait();
+                _hrguard.disarm();
+                continue;
+            }
+            // SAME-TICK HIT: helper-return drop must NOT
+            // murder R (disarmed above — RED without it).
+            drop(_hpguard);
+            assert_eq!(
+                proc_starttime(ppid),
+                Ok(Some(rtick)),
+                "disarmed helper guard must not murder same-tick R"
+            );
+            assert!(
+                matches!(proc_state(ppid), Some('R') | Some('S')),
+                "same-tick R must be live"
+            );
+            // Cleanup R by custody, then done (hit tested).
+            let _ = r.kill();
+            let _ = r.wait();
+            _hrguard.disarm();
+            assert_eq!(
+                proc_starttime(ppid),
+                Ok(None),
+                "cleanup must retire R"
+            );
+            eprintln!("R23012: same-tick hit — disarmed helper guard preserved R");
+            return;
+        }
+        eprintln!("R23012: vacuous (no same-tick retake in 20 attempts — timing luck)");
     }
 
     /// R19-004: an unreadable poll-gate must mark unresolved
@@ -27252,6 +28609,14 @@ else:
             eprintln!("skip: ns_last_pid unreadable (no reuse control)");
             return;
         }
+        // Population lock across the probe pair (R23-FLAKE10:
+        // same gap as the R21-012 wrapper — each probe child
+        // asserts a default-budget !truncated scan, and only
+        // the PARENT's in-process hold excludes the R19-009e
+        // 150k ghost test).
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (var, mode) in [
             ("SCOPEBASE_R20012_FORCE_MISS", "miss"),
             ("SCOPEBASE_R20012_FORCE_NO_FIRE", "no-fire"),
@@ -27446,16 +28811,61 @@ else:
             park_stray_bounded(pid, Some(tick), Duration::from_secs(5)),
             "matched zombie must park (assisted)"
         );
-        assert_eq!(
-            proc_starttime(pid),
-            Ok(None),
-            "the park must reap (efficacy)"
-        );
+        // R23-019: gone-or-recycled (a different-birth
+        // occupant keeps the evidence valid; unreadable
+        // refuses to certify — never a cleanup defect).
+        match prove_reaped_gone_or_recycled_audit(pid, tick) {
+            ReapedProofAudit::Gone | ReapedProofAudit::Recycled(_) => {}
+            ReapedProofAudit::StillOurs => panic!(
+                "RED: our zombie birth {pid}/{tick} still present (park did not reap?)"
+            ),
+            ReapedProofAudit::Unreadable(error) => panic!(
+                "inconclusive (reaped number unreadable: {error}) — refusing to certify"
+            ),
+        }
         _guard.disarm();
         assert!(
             child.try_wait().is_err(),
             "status went to the park's assist (ECHILD here)"
         );
+        // R23-019 recycle leg: a different-birth occupant on
+        // the freed number keeps retirement evidence valid
+        // (gone-or-recycled passes over the plant) while the
+        // old exact-vacancy shape would fail it as a cleanup
+        // defect (see the mutation record).
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        let (mut plant, mut plant_guard) = match plant_replacement(pid, tick) {
+            Some(placed) => placed,
+            None => {
+                eprintln!("R23019-LEG[park] vacuous (plant contended)");
+                return;
+            }
+        };
+        let plant_tick = match proc_starttime(pid) {
+            Ok(Some(now)) => now,
+            other => panic!("staging broken (plant unreadable post-place: {other:?})"),
+        };
+        eprintln!("R23019-LEG[park] plant {pid}/{plant_tick} (victim tick {tick})");
+        assert!(
+            plant_tick != tick,
+            "staging broken (plant shares the victim tick?)"
+        );
+        match proc_starttime(pid) {
+            Ok(Some(now)) if now == plant_tick => {}
+            Ok(Some(now)) => panic!(
+                "staging broken (stranger birth {now} on our steered number {pid}?)"
+            ),
+            Ok(None) => panic!("staging broken (plant vanished?)"),
+            Err(error) => {
+                panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
+            }
+        }
+        let _ = plant.kill();
+        let _ = plant.wait();
+        plant_guard.disarm();
     }
 
     /// R21-012: parse the fault probe's staged-births
@@ -27556,6 +28966,18 @@ else:
             eprintln!("skip: ns_last_pid unreadable (no reuse control)");
             return;
         }
+        // Population lock across the whole probe sequence
+        // (R23-FLAKE10: each probe child asserts a
+        // default-budget !truncated scan — the R19-009e 150k
+        // ghost table truncates it. The child's own _pop is
+        // a fresh-process mutex (useless cross-process);
+        // the PARENT's hold is what excludes the
+        // in-process ghost test. Deterministic RED
+        // pre-fix: co-run with the bigtable test fails the
+        // first cell at "must scan fully").
+        let _pop = DISCOVERY_POPULATION_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (shape_var, shape) in [
             ("SCOPEBASE_R20012_FORCE_MISS", "miss"),
             ("SCOPEBASE_R20012_FORCE_NO_FIRE", "no-fire"),
@@ -33543,6 +34965,11 @@ time.sleep(30)
         // own pid in the child and the guard would always
         // fire (observed)).
         let me = std::process::id() as libc::pid_t;
+        // R23-017: pdeathsig kill-switch for the RED-path
+        // leg (read PRE-fork — post-fork env reads
+        // allocate and can deadlock; the child reads only
+        // this stack bool).
+        let no_pdeathsig = std::env::var("SCOPEBASE_R22001B_NO_PDEATHSIG").is_ok();
         let s = unsafe { libc::fork() };
         assert!(s >= 0, "S fork works");
         // NO FixtureGuard on S — deliberate (R22-014): S's
@@ -33561,13 +34988,17 @@ time.sleep(30)
                 libc::close(2);
                 // Die with the probe (never a parked orphan
                 // past a setup failure / unwind — R22-014).
-                libc::prctl(
-                    libc::PR_SET_PDEATHSIG,
-                    libc::SIGKILL as libc::c_ulong,
-                    0,
-                    0,
-                    0,
-                );
+                // R23-017: skippable for the RED-path leg
+                // (the stack bool only — no env read here).
+                if !no_pdeathsig {
+                    libc::prctl(
+                        libc::PR_SET_PDEATHSIG,
+                        libc::SIGKILL as libc::c_ulong,
+                        0,
+                        0,
+                        0,
+                    );
+                }
                 if libc::getppid() != me {
                     libc::_exit(0);
                 }
@@ -33600,15 +35031,16 @@ time.sleep(30)
         // would be snapshot-listed — the arrival under test
         // must postdate entry).
         assert_ne!(proc_state(s), Some('Z'), "S must be live at entry");
-        assert!(
-            proc_starttime(s).ok().flatten().is_some(),
-            "S must be statable at entry"
-        );
+        // R23-016: retain S's birth for the parent oracle
+        // (gone-or-recycled, never tickless vacancy).
+        let stick = proc_starttime(s)
+            .expect("S must be statable at entry")
+            .expect("S must be visible at entry");
         // R22-014 unwind-discharge checkpoint: panic mid-park
         // (after S parks); S must die with the probe
         // (pdeathsig), never linger as a parked orphan.
         if std::env::var("SCOPEBASE_R22001B_PANIC_MIDPARK").is_ok() {
-            eprintln!("R22001B-PARKED spid={s}");
+            eprintln!("R22001B-PARKED spid={s} stick={stick}");
             panic!("staged mid-park panic (R22-014 unwind-discharge regression)");
         }
         // The drain: the hook is a fired-flag only (S's death
@@ -33739,6 +35171,113 @@ time.sleep(30)
         );
     }
 
+    /// R23-016: pdeathsig-oracle verdict over S's retained
+    /// birth. Died(Gone|Recycled|Zombie) ⟹ the birth ended
+    /// (any of the three proves death); StillLive(state) ⟹
+    /// the same birth observably alive at the bound (R, S,
+    /// D, T, anything present — only Z/X prove death);
+    /// Unverifiable ⟹ unreadable at the bound (transients
+    /// poll through — only a PERSISTENT outage reports
+    /// this). Never certifies death over an
+    /// unreadable-or-live birth.
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, PartialEq, Eq)]
+    enum PdeathsigVerdict {
+        DiedGone,
+        DiedRecycled,
+        DiedZombie,
+        StillLive(char),
+        Unverifiable,
+    }
+
+    /// R23-016: birth-aware pdeathsig oracle — gone or a
+    /// different birth proves death; the same birth lingers
+    /// while any live state shows (D included — only Z/X
+    /// prove death in place); unreadable polls through
+    /// (transient) and reports Unverifiable only when
+    /// persistent at the bound. Shared by the regression
+    /// and its legs so the oracle can't drift from the
+    /// legged shape.
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_oracle_verdict(
+        spid: libc::pid_t,
+        stick: u64,
+        bound: std::time::Duration,
+    ) -> PdeathsigVerdict {
+        use std::time::Instant;
+        let end = Instant::now() + bound;
+        // Last linger observation (reported if the bound hits).
+        let mut last = PdeathsigVerdict::Unverifiable;
+        loop {
+            match proc_starttime(spid) {
+                Ok(None) => return PdeathsigVerdict::DiedGone,
+                Ok(Some(tick)) if tick != stick => return PdeathsigVerdict::DiedRecycled,
+                Ok(Some(_)) => match proc_state(spid) {
+                    Some('Z') | Some('X') | Some('x') => return PdeathsigVerdict::DiedZombie,
+                    Some(state) => {
+                        last = PdeathsigVerdict::StillLive(state);
+                        if Instant::now() >= end {
+                            return last;
+                        }
+                    }
+                    None => {
+                        last = PdeathsigVerdict::Unverifiable;
+                        if Instant::now() >= end {
+                            return last;
+                        }
+                    }
+                },
+                Err(_) => {
+                    last = PdeathsigVerdict::Unverifiable;
+                    if Instant::now() >= end {
+                        return last;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// R23-017: S's birth no longer live (gone, recycled,
+    /// or an adopted corpse — reaping belongs to the
+    /// adopter). Unreadable ⟹ false (unproven — never
+    /// clean). Shared by the cleanup and the legs so
+    /// "retired" can't drift between them.
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_birth_retired(spid: libc::pid_t, stick: u64) -> bool {
+        match proc_starttime(spid) {
+            Ok(None) => true,
+            Ok(Some(tick)) => {
+                tick != stick || matches!(proc_state(spid), Some('Z') | Some('X') | Some('x'))
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// R23-017: retire S's retained birth after the verdict
+    /// is recorded (RED runs stay clean — cleanup can't
+    /// rewrite history). Gone, recycled, or an adopted
+    /// corpse need no signal; a live S is tick-gated
+    /// (never a blind kill). Loud when S stays live past
+    /// the bound (unretirable — never silent). Shared by
+    /// the regression and its RED-path leg.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_pdeathsig_subject(spid: libc::pid_t, stick: u64) {
+        use std::time::{Duration, Instant};
+        let _ = kill_tick_gated(spid, stick);
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if pdeathsig_birth_retired(spid, stick) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "cleanup must retire S={spid} (still live past the verdict?)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// R22-014: unwind discharge for the 001b plant — the
     /// probe panics mid-park (after S parks); S must die
     /// with it (pdeathsig), never linger as a parked
@@ -33785,32 +35324,354 @@ time.sleep(30)
             !out.status.success(),
             "probe must panic mid-park as staged\n{stderr}"
         );
-        // S's pid from the PARKED marker.
-        let spid: libc::pid_t = stderr
+        // S's birth from the PARKED marker.
+        let (spid, stick): (libc::pid_t, u64) = stderr
             .lines()
             .find_map(|line| {
-                line.split_once("R22001B-PARKED spid=").and_then(|(_, rest)| {
-                    rest.split_whitespace().next().and_then(|n| n.parse().ok())
-                })
+                let (_, rest) = line.split_once("R22001B-PARKED spid=")?;
+                let mut words = rest.split_whitespace();
+                let spid: libc::pid_t = words.next()?.parse().ok()?;
+                let stick = words.next()?.strip_prefix("stick=")?.parse().ok()?;
+                Some((spid, stick))
             })
-            .expect("probe must report S's pid before panicking");
-        // S must die with the probe (pdeathsig): not
-        // live-parked past the bound (dead-or-gone — init
-        // reaps, or another ancestor adopts the corpse; a
-        // recycle likewise proves death). Stopped counts
-        // as lingering (a stopped orphan still holds out).
-        let end = Instant::now() + Duration::from_secs(10);
+            .expect("probe must report S's birth before panicking");
+        // R23-016: birth-aware oracle (gone-or-recycled
+        // proves death; live states linger; unreadable
+        // reports unverifiable — never death). The verdict
+        // is RECORDED (not asserted inline — R23-017).
+        let verdict = pdeathsig_oracle_verdict(spid, stick, Duration::from_secs(10));
+        // R23-017: retire S BEFORE judging (RED runs stay
+        // clean — the verdict above is already recorded, so
+        // cleanup can't rewrite history).
+        retire_pdeathsig_subject(spid, stick);
+        // S must die with the probe (pdeathsig): the
+        // verdict distinguishes lingering from
+        // unverifiable (either fails — a parked orphan
+        // leaks, or the death is unproven).
+        assert!(
+            matches!(
+                verdict,
+                PdeathsigVerdict::DiedGone
+                    | PdeathsigVerdict::DiedRecycled
+                    | PdeathsigVerdict::DiedZombie
+            ),
+            "S={spid} must die with the panicking probe (pdeathsig — got {verdict:?})"
+        );
+    }
+
+    /// R23-016 leg (a): the oracle over an UNREADABLE
+    /// observation with S live must report Unverifiable —
+    /// never a death verdict. Fresh-image probe (the fd
+    /// outage is process-global): stage a live sleep,
+    /// transmit custody, exhaust fds, run the REAL oracle
+    /// with a 1s bound — the persistent outage must report
+    /// Unverifiable (transients poll through; only the
+    /// bound decides). The wrapper retires the survivor
+    /// via custody. Duration 846 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_oracle_unreadable_reports_unverifiable() {
+        if std::env::var("SCOPEBASE_R23016_ORACLE_OUTAGE").is_ok() {
+            pdeathsig_oracle_unreadable_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::pdeathsig_oracle_unreadable_reports_unverifiable")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R23016_ORACLE_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let (spid, stick): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R23016-SUBJECT ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                ))
+            })
+            .expect("probe must print custody");
+        // Cleanup FIRST (RED-safe): the survivor is live —
+        // retire it via the transmitted birth.
+        retire_pdeathsig_subject(spid, stick);
+        assert!(out.status.success(), "probe must complete\n{stderr}");
+        assert!(
+            stderr.contains("R23016-ORACLE-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            stdout.contains("R23016-VERDICT Unverifiable"),
+            "oracle must report Unverifiable over an unreadable live birth, never death\n{stdout}"
+        );
+    }
+
+    /// R23-016 leg (a) probe (fresh image): stage a live
+    /// sleep, transmit custody, exhaust fds, run the REAL
+    /// oracle (1s bound) — the verdict must be
+    /// Unverifiable. Prints the verdict; exits 0 (the
+    /// wrapper judges + retires the survivor).
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_oracle_unreadable_probe() {
+        use std::time::{Duration, Instant};
+        let sleeper = std::process::Command::new("/bin/sleep")
+            .arg("846")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let spid = sleeper.id() as libc::pid_t;
+        let stick = proc_starttime(spid)
+            .expect("staging broken (subject stat)")
+            .expect("staging broken (subject visible)");
+        let mut _sguard = FixtureGuard::new_expected(spid, stick);
+        assert!(
+            _sguard.tick.is_some(),
+            "staging broken (subject birth pinned)"
+        );
+        println!("R23016-SUBJECT {spid} {stick}");
+        // Anti-vacuity: S LIVE (R/S) before the outage (a
+        // pre-dead subject would make Unverifiable
+        // vacuous). Settles R→S.
+        let end = Instant::now() + Duration::from_secs(5);
         loop {
             match proc_state(spid) {
-                Some('R') | Some('S') | Some('T') => {}
-                _ => break,
+                Some('R') | Some('S') => break,
+                other => assert!(
+                    Instant::now() < end,
+                    "staging broken (subject not live: {other:?})"
+                ),
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Real outage (confine + fill — the established
+        // audit shape).
+        let _confine = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "exhaustion must consume fds");
+        assert!(
+            proc_starttime(spid).is_err(),
+            "staging broken (stat readable under hold?)"
+        );
+        // THE oracle (1s bound — the persistent outage must
+        // report Unverifiable, never a death verdict).
+        let verdict = pdeathsig_oracle_verdict(spid, stick, Duration::from_secs(1));
+        println!("R23016-VERDICT {verdict:?}");
+        eprintln!("R23016-ORACLE-DONE");
+        // Stand down: the wrapper owns the LIVE survivor
+        // (an unwind above would have retired through the
+        // guard instead). The sleeper handle drops
+        // unwaited — reparenting to the wrapper, which
+        // retires it via custody.
+        _sguard.disarm();
+    }
+
+    /// R23-016 leg (b): a different-birth replacement on
+    /// S's number must report DiedRecycled (S's birth ended
+    /// — never StillLive). In-process: stage a sleep, kill
+    /// + reap it, steer a live replacement onto the freed
+    /// number (vacuous-skip on miss or same-tick per
+    /// R17-003), run the REAL oracle — the verdict must be
+    /// immediate DiedRecycled (first poll — the bound
+    /// never burns). Cleanup retires the replacement.
+    /// Duration 849 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_oracle_replacement_reports_died_recycled() {
+        use std::time::{Duration, Instant};
+        let _hold = match steer_hold() {
+            Some(hold) => hold,
+            None => {
+                eprintln!("R23016b: vacuous (no reuse control)");
+                return;
+            }
+        };
+        let mut sleeper = std::process::Command::new("/bin/sleep")
+            .arg("849")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let spid = sleeper.id() as libc::pid_t;
+        let mut _sguard = FixtureGuard::new(spid);
+        let stick = proc_starttime(spid)
+            .expect("staging broken (subject stat)")
+            .expect("staging broken (subject visible)");
+        // Kill + reap S (free the number for the retake).
+        assert!(
+            kill_tick_gated(spid, stick),
+            "staging broken (subject kill)"
+        );
+        let _ = sleeper.wait();
+        assert_eq!(
+            proc_starttime(spid),
+            Ok(None),
+            "staging broken (number not freed)"
+        );
+        _sguard.disarm();
+        // Steer the replacement onto the freed number.
+        if !audit_steer_next_pid_unlocked(spid) {
+            eprintln!("R23016b: vacuous (steer refused)");
+            return;
+        }
+        let mut retake = std::process::Command::new("/bin/sleep")
+            .arg("849")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("replacement spawns");
+        let mut _rguard = FixtureGuard::new(retake.id() as libc::pid_t);
+        if retake.id() as libc::pid_t != spid {
+            let _ = retake.kill();
+            let _ = retake.wait();
+            _rguard.disarm();
+            eprintln!("R23016b: vacuous (steering missed)");
+            return;
+        }
+        let rtick = proc_starttime(spid)
+            .expect("staging broken (replacement stat)")
+            .expect("staging broken (replacement visible)");
+        if rtick == stick {
+            let _ = retake.kill();
+            let _ = retake.wait();
+            _rguard.disarm();
+            eprintln!("R23016b: vacuous (same-tick retake — S100)");
+            return;
+        }
+        // THE oracle: must be immediate DiedRecycled.
+        let start = Instant::now();
+        let verdict = pdeathsig_oracle_verdict(spid, stick, Duration::from_secs(5));
+        assert_eq!(
+            verdict,
+            PdeathsigVerdict::DiedRecycled,
+            "replacement must report the original birth dead"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "recycled verdict must be immediate (first poll)"
+        );
+        // Cleanup: retire the replacement (tick-gated) +
+        // drain; disarm the guard (number freed).
+        assert!(
+            kill_tick_gated(spid, rtick),
+            "cleanup must retire the replacement"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG assist only — our own child.
+            unsafe {
+                libc::waitpid(spid, &mut status, libc::WNOHANG);
+            }
+            if proc_starttime(spid) != Ok(Some(rtick)) {
+                break;
             }
             assert!(
                 Instant::now() < end,
-                "S={spid} must die with the panicking probe (pdeathsig — else a parked orphan leaks)"
+                "cleanup must drain the replacement"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let _ = retake.wait();
+        _rguard.disarm();
+    }
+
+    /// R23-017: with pdeathsig disabled, the oracle must
+    /// record StillLive (failed death verdict), the outer
+    /// cleanup must retire that SAME birth, and the
+    /// recorded verdict must not change. Drives the REAL
+    /// mid-park probe with SCOPEBASE_R22001B_NO_PDEATHSIG:
+    /// S survives the probe's death (2s oracle bound —
+    /// lingering is deterministic — S has no death
+    /// mechanism), cleanup retires (spid, stick), then the
+    /// leg asserts the birth retired AND the verdict still
+    /// StillLive (judged from the pre-cleanup record —
+    /// cleanup can't rewrite history). No fixture durations
+    /// (S is a fork-pause child, retired by custody).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pdeathsig_disabled_records_still_live_then_cleans_up() {
+        use std::time::{Duration, Instant};
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut probe = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::stray_group_drain_never_reaps_post_entry_arrivals")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22001B_SUBREAPER", "1")
+            .env("SCOPEBASE_R22001B_PANIC_MIDPARK", "1")
+            .env("SCOPEBASE_R22001B_NO_PDEATHSIG", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let mut _probe_guard = FixtureGuard::new(probe.id() as libc::pid_t);
+        // Bounded wait (R22-012 idiom — a wedged probe is
+        // killed loud, never an unbounded hang).
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            if probe.try_wait().expect("probe waitable").is_some() {
+                break;
+            }
+            if Instant::now() >= end {
+                let _ = probe.kill();
+                let _ = probe.wait();
+                panic!("probe hung past 60 s (killed loud)");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let out = probe.wait_with_output().expect("probe output collects");
+        _probe_guard.disarm();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            !out.status.success(),
+            "probe must panic mid-park as staged\n{stderr}"
+        );
+        let (spid, stick): (libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let (_, rest) = line.split_once("R22001B-PARKED spid=")?;
+                let mut words = rest.split_whitespace();
+                let spid: libc::pid_t = words.next()?.parse().ok()?;
+                let stick = words.next()?.strip_prefix("stick=")?.parse().ok()?;
+                Some((spid, stick))
+            })
+            .expect("probe must report S's birth before panicking");
+        // THE verdict (2s — S has no death mechanism, so
+        // StillLive is deterministic, not timing).
+        let verdict = pdeathsig_oracle_verdict(spid, stick, Duration::from_secs(2));
+        let recorded = format!("{verdict:?}");
+        // Cleanup retires the SAME birth (shared helper —
+        // the regression's exact shape).
+        retire_pdeathsig_subject(spid, stick);
+        // The birth retired AND the verdict is the
+        // pre-cleanup record (cleanup can't rewrite it).
+        assert!(
+            pdeathsig_birth_retired(spid, stick),
+            "cleanup must retire S's exact birth"
+        );
+        assert_eq!(
+            format!("{verdict:?}"),
+            recorded,
+            "cleanup must not rewrite the recorded verdict"
+        );
+        assert!(
+            matches!(verdict, PdeathsigVerdict::StillLive(_)),
+            "disabled pdeathsig must record StillLive, got {verdict:?}"
+        );
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
@@ -34598,6 +36459,35 @@ time.sleep(30)
         })() {
             Some(starttime) => Ok(Some(starttime)),
             None => Err(format!("task {pid} stat unparseable")),
+        }
+    }
+
+    /// R23-019: tick-aware reap proof — mirror of the fork
+    /// `ReapedProof`: `Gone` = absent ⟹ reaped; `Recycled`
+    /// = a different birth holds the number ⟹ OUR birth
+    /// reaped (retirement valid, vacancy unproven);
+    /// `StillOurs` = our birth present ⟹ NOT reaped (RED);
+    /// `Unreadable` = outage ⟹ inconclusive (loud, never
+    /// certified). Callers match explicitly (a recycled
+    /// occupant keeps the evidence valid; an unreadable
+    /// birth refuses to certify).
+    #[cfg(target_arch = "x86_64")]
+    enum ReapedProofAudit {
+        Gone,
+        Recycled(u64),
+        StillOurs,
+        Unreadable(String),
+    }
+
+    /// R23-019: prove the `tick` birth on `pid` reaped
+    /// (gone-or-recycled — see [`ReapedProofAudit`]).
+    #[cfg(target_arch = "x86_64")]
+    fn prove_reaped_gone_or_recycled_audit(pid: libc::pid_t, tick: u64) -> ReapedProofAudit {
+        match proc_starttime(pid) {
+            Ok(None) => ReapedProofAudit::Gone,
+            Ok(Some(now)) if now == tick => ReapedProofAudit::StillOurs,
+            Ok(Some(now)) => ReapedProofAudit::Recycled(now),
+            Err(error) => ReapedProofAudit::Unreadable(error),
         }
     }
 
