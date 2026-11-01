@@ -4216,6 +4216,21 @@ fn live_sleep_with_dur(dur: &str) -> bool {
     false
 }
 
+/// R22-004(a) (toolchain twin): mirror of the lib
+/// absence-proof — zombies retain /proc entries, so
+/// absence ⟺ reaped (no waitpid — a wait would steal a
+/// recycled sibling zombie's status). `Ok(true)` = absent
+/// ⟹ reaped; `Ok(false)` = present ⟹ UNPROVEN (fail
+/// closed); `Err` = outage (fails loud).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn prove_reaped_by_absence_toolchain(pid: i32) -> Result<bool, String> {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.to_string()),
+        Ok(_) => Ok(false),
+    }
+}
+
 /// R21-008 (toolchain twin): mirror of the lib jammed
 /// regression — a jammed report post-second-fork fully
 /// retires before `None` (m1 reaped, unknown-pid m2 dead).
@@ -4227,13 +4242,12 @@ fn jammed_report_retires_both_before_none() {
     let (result, m1) = unsafe { fork_pausing_grandchild_sleep_jam_report("958") };
     assert!(result.is_none(), "jammed report must yield None (tail ran)");
     assert!(m1 > 0, "jam exposes m1 for the reap proof");
-    let mut st = 0;
-    let got = unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) };
-    assert_eq!(got, -1, "m1 must be reaped already (no status left)");
+    // R22-004(a): /proc absence, never a wait (a recycled
+    // sibling zombie would lose its status to a waitpid).
     assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::ECHILD),
-        "reaped m1 must refuse ECHILD"
+        prove_reaped_by_absence_toolchain(m1),
+        Ok(true),
+        "m1 must be reaped already (/proc gone — present means RED or unproven)"
     );
     let end = Instant::now() + Duration::from_secs(10);
     while live_sleep_with_dur("958") {
@@ -4243,6 +4257,73 @@ fn jammed_report_retires_both_before_none() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// R22-004(a) (toolchain twin): mirror of the lib
+/// absence-proof regression — live ⟹ unproven, zombie ⟹
+/// unproven with the status retained (no steal), freed ⟹
+/// reaped. RED (neuter: waitpid inside the proof).
+/// Durations 965 (live) and 968 (zombie, then freed) are
+/// unique to this test.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn reap_proof_by_absence_never_steals() {
+    use std::time::{Duration, Instant};
+    let mut live = std::process::Command::new("/bin/sleep")
+        .arg("965")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("live spawns");
+    let live_pid = live.id() as i32;
+    assert_eq!(
+        prove_reaped_by_absence_toolchain(live_pid),
+        Ok(false),
+        "live occupant must read unproven (never reaped)"
+    );
+    let _ = live.kill();
+    let _ = live.wait();
+    let mut zombie = std::process::Command::new("/bin/sleep")
+        .arg("968")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("zombie spawns");
+    let zombie_pid = zombie.id() as i32;
+    let _ = zombie.kill();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = std::fs::read_to_string(format!("/proc/{zombie_pid}/stat"))
+            .ok()
+            .and_then(|text| {
+                text.rsplit_once(") ")
+                    .and_then(|(_, after)| after.split_whitespace().next().map(str::to_string))
+            });
+        if state.as_deref() == Some("Z") {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "staging broken (sleeper never zombified)"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        prove_reaped_by_absence_toolchain(zombie_pid),
+        Ok(false),
+        "zombie occupant must read unproven (never certified)"
+    );
+    match zombie.try_wait() {
+        Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
+        other => panic!("proof stole the zombie's status?! got {other:?}"),
+    }
+    assert_eq!(
+        prove_reaped_by_absence_toolchain(zombie_pid),
+        Ok(true),
+        "freed number must read reaped"
+    );
 }
 
 /// R22-019 (toolchain twin): one allocator-hammer body.
@@ -9657,7 +9738,7 @@ fn tail_helper_retires_live_birth() {
 /// harmless on the same live recycler. DEMO (always
 /// passes — it locks the defect mechanism, not the fix;
 /// the fix is locked by the skip/working tests above).
-/// Duration 974 (birth) is unique to this test.
+/// Duration 976 (birth) is unique to this test.
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 #[test]
 fn tail_blocking_wait_wedges_on_live_recycler() {
@@ -9670,7 +9751,7 @@ fn tail_blocking_wait_wedges_on_live_recycler() {
         }
     };
     let mut birth = std::process::Command::new("/bin/sleep")
-        .arg("974")
+        .arg("976")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

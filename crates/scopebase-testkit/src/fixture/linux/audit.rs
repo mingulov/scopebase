@@ -2777,6 +2777,20 @@ mod tests {
     /// any discharge citation). Hoisted from the
     /// birth-bracket test's closure so the outage regression
     /// exercises the same artifact.
+    /// R22-004(b): the assist is STAT-GATED — unknown
+    /// birth NEVER waits (pure stat-await — the owners of
+    /// an unknown occupant are unknowable, so any waitpid
+    /// risks stealing a sibling's status); known birth
+    /// waits ONLY on a tick-match read in the SAME
+    /// iteration (a recycled different-tick zombie
+    /// certifies WITHOUT a wait). Caller audit 2026-11-01:
+    /// every Some() tick in-tree is self-observed
+    /// in-process (a fresh `proc_starttime` read or a
+    /// guard-recorded placement — the report-file pids at
+    /// the miss/byproduct sites are transmitted but their
+    /// ticks are self-read) — no transmitted-tick caller
+    /// exists; a future one must prove the tick names OUR
+    /// child before using the assist arm.
     #[cfg(target_arch = "x86_64")]
     fn park_stray_bounded(spid: libc::pid_t, stick: Option<u64>, timeout: Duration) -> bool {
         if let Some(t) = stick {
@@ -2784,15 +2798,27 @@ mod tests {
         }
         let end = Instant::now() + timeout;
         loop {
-            let mut st = 0;
-            // SAFETY: WNOHANG assist only.
-            unsafe {
-                libc::waitpid(spid, &mut st, libc::WNOHANG);
-            }
             match (proc_starttime(spid), stick) {
                 (Ok(None), _) => return true,
-                (Ok(Some(now)), Some(known)) if now != known => return true,
-                (Ok(Some(_)), _) => {}
+                (Ok(Some(now)), Some(known)) => {
+                    if now != known {
+                        // Recycled (different birth) ⟹ the
+                        // stray is gone — WITHOUT a wait
+                        // (the occupant's status is not ours
+                        // to consume).
+                        return true;
+                    }
+                    let mut st = 0;
+                    // SAFETY: WNOHANG assist of the
+                    // same-iteration tick-verified stray
+                    // only (never a recycled zombie).
+                    unsafe {
+                        libc::waitpid(spid, &mut st, libc::WNOHANG);
+                    }
+                }
+                // Unknown birth: pure stat-await (no wait —
+                // owners unknowable).
+                (Ok(Some(_)), None) => {}
                 (Err(_), _) => return false,
             }
             if Instant::now() >= end {
@@ -24721,6 +24747,116 @@ else:
         assert!(
             park_stray_bounded(pid, None, Duration::from_millis(200)),
             "unknown-birth park over proven absence must certify"
+        );
+    }
+
+    /// R22-004(b): a replacement that exits DURING an
+    /// unknown-birth park keeps its status — the park is
+    /// pure stat-await (owners unknowable — no waitpid on
+    /// any iteration), so the mid-park zombie hosts the
+    /// number (unresolved, never parked) and our handle
+    /// reaps it. RED (old code: the waitpid-assist reaps
+    /// mid-park → certifies parked + steals the status).
+    /// Deterministic: the verdict is identical whether the
+    /// killer lands before or after the park's deadline
+    /// (live-host and zombie-host both report unresolved).
+    /// Duration 977 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn unknown_birth_park_preserves_mid_park_exit_status() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("977")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let killer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            // SAFETY: our own child, known identity.
+            unsafe { libc::kill(pid, libc::SIGKILL) }
+        });
+        let parked = park_stray_bounded(pid, None, Duration::from_millis(500));
+        let killed = killer.join().expect("killer joins");
+        assert_eq!(killed, 0, "staging broken (kill failed)");
+        assert!(
+            !parked,
+            "unknown-birth park must stay unresolved (the mid-park zombie hosts the number)"
+        );
+        let status = await_child_exit(&mut child, Duration::from_secs(5))
+            .expect("status must remain ours (the park must not reap)");
+        assert!(!status.success(), "must be our SIGKILLed child");
+    }
+
+    /// R22-004(b): known-birth stat-gates before waiting —
+    /// leg 1: a different-tick zombie on the number
+    /// certifies (recycled ⟹ parked) WITHOUT consuming its
+    /// status (still hosted after); leg 2 (same zombie):
+    /// the MATCHED tick still assists (reaps → absence →
+    /// parked — efficacy: the park itself reaped). RED
+    /// (old code: the iteration-one waitpid steals the
+    /// zombie in leg 1 — hosted-assert fails). Duration
+    /// 978 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn known_birth_park_gates_wait_on_tick_match() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("978")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleeper spawns");
+        let pid = child.id() as libc::pid_t;
+        let tick = proc_starttime(pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        let _ = child.kill();
+        // Settle to zombie (a dying-not-yet-Z occupant
+        // would make leg 1 vacuous — stage, don't assume).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|text| {
+                    text.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("Z") {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "staging broken (sleeper never zombified)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Leg 1: recycled (wrong tick) certifies WITHOUT
+        // consuming (the gated kill refuses; no wait runs).
+        let wrong = tick.wrapping_add(1);
+        assert!(
+            park_stray_bounded(pid, Some(wrong), Duration::from_secs(5)),
+            "recycled number must certify (parked)"
+        );
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(Some(tick)),
+            "the recycled zombie must stay hosted (no steal)"
+        );
+        // Leg 2: matched tick assists (the park reaps).
+        assert!(
+            park_stray_bounded(pid, Some(tick), Duration::from_secs(5)),
+            "matched zombie must park (assisted)"
+        );
+        assert_eq!(
+            proc_starttime(pid),
+            Ok(None),
+            "the park must reap (efficacy)"
+        );
+        assert!(
+            child.try_wait().is_err(),
+            "status went to the park's assist (ECHILD here)"
         );
     }
 

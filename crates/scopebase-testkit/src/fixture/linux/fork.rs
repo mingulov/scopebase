@@ -1175,8 +1175,9 @@ mod tests {
     }
 
     /// R21-008: a jammed report post-second-fork fully
-    /// retires before `None` — m1 reaped (waitpid-ECHILD on
-    /// the exposed pid — specific, never steals) and the
+    /// retires before `None` — m1 reaped (/proc absence on
+    /// the exposed pid — touch-free, never steals: R22-004)
+    /// and the
     /// unknown-pid m2 dead (no LIVE `sleep 957` anywhere
     /// within the bound — absence or zombie both prove
     /// death; 957 is unique to this test, and the 957 s
@@ -1195,15 +1196,13 @@ mod tests {
         assert!(result.is_none(), "jammed report must yield None (tail ran)");
         assert!(m1 > 0, "jam exposes m1 for the reap proof");
         // m1 reaped — the INDEPENDENT proof (the tail's
-        // own claim is not evidence; waitpid on the
-        // specific pid cannot steal a sibling's child).
-        let mut st = 0;
-        let got = unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) };
-        assert_eq!(got, -1, "m1 must be reaped already (no status left)");
+        // own claim is not evidence; /proc absence, never
+        // a wait — a recycled sibling zombie would lose
+        // its status to a waitpid here: R22-004(a)).
         assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ECHILD),
-            "reaped m1 must refuse ECHILD"
+            prove_reaped_by_absence(m1),
+            Ok(true),
+            "m1 must be reaped already (/proc gone — present means our unreaped zombie (RED) or a recycled occupant (unproven))"
         );
         // m2 dead: poll for no LIVE sleep-957 (bounded —
         // the tail's post-reap probe already proved the
@@ -1217,6 +1216,96 @@ mod tests {
                 "RED: unknown-pid m2 stranded live past the jammed report"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// R22-004(a): the absence-proof never waits — live
+    /// occupant ⟹ unproven (then cleaned by us); zombie
+    /// occupant ⟹ unproven AND the owner retains the
+    /// status (the proof consumes nothing — a waitpid
+    /// inside would steal it); freed number ⟹ reaped.
+    /// RED (neuter: waitpid inside the proof — the zombie
+    /// leg loses its status). Durations 979 (live) and
+    /// 980 (zombie, then freed) are unique to this test.
+    #[test]
+    fn reap_proof_by_absence_never_steals() {
+        // Live leg: present ⟹ unproven.
+        let mut live = std::process::Command::new("/bin/sleep")
+            .arg("979")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("live spawns");
+        let live_pid = live.id() as libc::pid_t;
+        assert_eq!(
+            prove_reaped_by_absence(live_pid),
+            Ok(false),
+            "live occupant must read unproven (never reaped)"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        // Zombie leg: present ⟹ unproven, status retained.
+        let mut zombie = std::process::Command::new("/bin/sleep")
+            .arg("980")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("zombie spawns");
+        let zombie_pid = zombie.id() as libc::pid_t;
+        let _ = zombie.kill();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{zombie_pid}/stat"))
+                .ok()
+                .and_then(|text| {
+                    text.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("Z") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "staging broken (sleeper never zombified)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            prove_reaped_by_absence(zombie_pid),
+            Ok(false),
+            "zombie occupant must read unproven (never certified)"
+        );
+        match zombie.try_wait() {
+            Ok(Some(status)) => assert!(!status.success(), "zombie must be our SIGKILLed sleeper"),
+            other => panic!("proof stole the zombie's status?! got {other:?}"),
+        }
+        // Absent leg: freed number ⟹ reaped.
+        assert_eq!(
+            prove_reaped_by_absence(zombie_pid),
+            Ok(true),
+            "freed number must read reaped"
+        );
+    }
+
+    /// R22-004(a): reap proof by /proc ABSENCE —
+    /// zombies retain /proc entries, so absence ⟺ reaped
+    /// (no waitpid — a wait would steal a recycled sibling
+    /// zombie's status: R21-001-class). `Ok(true)` = absent
+    /// ⟹ reaped; `Ok(false)` = present ⟹ UNPROVEN (our
+    /// unreaped zombie (RED) or a recycled occupant — both
+    /// fail closed, never certify); `Err` = outage (fails
+    /// loud, never certifies). The `Err` arm is a 1-line
+    /// mapping with no cheap fault (a non-NotFound /proc
+    /// read error needs EMFILE — fresh-image-only per
+    /// R22-012); the absence/presence/no-steal legs carry
+    /// the regression below.
+    fn prove_reaped_by_absence(pid: libc::pid_t) -> Result<bool, String> {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(error) => Err(error.to_string()),
+            Ok(_) => Ok(false),
         }
     }
 
