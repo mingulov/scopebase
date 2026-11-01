@@ -986,21 +986,42 @@ mod tests {
     /// drop retires both (m2 blind-killed FIRST while m1
     /// lives — the middleman pauses until signaled, so
     /// m2's number is pinned; then m1 killed + reaped,
-    /// bounded). Probe-first: an already-reaped m1 (unwind
-    /// past the tail's reap) means m2 is dead-orphaned
-    /// draining to init — nothing owed. Disarm after the
-    /// explicit tail.
+    /// bounded). Probe-first: m1 zombie (reaped by the
+    /// probe) ⟹ m2 pin-killed via its birth pidfd (R22-007:
+    /// m2 may live on — no pdeathsig/EOF; unpinned ⟹ loud
+    /// unresolved); m1 gone/ECHILD (reaped by the tail,
+    /// which kills m2 first) ⟹ the only sound early
+    /// return. Disarm after the explicit tail.
     struct MiddlemanPairGuard {
         m1: libc::pid_t,
         m2: libc::pid_t,
+        m2pin: Result<M2Pin, i32>,
         disarmed: bool,
+    }
+
+    /// R22-007: pidfd pin on m2's birth (fork-local mirror
+    /// of audit's PidfdGuard — closes on drop). The pin
+    /// names the BIRTH, not the number: killing through it
+    /// can never land on a recycled occupant.
+    struct M2Pin(libc::c_int);
+
+    impl Drop for M2Pin {
+        fn drop(&mut self) {
+            // SAFETY: fd owned by this guard.
+            unsafe { libc::close(self.0) };
+        }
     }
 
     impl MiddlemanPairGuard {
         fn armed(m1: libc::pid_t, m2: libc::pid_t) -> Self {
+            // Pin m2's birth NOW (infallible: Err(errno) on
+            // denial/unsupported — silent here, LOUD if the
+            // zombie path ever runs unpinned).
+            let m2pin = super::super::seccomp::pidfd_open_raw(m2).map(M2Pin);
             MiddlemanPairGuard {
                 m1,
                 m2,
+                m2pin,
                 disarmed: false,
             }
         }
@@ -1016,10 +1037,66 @@ mod tests {
             }
             let mut st = 0;
             // SAFETY: WNOHANG probe of our own child.
-            if unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) } != 0 {
-                // m1 zombie (reaped by the probe) or gone
-                // (reaped by the tail): m2 is dead-orphaned
-                // draining to init — nothing owed.
+            let probed = unsafe { libc::waitpid(self.m1, &mut st, libc::WNOHANG) };
+            if probed > 0 {
+                // R22-007: m1 ZOMBIE (reaped by the probe) —
+                // m2 may LIVE ON as an orphan (no
+                // pdeathsig/EOF channel — R21-008 verified;
+                // the old "dead-orphaned draining to init"
+                // rationale was false). Kill m2 via the
+                // birth pin (sound forever — the pin names
+                // the birth, not the number, so a recycled
+                // occupant is unaddressable; ESRCH ⟹ m2
+                // already drained, harmless). Init reaps
+                // the orphan (nothing to wait — not ours).
+                match &self.m2pin {
+                    Ok(pin) => {
+                        // SAFETY: pidfd_send_signal to our
+                        // pinned grandchild-birth only.
+                        unsafe {
+                            libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                        }
+                    }
+                    Err(errno) => {
+                        eprintln!(
+                            "R22007-UNPINNED middleman m1={} zombie-reaped, m2={} unpinned \
+                             (pin denied: errno {errno}) — m2 may survive (no safe signal \
+                             exists; caller owns the residual)",
+                            self.m1, self.m2
+                        );
+                    }
+                }
+                return;
+            }
+            if probed < 0 {
+                let errno = std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or(-999);
+                if errno == libc::ECHILD {
+                    // m1 gone (reaped by the tail): the ONLY
+                    // sound early return — and only because
+                    // the tail kills m2 FIRST (tail
+                    // contract: m2 already dead).
+                    return;
+                }
+                // Unexpected probe errno (EINTR-ish —
+                // WNOHANG barely blocks): m1's state is
+                // unknown and its NUMBER is unpinned (never
+                // touch it — recycle-murder), but the m2
+                // pin (when held) is still sound — kill
+                // through it, then report loud.
+                if let Ok(pin) = &self.m2pin {
+                    // SAFETY: pidfd_send_signal to our
+                    // pinned grandchild-birth only.
+                    unsafe {
+                        libc::syscall(libc::SYS_pidfd_send_signal, pin.0, libc::SIGKILL, 0, 0);
+                    }
+                }
+                eprintln!(
+                    "R22007-PROBE m1={} probe failed (errno {errno} — m1 state unknown, \
+                     number untouched); m2={} pin-killed when pinned",
+                    self.m1, self.m2
+                );
                 return;
             }
             // m1 live: m2's number is pinned — blind kill
@@ -1286,6 +1363,305 @@ mod tests {
             prove_reaped_by_absence(zombie_pid),
             Ok(true),
             "freed number must read reaped"
+        );
+    }
+
+    /// R22-007: settle to zombie (staging — the guard's
+    /// probe must see Z (zombie path), not a dying-R
+    /// (which takes the live path and would make the leg
+    /// vacuous)).
+    fn settle_zombie(pid: libc::pid_t) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .ok()
+                .and_then(|text| {
+                    text.rsplit_once(") ")
+                        .and_then(|(_, after)| after.split_whitespace().next().map(str::to_string))
+                });
+            if state.as_deref() == Some("Z") {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "staging broken (never zombified)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// R22-007: poll tick-aware absence (gone or recycled ⟹
+    /// OUR birth drained). True when drained within the
+    /// bound; loud on an unreadable stat.
+    fn birth_drained(pid: libc::pid_t, tick: u64, timeout: std::time::Duration) -> bool {
+        let end = std::time::Instant::now() + timeout;
+        loop {
+            match fork_starttime(pid) {
+                Ok(None) => return true,
+                Ok(Some(now)) if now != tick => return true,
+                Ok(Some(_)) => {}
+                Err(error) => panic!("staging broken (stat unreadable: {error})"),
+            }
+            if std::time::Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// R22-007: tick-gated kill (fork-local — audit's
+    /// helper is out of reach). True when the signal
+    /// landed on OUR birth.
+    fn kill_tick_gated_fork(pid: libc::pid_t, tick: u64) -> bool {
+        match fork_starttime(pid) {
+            Ok(Some(now)) if now == tick => unsafe { libc::kill(pid, libc::SIGKILL) == 0 },
+            _ => false,
+        }
+    }
+
+    /// R22-007: the zombie-m1 path retires m2 via the pin —
+    /// kill m1 (no reap), settle Z, unwind past a simulated
+    /// observation failure; the probe reaps m1 and the pin
+    /// kills the orphaned m2 (init drains it). Both births
+    /// retire. RED (old code: the probe reaps m1 and
+    /// returns — m2 abandoned live). Duration 988 is unique
+    /// to this test.
+    #[test]
+    fn middleman_guard_zombie_m1_retires_m2_via_pin() {
+        use std::panic::AssertUnwindSafe;
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("988") }.expect("pair staged");
+        let tick2 = fork_starttime(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _pair = MiddlemanPairGuard::armed(m1, m2);
+            assert_eq!(
+                unsafe { libc::kill(m1, libc::SIGKILL) },
+                0,
+                "staging broken (m1 kill)"
+            );
+            settle_zombie(m1);
+            panic!("simulated observation failure");
+        }));
+        assert!(outcome.is_err(), "staging broken (must unwind)");
+        assert_eq!(
+            fork_starttime(m1),
+            Ok(None),
+            "m1 must be reaped by the probe"
+        );
+        let retired = birth_drained(m2, tick2, std::time::Duration::from_secs(5));
+        // RED-safe cleanup (tick-gated — the verdict above
+        // is already recorded).
+        kill_tick_gated_fork(m2, tick2);
+        birth_drained(m2, tick2, std::time::Duration::from_secs(5));
+        assert!(retired, "m2 must retire via the pin (abandoned?!)");
+    }
+
+    /// R22-007: the ECHILD path (tail-honored contract —
+    /// m2 dead FIRST, then m1 reaped) returns clean: no
+    /// hang, nothing touched, both births gone.
+    /// CHARACTERIZATION (passes old+new — locks the
+    /// tail-contract path through the rework). Duration 989
+    /// is unique to this test.
+    #[test]
+    fn middleman_guard_echild_after_tail_returns_clean() {
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("989") }.expect("pair staged");
+        let tick2 = fork_starttime(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+        let pair = MiddlemanPairGuard::armed(m1, m2);
+        // The tail's contract: m2 dead first (zombie under
+        // the live middleman — never reaped until it dies).
+        assert_eq!(
+            unsafe { libc::kill(m2, libc::SIGKILL) },
+            0,
+            "staging broken (m2 kill)"
+        );
+        settle_zombie(m2);
+        // Then m1 killed + reaped (raw waitpid — the tail
+        // holds no handle).
+        assert_eq!(
+            unsafe { libc::kill(m1, libc::SIGKILL) },
+            0,
+            "staging broken (m1 kill)"
+        );
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut st = 0;
+            // SAFETY: WNOHANG reap of our own child.
+            let got = unsafe { libc::waitpid(m1, &mut st, libc::WNOHANG) };
+            if got == m1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "staging broken (m1 never reaped)"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Drop WITHOUT disarming: the probe sees ECHILD
+        // (m1 gone) — the only sound early return.
+        drop(pair);
+        assert_eq!(fork_starttime(m1), Ok(None), "m1 must stay reaped");
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "m2 must drain via init"
+        );
+    }
+
+    /// R22-007: the unpinned zombie path degrades loud —
+    /// forged pin denial (simulated seccomp), zombie-m1,
+    /// unwind; m2 SURVIVES (no safe signal exists) and the
+    /// test retires it via the known birth. CHARACTERIZATION
+    /// of the degraded SHAPE (passes old+new — both abandon;
+    /// the LOUDNESS delta is eyeballed here and asserted
+    /// for real by the fresh-image leg). Duration 990 is
+    /// unique to this test.
+    #[test]
+    fn middleman_guard_unpinned_zombie_leaves_m2_for_caller() {
+        use std::panic::AssertUnwindSafe;
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("990") }.expect("pair staged");
+        let tick2 = fork_starttime(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut pair = MiddlemanPairGuard::armed(m1, m2);
+            pair.m2pin = Err(libc::EPERM);
+            assert_eq!(
+                unsafe { libc::kill(m1, libc::SIGKILL) },
+                0,
+                "staging broken (m1 kill)"
+            );
+            settle_zombie(m1);
+            panic!("simulated observation failure");
+        }));
+        assert!(outcome.is_err(), "staging broken (must unwind)");
+        // Survives (nothing killed it — the only killer in
+        // this leg is the pin, which is denied).
+        // SAFETY: signal 0 probes only.
+        assert_eq!(
+            unsafe { libc::kill(m2, 0) },
+            0,
+            "m2 must survive unpinned (loud, then test-cleaned)"
+        );
+        assert_eq!(
+            fork_starttime(m2),
+            Ok(Some(tick2)),
+            "survivor must be OUR birth"
+        );
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "test must retire the survivor"
+        );
+    }
+
+    /// R22-007: run a fresh-image probe child with a bounded
+    /// wait (60s — a hung child is killed loud) and collect
+    /// its output. Fork-local twin of audit's helper (same
+    /// pipe rule: no live descendant may hold the probe's
+    /// pipes — the survivor's stdio is null, never piped).
+    fn run_fresh_probe_bounded(env: &str, test: &str) -> std::process::Output {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(format!("fixture::linux::fork::tests::{test}"))
+            .arg("--nocapture")
+            .env(env, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if child.try_wait().expect("child waitable").is_some() {
+                break;
+            }
+            if std::time::Instant::now() >= end {
+                let _ = child.kill();
+                panic!("probe child {test} hung past 60s (killed loud)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child.wait_with_output().expect("probe output readable")
+    }
+
+    /// R22-007 denied-pin probe (fresh image): seccomp-deny
+    /// `pidfd_open` in SELF (the pin genuinely fails —
+    /// realistic denial plumbing, not a forged `None`),
+    /// then zombie-m1 + unwind; the drop must go LOUD
+    /// (R22007-UNPINNED) and m2 survives for the parent
+    /// (its stdio is null — no pipe is held, so the output
+    /// read cannot wedge). RED (old code: silent return —
+    /// no marker). Duration 991 is unique to this test.
+    fn middleman_guard_denied_pin_reports_unpinned_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::panic::AssertUnwindSafe;
+        install_deny_one(libc::SYS_pidfd_open, DenyAction::Eperm).expect("deny installs (staging)");
+        // Anti-vacuity: the denial bites (self-probe on our
+        // own live pid).
+        assert_eq!(
+            super::super::seccomp::pidfd_open_raw(std::process::id() as libc::pid_t),
+            Err(libc::EPERM),
+            "staging broken (pidfd_open not denied?)"
+        );
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("991") }.expect("pair staged");
+        let tick2 = fork_starttime(m2)
+            .expect("m2 stat readable")
+            .expect("m2 visible");
+        println!("R22007-M2 {m2} {tick2}");
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _pair = MiddlemanPairGuard::armed(m1, m2);
+            assert_eq!(
+                unsafe { libc::kill(m1, libc::SIGKILL) },
+                0,
+                "staging broken (m1 kill)"
+            );
+            settle_zombie(m1);
+            panic!("simulated observation failure");
+        }));
+        assert!(outcome.is_err(), "staging broken (must unwind)");
+        eprintln!("R22007-PIN-DONE");
+    }
+
+    /// R22-007 denied-pin wrapper: the probe runs
+    /// fresh-image (seccomp is irreversible). Cleanup rides
+    /// the printed birth (tick-gated) and runs BEFORE the
+    /// verdict asserts so RED runs stay clean.
+    #[test]
+    fn middleman_guard_denied_pin_reports_unpinned() {
+        if std::env::var("SCOPEBASE_R22007_DENY_PIN").is_ok() {
+            middleman_guard_denied_pin_reports_unpinned_probe();
+            return;
+        }
+        let out = run_fresh_probe_bounded(
+            "SCOPEBASE_R22007_DENY_PIN",
+            "middleman_guard_denied_pin_reports_unpinned",
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let (m2, tick2): (libc::pid_t, u64) = stdout
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22007-M2 ")?;
+                let (pid, tick) = rest.split_once(' ')?;
+                Some((pid.parse().ok()?, tick.parse().ok()?))
+            })
+            .expect("staging broken (no m2 line?)");
+        kill_tick_gated_fork(m2, tick2);
+        assert!(
+            birth_drained(m2, tick2, std::time::Duration::from_secs(5)),
+            "parent must retire the survivor"
+        );
+        assert!(out.status.success(), "probe must complete\n{stderr}");
+        assert!(
+            stderr.contains("R22007-PIN-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22007-UNPINNED"),
+            "drop must go loud when unpinned\n{stderr}"
         );
     }
 
