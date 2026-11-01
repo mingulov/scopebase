@@ -42,18 +42,44 @@
 //!   named post-spawn step to fail (regression only: prove
 //!   each producer step fails loud + discharged). One of
 //!   stat|comm|tick|wait. Anything else fails loud.
+//! Hook: SCOPEBASE_PUBLISHER_DENY_WAIT=1 — seccomp-deny
+//!   `wait4` to self post-spawn (regression only: prove
+//!   the guard reports unresolved custody when reaping is
+//!   denied; pair with a fault step — the wait tail itself
+//!   cannot wait under the filter). Presence = on.
 //! Stdio topology matches the shell script exactly: the
 //! sleep inherits our stdio (pinned pipe write end and
 //! all); the pair prints to stdout.
 //! Exit: 0 after transmit + wait (shell `wait` with no args
 //!   exits zero — mirrored); 2 on usage/setup/stage
-//!   failure (loud, never silent).
+//!   failure (loud, never silent); 3 when the failure left
+//!   the sleep undischargeable (R22-006: kill-denied or
+//!   unreapable — loud UNRESOLVED-CUSTODY evidence: sleeper
+//!   pid + kill errno + reaped-or-not).
 
 use std::io::Write as _;
 
 fn fail(message: &str) -> ! {
     let _ = writeln!(std::io::stderr(), "scopebase-pair-publisher: {message}");
     std::process::exit(2);
+}
+
+/// R22-006: the stage failed AND the sleep is
+/// undischargeable — report both (sleeper pid, kill errno,
+/// reaped-or-not) and exit 3 (distinct from 2: custody
+/// unresolved, not merely a stage failure).
+fn fail_unresolved(message: &str, outcome: &GuardOutcome) -> ! {
+    let _ = writeln!(
+        std::io::stderr(),
+        "scopebase-pair-publisher: {message} — UNRESOLVED-CUSTODY sleeper={} kill_errno={} reaped={} ({})",
+        outcome.pid,
+        outcome
+            .kill_errno
+            .map_or_else(|| "none".to_string(), |errno| errno.to_string()),
+        outcome.reaped,
+        outcome.detail,
+    );
+    std::process::exit(3);
 }
 
 fn normalize_sigchld() {
@@ -78,15 +104,47 @@ fn normalize_sigchld() {
     }
 }
 
-/// R21-007: post-spawn custody over the sleep child — Drop
-/// kill+reaps unless disarmed. Covers BOTH all pipeline
-/// `Err` returns (main drops the guard between the pipeline
-/// and `fail()` — `fail()` itself `exit()`s, which runs no
-/// destructors) AND panics (unwind drops the guard: the
-/// transmit is checked, but any future panic still retires).
-/// Bounded reap (a SIGKILLed sleep dies in µs-ms; the bound
-/// only bites on the impossible). Never panics.
+/// R21-007: post-spawn custody over the sleep child.
+/// R22-006: the pipeline consumes the guard EXPLICITLY via
+/// [`SleepGuard::retire`] (status-aware — the outcome feeds
+/// the failure report) instead of drop-and-forget; `Drop`
+/// stays only as the panic/unwind backstop (best-effort
+/// retire + stderr evidence — a known direct child is not
+/// an identity-observation corner, so abandonment always
+/// carries unresolved-custody evidence). Bounded reap (a
+/// SIGKILLed sleep dies in µs-ms; the bound only bites on
+/// the denied/impossible). Never panics.
 struct SleepGuard(Option<std::process::Child>);
+
+/// R22-006: the guard's recorded outcome — pid (`-1` when
+/// vacuous: disarmed/orphaned/retired), the kill errno
+/// (`None` ⟺ the signal was sent), whether the sleep was
+/// reaped, and a short evidence fragment. Resolved ⟺
+/// reaped (a reaped sleep holds no pipes — no hang; an
+/// externally-reaped one (ECHILD) strands nothing either).
+/// Unresolved (kill-denied-live, wait-denied, D-state)
+/// exits distinctly (3, not 2) with this evidence.
+#[derive(Debug)]
+struct GuardOutcome {
+    pid: i32,
+    kill_errno: Option<i32>,
+    reaped: bool,
+    detail: String,
+}
+
+impl GuardOutcome {
+    fn vacuous() -> Self {
+        GuardOutcome {
+            pid: -1,
+            kill_errno: None,
+            reaped: true,
+            detail: "nothing staged".to_string(),
+        }
+    }
+    fn resolved(&self) -> bool {
+        self.reaped
+    }
+}
 
 impl SleepGuard {
     /// Borrow the staged child (the wait tail reaps through
@@ -105,24 +163,77 @@ impl SleepGuard {
     fn orphan(&mut self) {
         self.0 = None;
     }
+    /// R22-006: explicit status-aware retire — kill (outcome
+    /// RECORDED, never ignored) + bounded reap. `Ok(Some)`
+    /// ⟹ resolved; ECHILD ⟹ resolved-externally (reaped
+    /// behind our back — nothing stranded); any other wait
+    /// error (EPERM/seccomp-denial) ⟹ unreapable-by-us —
+    /// polls to the bound like a live child (uniform —
+    /// denial is permanent, so the bound always bites, and
+    /// the 5s keeps the D-state patience of the old drop).
+    /// Timeout ⟹ unresolved (kill-denied-live or
+    /// wait-denied). Never panics.
+    fn retire(&mut self) -> GuardOutcome {
+        let mut child = match self.0.take() {
+            None => return GuardOutcome::vacuous(),
+            Some(child) => child,
+        };
+        let pid = child.id() as i32;
+        let kill_errno = match child.kill() {
+            Ok(()) => None,
+            Err(error) => Some(error.raw_os_error().unwrap_or(-999)),
+        };
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return GuardOutcome {
+                        pid,
+                        kill_errno,
+                        reaped: true,
+                        detail: format!("status={status:?}"),
+                    };
+                }
+                Ok(None) => {
+                    if std::time::Instant::now() >= end {
+                        return GuardOutcome {
+                            pid,
+                            kill_errno,
+                            reaped: false,
+                            detail: "unreaped past 5s (kill-denied-live? D-state?)".to_string(),
+                        };
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(error) => {
+                    if error.raw_os_error() == Some(libc::ECHILD) {
+                        return GuardOutcome {
+                            pid,
+                            kill_errno,
+                            reaped: true,
+                            detail: "reaped externally (ECHILD — nothing stranded)".to_string(),
+                        };
+                    }
+                    if std::time::Instant::now() >= end {
+                        return GuardOutcome {
+                            pid,
+                            kill_errno,
+                            reaped: false,
+                            detail: format!("wait denied ({error}) past 5s"),
+                        };
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+    }
 }
 
 impl Drop for SleepGuard {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) | Err(_) => break,
-                    Ok(None) => {
-                        if std::time::Instant::now() >= end {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                    }
-                }
-            }
+        let outcome = self.retire();
+        if outcome.pid >= 0 {
+            eprintln!("scopebase-pair-publisher: unwind-retire {outcome:?}");
         }
     }
 }
@@ -155,6 +266,10 @@ fn main() {
         )),
         Err(_) => None,
     };
+    // R22-006 regression hook (presence = on — validated
+    // pre-spawn like the others: nothing staged on typo...
+    // a bool has no typo shape, so presence alone arms).
+    let deny_wait = std::env::var("SCOPEBASE_PUBLISHER_DENY_WAIT").is_ok();
     // Spawn with inherited stdio (exactly the shell
     // script's topology: the sleep holds our stdout pipe).
     // The "exit 0" tail deliberately never waits (the
@@ -168,11 +283,22 @@ fn main() {
     // R21-007: the guard owns the sleep from here on. The
     // pipeline below returns `Err` (never bare `fail()` —
     // that would `exit()` past the guard and strand the
-    // sleep); main drops the guard between the pipeline and
-    // `fail()`, so every error path kill+reaps first.
-    // Success paths disarm/orphan explicitly.
+    // sleep); main retires the guard explicitly between the
+    // pipeline and `fail()` (R22-006: status-aware — the
+    // outcome feeds the failure report), so every error
+    // path kill+reaps first. Success paths disarm/orphan
+    // explicitly.
     let mut guard = SleepGuard(Some(sleep));
     let result: Result<(), String> = (|| {
+        // R22-006 regression hook (inside the pipeline so
+        // an install failure retires through the guard —
+        // never a bare fail past the staged sleep).
+        if deny_wait {
+            use scopebase_testkit::fixture::linux::seccomp::{install_deny_one, DenyAction};
+            if let Err(error) = install_deny_one(libc::SYS_wait4, DenyAction::Eperm) {
+                return Err(format!("deny-wait install failed: {error}"));
+            }
+        }
         // Pause hook (regression staging only — unset = no-op).
         if let Ok(flag) = std::env::var("SCOPEBASE_PUBLISHER_PAUSE_FILE") {
             let end =
@@ -239,8 +365,24 @@ fn main() {
         }
         Ok(())
     })();
-    drop(guard);
-    if let Err(message) = result {
-        fail(&message);
+    // R22-006: explicit status-aware retire (never
+    // drop-and-forget — the outcome feeds the report).
+    let outcome = guard.retire();
+    match result {
+        Ok(()) => {
+            if outcome.pid >= 0 {
+                eprintln!(
+                    "scopebase-pair-publisher: BUG? retired a staged sleep on the success \
+                     path ({outcome:?})"
+                );
+            }
+        }
+        Err(message) => {
+            if outcome.resolved() {
+                fail(&message);
+            } else {
+                fail_unresolved(&message, &outcome);
+            }
+        }
     }
 }

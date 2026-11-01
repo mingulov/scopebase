@@ -3074,6 +3074,22 @@ mod tests {
             .ok()
     }
 
+    /// R22-005: tri-state pgrp read (`proc_pgrp`
+    /// conflates gone/unreadable/malformed into `None` —
+    /// the unparsed retire must route outage to its
+    /// degraded path while still panicking on
+    /// foreign/gone). `Ok(Some)` = parsed pgrp;
+    /// `Ok(None)` = malformed stat; `Err` with
+    /// NotFound = gone; any other `Err` = outage.
+    #[cfg(target_arch = "x86_64")]
+    fn read_pgrp_checked(pid: libc::pid_t) -> Result<Option<libc::pid_t>, std::io::Error> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+        Ok(text
+            .rsplit_once(") ")
+            .and_then(|(_, after)| after.split_whitespace().nth(2))
+            .and_then(|field| field.parse::<libc::pid_t>().ok()))
+    }
+
     /// R12-005: settle whether `pid` survived a strike.
     /// Death is async (a SIGKILLed task shows R with the
     /// signal pending for µs-ms before reaching Z), so an
@@ -12860,7 +12876,7 @@ mod tests {
     /// killpg would be unpinned), the pin releases mid-drain
     /// (someone reaped behind our back — refused to proceed
     /// unpinned), never self-grouped (the killpg would name
-    /// a foreign group), unreadable (unverifiable),
+    /// a foreign group), malformed stat (unverifiable),
     /// unreapable, or the group survives the bounded settle.
     /// The member set is closed (leader + /bin/sleep —
     /// neither forks), so one pinned killpg suffices (no
@@ -12868,6 +12884,18 @@ mod tests {
     /// murder-bait). Members settle via init (reparented at
     /// death, reaped in ms — adoption by us is impossible,
     /// asserted below).
+    /// R22-005: unreadable pin reads (outage) route to the
+    /// degraded reservation path below (handle/tick pin +
+    /// reservation-trust killpg + handle kill/reap +
+    /// signal-0 group probe — all outage-proof) instead of
+    /// panic-abandoning; reaped/foreign/gone still panic
+    /// (violations, unchanged). The degraded path returns
+    /// the leader's status on full discharge (callers
+    /// report their setup cause unchanged — discharge
+    /// precedes failure reporting) and panics loud only
+    /// for a post-discharge residual (sleeper surviving
+    /// past the bound, foreign errno, stolen status —
+    /// each cited with what WAS discharged).
     #[cfg(target_arch = "x86_64")]
     fn retire_unparsed_publisher_group(
         publisher: &mut std::process::Child,
@@ -12879,22 +12907,49 @@ mod tests {
         // behind our back). The birth tick is kept: every
         // poll below re-verifies it (the pin must hold
         // through the whole drain, not just at entry).
+        // Unreadable (outage) ⟹ degraded (handle-pin).
         let pubtick = match proc_starttime(pubpid) {
             Ok(Some(tick)) => tick,
             Ok(None) => panic!(
                 "unparsed publisher {pubpid} already reaped (reservation violated — \
                  group retire refused: unpinned killpg)"
             ),
-            Err(error) => panic!(
-                "unparsed publisher {pubpid} tick unreadable ({error:?}) — group unverifiable"
-            ),
+            Err(error) => {
+                return retire_unparsed_degraded(
+                    publisher,
+                    pubpid,
+                    DegradedPin::Handle,
+                    &format!("tick unreadable: {error}"),
+                );
+            }
         };
-        assert_eq!(
-            proc_pgrp(pubpid),
-            Some(pubpid),
-            "unparsed publisher {pubpid} never self-grouped — group retire refused \
-             (killpg would name a foreign group)"
-        );
+        // Pgrp tri-state: self ⟹ normal (below); foreign ⟹
+        // panic (never self-grouped — unchanged); gone ⟹
+        // panic (pin released mid-entry — violation);
+        // outage ⟹ degraded (tick-pin held).
+        match read_pgrp_checked(pubpid) {
+            Ok(Some(pgrp)) if pgrp == pubpid => {}
+            Ok(Some(foreign)) => panic!(
+                "unparsed publisher {pubpid} in group {foreign} (never self-grouped — \
+                 group retire refused: killpg would name a foreign group)"
+            ),
+            Ok(None) => panic!(
+                "unparsed publisher {pubpid} stat malformed (pgrp unparseable — \
+                 group unverifiable)"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => panic!(
+                "unparsed publisher {pubpid} reaped mid-entry (pin released — \
+                 group retire refused: unpinned killpg)"
+            ),
+            Err(error) => {
+                return retire_unparsed_degraded(
+                    publisher,
+                    pubpid,
+                    DegradedPin::Tick(pubtick),
+                    &format!("pgrp unreadable: {error}"),
+                );
+            }
+        }
         assert_no_subreaper_leak("retire_unparsed_publisher_group");
         // SAFETY: SIGKILL to our own pinned group, then our
         // own pinned child; errors ignored (a racing death
@@ -12932,6 +12987,188 @@ mod tests {
             "unparsed publisher {pubpid} group survived the retire"
         );
         status
+    }
+
+    /// R22-005: the degraded path's pin — what proves the
+    /// number is still ours when /proc reads fail. `Tick`
+    /// (a tick read SUCCEEDED — the outage took only the
+    /// pgrp leg): live-or-zombie-ours ⟹ number held (a
+    /// zombie holds its number+pgid) ⟹ killpg sound.
+    /// `Handle` (no read succeeded): validated by
+    /// `try_wait` inside the degraded retire — live ⟹
+    /// number held ⟹ killpg sound; already-dead ⟹ WE reap
+    /// ⟹ pin released ⟹ NO killpg (probe-only). Stale
+    /// (reaped behind our back) ⟹ panic (violation).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug)]
+    enum DegradedPin {
+        Tick(u64),
+        Handle,
+    }
+
+    /// R22-005: outage-degraded unparsed retire — NO /proc
+    /// reads (prctl + kill + waitpid + killpg-0 only — all
+    /// outage-proof; every line is fd-free). Trusts the
+    /// RESERVATION loud (cited below): our unreaped child,
+    /// self-grouped at spawn, never regroups — audited at
+    /// every call site 2026-11-01 (lib: the two R20010
+    /// setup-Err arms — spawn → stdout-take → read → parse
+    /// → stat, no waits, no guards; the holistic
+    /// run_recv_fail arm — spawn → read → torn-parse, no
+    /// waits, no guards; twin: the three mirrors; spawn is
+    /// pre_exec-setpgid-or-fail; the publisher binary
+    /// contains no setpgid/setsid).
+    /// Implementation note (deviation): the triage op-list
+    /// read "handle kill + handle reap + signal-0 probe"
+    /// with no killpg — but without a group strike the
+    /// live-case unknown sleeper strands BY DESIGN (its pid
+    /// is unknown and post-reap killpg is R22-002-forbidden
+    /// murder-bait), leaving the finding's headline defect
+    /// ("leaves the publisher and unpublished sleeper
+    /// alive") half-open with only a louder report. The
+    /// killpg here is NOT unpinned: the number is HELD
+    /// (live ⟹ unreapable — no waiter exists but us, so no
+    /// recycle is possible in the pin-to-strike window;
+    /// zombie ⟹ holds number+pgid) and the group is OURS
+    /// (reservation: self-grouped, never regroups, closed
+    /// member set) — the same justification as the normal
+    /// path's pinned killpg, minus only the pgrp
+    /// re-verification the outage took away. Soundness
+    /// rests on the audited reservation, not on a read.
+    /// Returns the leader's status on full discharge;
+    /// panics loud (post-discharge, with what WAS
+    /// discharged cited) on a surviving group, a foreign
+    /// probe errno, or a stolen status.
+    #[cfg(target_arch = "x86_64")]
+    fn retire_unparsed_degraded(
+        publisher: &mut std::process::Child,
+        pubpid: libc::pid_t,
+        pin: DegradedPin,
+        why: &str,
+    ) -> std::process::ExitStatus {
+        use std::time::{Duration, Instant};
+        let pin_note = match pin {
+            DegradedPin::Tick(tick) => format!("tick-pin {tick}"),
+            DegradedPin::Handle => "handle-pin".to_string(),
+        };
+        eprintln!(
+            "R22005-DEGRADED unparsed publisher {pubpid}: {why} — trusting the RESERVATION loud \
+             (our unreaped child, self-grouped at spawn, never regroups; pin: {pin_note}; \
+             pgrp unverified (outage) — self-groupedness by reservation, not by read)"
+        );
+        assert_no_subreaper_leak("retire_unparsed_publisher_group (degraded)");
+        // Validate the pin; reap now when already dead (the
+        // pin releases with the reap — no killpg then).
+        let mut status = match pin {
+            DegradedPin::Tick(_) => None,
+            DegradedPin::Handle => match publisher.try_wait() {
+                Ok(None) => None,
+                Ok(Some(status)) => Some(status),
+                Err(error) => panic!(
+                    "unparsed publisher {pubpid} handle stale ({error:?} — reaped behind our \
+                     back: reservation violated, unpinned everything refused)"
+                ),
+            },
+        };
+        if status.is_none() {
+            // SAFETY: killpg under pin (tick-read or
+            // live-handle) + reservation (self-grouped,
+            // never regroups, closed set) — the number is
+            // HELD so the group is ours (see above).
+            unsafe {
+                libc::killpg(pubpid, libc::SIGKILL);
+                libc::kill(pubpid, libc::SIGKILL);
+            }
+        } else {
+            eprintln!(
+                "R22005-DEGRADED unparsed publisher {pubpid}: leader already dead (reaped \
+                 above — pin released, NO killpg: probe-only)"
+            );
+        }
+        // Reap the leader through its handle (status kept).
+        // A wait error means a sibling stole our reap (the
+        // status is gone — the probe below still judges the
+        // group, then the theft panics loud).
+        let mut stolen = false;
+        if status.is_none() {
+            let start = Instant::now();
+            status = loop {
+                match publisher.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) => {
+                        if start.elapsed() >= Duration::from_secs(5) {
+                            panic!(
+                                "unparsed publisher {pubpid} unreapable after SIGKILL \
+                                 (degraded — D-state?)"
+                            );
+                        }
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "R22005-DEGRADED unparsed publisher {pubpid}: leader reaped behind \
+                             our back ({error:?} — status stolen by a sibling wait)"
+                        );
+                        stolen = true;
+                        break None;
+                    }
+                }
+            };
+        }
+        let leader_note = match (&status, stolen) {
+            (Some(status), _) => format!("leader reaped ({status:?})"),
+            (None, true) => "leader reaped behind our back (status stolen)".to_string(),
+            (None, false) => unreachable!("reap loop always resolves"),
+        };
+        await_group_empty_degraded(pubpid, &leader_note);
+        match status {
+            Some(status) => status,
+            None => panic!(
+                "unparsed publisher {pubpid} group discharged ({leader_note}) but the status \
+                 is lost (sibling steal — cannot return what we do not have)"
+            ),
+        }
+    }
+
+    /// R22-005: outage-proof group-empty probe (killpg-0
+    /// only — no fd, no /proc). ESRCH ⟹ OUR group gone
+    /// (reservation: pgid `pubpid` is ours — the unknown
+    /// sleeper shares it, so ESRCH proves the sleeper
+    /// dead). 0 past the bound ⟹ loud residual panic (the
+    /// leader is already discharged — cited via
+    /// `leader_note` — discharge precedes failure
+    /// reporting). Any other errno (EPERM ⟹ a foreign
+    /// group on a recycled pgid — ours is same-uid) ⟹ loud
+    /// fail-closed at once (R22-009 principle: non-ESRCH
+    /// never proves emptiness). Returns () on ESRCH.
+    #[cfg(target_arch = "x86_64")]
+    fn await_group_empty_degraded(pubpid: libc::pid_t, leader_note: &str) {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        loop {
+            // SAFETY: signal 0 probes only.
+            let probed = unsafe { libc::killpg(pubpid, 0) };
+            if probed != 0 {
+                let errno = std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or(-999);
+                if errno == libc::ESRCH {
+                    return;
+                }
+                panic!(
+                    "unparsed publisher {pubpid} group probe failed with errno {errno} \
+                     (foreign group on a recycled pgid? — fail closed; {leader_note})"
+                );
+            }
+            if start.elapsed() >= Duration::from_secs(5) {
+                panic!(
+                    "unparsed publisher {pubpid} group survived the degraded retire \
+                     ({leader_note}; sleeper residual — unkillable-by-us post-reap: no pin \
+                     to killpg under)"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// R22-002: pinned group drain shared by the unparsed
@@ -14256,6 +14493,248 @@ mod tests {
     /// (hangs in the wait tail), and the bare kill+reap shape
     /// strands the unknown sleeper. Durations 933-941 and 951
     /// are unique to this test.
+    /// R22-015: pub-cell judge (extracted from the
+    /// run_pub_cell closure so the regression executes the
+    /// same step): verdict FIRST (hung/stranded/post_empty
+    /// — a failed verdict panics immediately WITHOUT
+    /// touching stderr, since a stranded writer would wedge
+    /// any drain for its whole lifetime), THEN the bounded
+    /// stderr drain (nonblocking + deadline + cap —
+    /// defense-in-depth: writers SHOULD be dead now),
+    /// then the diagnostic asserts (promptness/code/marker)
+    /// with the drained content.
+    #[cfg(target_arch = "x86_64")]
+    fn judge_pub_cell(
+        step: &str,
+        elapsed: Duration,
+        outcome: Option<(std::process::ExitStatus, bool, bool)>,
+        stderr_pipe: Option<std::process::ChildStderr>,
+        marker: &str,
+    ) {
+        let (status, stranded, post_empty) = outcome.unwrap_or_else(|| {
+            panic!(
+                "PUB-{step}: publisher hung (fault ignored?) after {elapsed:?} \
+                 (stderr undrained — verdict-first)"
+            )
+        });
+        assert!(
+            !stranded,
+            "PUB-{step}: group must be ESRCH-empty (stranded sleeper; drain refused)"
+        );
+        assert!(
+            post_empty,
+            "PUB-{step}: group must prove ESRCH-empty after retire (squatter?; drain refused)"
+        );
+        let err = drain_pipe_bounded(stderr_pipe, Duration::from_secs(5), step);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "PUB-{step}: must fail promptly, took {elapsed:?}\nstderr: {err}"
+        );
+        assert_eq!(
+            status.code(),
+            Some(2),
+            "PUB-{step}: must exit 2, got {status:?}\nstderr: {err}"
+        );
+        assert!(
+            err.contains(marker),
+            "PUB-{step}: stderr must name the failed step ({marker:?}), got {err:?}"
+        );
+    }
+
+    /// R22-015: bounded pipe drain (nonblocking + deadline +
+    /// 1MB cap) — defense-in-depth for diagnostic reads
+    /// after judged-empty groups (a lingering writer wedges
+    /// an unbounded `read_to_string` for the writer's whole
+    /// lifetime). EOF before the deadline ⟹ content;
+    /// still-open past the deadline ⟹ loud wedge-panic (a
+    /// writer survived the verdict?! — with a partial
+    /// preview); past 1MB ⟹ stops appending (drains on to
+    /// EOF-or-deadline, discarding) and marks [TRUNCATED].
+    /// `None` ⟹ empty.
+    #[cfg(target_arch = "x86_64")]
+    fn drain_pipe_bounded(
+        pipe: Option<std::process::ChildStderr>,
+        timeout: Duration,
+        what: &str,
+    ) -> String {
+        use std::io::Read as _;
+        use std::os::unix::io::AsRawFd as _;
+        const CAP: usize = 1024 * 1024;
+        let Some(mut pipe) = pipe else {
+            return String::new();
+        };
+        // ChildStderr has no set_nonblocking — fcntl it
+        // (our own pipe — staging-infallible).
+        // SAFETY: fcntl O_NONBLOCK on our own pipe fd only.
+        let flags = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "PUB-{what}: fcntl F_GETFL failed");
+        let set = unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        assert_eq!(set, 0, "PUB-{what}: fcntl O_NONBLOCK failed");
+        let mut buf: Vec<u8> = Vec::new();
+        let mut total: usize = 0;
+        let mut capped = false;
+        let end = Instant::now() + timeout;
+        loop {
+            let mut chunk = [0u8; 8192];
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total += n;
+                    if buf.len() < CAP {
+                        let room = CAP - buf.len();
+                        buf.extend_from_slice(&chunk[..n.min(room)]);
+                    } else {
+                        capped = true;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= end {
+                        let preview =
+                            String::from_utf8_lossy(&buf[..buf.len().min(500)]).into_owned();
+                        panic!(
+                            "PUB-{what}: stderr drain wedged past {timeout:?} (a writer \
+                             survived the verdict?!) — partial ({total} bytes): {preview:?}",
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("PUB-{what}: stderr drain failed: {error}"),
+            }
+        }
+        let mut out = String::from_utf8_lossy(&buf).into_owned();
+        if capped {
+            out.push_str("\n[TRUNCATED at 1MB]");
+        }
+        out
+    }
+
+    /// R22-015: the pub-cell judge pins verdict-first +
+    /// bounded diagnostics. Leg 1 (denied-cleanup shape: a
+    /// failed outcome + a LIVE stderr writer): must panic
+    /// on the VERDICT fast (<5s — the pipe is never
+    /// touched). Leg 2 (verdict-lied shape: a success
+    /// outcome + a LIVE writer): the bounded drain must
+    /// wedge-panic (~5s, loud, with a partial preview —
+    /// never a silent 900s). Leg 3 (positive: success +
+    /// EOF pipe with the marker): returns normally. Writers
+    /// print the marker then `exec sleep` (one process —
+    /// cleanup via the held handle, no orphans). RED (old
+    /// shape: leg 1 drains 7s then judges (time fails);
+    /// leg 2 drains to EOF and passes silent (no panic)).
+    /// Durations 7 and 8 are unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn judge_pub_cell_verdict_first_and_bounded() {
+        use std::panic::AssertUnwindSafe;
+        let exit2 = || {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("exit 2")
+                .status()
+                .expect("exit-2 fabricates")
+        };
+        let message_of = |payload: Box<dyn std::any::Any + Send>| {
+            payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("")
+                .to_string()
+        };
+        // Leg 1: failed verdict + live writer ⟹ fast
+        // stranded-panic (verdict-first — no drain).
+        let mut writer1 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("echo PUBMARK >&2; exec sleep 7")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("writer1 spawns");
+        let pipe1 = writer1.stderr.take();
+        let start = Instant::now();
+        let verdict1 = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            judge_pub_cell(
+                "t",
+                Duration::from_millis(100),
+                Some((exit2(), true, false)),
+                pipe1,
+                "PUBMARK",
+            )
+        }));
+        let leg1_time = start.elapsed();
+        let _ = writer1.kill();
+        let _ = writer1.wait();
+        let message1 = match verdict1 {
+            Ok(()) => panic!("leg 1 must panic (stranded verdict)"),
+            Err(payload) => message_of(payload),
+        };
+        assert!(
+            message1.contains("stranded"),
+            "leg 1 must cite the verdict, got: {message1}"
+        );
+        assert!(
+            leg1_time < Duration::from_secs(5),
+            "leg 1 must fail fast (verdict-first — no drain), took {leg1_time:?}"
+        );
+        // Leg 2: success verdict + live writer ⟹ bounded
+        // wedge-panic (~5s, loud — never silent, never
+        // 900s).
+        let mut writer2 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("echo PUBMARK >&2; exec sleep 8")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("writer2 spawns");
+        let pipe2 = writer2.stderr.take();
+        let start = Instant::now();
+        let verdict2 = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            judge_pub_cell(
+                "t",
+                Duration::from_millis(100),
+                Some((exit2(), false, true)),
+                pipe2,
+                "PUBMARK",
+            )
+        }));
+        let leg2_time = start.elapsed();
+        let _ = writer2.kill();
+        let _ = writer2.wait();
+        let message2 = match verdict2 {
+            Ok(()) => panic!("leg 2 must panic (wedged drain)"),
+            Err(payload) => message_of(payload),
+        };
+        assert!(
+            message2.contains("wedged"),
+            "leg 2 must cite the wedge, got: {message2}"
+        );
+        assert!(
+            leg2_time >= Duration::from_secs(5) && leg2_time < Duration::from_secs(30),
+            "leg 2 must bound (~5s deadline), took {leg2_time:?}"
+        );
+        // Leg 3: success verdict + EOF pipe with the marker
+        // ⟹ returns normally.
+        let mut writer3 = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("echo PUBMARK >&2")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("writer3 spawns");
+        let pipe3 = writer3.stderr.take();
+        judge_pub_cell(
+            "t",
+            Duration::from_millis(100),
+            Some((exit2(), false, true)),
+            pipe3,
+            "PUBMARK",
+        );
+        let _ = writer3.wait();
+    }
+
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pair_setup_holistic_retirement() {
@@ -14336,39 +14815,7 @@ mod tests {
                         pubtick,
                     ))
                 };
-                // Post-cleanup stderr drain (all pipe writers
-                // dead now — EOF prompt; proves WHICH step failed).
-                let mut err = String::new();
-                if let Some(mut pipe) = publisher.stderr.take() {
-                    use std::io::Read as _;
-                    let _ = pipe.read_to_string(&mut err);
-                }
-                let (status, stranded, post_empty) = outcome.unwrap_or_else(|| {
-                    panic!(
-                    "PUB-{step}: publisher hung (fault ignored?) after {elapsed:?}\nstderr: {err}"
-                )
-                });
-                assert!(
-                    elapsed < Duration::from_secs(5),
-                    "PUB-{step}: must fail promptly, took {elapsed:?}\nstderr: {err}"
-                );
-                assert_eq!(
-                    status.code(),
-                    Some(2),
-                    "PUB-{step}: must exit 2, got {status:?}\nstderr: {err}"
-                );
-                assert!(
-                    err.contains(marker),
-                    "PUB-{step}: stderr must name the failed step ({marker:?}), got {err:?}"
-                );
-                assert!(
-                    !stranded,
-                    "PUB-{step}: group must be ESRCH-empty (stranded sleeper)\nstderr: {err}"
-                );
-                assert!(
-                post_empty,
-                "PUB-{step}: group must prove ESRCH-empty after retire (squatter?)\nstderr: {err}"
-            );
+                judge_pub_cell(step, elapsed, outcome, publisher.stderr.take(), marker);
             };
         // Real pause-timeout path (absent flag + short
         // deadline hook — the 30s default would hang RED).
@@ -23479,6 +23926,432 @@ mod tests {
         assert!(
             stderr.contains("R21011-OUTAGE-DONE"),
             "probe must cite completion\n{stderr}"
+        );
+    }
+
+    /// R22-005: fresh-image probe — persistent birth/pgrp
+    /// observation failures through unparsed-group cleanup
+    /// after a VALID publication. The pair reads fine (fds
+    /// open); then EMFILE is held persistently across the
+    /// setup-stat (must fail) and the retire (must take the
+    /// degraded reservation path — pin + reservation-trust
+    /// killpg + handle kill/reap + signal-0 group probe,
+    /// all outage-proof). The verdict is outage-proof too:
+    /// the leader's status (via handle) + group ESRCH (via
+    /// killpg-0 ⟹ the unknown sleeper is dead — it shares
+    /// the group). RED (old code: the pin re-read panics
+    /// BEFORE any signal — publisher + sleeper strand).
+    /// Every line past the exhaustion opens NO fd (a stray
+    /// /proc read would fail and false-RED — the EMFILE
+    /// witness guards the staging, not the verdict).
+    #[cfg(target_arch = "x86_64")]
+    fn outage_unparsed_retire_discharges_probe() {
+        use std::io::BufRead as _;
+        // 1. Valid publication (fds open).
+        let mut publisher = spawn_self_grouped_publisher("982", "wait", &[]);
+        let pubpid = publisher.id() as libc::pid_t;
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        // Parses (valid publication) — but the retire
+        // contract takes no stranger (unparsed path).
+        let (_stranger, _stick) = try_parse_published_pair(line.trim(), "outage publication")
+            .expect("pair must parse (valid publication)");
+        // 2. Persistent EMFILE (confine + fill; held to exit).
+        let _confined = confine_fd_table_for_exhaustion();
+        let mut held = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            held.push(file);
+        }
+        assert!(!held.is_empty(), "staging broken (nothing held)");
+        // 3. Anti-vacuity: the outage bites (direct witness).
+        assert!(
+            std::fs::File::open("/dev/null").is_err(),
+            "staging broken (outage not established)"
+        );
+        // 4. The setup-stat leg (mirrors the call-site setup
+        // closure's stat — must fail under the outage).
+        assert!(
+            proc_starttime(pubpid).is_err(),
+            "staging broken (setup stat readable — outage not biting?)"
+        );
+        // 5. THE retire (degraded path — must discharge).
+        let status = retire_unparsed_publisher_group(&mut publisher);
+        // 6. Independent outage-proof verdict: group ESRCH
+        // (killpg-0 ⟹ the unknown sleeper is dead).
+        let group_errno = {
+            // SAFETY: signal 0 probes only.
+            let probed = unsafe { libc::killpg(pubpid, 0) };
+            if probed == 0 {
+                0
+            } else {
+                std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .unwrap_or(-999)
+            }
+        };
+        assert_eq!(
+            group_errno,
+            libc::ESRCH,
+            "group must be ESRCH-empty (sleeper discharged)"
+        );
+        eprintln!("R22005-DISCHARGED status={status:?}");
+    }
+
+    /// R22-005 outage wrapper: the outage probe runs
+    /// fresh-image (it exhausts the fd table). Duration
+    /// 982 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn outage_unparsed_retire_discharges() {
+        if std::env::var("SCOPEBASE_R22005_OUTAGE").is_ok() {
+            outage_unparsed_retire_discharges_probe();
+            return;
+        }
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::audit::tests::outage_unparsed_retire_discharges")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R22005_OUTAGE", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("probe child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "probe must discharge under persistent outage\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22005-DEGRADED"),
+            "probe must take the degraded path\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22005-DISCHARGED"),
+            "probe must cite discharge\n{stderr}"
+        );
+    }
+
+    /// R22-006: run a fresh-image probe child with a bounded
+    /// wait (60s — a hung child is killed loud, never an
+    /// unbounded hang) and collect its output. PIPE RULE:
+    /// the probe must exit with NO live descendant holding
+    /// its pipes (a live grandchild with inherited stderr
+    /// wedges the output read past the child's own exit —
+    /// observed: 782s deadlock — while only the parent can
+    /// kill it); grandchildren that may survive get
+    /// file-redirected stdio, never inherited pipes.
+    #[cfg(target_arch = "x86_64")]
+    fn run_fresh_probe_bounded(env: &str, test: &str) -> std::process::Output {
+        let exe = std::env::current_exe().expect("own test binary");
+        let mut child = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(format!("fixture::linux::audit::tests::{test}"))
+            .arg("--nocapture")
+            .env(env, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("probe child spawns");
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            if child.try_wait().expect("child waitable").is_some() {
+                break;
+            }
+            if Instant::now() >= end {
+                let _ = child.kill();
+                panic!("probe child {test} hung past 60s (killed loud)");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.wait_with_output().expect("probe output readable")
+    }
+
+    /// R22-006: parse a `R22006-SLEEPER pid tick` line from
+    /// probe stdout (the publisher's transmitted pair,
+    /// forwarded for parent-side cleanup).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_r22006_sleeper(stdout: &str) -> Option<(libc::pid_t, u64)> {
+        stdout.lines().find_map(|line| {
+            let rest = line.strip_prefix("R22006-SLEEPER ")?;
+            let (pid, tick) = rest.split_once(' ')?;
+            Some((pid.parse().ok()?, tick.parse().ok()?))
+        })
+    }
+
+    /// R22-006: parse a `R22006-CODE n` line from probe
+    /// stdout (the publisher's exit code, observed by the
+    /// unfiltered waiter).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_r22006_code(stdout: &str) -> Option<i32> {
+        stdout.lines().find_map(|line| {
+            line.strip_prefix("R22006-CODE ")
+                .and_then(|code| code.parse().ok())
+        })
+    }
+
+    /// R22-006 kill-denied probe (fresh image): seccomp-deny
+    /// `kill` in SELF (inherited by the publisher across
+    /// spawn — the finding's realistic vector), run the
+    /// publisher into its wait-step fault (valid transmit,
+    /// then the guard engages with signaling denied), and
+    /// forward the pair + exit code + evidence path. The
+    /// publisher's stderr goes to a FILE (never a pipe —
+    /// the surviving sleeper holds the write end, so any
+    /// EOF read would wedge; a file has no EOF wait). Only
+    /// ONE pair line is read from its stdout (no EOF wait).
+    /// The SLEEPER line prints BEFORE the wait (cleanup
+    /// info survives even a publisher hang — the parent's
+    /// 60s bound kills the probe, then cleans from it).
+    #[cfg(target_arch = "x86_64")]
+    fn publisher_guard_denied_kill_reports_unresolved_probe() {
+        use super::super::seccomp::{install_deny_one, DenyAction};
+        use std::io::BufRead as _;
+        install_deny_one(libc::SYS_kill, DenyAction::Eperm).expect("deny-kill installs (staging)");
+        // Anti-vacuity: the filter bites (self-probe).
+        // SAFETY: signal 0 to self probes only.
+        let probed = unsafe { libc::kill(std::process::id() as libc::pid_t, 0) };
+        assert_eq!(probed, -1, "staging broken (kill not denied?)");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM),
+            "staging broken (wrong denial errno?)"
+        );
+        let errlog = std::env::temp_dir().join(format!(
+            "scopebase-r22006-kill-{}-{}.log",
+            std::process::id(),
+            errlog_nonce()
+        ));
+        println!("R22006-ERRLOG {}", errlog.display());
+        let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("984")
+            .arg("wait")
+            .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(errfile)
+            .spawn()
+            .expect("publisher spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
+            .expect("pair must parse (valid transmit)");
+        println!("R22006-SLEEPER {sleeper} {stick}");
+        // wait4 is ALLOWED (only kill is denied) — the exit
+        // code is observed, never self-reported.
+        let status = publisher.wait().expect("publisher waitable");
+        println!("R22006-CODE {}", status.code().unwrap_or(-999));
+        eprintln!("R22006-KILL-DONE");
+    }
+
+    /// R22-006: nonce for probe errlog names (two probes
+    /// never share a path even across reruns in one boot).
+    #[cfg(target_arch = "x86_64")]
+    fn errlog_nonce() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
+    /// R22-006: parse a `R22006-ERRLOG path` line from probe
+    /// stdout (the publisher's file-redirected stderr).
+    #[cfg(target_arch = "x86_64")]
+    fn parse_r22006_errlog(stdout: &str) -> Option<std::path::PathBuf> {
+        stdout.lines().find_map(|line| {
+            line.strip_prefix("R22006-ERRLOG ")
+                .map(std::path::PathBuf::from)
+        })
+    }
+
+    /// R22-006 kill-denied wrapper: the probe runs
+    /// fresh-image (seccomp is irreversible). Cleanup rides
+    /// the transmitted pair (tick-gated — the probe itself
+    /// cannot kill) and runs BEFORE the verdict asserts so
+    /// RED runs stay clean. Duration 984 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publisher_guard_denied_kill_reports_unresolved() {
+        if std::env::var("SCOPEBASE_R22006_DENY_KILL").is_ok() {
+            publisher_guard_denied_kill_reports_unresolved_probe();
+            return;
+        }
+        let out = run_fresh_probe_bounded(
+            "SCOPEBASE_R22006_DENY_KILL",
+            "publisher_guard_denied_kill_reports_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // Cleanup FIRST (RED-safe): the kill-denied sleeper
+        // survives — retire it via the transmitted birth.
+        let (sleeper, stick) =
+            parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
+        assert!(
+            kill_tick_gated(sleeper, stick),
+            "sleeper kill must land (staging?)"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match proc_starttime(sleeper) {
+                Ok(Some(now)) if now == stick => {}
+                Ok(_) => break,
+                Err(error) => panic!("sleeper death unreadable: {error}"),
+            }
+            assert!(Instant::now() < end, "sleeper must die by our kill");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Evidence: read the publisher's errlog, then delete
+        // it (content lands in every message below, so no
+        // failure needs the file itself — zero litter).
+        let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
+        let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+        let _ = std::fs::remove_file(&errlog);
+        assert!(out.status.success(), "probe must complete\n{stderr}");
+        assert!(
+            stderr.contains("R22006-KILL-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        assert_eq!(
+            parse_r22006_code(&stdout),
+            Some(3),
+            "kill-denied publisher must exit 3 (unresolved, not 2)\n{evidence}"
+        );
+        assert!(
+            evidence.contains("UNRESOLVED-CUSTODY"),
+            "must cite unresolved custody\n{evidence}"
+        );
+        assert!(
+            evidence.contains(&format!("sleeper={sleeper}")),
+            "must name the sleeper pid\n{evidence}"
+        );
+        assert!(
+            evidence.contains(&format!("kill_errno={}", libc::EPERM)),
+            "must cite the kill errno\n{evidence}"
+        );
+        assert!(
+            evidence.contains("reaped=false"),
+            "must report unreaped\n{evidence}"
+        );
+    }
+
+    /// R22-006 wait-denied probe (fresh image): the
+    /// publisher denies `wait4` to ITSELF via its
+    /// regression hook (a self-filter here would blind us
+    /// to its exit code — the unfiltered waiter must
+    /// observe it), then faults at its wait step (kill
+    /// lands, the reap is denied). The publisher's stderr
+    /// goes to a FILE (pipe-rule: no live descendant may
+    /// hold our pipes). The orphaned zombie drains via
+    /// init — polled tick-aware (init latency, never
+    /// assumed).
+    #[cfg(target_arch = "x86_64")]
+    fn publisher_guard_denied_wait_reports_unresolved_probe() {
+        use std::io::BufRead as _;
+        let errlog = std::env::temp_dir().join(format!(
+            "scopebase-r22006-wait-{}-{}.log",
+            std::process::id(),
+            errlog_nonce()
+        ));
+        println!("R22006-ERRLOG {}", errlog.display());
+        let errfile = std::fs::File::create(&errlog).expect("errlog creatable (staging)");
+        let mut publisher = std::process::Command::new(pair_publisher_bin())
+            .arg("985")
+            .arg("wait")
+            .env("SCOPEBASE_PUBLISHER_DENY_WAIT", "1")
+            .env("SCOPEBASE_PUBLISHER_FAULT_STEP", "wait")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(errfile)
+            .spawn()
+            .expect("publisher spawns");
+        let mut line = String::new();
+        std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"))
+            .read_line(&mut line)
+            .expect("pair readable");
+        let (sleeper, stick) = try_parse_published_pair(line.trim(), "denied publication")
+            .expect("pair must parse (valid transmit)");
+        println!("R22006-SLEEPER {sleeper} {stick}");
+        let status = publisher.wait().expect("publisher waitable");
+        println!("R22006-CODE {}", status.code().unwrap_or(-999));
+        // The zombie orphans to init at publisher exit —
+        // poll its drain (never assume instant).
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            match proc_starttime(sleeper) {
+                Ok(Some(now)) if now == stick => {}
+                Ok(_) => break,
+                Err(error) => panic!("sleeper drain unreadable: {error}"),
+            }
+            assert!(
+                Instant::now() < end,
+                "staging broken (orphaned zombie never drained?)"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        eprintln!("R22006-WAIT-DONE");
+    }
+
+    /// R22-006 wait-denied wrapper: the probe runs
+    /// fresh-image. No parent cleanup (init reaps the
+    /// orphaned zombie — the probe polls it); the install
+    /// failure shape fails as staging-broken, never as a
+    /// false pass. Duration 985 is unique to this test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn publisher_guard_denied_wait_reports_unresolved() {
+        if std::env::var("SCOPEBASE_R22006_DENY_WAIT").is_ok() {
+            publisher_guard_denied_wait_reports_unresolved_probe();
+            return;
+        }
+        let out = run_fresh_probe_bounded(
+            "SCOPEBASE_R22006_DENY_WAIT",
+            "publisher_guard_denied_wait_reports_unresolved",
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let errlog = parse_r22006_errlog(&stdout).expect("staging broken (no errlog line?)");
+        let evidence = std::fs::read_to_string(&errlog).expect("errlog readable (staging?)");
+        let _ = std::fs::remove_file(&errlog);
+        assert!(
+            !evidence.contains("deny-wait install failed"),
+            "staging broken (seccomp unavailable?)\n{evidence}"
+        );
+        assert!(out.status.success(), "probe must complete\n{stderr}");
+        assert!(
+            stderr.contains("R22006-WAIT-DONE"),
+            "probe must cite completion\n{stderr}"
+        );
+        let (sleeper, _stick) =
+            parse_r22006_sleeper(&stdout).expect("staging broken (no sleeper line?)");
+        assert_eq!(
+            parse_r22006_code(&stdout),
+            Some(3),
+            "wait-denied publisher must exit 3 (unresolved, not 2)\n{evidence}"
+        );
+        assert!(
+            evidence.contains("UNRESOLVED-CUSTODY"),
+            "must cite unresolved custody\n{evidence}"
+        );
+        assert!(
+            evidence.contains(&format!("sleeper={sleeper}")),
+            "must name the sleeper pid\n{evidence}"
+        );
+        assert!(
+            evidence.contains("kill_errno=none"),
+            "kill must have landed (none = sent)\n{evidence}"
+        );
+        assert!(
+            evidence.contains("reaped=false"),
+            "must report unreaped\n{evidence}"
         );
     }
 
