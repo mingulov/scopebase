@@ -45,6 +45,15 @@
 //!   staging: hold the publisher pre-spawn, prove the
 //!   wrapper retires it before any sleeper can appear).
 //!   Unset env = no-op.
+//! Hook: SCOPEBASE_PUBLISHER_PRE_EXEC_HOLD=path — when set
+//!   and the path is absent, the sleep child waits (bounded
+//!   by the pause timeout above) for the path to appear
+//!   AFTER fork, BEFORE exec (R23-010 reopened regression
+//!   staging: the child is forked but not sleep-shaped —
+//!   group-visible, scan-invisible — while held). The wait
+//!   runs in pre_exec (syscall-only: no allocator, no
+//!   locks); expiry fails the spawn loud with nothing
+//!   staged. Unset env = no-op.
 //! Hook: SCOPEBASE_PUBLISHER_GARBAGE_PAIR=1 — print a
 //!   malformed pair line instead of the transmit (R23-011
 //!   regression staging: the receiver's parse panics; the
@@ -282,6 +291,18 @@ fn main() {
     // pre-spawn like the others: nothing staged on typo...
     // a bool has no typo shape, so presence alone arms).
     let deny_wait = std::env::var("SCOPEBASE_PUBLISHER_DENY_WAIT").is_ok();
+    // R23-010 reopened regression hook (pre-exec hold —
+    // parsed + validated PRE-spawn like the others: the
+    // CString build fails loud here on NUL, never
+    // mid-pipeline; unset = no-op).
+    let pre_exec_hold: Option<std::ffi::CString> =
+        match std::env::var("SCOPEBASE_PUBLISHER_PRE_EXEC_HOLD") {
+            Ok(flag) => Some(
+                std::ffi::CString::new(flag)
+                    .unwrap_or_else(|_| fail("pre-exec hold path contains NUL")),
+            ),
+            Err(_) => None,
+        };
     // R23-010 regression hook (pre-spawn hold — unset =
     // no-op; expiry fails loud with nothing staged). Prints
     // R23010-HELD on hold entry (readiness proof — the
@@ -303,9 +324,70 @@ fn main() {
     // script's topology: the sleep holds our stdout pipe).
     // The "exit 0" tail deliberately never waits (the
     // sleep orphans to init — the tail's whole point).
+    use std::os::unix::process::CommandExt as _;
+    let mut sleep_cmd = std::process::Command::new("/bin/sleep");
+    sleep_cmd.arg(&secs);
+    if let Some(hold) = pre_exec_hold {
+        // R23-010 reopened: hold the child post-fork,
+        // pre-exec (the closure runs IN the child after
+        // fork, before exec — syscall-only: access +
+        // nanosleep + clock_gettime; no allocator, no
+        // locks; from_raw_os_error carries the errno
+        // without allocating — the message renders later,
+        // in the parent). Expiry fails the SPAWN loud
+        // (the child exits pre-exec — nothing staged).
+        // SAFETY: pre_exec on self pre-exec; the closure
+        // upholds the syscall-only contract above.
+        unsafe {
+            sleep_cmd.pre_exec(move || {
+                // SAFETY: clock_gettime with a valid
+                // out-pointer (monotonic — a wall jump
+                // must not stretch or shrink the bound).
+                let start_ms = {
+                    let mut now = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    };
+                    if libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    now.tv_sec as u64 * 1000 + now.tv_nsec as u64 / 1_000_000
+                };
+                loop {
+                    // SAFETY: access on our moved CString
+                    // (any error polls through — a
+                    // permanently-blocked path burns to the
+                    // loud timeout below, never passes).
+                    if libc::access(hold.as_ptr(), libc::F_OK) == 0 {
+                        return Ok(());
+                    }
+                    // SAFETY: clock_gettime with a valid
+                    // out-pointer.
+                    let mut now = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    };
+                    if libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let now_ms = now.tv_sec as u64 * 1000 + now.tv_nsec as u64 / 1_000_000;
+                    if now_ms.saturating_sub(start_ms) >= pause_timeout_ms {
+                        return Err(std::io::Error::from_raw_os_error(libc::ETIMEDOUT));
+                    }
+                    // SAFETY: nanosleep with a valid
+                    // request; remaining unsaved (a signal
+                    // shortens one nap, never the bound).
+                    let nap = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 1_000_000,
+                    };
+                    libc::nanosleep(&nap, std::ptr::null_mut());
+                }
+            });
+        }
+    }
     #[allow(clippy::zombie_processes)]
-    let sleep = std::process::Command::new("/bin/sleep")
-        .arg(&secs)
+    let sleep = sleep_cmd
         .spawn()
         .unwrap_or_else(|error| fail(&format!("sleep spawn failed: {error}")));
     let pid = sleep.id() as i32;

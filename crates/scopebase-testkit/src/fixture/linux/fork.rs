@@ -3318,6 +3318,12 @@ mod tests {
         use super::super::seccomp::{install_deny_one, DenyAction};
         let (m1, stub) = unsafe { fork_prestall_grandchild_jam_noretire("863") }
             .expect("staging broken (pair spawn)");
+        // R23-011: pair custody BEFORE the fallible stat
+        // reads below (a pre-custody unwind must retire
+        // m1 + the stub, never strand them). Disarmed
+        // once custody is published (the wrapper owns
+        // post-publication cleanup via the lines).
+        let mut _prestall_guard = MiddlemanPairGuard::armed(m1, stub);
         let tick1 = fork_starttime(m1)
             .expect("staging broken (m1 stat)")
             .expect("staging broken (m1 visible)");
@@ -3327,6 +3333,7 @@ mod tests {
         println!("R22016B-M1 {m1} {tick1}");
         println!("R22016B-STUB {stub} {tick_stub}");
         std::io::Write::flush(&mut std::io::stdout()).expect("custody lines flushed");
+        _prestall_guard.disarm();
         // Scan-blind pin: the stub is pre-exec (argv0 is
         // the inherited image, never `sleep`) — the scan
         // MUST see nothing. (If this ever fires, the stub
@@ -5048,6 +5055,13 @@ mod tests {
     /// assert (structural); this hammer is pressure, not
     /// proof.
     fn hammer_sibling_fd_op() -> std::io::Result<()> {
+        // R24-005 fault hook (unset = no-op): fail the
+        // hammer (parent-side failure with the probe
+        // GO-blocked — the unwind must retire the pair,
+        // never just the probe).
+        if std::env::var("SCOPEBASE_R24005_FAIL_HAMMER").is_ok() {
+            return Err(std::io::Error::other("R24005 fault: hammer fails"));
+        }
         let mut last = std::io::Error::other("unreached");
         for _ in 0..3 {
             let attempt = (|| -> std::io::Result<()> {
@@ -5114,6 +5128,12 @@ mod tests {
     /// hammer-loop panic retires it — no orphan transient;
     /// the child is additionally self-sufficient: it
     /// retires its own pair and exits alone in ms).
+    /// R24-005: the wrapper also arms parent-side pair
+    /// guards from the child's PAIR line (a parent-side
+    /// failure retires the pair, never just the probe)
+    /// and restages via SCOPEBASE_R22012_SLEEP_DUR
+    /// (fault legs drive it as a child under parallel
+    /// runs — never share 108).
     #[test]
     fn middleman_pair_guard_discharges_on_first_read_failure() {
         if std::env::var(R22012_FAULT_ENV).is_ok() {
@@ -5136,6 +5156,16 @@ mod tests {
             .spawn()
             .expect("fault child spawns");
         let mut _cguard = ForkChildGuard::new(child.id() as libc::pid_t);
+        // R24-006: forward the probe birth AT SPAWN (the
+        // deny leg's child dies pre-ENTER — before any
+        // other forward — the leg still names it).
+        {
+            let probe = child.id() as libc::pid_t;
+            let probe_tick = fork_starttime(probe)
+                .expect("staging broken (probe stat)")
+                .expect("staging broken (probe visible)");
+            eprintln!("R22012-PROBE child={probe} ctick={probe_tick}");
+        }
         let mut child_stdin = child.stdin.take().expect("fault child stdin piped");
         let mut child_stdout = child.stdout.take().expect("fault child stdout piped");
         let child_stderr = child.stderr.take().expect("fault child stderr piped");
@@ -5177,6 +5207,50 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 Err(error) => panic!("fault child stderr unreadable: {error}"),
+            }
+        }
+        // R24-005: pair custody from the child's PAIR
+        // line (transmitted pre-query — present whenever
+        // ENTER is). Arm parent-side guards BEFORE
+        // hammering (a hammer failure unwinds through
+        // them — the pair retires, never just the probe)
+        // + forward the custody (fault legs prove
+        // retirement from it).
+        let (m1, t1, m2, t2): (libc::pid_t, u64, libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22012-PAIR ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.strip_prefix("m1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("m2=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t2=")?.parse().ok()?,
+                ))
+            })
+            .unwrap_or_else(|| panic!("staging broken (child PAIR line missing)\n{stderr}"));
+        let mut _m1guard = LegChildGuard {
+            pid: m1,
+            tick: Some(t1),
+            disarmed: false,
+        };
+        let mut _m2guard = LegChildGuard {
+            pid: m2,
+            tick: Some(t2),
+            disarmed: false,
+        };
+        let cpid = child.id() as libc::pid_t;
+        let ctick = fork_starttime(cpid)
+            .expect("staging broken (child stat)")
+            .expect("staging broken (child visible)");
+        eprintln!("R22012-PAIR m1={m1} t1={t1} m2={m2} t2={t2} child={cpid} ctick={ctick}");
+        // R24-005 fault hook (unset = no-op): SIGSTOP the
+        // probe NOW (frozen mid-GO-wait — its self-retire
+        // can't race the parent's unwind).
+        if std::env::var("SCOPEBASE_R24005_STOP_AFTER_ENTER").is_ok() {
+            // SAFETY: SIGSTOP to our own staged child.
+            unsafe {
+                libc::kill(cpid, libc::SIGSTOP);
             }
         }
         // R23-020: the hammer lands INSIDE the window by
@@ -5228,9 +5302,23 @@ mod tests {
             stderr.contains("R22012-DISCHARGED"),
             "discharge marker\n{stderr}"
         );
+        // R24-005: the child proved pair retirement
+        // (DISCHARGED) — parent-side custody ends here
+        // (any earlier unwind retires through the guards
+        // above).
+        _m1guard.disarmed = true;
+        _m2guard.disarmed = true;
         assert!(
             !stderr.contains("R22012-GO-MISSING"),
             "GO must land (the child saw the hammered window)\n{stderr}"
+        );
+        // R23-020 (reopened): the child must READ the GO
+        // (overlap proof — the write landing in the pipe
+        // buffer proves nothing about the child; deleting
+        // the child's GO-read block fails here).
+        assert!(
+            stderr.contains("R22012-GO-READ"),
+            "GO must be READ (a written-but-unread GO never passes)\n{stderr}"
         );
         // R23-021: the confine lives in the CHILD (proven by
         // its own marker below) — the old parent-side exact
@@ -5255,6 +5343,253 @@ mod tests {
             holder, me,
             "fault must run in the child image (in-process reintroduction fails here)"
         );
+    }
+
+    /// R24-005: a parent-side failure with the probe
+    /// GO-blocked must retire the PAIR, never just the
+    /// probe. Drives the REAL wrapper as a child with
+    /// STOP_AFTER_ENTER (the probe freezes mid-GO-wait —
+    /// its self-retire can't race the unwind) +
+    /// FAIL_HAMMER (the parent's hammer panics): the
+    /// child MUST fail citing the hammer fault, and BOTH
+    /// staged pair births (forwarded custody) plus the
+    /// probe MUST be retired (gone-or-recycled —
+    /// birth-aware, never vacancy-only). RED (no
+    /// parent-side pair guards): the probe dies but m1
+    /// pauses and the sleeper survives. Duration 110
+    /// (restaged child — never the GREEN 108).
+    #[test]
+    fn r24005_rendezvous_failure_retires_pair_not_just_probe() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::fork::tests::middleman_pair_guard_discharges_on_first_read_failure")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R24005_STOP_AFTER_ENTER", "1")
+            .env("SCOPEBASE_R24005_FAIL_HAMMER", "1")
+            .env("SCOPEBASE_R22012_SLEEP_DUR", "110")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("wrapper child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // (a) The wrapper failed ON the hammer fault (the
+        // forced parent-side failure — staging proof; a
+        // staging flake fails here instead).
+        assert!(
+            !out.status.success(),
+            "wrapper must fail on the forced hammer fault\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R24005 fault: hammer fails"),
+            "wrapper must cite the hammer fault\n{stderr}"
+        );
+        // (b) Custody (the wrapper's forward — proves IT
+        // parsed the pair before failing).
+        let (m1, t1, m2, t2, cpid, ctick): (
+            libc::pid_t,
+            u64,
+            libc::pid_t,
+            u64,
+            libc::pid_t,
+            u64,
+        ) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22012-PAIR ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.strip_prefix("m1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("m2=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t2=")?.parse().ok()?,
+                    words.next()?.strip_prefix("child=")?.parse().ok()?,
+                    words.next()?.strip_prefix("ctick=")?.parse().ok()?,
+                ))
+            })
+            .unwrap_or_else(|| panic!("wrapper must forward pair custody\n{stderr}"));
+        // (c) BOTH pair births retired (birth-aware —
+        // never vacancy-only) + the probe retired (not
+        // merely the probe — the finding's bar).
+        // N4 (R1): independent expected-identity
+        // backstops (a mutant-RED StillOurs unwinds
+        // through them — the failure records, nothing
+        // strands; disarmed once all three prove
+        // retired — AFTER the judge below, never
+        // before).
+        let mut _b1 = LegChildGuard {
+            pid: m1,
+            tick: Some(t1),
+            disarmed: false,
+        };
+        let mut _b2 = LegChildGuard {
+            pid: m2,
+            tick: Some(t2),
+            disarmed: false,
+        };
+        let mut _b3 = LegChildGuard {
+            pid: cpid,
+            tick: Some(ctick),
+            disarmed: false,
+        };
+        // N5 (R1): bounded birth-aware SETTLE before
+        // each verdict read (a correctly-retired orphan
+        // may still be an unreaped zombie — a single
+        // read would misjudge it StillOurs; the bool
+        // only hurries — the proof below judges);
+        // verdicts COLLECTED under settle, then judged
+        // in order (first failure panics — the backstops
+        // above retire every survivor on unwind).
+        let mut verdicts = Vec::new();
+        for (pid, tick, who) in [
+            (m1, t1, "m1"),
+            (m2, t2, "sleeper"),
+            (cpid, ctick, "probe"),
+        ] {
+            let _ = birth_drained(pid, tick, std::time::Duration::from_secs(5));
+            verdicts.push((who, pid, tick, prove_reaped_gone_or_recycled(pid, tick)));
+        }
+        for (who, pid, tick, proof) in verdicts {
+            match proof {
+                ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+                ReapedProof::StillOurs => panic!(
+                    "R24005: {who} {pid}/{tick} survives the rendezvous failure \
+                     (unwind retired the probe only?)"
+                ),
+                ReapedProof::Unreadable(error) => panic!(
+                    "inconclusive ({who} unreadable: {error}) — refusing to certify"
+                ),
+            }
+        }
+        _b1.disarmed = true;
+        _b2.disarmed = true;
+        _b3.disarmed = true;
+    }
+
+    /// R24-006: a denied rlimit snapshot must retire
+    /// BOTH staged births before probe termination (the
+    /// snapshot sits between the outer disarm and the
+    /// inner arm — denying it used to panic with NEITHER
+    /// guard armed). Drives the REAL wrapper as a child
+    /// with DENY_RLIMIT (the probe denies prlimit64 —
+    /// the syscall glibc's getrlimit actually issues —
+    /// then snapshots): the child MUST die pre-ENTER
+    /// citing the deny, and BOTH pair births (custody
+    /// out pre-query) plus the probe MUST be retired
+    /// (gone-or-recycled — birth-aware). Nothing else
+    /// retires (init only reaps — reaping never kills) —
+    /// observed-retired proves the unwinding outer guard
+    /// killed pre-exit. RED (pre-fix handoff): the pair
+    /// strands (m1 pausing, sleeper live). Duration 111
+    /// (restaged child — never the GREEN 108).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r24006_denied_rlimit_snapshot_retires_pair_before_probe_exit() {
+        let exe = std::env::current_exe().expect("own test binary");
+        let out = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("fixture::linux::fork::tests::middleman_pair_guard_discharges_on_first_read_failure")
+            .arg("--nocapture")
+            .env("SCOPEBASE_R24006_DENY_RLIMIT", "1")
+            .env("SCOPEBASE_R22012_SLEEP_DUR", "111")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("wrapper child runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // (a) The probe died pre-ENTER on the DENY (the
+        // forced fault — staging proof; a staging flake
+        // fails here instead).
+        assert!(
+            !out.status.success(),
+            "wrapper must fail (probe dies pre-ENTER)\n{stderr}"
+        );
+        assert!(
+            stderr.contains("died before ENTER"),
+            "probe must die pre-ENTER\n{stderr}"
+        );
+        assert!(
+            stderr.contains("R22012-RLIMIT-DENIED"),
+            "deny must fire before the snapshot\n{stderr}"
+        );
+        // (b) Custody (the child's PAIR — out pre-query —
+        // rides the wrapper's panic stderr; the probe
+        // birth rides the wrapper's spawn forward).
+        let (m1, t1, m2, t2): (libc::pid_t, u64, libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22012-PAIR ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.strip_prefix("m1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t1=")?.parse().ok()?,
+                    words.next()?.strip_prefix("m2=")?.parse().ok()?,
+                    words.next()?.strip_prefix("t2=")?.parse().ok()?,
+                ))
+            })
+            .unwrap_or_else(|| panic!("child PAIR line missing\n{stderr}"));
+        let (cpid, ctick): (libc::pid_t, u64) = stderr
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("R22012-PROBE ")?;
+                let mut words = rest.split_whitespace();
+                Some((
+                    words.next()?.strip_prefix("child=")?.parse().ok()?,
+                    words.next()?.strip_prefix("ctick=")?.parse().ok()?,
+                ))
+            })
+            .unwrap_or_else(|| panic!("wrapper PROBE forward missing\n{stderr}"));
+        // (c) BOTH staged births retired pre-exit +
+        // the probe retired (birth-aware — never
+        // vacancy-only).
+        // N4 (R1): independent expected-identity
+        // backstops (see the 005 leg — a mutant-RED
+        // StillOurs unwinds through them; disarmed
+        // AFTER the judge, never before).
+        let mut _b1 = LegChildGuard {
+            pid: m1,
+            tick: Some(t1),
+            disarmed: false,
+        };
+        let mut _b2 = LegChildGuard {
+            pid: m2,
+            tick: Some(t2),
+            disarmed: false,
+        };
+        let mut _b3 = LegChildGuard {
+            pid: cpid,
+            tick: Some(ctick),
+            disarmed: false,
+        };
+        // N5 (R1): bounded birth-aware SETTLE before
+        // each verdict read (see the 005 leg);
+        // verdicts COLLECTED, then judged.
+        let mut verdicts = Vec::new();
+        for (pid, tick, who) in [
+            (m1, t1, "m1"),
+            (m2, t2, "sleeper"),
+            (cpid, ctick, "probe"),
+        ] {
+            let _ = birth_drained(pid, tick, std::time::Duration::from_secs(5));
+            verdicts.push((who, pid, tick, prove_reaped_gone_or_recycled(pid, tick)));
+        }
+        for (who, pid, tick, proof) in verdicts {
+            match proof {
+                ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+                ReapedProof::StillOurs => panic!(
+                    "R24006: {who} {pid}/{tick} survives the denied snapshot \
+                     (outer guard disarmed too early?)"
+                ),
+                ReapedProof::Unreadable(error) => panic!(
+                    "inconclusive ({who} unreadable: {error}) — refusing to certify"
+                ),
+            }
+        }
+        _b1.disarmed = true;
+        _b2.disarmed = true;
+        _b3.disarmed = true;
     }
 
     /// R22-012: env flag selecting the hold
@@ -5332,7 +5667,12 @@ mod tests {
     /// assert-fail exits nonzero (parent fails).
     fn r22012_fault_child_scenario() {
         eprintln!("R22012-HOLDER pid={}", std::process::id());
-        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep("108") }.expect("pair staged");
+        // R24-005: restageable duration (fault legs drive
+        // this scenario as a child under parallel runs —
+        // sharing 108 would collide; GREEN keeps the
+        // default).
+        let dur = std::env::var("SCOPEBASE_R22012_SLEEP_DUR").unwrap_or_else(|_| "108".to_string());
+        let (m1, m2) = unsafe { fork_pausing_grandchild_sleep(&dur) }.expect("pair staged");
         // R22-014 guard-handoff: the OUTER guard covers the
         // setup reads (they can fail — outage — before any
         // inner scope exists); disarmed once the INNER
@@ -5349,13 +5689,37 @@ mod tests {
         let t2 = fork_starttime(m2)
             .expect("grandchild stat readable")
             .expect("grandchild visible");
-        outer.disarm();
+        // R24-005: transmit pair custody BEFORE the fault
+        // window (the parent arms its own guards from this
+        // line — a parent-side failure then retires the
+        // pair, never just the probe). Printed pre-query
+        // (R24-006's deny panics before ENTER — custody
+        // must already be out).
+        eprintln!("R22012-PAIR m1={m1} t1={t1} m2={m2} t2={t2}");
+        // R24-006 fault hook (unset = no-op): deny the
+        // rlimit query's actual syscall (prlimit64 —
+        // glibc's getrlimit issues no getrlimit; verified
+        // by strace on glibc 2.43). A denied query panics
+        // below — covered by the STILL-ARMED outer (the
+        // deny leg proves both births retire).
+        if std::env::var("SCOPEBASE_R24006_DENY_RLIMIT").is_ok() {
+            use super::super::seccomp::{install_deny_one, DenyAction};
+            install_deny_one(libc::SYS_prlimit64, DenyAction::Eperm).expect("deny installs");
+            eprintln!("R22012-RLIMIT-DENIED");
+        }
         // R23-021: snapshot OUR rlimit (the confine lives in
         // THIS image — the restore is proven here, where no
-        // sibling can interleave).
+        // sibling can interleave). Covered by the OUTER
+        // guard (R24-006: the disarm moved inside the catch —
+        // a denied query used to panic with NEITHER guard
+        // armed).
         let rlim_before = nofile_soft_limit();
         let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _pair = MiddlemanPairGuard::armed(m1, m2);
+            // R24-006: handoff INSIDE (inner armed —
+            // overlap, never gap; the two ops are
+            // infallible — no panic path double-arms).
+            outer.disarm();
             let _hold = OutageHold::exhaust();
             // R23-020: rendezvous — the fault window is OPEN
             // (hold alive, pair guarded); the parent hammers
@@ -5372,6 +5736,15 @@ mod tests {
                 eprintln!("R22012-GO-MISSING");
                 panic!("staging broken (GO unreadable — parent died pre-hammer?)");
             }
+            // R23-020 (reopened): content-checked + READ
+            // marker — the parent asserts GO-READ present
+            // (overlap proof: a written-but-unread GO
+            // never passes — deleting this block escapes
+            // nothing). The content assert pins the byte
+            // (a read-deleting mutant keeps go==[0] and
+            // panics here instead of passing silently).
+            assert_eq!(go, [b'G'], "staging broken (GO byte wrong?)");
+            eprintln!("R22012-GO-READ");
             std::fs::read_to_string(format!("/proc/{m2}/stat")).expect("first read");
         }));
         assert!(failed.is_err(), "faulted first read must panic");

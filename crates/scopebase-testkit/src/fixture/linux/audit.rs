@@ -12495,6 +12495,121 @@ mod tests {
         kill_tick_gated_with(pid, tick, proc_starttime)
     }
 
+    /// R23-010 (reopened): tick-gated kill that covers a
+    /// leader's whole group. A child forked but stalled
+    /// pre-exec shares the publisher's group
+    /// (fork-inherited) while NO scan can name it (not
+    /// sleep-shaped yet; the publisher scan only matches a
+    /// fork that landed BEFORE the scan — fork-after-scan
+    /// is the hole). Signaling the leader's group retires
+    /// every fork-before-kill regardless of scan timing or
+    /// exec state.
+    ///
+    /// Contract mirrors [`kill_tick_gated`] (true =
+    /// signaled or nothing of ours; false = unreadable;
+    /// never panics; signal errors ignored — the caller's
+    /// death-await judges survival loud).
+    ///
+    /// Safety: killpg fires ONLY when (a) the tick gate
+    /// holds, (b) the birth is a group LEADER (pgrp ==
+    /// pid — its group is its own subtree: members join
+    /// solely by fork-inheritance, all fixture tasks),
+    /// AND (c) a pidfd opened BEFORE the reads still
+    /// addresses the SAME task at send time (a recycle
+    /// between the reads and the send answers ESRCH —
+    /// the group is never signaled on a recycled
+    /// number). Non-leaders (pre-exec children
+    /// themselves, ungrouped publishers) and unreadable
+    /// pgrps take the baseline single kill (strictly the
+    /// old shape). A pin that won't OPEN fails closed
+    /// (false — unproven; a live tick-pinned task with
+    /// an unopenable pidfd is EMFILE-grade trouble, never
+    /// a blind killpg). A pin that probes ESRCH means
+    /// OUR birth died under us (possibly recycled —
+    /// never signaled): true, nothing of ours (an
+    /// orphaned pre-exec child of a naturally-dying
+    /// leader is production-impossible — unhooked
+    /// children exec and fall to the sleep sweep).
+    #[cfg(target_arch = "x86_64")]
+    fn kill_tick_gated_group_aware(pid: libc::pid_t, tick: u64) -> bool {
+        // Pin the TASK pre-read (a pidfd tracks the task,
+        // not the number — it distinguishes our birth
+        // from a recycler at send time).
+        let pin = super::super::seccomp::pidfd_open_raw(pid);
+        // Tick gate (same tri-state as the single gate).
+        // N1 (R1): the pin PREDATES the gate (load-bearing
+        // — it must name the pre-gate holder), so every
+        // early exit closes it (a leaked pidfd per
+        // fallback sweep would contaminate fd-sensitive
+        // tests; manual closes match the file idiom).
+        match proc_starttime(pid) {
+            Ok(Some(now)) if now == tick => {}
+            Ok(_) => {
+                if let Ok(fd) = pin {
+                    // SAFETY: pin owned by this scope.
+                    unsafe { libc::close(fd) };
+                }
+                return true;
+            }
+            Err(_) => {
+                if let Ok(fd) = pin {
+                    // SAFETY: pin owned by this scope.
+                    unsafe { libc::close(fd) };
+                }
+                return false;
+            }
+        }
+        // Non-leader or unreadable pgrp: the baseline
+        // single kill (strictly the old shape).
+        if proc_pgrp(pid) != Some(pid) {
+            // SAFETY: tick-pinned staged task; errors ignored.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            if let Ok(fd) = pin {
+                // SAFETY: pin owned by this scope.
+                unsafe { libc::close(fd) };
+            }
+            return true;
+        }
+        // Leader: re-prove the pin AT SEND TIME, then
+        // signal the whole group.
+        let fd = match pin {
+            Ok(fd) => fd,
+            Err(_) => return false,
+        };
+        // SAFETY: pidfd_send_signal probe (sig 0) on our
+        // pinned task.
+        let probed = unsafe { libc::syscall(libc::SYS_pidfd_send_signal, fd, 0, 0, 0) };
+        // SAFETY: close of our owned pidfd (before the
+        // kill — fd hygiene).
+        unsafe {
+            libc::close(fd);
+        }
+        if probed != 0 {
+            let errno = std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(-999);
+            if errno == libc::ESRCH {
+                // Our task died under us (possibly
+                // recycled — the pin proves OUR birth
+                // gone): refuse the group signal.
+                return true;
+            }
+            // Non-ESRCH (still ours, or EPERM-masked):
+            // fire — errors ignored, the caller's
+            // death-await judges survival loud (same
+            // standard as the single gate).
+        }
+        // SAFETY: tick-pinned + pin-proven group leader;
+        // its group holds its own subtree only (members
+        // join by fork-inheritance); errors ignored.
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
+        true
+    }
+
     /// R15-003: tick-gated retirement for owned test children —
     /// the gated signal above plus a bounded reaping wait (a
     /// stale `Child::wait` after a raw reap would block on, or
@@ -13522,9 +13637,11 @@ mod tests {
     /// `try_wait` validation REAPS an already-dead leader
     /// (releasing the pin before the strike and stranding
     /// a live sleeper the probe-only tail can never kill),
-    /// and no non-reaping ownership check exists under the
-    /// outage (WNOWAIT EINVALs — unavailable) — so the
-    /// strike precedes all validation.
+    /// and the degraded path performs no pre-strike
+    /// validation (waitid(WNOWAIT) observes without
+    /// reaping but is not consulted here — WNOWAIT
+    /// residual below) — so the strike precedes all
+    /// validation.
     #[cfg(target_arch = "x86_64")]
     #[derive(Debug)]
     enum DegradedPin {
@@ -13562,10 +13679,20 @@ mod tests {
     /// re-verification the outage took away. Soundness
     /// rests on the audited reservation, not on a read.
     /// R23-004 residual: the strike precedes handle
-    /// validation (no non-reaping check exists under the
-    /// outage), so a handle stolen behind our back AND a
+    /// validation (none is performed pre-strike), so a
+    /// handle stolen behind our back AND a
     /// dead-and-reaped group AND a foreign group recycled
     /// onto our pgid — all three — would take the strike.
+    /// WNOWAIT residual: the original rationale claimed
+    /// WNOWAIT EINVALs and is unavailable — that claim was
+    /// wrong (waitid(WEXITED|WNOHANG|WNOWAIT) is used
+    /// in-tree, target.rs — it observes without reaping).
+    /// A pre-strike waitid could validate the handle pin
+    /// (ECHILD ⟺ stolen-behind-our-back ⟹ refuse the
+    /// strike loud, instead of striking-then-detecting).
+    /// Not implemented: the degraded path stands on the
+    /// audited reservation + post-strike validation (the
+    /// R23-004 headline is discharged as-is).
     /// The steal alone is safe (a live sleeper holds OUR
     /// group — the strike lands correctly — and the reap
     /// below still reports it loud post-discharge); only
@@ -13599,9 +13726,11 @@ mod tests {
         // holds number+pgid) is held NOW; any pre-strike
         // try_wait would reap a zombie leader and release
         // the reservation before the strike (the strand this
-        // fixes), and no non-reaping ownership check exists
-        // here (WNOWAIT EINVALs — unavailable; /proc and
-        // pidfd need the fds the outage took). A handle
+        // fixes), and no non-reaping ownership check is
+        // consulted here (waitid WNOWAIT observes without
+        // reaping but the degraded path never calls it —
+        // residual, see the function doc; /proc and pidfd
+        // need the fds the outage took). A handle
         // stolen behind our back is still detected — by the
         // reap below (ECHILD ⟹ the existing stolen arm,
         // loud post-discharge) — never silently absorbed.
@@ -16503,8 +16632,25 @@ mod tests {
         );
         let pubpid = publisher.id() as libc::pid_t;
         let stdout = publisher.stdout.take().expect("publisher stdout");
+        // Fix-1 (R1): the stale handle is DROPPED (a
+        // reintroduced `publisher.wait()` tail must not
+        // compile — it would steal a recycled
+        // replacement's status; re-adding one requires
+        // deleting this drop first).
+        drop(publisher);
+        // N2 (R1): the birth read runs INSIDE the catch,
+        // under the guard (a failing first observation
+        // unwinds through the guard — never strands; the
+        // tick escapes via the captured slot; the
+        // drop-at-catch-end discipline is unchanged).
+        let mut pubtick_slot: Option<u64> = None;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut _tguard = PublisherTreeGuard::new(pubpid);
+            pubtick_slot = Some(
+                proc_starttime(pubpid)
+                    .expect("staging broken (publisher stat)")
+                    .expect("staging broken (publisher visible)"),
+            );
             let mut line = String::new();
             std::io::BufReader::new(stdout)
                 .read_line(&mut line)
@@ -16515,16 +16661,21 @@ mod tests {
             outcome.is_err(),
             "R23011-parse: garbage pair must panic the parse"
         );
-        // Publisher: our child — reap whatever the drop left
-        // (kill-only or already-reaped both converge) and
-        // prove the number gone.
-        let _ = publisher.wait();
+        let pubtick = pubtick_slot.expect("tick observed under guard");
+        // Publisher: our child — the tree-guard drop above
+        // is the SOLE reaper (a stale tail wait would steal
+        // a recycled replacement's status); prove the
+        // birth reaped (gone-or-recycled — R23-019: a
+        // different-birth occupant proves retirement,
+        // never a cleanup defect).
         let end = Instant::now() + Duration::from_secs(5);
         loop {
-            match proc_starttime(pubpid) {
-                Ok(None) => break,
-                Ok(Some(_)) => {}
-                Err(error) => panic!("R23011-parse: publisher drain unreadable: {error}"),
+            match prove_reaped_gone_or_recycled_audit(pubpid, pubtick) {
+                ReapedProofAudit::Gone | ReapedProofAudit::Recycled(_) => break,
+                ReapedProofAudit::StillOurs => {}
+                ReapedProofAudit::Unreadable(error) => {
+                    panic!("R23011-parse: publisher drain unreadable: {error}")
+                }
             }
             assert!(
                 Instant::now() < end,
@@ -16555,8 +16706,20 @@ mod tests {
         );
         let pubpid = publisher.id() as libc::pid_t;
         let stdout = publisher.stdout.take().expect("publisher stdout");
+        // Fix-1 (R1): the stale handle is DROPPED (see
+        // the GOOD arm — a reintroduced tail must not
+        // compile).
+        drop(publisher);
+        // N2 (R1): the birth read runs INSIDE the catch,
+        // under the guard (see the GOOD arm).
+        let mut pubtick_slot: Option<u64> = None;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut _tguard = FixtureGuard::new(pubpid);
+            pubtick_slot = Some(
+                proc_starttime(pubpid)
+                    .expect("staging broken (publisher stat)")
+                    .expect("staging broken (publisher visible)"),
+            );
             let mut line = String::new();
             std::io::BufReader::new(stdout)
                 .read_line(&mut line)
@@ -16567,13 +16730,20 @@ mod tests {
             outcome.is_err(),
             "R23011-parse-bad: garbage pair must panic the parse"
         );
-        let _ = publisher.wait();
+        let pubtick = pubtick_slot.expect("tick observed under guard");
+        // The bare-guard drop above is the SOLE reaper (a
+        // stale tail wait would steal a recycled
+        // replacement's status); prove the birth reaped
+        // (gone-or-recycled — R23-019: a different-birth
+        // occupant proves retirement, never a defect).
         let end = Instant::now() + Duration::from_secs(5);
         loop {
-            match proc_starttime(pubpid) {
-                Ok(None) => break,
-                Ok(Some(_)) => {}
-                Err(error) => panic!("R23011-parse-bad: publisher drain unreadable: {error}"),
+            match prove_reaped_gone_or_recycled_audit(pubpid, pubtick) {
+                ReapedProofAudit::Gone | ReapedProofAudit::Recycled(_) => break,
+                ReapedProofAudit::StillOurs => {}
+                ReapedProofAudit::Unreadable(error) => {
+                    panic!("R23011-parse-bad: publisher drain unreadable: {error}")
+                }
             }
             assert!(
                 Instant::now() < end,
@@ -16598,6 +16768,118 @@ mod tests {
             1,
             "R23011-parse-bad: sweep must drain exactly the stranded stranger"
         );
+    }
+
+    /// R24-003: a parse-panic tail must not wait through
+    /// the stale publisher handle — after the guard drop
+    /// retires and reaps the publisher, a different-birth
+    /// owned replacement planted on the freed number keeps
+    /// its status with its owner, and the tail completes
+    /// promptly (no blocking wait on a possibly-recycled
+    /// number). Two phases: (A) the plant is settled to an
+    /// unreaped zombie and the tail runs — the owner must
+    /// still retain the status; (B) a live plant is
+    /// stationed and the tail runs bounded — it must
+    /// complete within 2 s (a stale blocking wait never
+    /// returns on a live replacement). RED (stale
+    /// `publisher.wait()` tails): phase A sees ECHILD
+    /// (status stolen), phase B times out. GREEN (no tail —
+    /// the guard drop is the sole reaper): owner retains,
+    /// phases instant. Duration 811 is unique to this
+    /// test; the plant dur comes from the shared steered
+    /// standin (pid-addressed, never dur-scanned).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r24003_parse_panic_tail_spares_recycled_replacement() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let mut publisher = spawn_self_grouped_publisher(
+            "811",
+            "wait",
+            &[("SCOPEBASE_PUBLISHER_GARBAGE_PAIR", "1")],
+        );
+        let pubpid = publisher.id() as libc::pid_t;
+        let stdout = publisher.stdout.take().expect("publisher stdout");
+        // Fix-1 (R1): the stale handle is DROPPED (a
+        // reintroduced `publisher.wait()` tail must not
+        // compile — it would steal the planted
+        // replacement's status; re-adding one requires
+        // deleting this drop first).
+        drop(publisher);
+        // N2 (R1): the birth read runs INSIDE the catch,
+        // under the guard (a failing first observation
+        // unwinds through the guard — never strands; the
+        // tick escapes via the captured slot).
+        let mut pubtick_slot: Option<u64> = None;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut _tguard = PublisherTreeGuard::new(pubpid);
+            pubtick_slot = Some(
+                proc_starttime(pubpid)
+                    .expect("staging broken (publisher stat)")
+                    .expect("staging broken (publisher visible)"),
+            );
+            let mut line = String::new();
+            std::io::BufReader::new(stdout)
+                .read_line(&mut line)
+                .expect("pair readable");
+            let (_stranger, _stick) = parse_published_pair(line.trim(), "garbage publication");
+        }));
+        assert!(
+            outcome.is_err(),
+            "R24003: garbage pair must panic the parse"
+        );
+        let pubtick = pubtick_slot.expect("tick observed under guard");
+        // The drop retired + reaped our birth (a same-tick
+        // zombie here is a broken guard, not a skip).
+        assert_ne!(
+            proc_starttime(pubpid),
+            Ok(Some(pubtick)),
+            "R24003: guard drop must reap the publisher"
+        );
+        let _serial = match steer_hold() {
+            Some(guard) => guard,
+            None => return,
+        };
+        // Phase A (retention): zombie plant + tail — the
+        // owner must retain the status.
+        let (mut plant, mut plant_guard) = match plant_replacement(pubpid, pubtick) {
+            Some(placed) => placed,
+            None => return,
+        };
+        assert!(
+            settle_replacement_zombie(&mut plant, pubpid),
+            "staging broken (plant must zombify)"
+        );
+        // No tail: the guard drop is the sole reaper (a
+        // stale `publisher.wait()` here would consume the
+        // replacement's status).
+        match plant.try_wait() {
+            Ok(_) => {}
+            Err(error) => panic!("R24003: tail stole the replacement status: {error:?}"),
+        }
+        plant_guard.disarm();
+        // Phase B (promptness): live plant + owner ops —
+        // must complete within 2 s. (No tail: the guard
+        // drop is the sole reaper — nothing blocks on the
+        // live replacement.)
+        let (mut live, mut live_guard) = match plant_replacement(pubpid, pubtick) {
+            Some(placed) => placed,
+            None => return,
+        };
+        let start = Instant::now();
+        // The live plant is undisturbed (still ours, still
+        // live — nobody waited or killed it).
+        assert!(
+            matches!(live.try_wait(), Ok(None)),
+            "R24003: live replacement must stay live-owned"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "R24003: owner phase must complete promptly"
+        );
+        let _ = live.kill();
+        let _ = live.wait();
+        live_guard.disarm();
     }
 
     /// R23-011 site-4 read leg (audit): mirror of the
@@ -16807,14 +17089,15 @@ mod tests {
         {
             let mut publisher = spawn_self_grouped_publisher("963", "wait", &[]);
             let pubpid = publisher.id() as libc::pid_t;
-            let pubtick = proc_starttime(pubpid)
-                .expect("publisher stat readable")
-                .expect("publisher visible");
-            // R23-022: the tree guard covers the staging
-            // below (a staging panic retires the pair —
+            // R23-022: the tree guard covers the birth
+            // read AND the staging below (R23-011: a
+            // pre-observation panic retires the pair —
             // never strands; disarmed once the retire
             // below reaps).
             let mut _tguard = PublisherTreeGuard::new(pubpid);
+            let pubtick = proc_starttime(pubpid)
+                .expect("publisher stat readable")
+                .expect("publisher visible");
             // R23-022: await EXACTLY ONE live sleep child —
             // the publisher births its sleeper async, and
             // striking pre-spawn retires an empty group
@@ -16871,6 +17154,14 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(1));
                 }
             };
+            // R24-004: independent custody for the
+            // retained sleeper (a strike-removing mutant
+            // orphans it — the drain panics, and the tree
+            // guard cannot recover an orphan from the
+            // dead publisher's children file; this guard
+            // retires it on unwind — the failure still
+            // fails, but nothing strands).
+            let mut _sguard = FixtureGuard::new_expected(spid, stick);
             let start = Instant::now();
             let status = retire_hung_publisher_group(&mut publisher, pubpid, pubtick);
             _tguard.disarm();
@@ -16890,6 +17181,7 @@ mod tests {
                 await_proc_gone_reaping(spid, stick, Duration::from_secs(5)),
                 "R22002-hung: proven sleeper {spid} must drain (strike missed?)"
             );
+            _sguard.disarm();
         }
         // Exited cell: zombie sh-leader (pin held) + live
         // sleep orphaned to init (stranded, not ours).
@@ -26430,7 +26722,10 @@ mod tests {
         // lands a jiffy past births staged ms earlier and
         // would exclude our own fixture).
         for (pid, tick) in r22006_scan_owned_publishers_with_dur(dur, anchor) {
-            let _ = kill_tick_gated(pid, tick);
+            // R23-010 (reopened): group-aware (a forked
+            // pre-exec child shares the group, never the
+            // sleep shape — the single kill strands it).
+            let _ = kill_tick_gated_group_aware(pid, tick);
             r22006_await_birth_gone(pid, tick, "publisher");
             eprintln!("R12 fallback: retired orphaned publisher {pid} (tick {tick})");
         }
@@ -26801,6 +27096,7 @@ mod tests {
                 .stderr(std::process::Stdio::piped())
                 .output()
                 .expect("probe child runs");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
             // Observe BEFORE cleanup (R15-001 order).
             let after = std::fs::symlink_metadata(&link).ok();
@@ -26810,6 +27106,24 @@ mod tests {
             // lets us unlink it).
             let _ = std::fs::remove_file(&link);
             let _ = std::fs::remove_dir_all(&dir);
+            // R24-004: consume + retire a TRANSMITTED
+            // sleeper BEFORE judging (a following-open
+            // mutant lets the probe stage one — the
+            // refusal assert below still fails, but the
+            // survivor must not strand; GREEN refuses
+            // pre-stage and transmits nothing). The drain
+            // PROVES death (never fire-and-forget).
+            if let Some((sleeper, stick)) = parse_r22006_sleeper(&stdout) {
+                let _ = kill_tick_gated(sleeper, stick);
+                assert!(
+                    await_proc_gone_reaping(
+                        sleeper,
+                        stick,
+                        std::time::Duration::from_secs(5)
+                    ),
+                    "{tag}: transmitted sleeper must retire (following-open mutant staged one?)"
+                );
+            }
             // Verdicts: refusal cited, plant + victim intact.
             assert!(
                 !out.status.success(),
@@ -26842,12 +27156,14 @@ mod tests {
     /// (`read_r22006_evidence`, synthetic probe stdout —
     /// same line format the probes print): a regular log
     /// reads content; a writerless FIFO swapped in refuses
-    /// promptly (the old blocking open hung forever); a
-    /// symlink refuses ELOOP (never followed); a missing
-    /// path refuses. Each refusal bounded (5s — a wedge
-    /// would hang past it; normal is ms). No privilege
-    /// (own-uid plants — the refusal arms don't
-    /// discriminate ownership) and no fixture durations.
+    /// promptly (reader thread + 5 s bound + writer-unblock —
+    /// a blocking-open mutant FAILS the promptness assert
+    /// instead of wedging the suite); a symlink refuses
+    /// ELOOP (never followed); a missing path refuses.
+    /// Each refusal bounded (5s — a wedge fails past it;
+    /// normal is ms). No privilege (own-uid plants — the
+    /// refusal arms don't discriminate ownership) and no
+    /// fixture durations.
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r23015_errlog_consumption_refuses_swapped_plants_promptly() {
@@ -26874,10 +27190,86 @@ mod tests {
             0,
             "fifo planted"
         );
+        // R23-015 (reopened): the read runs BOUNDED —
+        // a blocking-open mutant hangs inside open, and
+        // the synchronous shape wedges the SUITE instead
+        // of failing. Reader thread + 5 s channel bound;
+        // on expiry a WRITER open unblocks the stuck
+        // reader and the leg FAILS the promptness assert
+        // (terminates with the intended failure, never
+        // hangs).
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stdout2 = stdout.clone();
+        let reader = std::thread::spawn(move || {
+            let refused = read_r22006_evidence(&stdout2);
+            let _ = tx.send(refused);
+        });
         let start = Instant::now();
-        let refused = read_r22006_evidence(&stdout);
+        let first = rx.recv_timeout(Duration::from_secs(5));
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_secs(5), "FIFO refusal must be prompt");
+        let refused = match first {
+            Ok(refused) => {
+                let _ = reader.join();
+                assert!(elapsed < Duration::from_secs(5), "FIFO refusal must be prompt");
+                refused
+            }
+            Err(_) => {
+                // No refusal in 5 s — the reader is stuck
+                // in a blocking open (O_NONBLOCK mutant)
+                // or missed the bound by µs. Unblock by
+                // OFFER LOOP (Fix-5 R1: a single-shot
+                // writer races a reader that hasn't
+                // reached open yet — ENXIO, then the
+                // reader blocks forever under an
+                // unbounded join): offer a writer, poll
+                // the channel briefly, repeat — a reader
+                // parked in open pairs within one
+                // iteration, reports, and joins promptly.
+                // O_WRONLY|O_NONBLOCK never blocks
+                // (pairs while a reader waits, ENXIO
+                // otherwise). THEN fail (the bound
+                // already blew — a just-missed result is
+                // forensics, never a pass).
+                let offer_end = Instant::now() + Duration::from_secs(5);
+                let late = loop {
+                    {
+                        use std::os::unix::fs::OpenOptionsExt as _;
+                        let _writer = std::fs::OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NONBLOCK)
+                            .open(&log);
+                        // The writer is HELD for the poll
+                        // below (dropping it before the
+                        // reader pairs would ENXIO without
+                        // ever unblocking).
+                        if let Ok(refused) = rx.recv_timeout(Duration::from_millis(100)) {
+                            break Some(refused);
+                        }
+                    }
+                    if Instant::now() >= offer_end {
+                        break None;
+                    }
+                };
+                match late {
+                    Some(_) => {
+                        // Reported ⟹ the send was the
+                        // thread's last act ⟹ prompt join.
+                        let _ = reader.join();
+                    }
+                    None => {
+                        // Never reported (not a stuck
+                        // open — something else wedged
+                        // the reader): LEAK the thread
+                        // (never an unbounded join —
+                        // process exit reaps it) and fail
+                        // loud below.
+                    }
+                }
+                panic!(
+                    "FIFO refusal must be prompt (no refusal in {elapsed:?} — blocking open?; late: {late:?})"
+                );
+            }
+        };
         match refused {
             Err(cause) => assert!(
                 cause.contains("not a regular file"),
@@ -27947,6 +28339,185 @@ mod tests {
         );
     }
 
+    /// R23-010 (reopened): the publisher retires FIRST —
+    /// but its child is ALREADY FORKED, stalled pre-exec
+    /// (group-joined, scan-invisible — not sleep-shaped,
+    /// and forked AFTER the selection scan). Select the
+    /// publisher SINGULAR (child unborn), release the
+    /// pre-spawn hold, await the held child
+    /// (publisher-shaped — the selection scan now sees
+    /// two), kill the SELECTED birth via the REAL
+    /// group-aware helper + the REAL death-await (the
+    /// fallback's publisher step, verbatim), scan sleep
+    /// argv TWICE (both must read empty — the held child
+    /// is invisible to every sleep scan), then release
+    /// the pre-exec hold: NOTHING may exec (the group
+    /// kill retired the held child with its leader). RED
+    /// (single-pid kill: the held child survives, execs
+    /// late — the pre-release drain AND the late-birth
+    /// poll both fail). Duration 902 is unique to this
+    /// test.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn r22006_fallback_retires_preexec_child_with_publisher() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // Two holds (absent = held).
+        let tag = format!(
+            "scopebase-r23010-preexec-{}-{}.flag",
+            std::process::id(),
+            errlog_nonce()
+        );
+        let spawn_flag = std::env::temp_dir().join(format!("{tag}-spawn"));
+        let exec_flag = std::env::temp_dir().join(format!("{tag}-exec"));
+        let _ = std::fs::remove_file(&spawn_flag);
+        let _ = std::fs::remove_file(&exec_flag);
+        // Anchor pre-staging.
+        let anchor = boot_ticks_now().expect("staging broken (boot clock)");
+        // Grouped publisher (spawn-side pre_exec — the
+        // group kill's precondition; its sleep child
+        // inherits the group at fork).
+        let mut publisher = spawn_self_grouped_publisher(
+            "902",
+            "wait",
+            &[
+                (
+                    "SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD",
+                    spawn_flag.to_str().expect("spawn flag utf8"),
+                ),
+                (
+                    "SCOPEBASE_PUBLISHER_PRE_EXEC_HOLD",
+                    exec_flag.to_str().expect("exec flag utf8"),
+                ),
+            ],
+        );
+        let ppid = publisher.id() as libc::pid_t;
+        // Group precondition (staging — killpg's safety
+        // rests on leadership).
+        assert_eq!(
+            proc_pgrp(ppid),
+            Some(ppid),
+            "staging broken (publisher must self-group)"
+        );
+        let mut _pguard = KillOnlyGuard::new(ppid);
+        std::thread::spawn(move || {
+            let mut status = 0;
+            // SAFETY: waitpid on the known own child; errors ignored.
+            unsafe {
+                libc::waitpid(ppid, &mut status, 0);
+            }
+        });
+        let ptick = proc_starttime(ppid)
+            .expect("staging broken (publisher stat)")
+            .expect("staging broken (publisher visible)");
+        // 1. Hold proof (HELD line; the reader stays alive
+        // for the whole leg — same EPIPE discipline as the
+        // sibling leg) + singular selection (the hole's
+        // precondition: the publisher scan names ONE
+        // birth — the child is unborn) + no sleep born.
+        let mut line = String::new();
+        let mut _held_stdout =
+            std::io::BufReader::new(publisher.stdout.take().expect("publisher stdout"));
+        _held_stdout
+            .read_line(&mut line)
+            .expect("held line readable");
+        assert!(
+            line.contains("R23010-HELD"),
+            "staging broken (no hold proof: {line:?})"
+        );
+        assert_eq!(
+            r22006_scan_owned_publishers_with_dur("902", anchor),
+            vec![(ppid, ptick)],
+            "staging broken (publisher selection must be singular pre-fork)"
+        );
+        assert!(
+            r22006_scan_sleep_with_dur("902").is_empty(),
+            "staging broken (sleeper pre-born?)"
+        );
+        // 2. Release the pre-spawn hold; await the HELD
+        // child (publisher-shaped — the selection scan now
+        // sees TWO; the child is forked, pre-exec,
+        // group-joined, sleep-invisible).
+        std::fs::write(&spawn_flag, "go").expect("staging broken (spawn flag write)");
+        let (cpid, ctick) = {
+            let end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let found = r22006_scan_owned_publishers_with_dur("902", anchor);
+                if found.len() == 2 {
+                    if let Some(pair) = found.iter().find(|(pid, _)| *pid != ppid).copied() {
+                        break pair;
+                    }
+                }
+                assert!(
+                    Instant::now() < end,
+                    "staging broken (held child never appeared)"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        // The held child shares the group (killpg's reach)
+        // but not the sleep shape (the scans' blindness).
+        assert_eq!(
+            proc_pgrp(cpid),
+            Some(ppid),
+            "staging broken (held child must share the group)"
+        );
+        assert!(
+            r22006_scan_sleep_with_dur("902").is_empty(),
+            "staging broken (held child sleep-visible?!)"
+        );
+        // 3. Kill the SELECTED birth (the REAL group-aware
+        // helper + the REAL death-await — the fallback's
+        // publisher step, verbatim).
+        let _ = kill_tick_gated_group_aware(ppid, ptick);
+        r22006_await_birth_gone(ppid, ptick, "publisher");
+        // 4. Scan sleep argv TWICE (both must read empty —
+        // the schedule's core: a pre-exec-held child is
+        // invisible to every sleep scan).
+        assert!(
+            r22006_scan_owned_sleep_with_dur("902", anchor).is_empty(),
+            "sleep scan 1 must read empty over the held child"
+        );
+        assert!(
+            r22006_scan_owned_sleep_with_dur("902", anchor).is_empty(),
+            "sleep scan 2 must read empty over the held child"
+        );
+        // 5. Pre-release drain proof (COLLECT, never assert
+        // yet — custody before verdicts): GREEN drains
+        // here (killpg'd, init reaps); RED times out
+        // (alive-held — the 5 s burn is RED-only).
+        let child_drained = await_proc_gone_reaping(cpid, ctick, Duration::from_secs(5));
+        // 6. Release the pre-exec hold + poll 1 s for a
+        // late birth (collect, never assert yet).
+        std::fs::write(&exec_flag, "go").expect("staging broken (exec flag write)");
+        let end = Instant::now() + Duration::from_secs(1);
+        let mut appeared = false;
+        while Instant::now() < end {
+            if !r22006_scan_sleep_with_dur("902").is_empty() {
+                appeared = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // 7. Custody BEFORE verdicts (RED-safe): retire
+        // the publisher + the held birth (RED-path: the
+        // survivor) + sweep any late sleeper, then judge.
+        let _ = kill_tick_gated(ppid, ptick);
+        let _ = kill_tick_gated(cpid, ctick);
+        let _ = r22006_fallback_sweep_sleep("902", anchor);
+        let _ = std::fs::remove_file(&spawn_flag);
+        let _ = std::fs::remove_file(&exec_flag);
+        _pguard.disarm();
+        assert!(
+            child_drained,
+            "held child {cpid}/{ctick} must drain pre-release (the group kill missed it)"
+        );
+        assert!(
+            !appeared,
+            "late sleeper appeared — the group-aware kill did not retire the pre-exec child"
+        );
+    }
+
     /// R22-014/R12 fault leg (wait shape): same as the
     /// kill leg, except the swept count races the
     /// publisher's own guard kill (0 or 1 — either is
@@ -28166,6 +28737,70 @@ mod tests {
         );
     }
 
+    /// R23-012: kill+reap P, disarm the helper guard,
+    /// steer a retake onto P's number. THE disarm
+    /// (helper-return discipline — a same-tick S100
+    /// retake matches the pin; an armed drop murders it,
+    /// then trips the replacement-pin assert). Shared by
+    /// the denied-reused probe's helper thread and the
+    /// same-tick hammer — deleting the disarm REDs the
+    /// hammer (the regression exercises THIS helper,
+    /// never a local replica). Returns the DISARMED guard
+    /// (the caller's drop stays silent) + the retake
+    /// triple on a number hit (steer/number misses retire
+    /// in-helper and return None). Panics are
+    /// staging-loud (verbatim texts from the inlined
+    /// shape). CALLER HOLDS the ns_last_pid flock (the
+    /// steer is the unlocked variant — POSIX locks are
+    /// per-process).
+    #[cfg(target_arch = "x86_64")]
+    fn kill_reap_disarm_retake(
+        pid: libc::pid_t,
+        tick: u64,
+        mut hpguard: FixtureGuard,
+        stray: &mut std::process::Child,
+        dur: &str,
+    ) -> (
+        FixtureGuard,
+        Option<(std::process::Child, FixtureGuard, u64)>,
+    ) {
+        // Death-then-recycle, adjacent on this thread
+        // (the µs steer→spawn placement window).
+        assert!(kill_tick_gated(pid, tick), "stray signaled");
+        let _ = stray.wait();
+        assert_eq!(proc_starttime(pid), Ok(None), "number must free");
+        // P reaped — disarm BEFORE the retake (a
+        // same-tick S100 retake would otherwise match
+        // the pin and be murdered by the drop at
+        // helper return).
+        hpguard.disarm();
+        if !audit_steer_next_pid_unlocked(pid) {
+            return (hpguard, None);
+        }
+        let mut retake = std::process::Command::new("/bin/sleep")
+            .arg(dur)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("replacement spawns");
+        let mut hrguard = FixtureGuard::new(retake.id() as libc::pid_t);
+        if retake.id() as libc::pid_t != pid {
+            let _ = retake.kill();
+            let _ = retake.wait();
+            // N3 (R1): disarm the retired miss (kill+wait
+            // reaped OUR birth — the number is freed, so
+            // an armed drop could only murder a same-tick
+            // replacement that lands before it runs).
+            hrguard.disarm();
+            return (hpguard, None);
+        }
+        let rtick = proc_starttime(pid)
+            .expect("replacement stat readable")
+            .expect("replacement visible");
+        (hpguard, Some((retake, hrguard, rtick)))
+    }
+
     /// R20-006: a denied pin over a REUSED number must report
     /// unresolved, never certify. The re-read cannot tell
     /// death-then-recycle orphans (ours — the snapshot
@@ -28250,7 +28885,7 @@ mod tests {
                 .spawn()
                 .expect("stray spawns");
             let pid = stray.id() as libc::pid_t;
-            let mut _hpguard = FixtureGuard::new(pid);
+            let _hpguard = FixtureGuard::new(pid);
             let tick = proc_starttime(pid)
                 .expect("stray stat readable")
                 .expect("stray visible");
@@ -28294,35 +28929,15 @@ mod tests {
             if shutdown {
                 return;
             }
-            // Death-then-recycle, adjacent on this thread
-            // (the µs steer→spawn placement window).
-            assert!(kill_tick_gated(pid, tick), "stray signaled");
-            let _ = stray.wait();
-            assert_eq!(proc_starttime(pid), Ok(None), "number must free");
-            // P reaped — disarm BEFORE the retake (a
-            // same-tick S100 retake would otherwise match
-            // the pin and be murdered by the drop at
-            // helper return).
-            _hpguard.disarm();
-            let outcome = if !audit_steer_next_pid_unlocked(pid) {
-                (false, -1, 0)
-            } else {
-                let mut retake = std::process::Command::new("/bin/sleep")
-                    .arg("106")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                    .expect("replacement spawns");
-                let _hrguard = FixtureGuard::new(retake.id() as libc::pid_t);
-                if retake.id() as libc::pid_t != pid {
-                    let _ = retake.kill();
-                    let _ = retake.wait();
-                    (false, -1, 0)
-                } else {
-                    let rtick = proc_starttime(pid)
-                        .expect("replacement stat readable")
-                        .expect("replacement visible");
+            // Death-then-recycle via the SHARED helper
+            // (kill+reap+DISARM+steer+retake — R23-012:
+            // the hammer exercises this same helper, so
+            // the disarm is regression-covered, never
+            // local-only).
+            let (_hpguard, retake) =
+                kill_reap_disarm_retake(pid, tick, _hpguard, &mut stray, "106");
+            let outcome = match retake {
+                Some((retake, _hrguard, rtick)) => {
                     // Hit: custody moves into shared
                     // (taken by the main thread after the
                     // frame — never disarmed, never gapped).
@@ -28331,6 +28946,7 @@ mod tests {
                     s.retake_guard = Some(_hrguard);
                     (true, pid, rtick)
                 }
+                None => (false, -1, 0),
             };
             {
                 let mut s = hshared.lock().unwrap_or_else(|p| p.into_inner());
@@ -28708,10 +29324,13 @@ mod tests {
     /// a same-tick S100 retake matches the pin and an
     /// armed drop would murder it, then trip the
     /// replacement-pin assert). Hammer: up to 20 attempts
-    /// of spawn-P/kill+reap/disarm/steer-R; on a same-tick
-    /// hit the helper-return drop must leave R live (tick
-    /// + R/S state), then R retires by custody. RED (armed
-    /// drop): the pin matches and R dies. DIRECT steering
+    /// driving the REAL [`kill_reap_disarm_retake`]
+    /// helper (spawn-P per attempt, then the helper's own
+    /// kill+reap+DISARM+steer+retake — never a local
+    /// replica); on a same-tick hit the helper-return
+    /// drop must leave R live (tick + R/S state), then R
+    /// retires by custody. RED (helper disarm deleted):
+    /// the pin matches and R dies. DIRECT steering
     /// only (a sudo round-trip spans several jiffies — R
     /// can never share P's tick through sudo; vacuous-skip
     /// loud there). Vacuous-skip loud when no hit lands
@@ -28741,7 +29360,10 @@ mod tests {
             return;
         }
         for _attempt in 0..20 {
-            // Stage P + arm the helper guard (pins P's tick).
+            // Stage P (hammer-owned spawn; the REAL helper
+            // pins + kills + reaps + DISARMS + steers +
+            // retakes — R23-012: no local replica, so
+            // deleting the helper's disarm REDs this leg).
             let mut p = std::process::Command::new("/bin/sleep")
                 .arg("830")
                 .stdin(std::process::Stdio::null())
@@ -28750,44 +29372,18 @@ mod tests {
                 .spawn()
                 .expect("P spawns");
             let ppid = p.id() as libc::pid_t;
-            let mut _hpguard = FixtureGuard::new(ppid);
+            let hpguard = FixtureGuard::new(ppid);
             let ptick = proc_starttime(ppid)
                 .expect("staging broken (P stat)")
                 .expect("staging broken (P visible)");
-            // Kill + reap P, then disarm (THE fix — helper
-            // return discipline).
-            assert!(kill_tick_gated(ppid, ptick), "staging broken (P kill)");
-            let _ = p.wait();
-            assert_eq!(
-                proc_starttime(ppid),
-                Ok(None),
-                "staging broken (P number not freed)"
-            );
-            _hpguard.disarm();
-            // Steer R onto P's number — SINGLE try (the
-            // flock+retry helper costs ms per call and a
-            // same-tick hit needs P→R inside one jiffy;
-            // the hammer loop already retries, so a miss
-            // just continues).
-            if !audit_steer_next_pid_unlocked(ppid) {
+            // THE HELPER (kill+reap+DISARM+steer+retake —
+            // the disarm under test; misses retire
+            // in-helper and continue).
+            let (_hpguard, retake) =
+                kill_reap_disarm_retake(ppid, ptick, hpguard, &mut p, "830");
+            let Some((mut r, mut _hrguard, rtick)) = retake else {
                 continue;
-            }
-            let mut r = std::process::Command::new("/bin/sleep")
-                .arg("830")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .expect("R spawns");
-            if r.id() as libc::pid_t != ppid {
-                let _ = r.kill();
-                let _ = r.wait();
-                continue;
-            }
-            let mut _hrguard = FixtureGuard::new(ppid);
-            let rtick = proc_starttime(ppid)
-                .expect("staging broken (R stat)")
-                .expect("staging broken (R visible)");
+            };
             if rtick != ptick {
                 // Different-tick retake — retire + next attempt.
                 let _ = r.kill();
@@ -29779,6 +30375,25 @@ else:
             Err(error) => {
                 panic!("inconclusive (plant unreadable: {error}) — refusing to certify")
             }
+        }
+        // R23-019 (reopened): the HELPER must report
+        // Recycled over the plant (exercises the recycled
+        // arm — the StillOurs mutant fails here; the
+        // pre-plant call above only ever saw Gone).
+        match prove_reaped_gone_or_recycled_audit(pid, tick) {
+            ReapedProofAudit::Recycled(now) => assert_eq!(
+                now, plant_tick,
+                "helper must name the plant birth over the freed number"
+            ),
+            ReapedProofAudit::Gone => panic!(
+                "helper must report Recycled over the live plant (saw Gone?)"
+            ),
+            ReapedProofAudit::StillOurs => panic!(
+                "RED: helper reports StillOurs over the plant (recycled arm broken?)"
+            ),
+            ReapedProofAudit::Unreadable(error) => panic!(
+                "inconclusive (plant unreadable: {error}) — refusing to certify"
+            ),
         }
         let _ = plant.kill();
         let _ = plant.wait();
@@ -36255,6 +36870,11 @@ time.sleep(30)
                 Some((spid, stick))
             })
             .expect("probe must report S's birth before panicking");
+        // R23-017 (reopened): forward S's birth (the
+        // disabled leg drives THIS wrapper as a child and
+        // proves the wrapper's own cleanup retired the
+        // birth its verdict judged — verdict-neutral).
+        eprintln!("R23017-S {spid} {stick}");
         // R23-016: birth-aware oracle (gone-or-recycled
         // proves death; live states linger; unreadable
         // reports unverifiable — never death). The verdict
@@ -36509,89 +37129,78 @@ time.sleep(30)
         _rguard.disarm();
     }
 
-    /// R23-017: with pdeathsig disabled, the oracle must
-    /// record StillLive (failed death verdict), the outer
-    /// cleanup must retire that SAME birth, and the
-    /// recorded verdict must not change. Drives the REAL
-    /// mid-park probe with SCOPEBASE_R22001B_NO_PDEATHSIG:
-    /// S survives the probe's death (2s oracle bound —
-    /// lingering is deterministic — S has no death
-    /// mechanism), cleanup retires (spid, stick), then the
-    /// leg asserts the birth retired AND the verdict still
-    /// StillLive (judged from the pre-cleanup record —
-    /// cleanup can't rewrite history). No fixture durations
-    /// (S is a fork-pause child, retired by custody).
+    /// R23-017 (reopened): with pdeathsig disabled, the
+    /// ORIGINAL wrapper must record StillLive (failed
+    /// death verdict) AND retire that SAME birth before
+    /// its verdict assert fails. Drives the REAL wrapper
+    /// (`stray_group_probe_unwind_discharges_parked_sibling`)
+    /// as a child with SCOPEBASE_R22001B_NO_PDEATHSIG
+    /// (inherited by the wrapper's probe — S survives):
+    /// the child MUST fail its Died-assert citing
+    /// StillLive, and the forwarded birth MUST be retired
+    /// (the wrapper's own cleanup ran before asserting).
+    /// RED (wrapper cleanup deleted): the child fails as
+    /// staged but S survives — the retired-assert fails.
+    /// The old leg drove the lower-level probe with its
+    /// own cleanup (a wrapper-cleanup deletion escaped
+    /// it). No fixture durations (S is a fork-pause
+    /// child, retired by the wrapper's custody).
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn pdeathsig_disabled_records_still_live_then_cleans_up() {
-        use std::time::{Duration, Instant};
         let exe = std::env::current_exe().expect("own test binary");
-        let mut probe = std::process::Command::new(exe)
+        // THE ORIGINAL WRAPPER as a child (its probe
+        // inherits NO_PDEATHSIG — S survives — so the
+        // wrapper's Died-assert MUST fail; the failure is
+        // the staging, the cleanup before it the verdict).
+        let out = std::process::Command::new(exe)
             .arg("--exact")
-            .arg("fixture::linux::audit::tests::stray_group_drain_never_reaps_post_entry_arrivals")
+            .arg("fixture::linux::audit::tests::stray_group_probe_unwind_discharges_parked_sibling")
             .arg("--nocapture")
-            .env("SCOPEBASE_R22001B_SUBREAPER", "1")
-            .env("SCOPEBASE_R22001B_PANIC_MIDPARK", "1")
             .env("SCOPEBASE_R22001B_NO_PDEATHSIG", "1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("probe child spawns");
-        let mut _probe_guard = FixtureGuard::new(probe.id() as libc::pid_t);
-        // Bounded wait (R22-012 idiom — a wedged probe is
-        // killed loud, never an unbounded hang).
-        let end = Instant::now() + Duration::from_secs(60);
-        loop {
-            if probe.try_wait().expect("probe waitable").is_some() {
-                break;
-            }
-            if Instant::now() >= end {
-                let _ = probe.kill();
-                let _ = probe.wait();
-                panic!("probe hung past 60 s (killed loud)");
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let out = probe.wait_with_output().expect("probe output collects");
-        _probe_guard.disarm();
+            .output()
+            .expect("wrapper child runs");
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        // (a) The wrapper failed its Died-assert citing
+        // the StillLive record (cleanup can't rewrite
+        // history — the record survived to the message).
         assert!(
             !out.status.success(),
-            "probe must panic mid-park as staged\n{stderr}"
+            "wrapper must fail its Died-assert under NO_PDEATHSIG\n{stderr}"
         );
+        assert!(
+            stderr.contains("StillLive"),
+            "wrapper must record StillLive\n{stderr}"
+        );
+        // (b) The forwarded birth is retired — the
+        // wrapper's OWN cleanup ran before its failing
+        // assert (deleting it strands S and fails here).
         let (spid, stick): (libc::pid_t, u64) = stderr
             .lines()
             .find_map(|line| {
-                let (_, rest) = line.split_once("R22001B-PARKED spid=")?;
+                let rest = line.strip_prefix("R23017-S ")?;
                 let mut words = rest.split_whitespace();
-                let spid: libc::pid_t = words.next()?.parse().ok()?;
-                let stick = words.next()?.strip_prefix("stick=")?.parse().ok()?;
-                Some((spid, stick))
+                Some((
+                    words.next()?.parse().ok()?,
+                    words.next()?.parse().ok()?,
+                ))
             })
-            .expect("probe must report S's birth before panicking");
-        // THE verdict (2s — S has no death mechanism, so
-        // StillLive is deterministic, not timing).
-        let verdict = pdeathsig_oracle_verdict(spid, stick, Duration::from_secs(2));
-        let recorded = format!("{verdict:?}");
-        // Cleanup retires the SAME birth (shared helper —
-        // the regression's exact shape).
-        retire_pdeathsig_subject(spid, stick);
-        // The birth retired AND the verdict is the
-        // pre-cleanup record (cleanup can't rewrite it).
+            .unwrap_or_else(|| panic!("wrapper must forward S's birth\n{stderr}"));
+        // RED-backstop (mutant-only): if the wrapper's
+        // cleanup is gone, S survives the assert below —
+        // retire it on unwind (the failure is already
+        // recorded — this never masks, only cleans).
+        // Expected-identity (never a live read — the
+        // number may be freed or recycled already).
+        let mut _sbackstop = FixtureGuard::new_expected(spid, stick);
         assert!(
             pdeathsig_birth_retired(spid, stick),
-            "cleanup must retire S's exact birth"
+            "wrapper cleanup must retire S={spid}'s exact birth before asserting"
         );
-        assert_eq!(
-            format!("{verdict:?}"),
-            recorded,
-            "cleanup must not rewrite the recorded verdict"
-        );
-        assert!(
-            matches!(verdict, PdeathsigVerdict::StillLive(_)),
-            "disabled pdeathsig must record StillLive, got {verdict:?}"
-        );
+        _sbackstop.disarm();
     }
 
     /// R18-001 staging: probe → mid (own group) → writer
