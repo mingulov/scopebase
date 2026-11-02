@@ -1108,6 +1108,25 @@
       "status": "LEDGER_MERGED",
       "summary": "Integration merged to main (fast-forward to db47ca3; ledger reconciliation in 739aead); TODO/traceability recounted 51/86 with gap-audit findings ledger.",
       "task_ids": []
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-11-02-s-loop-call.md",
+          "blob_sha1": "cdb5d4a9d3dc12acb74203dc5f6ae1c19f9db76e"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-11-02",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "OWNER_DECISION",
+      "summary": "Owner S-call answered 2026-11-02: scoped regeneration of non-fixture surfaces; lost S143-S159 range superseded by fresh S160+ review (decision record with frozen scope).",
+      "task_ids": []
     }
   ],
   "profile_extensions": [
