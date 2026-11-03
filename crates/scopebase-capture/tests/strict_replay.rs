@@ -60,6 +60,34 @@ fn offset_of(bytes: &[u8]) -> usize {
 }
 
 #[test]
+fn deep_nesting_refuses_on_bounded_stack() {
+    // S192: `max_nesting: usize::MAX` is documented-valid, so ~200 KB
+    // of `[` must refuse — never abort with stack overflow. The
+    // 512 KiB thread stack proves the pre-scan depth is bounded.
+    let input = vec![b'['; 200_000];
+    let limits = ReplayLimits {
+        max_nesting: usize::MAX,
+        ..ReplayLimits::default()
+    };
+    let kind = std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || decode(&input, limits).unwrap_err().kind())
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(kind, ReplayErrorKind::TooDeep);
+}
+
+#[test]
+fn serde_failure_offset_is_zero_based() {
+    // S190: `serde_json::Error::column()` is one-based; the mapped
+    // offset must not overshoot by one column.
+    let error = decode(b"x", ReplayLimits::default()).unwrap_err();
+    assert_eq!(error.kind(), ReplayErrorKind::Malformed);
+    assert_eq!(error.offset(), 0);
+}
+
+#[test]
 fn nested_duplicate_members_refuse() {
     for (name, bytes) in [
         (
@@ -592,6 +620,25 @@ fn schema_and_shape_refusals_are_typed() {
         ReplayErrorKind::UnknownKind,
         "CP10:unknown record kind refuses"
     );
+    // S189: unknown kind in the second data record — the refusal
+    // offset must sit inside the second record, not at(0).
+    let first = counter_record("\"7\"", "\"5\"");
+    let second =
+        counter_record("\"7\"", "\"5\"").replace("\"kind\":\"counter\"", "\"kind\":\"needle\"");
+    let bytes = doc(&format!(
+        "{first},{second},{}",
+        terminal_record("\"1\"")
+    ));
+    let error = decode(&bytes, ReplayLimits::default()).unwrap_err();
+    assert_eq!(error.kind(), ReplayErrorKind::UnknownKind);
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let second_start = text.find(second.as_str()).unwrap();
+    let second_end = second_start + second.len();
+    assert!(
+        (second_start..second_end).contains(&error.offset()),
+        "offset {} inside second record {second_start}..{second_end}",
+        error.offset()
+    );
     let bytes = doc(&format!(
         "{},{}",
         counter_record("\"7\"", "\"5\"").replace("}", ",\"extra\":\"1\"}"),
@@ -707,6 +754,42 @@ fn small_valid_vectors() -> Vec<Vec<u8>> {
             terminal_record_full(0, 1, 0)
         )),
     ]
+}
+
+#[test]
+fn two_member_policy_and_magnitude_refuse_same_kind() {
+    // S193: "exactly one of these members" violations refuse with the
+    // same variant in both shapes — extras are unknown in the selected
+    // single-member shape — while genuinely empty objects stay
+    // `MissingMember`.
+    let policy_two = doc(&format!(
+        "{},{}",
+        counter_record("\"7\"", "\"5\"").replace(
+            "\"policy\":\"monotonic\"",
+            "\"policy\":{\"saturating\":\"4\",\"modulo\":\"8\"}"
+        ),
+        terminal_record("\"1\"")
+    ));
+    assert_eq!(kind_of(&policy_two), ReplayErrorKind::UnknownMember);
+    let magnitude_two = doc(&format!(
+        "{{\"kind\":\"loss\",\"epoch\":\"0\",\"channel\":\"1\",\
+         \"loss-kind\":\"transport\",\"magnitude\":{{\"exact\":\"1\",\"at-least\":\"2\"}},\"unit\":\"events\"}},{}",
+        terminal_record_full(0, 1, 0)
+    ));
+    assert_eq!(kind_of(&magnitude_two), ReplayErrorKind::UnknownMember);
+    let magnitude_empty = doc(&format!(
+        "{{\"kind\":\"loss\",\"epoch\":\"0\",\"channel\":\"1\",\
+         \"loss-kind\":\"transport\",\"magnitude\":{{}},\"unit\":\"events\"}},{}",
+        terminal_record_full(0, 1, 0)
+    ));
+    assert_eq!(kind_of(&magnitude_empty), ReplayErrorKind::MissingMember);
+    let policy_empty = doc(&format!(
+        "{},{}",
+        counter_record("\"7\"", "\"5\"")
+            .replace("\"policy\":\"monotonic\"", "\"policy\":{}"),
+        terminal_record("\"1\"")
+    ));
+    assert_eq!(kind_of(&policy_empty), ReplayErrorKind::MissingMember);
 }
 
 #[test]

@@ -62,6 +62,23 @@ impl<T> Versioned<T> {
             value: correction.replacement,
         })
     }
+    /// Validate by reference, then replace in place, handing the
+    /// displaced payload back instead of dropping it (S191). The caller
+    /// retains the replacement first and drops the old payload after, so
+    /// a panicking old `Drop` can never strand the owner empty. Refusals
+    /// leave `self` untouched; the rejected replacement drops inside.
+    pub fn checked_replace(&mut self, correction: Correction<T>) -> Result<T, ContractError> {
+        if self.epoch != correction.epoch {
+            return Err(ContractError::DomainMismatch);
+        }
+        if self.revision != correction.from {
+            return Err(ContractError::StaleRevision);
+        }
+        let old = std::mem::replace(&mut self.value, correction.replacement);
+        self.epoch = correction.epoch;
+        self.revision = correction.to;
+        Ok(old)
+    }
 }
 impl<T> Correction<T> {
     /// Construct exactly from+1, refusing MAX with ArithmeticOverflow. On refusal

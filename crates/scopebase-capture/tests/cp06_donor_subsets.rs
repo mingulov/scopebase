@@ -27,90 +27,73 @@ fn read(l: &ClaimLedger, partial: bool) -> Vec<ClaimAssessment> {
     l.snapshot(&[claim(1), claim(2)], &QueryOverlay::new(&ids, 2).unwrap())
         .unwrap()
 }
-// Supplied scalar facts stay in this caller; the ledger never computes DMA metrics.
-#[derive(Debug, PartialEq, Eq)]
-struct Metrics {
-    copy: u64,
-    occupancy: u64,
-    shared: u64,
-    pool: u64,
-}
-fn metrics() -> Metrics {
-    Metrics {
-        copy: 512,
-        occupancy: 4096,
-        shared: 8192,
-        pool: 3,
-    }
-}
+// S171: donor scalar echoes removed. The old `Metrics` asserted caller
+// locals (512/4096/8192/pool), never library output; subset IDs stay in
+// test names and every test below asserts library behavior.
 #[test]
 fn m_s01_copy_loss_preserves_valued_occupancy() {
     let mut l = ledger();
-    let values = metrics();
     l.record_loss(&fact(0, LossMagnitude::Unknown), &[claim(1)])
         .unwrap();
     let v = read(&l, false);
     assert_eq!(v[0].reasons(), [QualityReason::ConsumedLoss]);
     assert_eq!(v[1].reasons(), [], "CP06:M-S01 occupancy quality");
-    assert_eq!((values.copy, values.occupancy), (512, 4096));
 }
 #[test]
 fn m_s02_mapping_loss_preserves_copy512() {
     let mut l = ledger();
-    let values = metrics();
     l.record_loss(&fact(0, LossMagnitude::Unknown), &[claim(2)])
         .unwrap();
     let v = read(&l, false);
     assert_eq!(v[0].reasons(), [], "CP06:M-S02 copy quality");
-    assert_eq!(values.copy, 512);
     assert_eq!(v[1].reasons(), [QualityReason::ConsumedLoss]);
 }
 #[test]
-fn m_s03_snapshot_finish_equivalence() {
+fn m_s03_plain_snapshot_is_deterministic() {
+    // S194: the old name overclaimed snapshot/finish equivalence
+    // (`finish` lives on `FeedRegistry`, a different type) while only
+    // comparing `snapshot` to itself. Pin determinism plus content: an
+    // empty ledger yields no reasons; a post-loss twin shows the
+    // reason. A constant-wrong-reason `snapshot` mutant fails here.
     let l = ledger();
     assert_eq!(
         read(&l, false),
         read(&l, false),
-        "CP06:M-S03 plain equivalent"
+        "CP06:M-S03 deterministic"
     );
+    let empty = read(&l, false);
+    assert_eq!(empty[0].reasons(), [], "CP06:M-S03 empty claim 1");
+    assert_eq!(empty[1].reasons(), [], "CP06:M-S03 empty claim 2");
+    let mut twin = ledger();
+    twin.record_loss(&fact(0, LossMagnitude::Unknown), &[claim(1)])
+        .unwrap();
+    let degraded = read(&twin, false);
+    assert_eq!(
+        degraded[0].reasons(),
+        [QualityReason::ConsumedLoss],
+        "CP06:M-S03 post-loss twin degrades"
+    );
+    assert_eq!(degraded[1].reasons(), []);
 }
 #[test]
 fn m_s04_partial_preserves_original4096_8192_pool3() {
     let l = ledger();
-    let values = metrics();
     assert_eq!(read(&l, true)[0].reasons(), [QualityReason::QueryPartial]);
     assert_eq!(
         read(&l, false),
         read(&ledger(), false),
         "CP06:M-S04 later fresh truth"
     );
-    assert_eq!(
-        values,
-        Metrics {
-            copy: 512,
-            occupancy: 4096,
-            shared: 8192,
-            pool: 3
-        }
-    );
 }
 #[test]
 fn m_s05_repeated_partial_views_leave_facts() {
     let mut l = ledger();
-    let mut values = metrics();
-    values.pool = 2;
     for p in [true, false, true] {
         let _ = read(&l, p);
     }
     l.record_loss(&exact(0, 0), &[claim(1)]).unwrap();
-    values.pool += 1;
     let _ = read(&l, true);
     assert_eq!(read(&l, false), read(&ledger(), false));
-    assert_eq!(
-        (values.occupancy, values.shared, values.pool),
-        (4096, 8192, 3),
-        "CP06:M-S05 caller facts survive"
-    );
 }
 #[test]
 fn m_s06_consumed_gap_stays_degraded() {
@@ -119,12 +102,7 @@ fn m_s06_consumed_gap_stays_degraded() {
         .unwrap();
     let _ = read(&l, true);
     let _ = read(&l, false);
-    let values = Metrics {
-        pool: 1,
-        ..metrics()
-    };
     assert_eq!(read(&l, false)[0].reasons(), [QualityReason::ConsumedLoss]);
-    assert_eq!(values.pool, 1);
 }
 #[test]
 fn m_s07_gap_between_views_stays_degraded() {
@@ -140,56 +118,47 @@ fn m_s07_gap_between_views_stays_degraded() {
     );
 }
 #[test]
-fn m_s08_post_gap_caller_pool_run_one_to_three() {
+fn m_s08_post_gap_queries_leave_ledger() {
+    // S171: the old `samples` counter asserted caller arithmetic. The
+    // behavioral claim is that interleaved queries leave ledger state.
     let mut l = ledger();
     l.record_loss(&fact(0, LossMagnitude::Unknown), &[claim(2)])
         .unwrap();
-    let mut samples = 1;
-    let _ = read(&l, false);
-    samples += 2;
+    let before = read(&l, false);
     let _ = read(&l, true);
     let _ = read(&l, false);
     assert_eq!(
-        samples, 3,
-        "CP06:M-S08 query does not replay loss into caller"
+        read(&l, false),
+        before,
+        "CP06:M-S08 queries do not replay loss into ledger state"
     );
 }
 #[test]
-fn k_s01_shared11_5_has_no_backend_contribution() {
+fn k_s01_shared11_5_disjoint_feeds_finish() {
+    // S171: backend counters are unobservable (FeedRegistry exposes only
+    // feed/finish), so the test pins disjoint feeds finishing clean.
     let mut r = FeedRegistry::new(epoch(), &[channel(0), channel(1)], 2).unwrap();
-    let (mut accepted, backend, skipped) = ((0, 0), (0, 0), 0);
     r.feed(&exact(0, 11)).unwrap();
-    accepted.0 = 11;
     r.feed(&exact(1, 5)).unwrap();
-    accepted.1 = 5;
-    assert_eq!(r.finish(), Ok(()));
-    assert_eq!(
-        (accepted, backend, skipped),
-        ((11, 5), (0, 0), 0),
-        "CP06:K-S01 disjoint numeric facts"
-    );
+    assert_eq!(r.finish(), Ok(()), "CP06:K-S01 disjoint numeric facts");
 }
 #[test]
-fn k_s02_shared_first_feed_accrues_once() {
+fn k_s02_shared_first_feed_accepted() {
+    // S171: the old `accepted` scalar mirrored `feed().is_ok()`.
     let mut r = FeedRegistry::new(epoch(), &[channel(0)], 1).unwrap();
-    let mut accepted = None;
-    if r.feed(&exact(0, 11)).is_ok() {
-        accepted = Some((11, 5));
-    }
-    assert_eq!(accepted, Some((11, 5)));
+    assert_eq!(r.feed(&exact(0, 11)), Ok(()));
     assert_eq!(r.finish(), Ok(()));
 }
 #[test]
 fn k_s03_duplicate100_100_cannot_replace11_5() {
     let mut r = FeedRegistry::new(epoch(), &[channel(0)], 1).unwrap();
     r.feed(&exact(0, 11)).unwrap();
-    let mut accepted = (11, 5);
     let duplicate = r.feed(&exact(0, 100));
-    if duplicate.is_ok() {
-        accepted = (100, 100);
-    }
-    assert_eq!(duplicate, Err(ContractError::DuplicateFeed));
-    assert_eq!(accepted, (11, 5), "CP06:K-S03 first numbers stand");
+    assert_eq!(
+        duplicate,
+        Err(ContractError::DuplicateFeed),
+        "CP06:K-S03 first numbers stand"
+    );
 }
 #[test]
 fn k_s04_missing_strict_feed_refuses() {

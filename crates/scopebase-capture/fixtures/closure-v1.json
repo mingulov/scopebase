@@ -1,7 +1,7 @@
 {
   "schema": "scopebase.capture.closure-v1",
   "version": 1,
-  "note": "Scripted T1 closure vectors. Predicates are caller labels; serials order reports without proving any boundary occurred. No live settlement is qualified.",
+  "note": "Scripted T1 closure vectors. Predicates are caller labels; serials order reports without proving any boundary occurred. No live settlement is qualified. Expected invalidated entries are [predicate, gap] pairs.",
   "predicates": [
     {"id": 1, "name": "baseline"},
     {"id": 2, "name": "admission"},
@@ -22,25 +22,25 @@
       "id": "baseline-after-admission",
       "observations": [[1, 2, 0], [2, 1, 0], [3, 3, 0]],
       "invalidations": [],
-      "expected": {"satisfied": [1], "missing": [4, 5, 6], "invalidated": [2, 3]}
+      "expected": {"satisfied": [1], "missing": [4, 5, 6], "invalidated": [[2, "Missing"], [3, "Missing"]]}
     },
     {
       "id": "dropped-quiescence",
       "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [5, 5, 0], [6, 6, 0]],
       "invalidations": [],
-      "expected": {"satisfied": [1, 2, 3], "missing": [4], "invalidated": [5, 6]}
+      "expected": {"satisfied": [1, 2, 3], "missing": [4], "invalidated": [[5, "Missing"], [6, "Missing"]]}
     },
     {
       "id": "sample-before-drain",
       "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 5, 0], [6, 4, 0]],
       "invalidations": [],
-      "expected": {"satisfied": [1, 2, 3, 4, 5], "missing": [], "invalidated": [6]}
+      "expected": {"satisfied": [1, 2, 3, 4, 5], "missing": [], "invalidated": [[6, "Missing"]]}
     },
     {
       "id": "late-submit-invalidates-drain-sample",
       "observations": [[1, 1, 0], [2, 2, 0], [3, 3, 0], [4, 4, 0], [5, 5, 0], [6, 6, 0]],
       "invalidations": [[5, "LateEvidence"]],
-      "expected": {"satisfied": [1, 2, 3, 4], "missing": [], "invalidated": [5, 6]}
+      "expected": {"satisfied": [1, 2, 3, 4], "missing": [], "invalidated": [[5, "LateEvidence"], [6, "LateEvidence"]]}
     },
     {
       "id": "quiet-poll-settles-nothing",

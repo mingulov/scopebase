@@ -270,3 +270,31 @@ fn inactive_target_dev_dependency_alias_is_refused() {
         "DEPENDENCIES",
     );
 }
+
+// X3: the S170 sealed-units harness must ship in the packaged crate
+// alongside the nine UI fixtures it executes — otherwise the
+// delivered package carries fixtures without their runner. Parsed
+// with tomllib (same developer-python prerequisite as the boundary
+// helper), not substring matching.
+#[test]
+fn sealed_units_harness_ships_in_package() {
+    let manifest = Path::new(MANIFEST_DIR).join("Cargo.toml");
+    let probe = Command::new("python3")
+        .arg("-I")
+        .arg("-c")
+        .arg(
+            "import sys,tomllib;include=tomllib.load(open(sys.argv[1],'rb'))['package']['include'];print('tests/ui_sealed_units.rs' in include)",
+        )
+        .arg(&manifest)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .expect("required Python 3.11+ must be available");
+    assert!(probe.status.success(), "tomllib include probe failed");
+    assert_eq!(
+        String::from_utf8(probe.stdout).unwrap(),
+        "True\n",
+        "tests/ui_sealed_units.rs missing from package include"
+    );
+}

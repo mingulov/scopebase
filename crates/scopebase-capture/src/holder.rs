@@ -59,23 +59,18 @@ impl<T> CorrectionHolder<T> {
 
     /// Apply one correction to this holder only. On refusal the retained
     /// value and revision are unchanged; the rejected replacement drops
-    /// with ordinary caller-defined behavior. This never touches the
-    /// paired holder: the caller routes each correction explicitly.
+    /// with ordinary caller-defined behavior. The replacement is retained
+    /// before the displaced payload drops (S191), so even a panicking old
+    /// `Drop` propagates with the holder still usable. This never touches
+    /// the paired holder: the caller routes each correction explicitly.
     pub fn apply(&mut self, correction: Correction<T>) -> Result<(), ContractError> {
         let current = self
             .current
-            .take()
+            .as_mut()
             .expect("CP11:holder always retains a value");
-        match current.apply(correction) {
-            Ok(next) => {
-                self.current = Some(next);
-                Ok(())
-            }
-            Err((original, refused)) => {
-                self.current = Some(original);
-                Err(refused)
-            }
-        }
+        let displaced = current.checked_replace(correction)?;
+        drop(displaced);
+        Ok(())
     }
 }
 
@@ -211,6 +206,49 @@ mod tests {
         assert_eq!(gap.report(), Revision::new(1));
         assert_eq!(gap.export(), Revision::new(0));
         assert_eq!(*pair.export().value(), 10);
+    }
+
+    #[test]
+    fn same_revision_value_divergence_disagrees() {
+        // S169: `agree` is the only API detecting same-revision value
+        // divergence; degenerating it to `revisions_agree` must fail here.
+        let mut pair = HolderPair::new(
+            Versioned::new(epoch(), 10u64),
+            Versioned::new(epoch(), 10u64),
+        );
+        pair.apply_report(Correction::new(epoch(), Revision::new(0), 7u64).unwrap())
+            .unwrap();
+        pair.apply_export(Correction::new(epoch(), Revision::new(0), 5u64).unwrap())
+            .unwrap();
+        assert_eq!(pair.report().revision(), Revision::new(1));
+        assert_eq!(pair.export().revision(), Revision::new(1));
+        assert!(pair.revisions_agree());
+        assert!(!pair.agree());
+        assert_eq!(pair.divergence(), None);
+    }
+
+    struct PanicOnDrop;
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("S191: old payload drop");
+        }
+    }
+
+    #[test]
+    fn panicking_old_drop_leaves_holder_usable() {
+        // S191: the old payload's `Drop` runs after the replacement is
+        // retained, so a catchable drop panic propagates without
+        // poisoning the holder — accessors still behave.
+        let mut holder =
+            CorrectionHolder::new(HolderKind::Report, Versioned::new(epoch(), PanicOnDrop));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            holder.apply(Correction::new(epoch(), Revision::new(0), PanicOnDrop).unwrap())
+        }));
+        assert!(outcome.is_err(), "drop panic propagates to the caller");
+        assert_eq!(holder.revision(), Revision::new(1));
+        let _ = holder.value();
+        std::mem::forget(holder);
     }
 
     #[test]

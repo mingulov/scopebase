@@ -68,7 +68,9 @@ pub struct ReplayLimits {
     /// Maximum data records, checked before buffer growth. The mandatory
     /// terminal occupies one extra structural slot.
     pub max_records: usize,
-    /// Maximum object/array nesting depth.
+    /// Maximum object/array nesting depth. The pre-scan clamps this to
+    /// a hard 256 (above serde_json's own 128 ceiling); deeper inputs
+    /// refuse `TooDeep` instead of exhausting the stack.
     pub max_nesting: usize,
     /// Maximum members per object, elements per array, and entries per
     /// semantic collection (parts, reasons).
@@ -296,12 +298,22 @@ fn refuse(kind: ReplayErrorKind, offset: usize) -> ReplayError {
     ReplayError { kind, offset }
 }
 
+/// Hard pre-scan depth ceiling (S192). The recursive scanner runs
+/// before serde's own depth guard, so a documented-valid caller
+/// `max_nesting` (up to `usize::MAX`) cannot be trusted for stack
+/// safety. 256 stays above serde_json's enforced 128 recursion ceiling
+/// (1.0.151 `remaining_depth: u8`), so the clamp never refuses an input
+/// the downstream parser would accept, while bounding worst-case stack
+/// to ~256 two-frame levels on any thread stack.
+const MAX_SCAN_DEPTH: usize = 256;
+
 /// Structural pre-scan over raw bytes. Enforces nesting, string, breadth
 /// and duplicate-member rules before `serde_json` builds any DOM, and
 /// counts the root `records` array (refusing past `max_records`) while
 /// recording each element start offset. Invalid JSON encountered here
 /// refuses as [`ReplayErrorKind::Malformed`]; anything subtler is left
-/// for the real parser. Recursion depth never exceeds `max_nesting + 1`.
+/// for the real parser. Recursion depth never exceeds the clamped
+/// caller ceiling + 1 (see [`MAX_SCAN_DEPTH`]).
 struct Scanner<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -311,6 +323,10 @@ struct Scanner<'a> {
 
 impl<'a> Scanner<'a> {
     fn new(bytes: &'a [u8], limits: ReplayLimits) -> Self {
+        let limits = ReplayLimits {
+            max_nesting: limits.max_nesting.min(MAX_SCAN_DEPTH),
+            ..limits
+        };
         Self {
             bytes,
             pos: 0,
@@ -704,12 +720,18 @@ fn magnitude_of(value: &ReplayValue, offset: usize) -> Result<NeutralMagnitude, 
         ReplayValue::Text(_) => Err(refuse(ReplayErrorKind::TypeMismatch, offset)),
         ReplayValue::Object(fields) => {
             check_members(fields, &["exact", "at-least"], offset)?;
-            if fields.len() != 1 {
-                return Err(refuse(ReplayErrorKind::MissingMember, offset));
-            }
+            // S193: branch-first like `policy_of` — exactly one member;
+            // extras are unknown in the selected single-member shape,
+            // while a genuinely empty object stays `MissingMember`.
             if let Some(exact) = fields.iter().find(|(key, _)| key == "exact") {
+                if fields.len() != 1 {
+                    return Err(refuse(ReplayErrorKind::UnknownMember, offset));
+                }
                 Ok(NeutralMagnitude::Exact(count_of(&exact.1, offset)?))
             } else if let Some(bound) = fields.iter().find(|(key, _)| key == "at-least") {
+                if fields.len() != 1 {
+                    return Err(refuse(ReplayErrorKind::UnknownMember, offset));
+                }
                 Ok(NeutralMagnitude::AtLeast(count_of(&bound.1, offset)?))
             } else {
                 Err(refuse(ReplayErrorKind::MissingMember, offset))
@@ -866,7 +888,7 @@ fn assemble(
         ));
     }
     let mut counts = [0u64; 6];
-    for record in &records {
+    for (index, record) in records.iter().enumerate() {
         let slot = match record.kind() {
             "counter" => &mut counts[0],
             "loss" => &mut counts[1],
@@ -874,7 +896,8 @@ fn assemble(
             "claim" => &mut counts[3],
             "partition" => &mut counts[4],
             "correction" => &mut counts[5],
-            _ => return Err(refuse(ReplayErrorKind::UnknownKind, at(0))),
+            // S189: blame the offending record, never hardcoded at(0).
+            _ => return Err(refuse(ReplayErrorKind::UnknownKind, at(index))),
         };
         *slot += 1;
     }
@@ -1015,7 +1038,10 @@ fn serde_offset(input: &[u8], line: usize, column: usize) -> usize {
         offset += newline + 1;
         current += 1;
     }
-    offset.saturating_add(column).min(input.len())
+    // S190: serde columns are one-based; map to a zero-based offset.
+    offset
+        .saturating_add(column.saturating_sub(1))
+        .min(input.len())
 }
 
 /// Decode and admit one v1 document. The pre-scan enforces structural

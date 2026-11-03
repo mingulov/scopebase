@@ -243,9 +243,28 @@ fn run_closure_case(profile: &ClosureProfile, case: &Json) {
     let seen = assess_closure(profile, &record).unwrap();
     assert_eq!(seen.satisfied().to_vec(), want("satisfied"), "case {id}: satisfied");
     assert_eq!(seen.missing().to_vec(), want("missing"), "case {id}: missing");
-    let got_invalidated: Vec<PredicateId> =
-        seen.invalidated().iter().map(|(id, _)| *id).collect();
-    assert_eq!(got_invalidated, want("invalidated"), "case {id}: invalidated");
+    // S195: compare full (predicate, gap) pairs — the old `|(id, _)|`
+    // projection stayed green when every gap degraded to `Missing`.
+    let want_invalidated: Vec<(PredicateId, ClosureGap)> = expected
+        .get("invalidated")
+        .unwrap()
+        .as_arr()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            let pair = entry.as_arr().unwrap();
+            assert_eq!(pair.len(), 2, "case {id}: expected invalidated is [predicate, gap]");
+            (
+                fixture_pid(&pair[0]),
+                fixture_gap(pair[1].as_str().unwrap(), id),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen.invalidated().to_vec(),
+        want_invalidated,
+        "case {id}: invalidated"
+    );
 }
 
 #[test]
