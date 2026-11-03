@@ -16,8 +16,8 @@ use scopebase_linux::file::ReadLimits;
 use scopebase_sdk::context::AppContext;
 use scopebase_sdk::limits::Limits;
 use scopebase_sdk::observer::{
-    ObserverError, ObserverLimits, WorkloadObserver, DEFAULT_INPUT_BYTES, DEFAULT_LIVE_OWNERS,
-    DEFAULT_OPERATIONS, DEFAULT_PATTERN_BYTES, DEFAULT_RETAINED_BYTES,
+    ObserverError, ObserverLimits, WaitOutcome, WorkloadObserver, DEFAULT_INPUT_BYTES,
+    DEFAULT_LIVE_OWNERS, DEFAULT_OPERATIONS, DEFAULT_PATTERN_BYTES, DEFAULT_RETAINED_BYTES,
 };
 use scopebase_sdk::profile::Profile;
 use std::fs;
@@ -50,6 +50,39 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// External R1-1: run `op` on a DETACHED worker, returning the
+/// receiver for a bounded `recv_timeout` wait. A wedged worker is
+/// abandoned, never joined — the timeout panics instead of hanging
+/// the suite. (`thread::scope` would join the stuck worker during
+/// teardown: proved hung, killed by timeout exit 124.) The abandoned
+/// worker dies with the test process; it exists only when the
+/// operation under test already wedged, i.e. the suite is red.
+fn run_detached<T, F>(op: F) -> std::sync::mpsc::Receiver<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(op());
+    });
+    rx
+}
+
+/// External R1-1 collateral: the timeout path abandons a wedged
+/// worker instead of joining it. A parked worker plus a 100ms
+/// timeout yields `Timeout` and the test ENDS.
+#[test]
+fn detached_timeout_abandons_wedged_worker() {
+    let rx = run_detached(|| {
+        std::thread::park();
+    });
+    let err = rx
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_err();
+    assert_eq!(err, std::sync::mpsc::RecvTimeoutError::Timeout);
 }
 
 /// Deterministic 4,096-byte ASCII pattern with no shell metacharacters.
@@ -368,6 +401,40 @@ fn invalid_observer_limits_refuse_before_spawn() {
     };
     let refused = WorkloadObserver::spawn(test_profile(), test_limits(), zero_read, &mut probe);
     assert!(matches!(refused, Err(ObserverError::InvalidLimits)));
+
+    // S218 self-review: the remaining two refusal shapes. Zero
+    // read-call and buffer-capacity ceilings refuse InvalidLimits
+    // WITHOUT spawning — the nonexistent binary proves refusal
+    // precedes spawn (a spawn-first order would yield Spawn).
+    for (field, read) in [
+        (
+            "max_read_calls",
+            ReadLimits {
+                max_bytes: 1024,
+                max_read_calls: 0,
+                max_buffer_capacity: 65_537,
+            },
+        ),
+        (
+            "max_buffer_capacity",
+            ReadLimits {
+                max_bytes: 1024,
+                max_read_calls: 64,
+                max_buffer_capacity: 0,
+            },
+        ),
+    ] {
+        let limits = ObserverLimits {
+            read,
+            ..test_observer_limits()
+        };
+        let mut ghost = Command::new("/nonexistent-sdk04-probe");
+        let refused = WorkloadObserver::spawn(test_profile(), test_limits(), limits, &mut ghost);
+        assert!(
+            matches!(refused, Err(ObserverError::InvalidLimits)),
+            "{field} must refuse before spawn"
+        );
+    }
 }
 
 #[test]
@@ -465,4 +532,176 @@ fn context_is_inert_and_borrow_only() {
     assert_eq!(context.report().observations.len(), 0);
     assert_eq!(context.report().diagnostics.len(), 1);
     observer.shutdown().unwrap();
+}
+
+// S212: an overflowing deadline (`Duration::MAX`) saturates to
+// "never expires" instead of timing out immediately. A waiter
+// thread must still be blocked after 100ms; an external kill then
+// lets it reap Exited (proving it waited past the overflow point
+// rather than returning instant Timeout).
+#[test]
+fn wait_for_exit_overflow_timeout_waits() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let mut command = Command::new("sleep");
+    command.arg("60");
+    let mut observer =
+        WorkloadObserver::spawn(test_profile(), test_limits(), test_observer_limits(), &mut command)
+            .unwrap();
+    let pid = observer.pid();
+    let done = Arc::new(AtomicBool::new(false));
+    std::thread::scope(|s| {
+        let waiter_done = done.clone();
+        let obs = &mut observer;
+        let waiter = s.spawn(move || {
+            let outcome = obs.wait_for_exit(Duration::MAX).unwrap();
+            waiter_done.store(true, Ordering::SeqCst);
+            outcome
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "overflow wait returned immediately"
+        );
+        assert!(proc_pid_exists(pid), "child must still run at 100ms");
+        let killed = Command::new("sh")
+            .arg("-c")
+            .arg(format!("kill {pid}"))
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        let outcome = waiter.join().unwrap();
+        assert!(
+            matches!(outcome, WaitOutcome::Exited(_)),
+            "waiter must reap the killed child, got {outcome:?}"
+        );
+    });
+    assert!(!proc_pid_exists(pid), "killed child must be reaped");
+    // The waiter already reaped: shutdown reports the earlier exit,
+    // never a kill.
+    let shutdown = observer.shutdown().unwrap();
+    assert!(!shutdown.was_killed());
+    assert!(!shutdown.exited_cleanly(), "signal kill is not clean");
+}
+
+// S215: the `FileObservation` Debug impl is a redaction boundary
+// — retained bytes and stat metadata never render. Pinned with
+// marker bytes: a derived `Debug` (or a new field wired into the
+// manual impl) leaks the marker and fails this test.
+#[test]
+fn file_observation_debug_redacts_content() {
+    let fixture = Fixture::new();
+    let target = fixture.path("secret.bin");
+    let marker = b"S215-SECRET-MARKER-9f8e7d6c5b";
+    let mut command = writer_command(&target, marker);
+    let mut observer =
+        WorkloadObserver::spawn(test_profile(), test_limits(), test_observer_limits(), &mut command)
+            .unwrap();
+    let pid = observer.pid();
+    assert!(observer.wait_for_exit(Duration::from_secs(10)).unwrap().exited());
+    let control = OperationControl::unlimited();
+    let observation = observer.observe_file(pid, &target, &control).unwrap();
+    assert_eq!(&observation.bytes, marker);
+    let rendered = format!("{observation:?}");
+    assert!(
+        !rendered.contains("S215-SECRET-MARKER"),
+        "Debug leaks retained bytes: {rendered}"
+    );
+    assert!(
+        !rendered.contains("secret.bin"),
+        "Debug leaks the observed path: {rendered}"
+    );
+    // The safe skeleton still renders (regression trip-wire both
+    // directions: redaction must not swallow the whole struct).
+    for field in ["sequence", "pid", "bytes_len", "read_calls"] {
+        assert!(rendered.contains(field), "missing {field}: {rendered}");
+    }
+    assert!(rendered.contains(&format!("bytes_len: {}", marker.len())));
+    observer.shutdown().unwrap();
+}
+
+// S218: spawning a nonexistent workload binary fails with
+// `Spawn`, preserving the OS error as source — never a panic,
+// never a phantom observer.
+#[test]
+fn spawn_missing_binary_reports_spawn_error() {
+    let mut command = Command::new("/nonexistent-scopebase-workload-binary");
+    let err = WorkloadObserver::spawn(
+        test_profile(),
+        test_limits(),
+        test_observer_limits(),
+        &mut command,
+    )
+    .expect_err("missing binary must not spawn");
+    assert!(
+        matches!(err, ObserverError::Spawn(_)),
+        "expected Spawn, got {err:?}"
+    );
+    assert!(!err.to_string().is_empty());
+    assert!(std::error::Error::source(&err).is_some());
+}
+
+// S218: observing a 0-byte file returns promptly with empty bytes
+// (EOF is not a retry condition). Runs on a DETACHED worker with a
+// bounded wait (external R1-1): a read-zero spin trips the timeout
+// instead of hanging the suite — the wedged worker is abandoned,
+// never joined. The observer moves in and comes back out; outcome
+// assertions run on the main thread so a content failure never
+// misreports as a hang.
+#[test]
+fn observe_empty_file_returns_empty_bytes() {
+    let fixture = Fixture::new();
+    let target = fixture.path("empty.bin");
+    std::fs::write(&target, b"").unwrap();
+    let mut command = Command::new("true");
+    let mut observer =
+        WorkloadObserver::spawn(test_profile(), test_limits(), test_observer_limits(), &mut command)
+            .unwrap();
+    let pid = observer.pid();
+    assert!(observer.wait_for_exit(Duration::from_secs(10)).unwrap().exited());
+    let rx = run_detached(move || {
+        let control = OperationControl::unlimited();
+        // Owned bits only: the observation borrows the observer, so
+        // both cannot cross the channel together.
+        let outcome = observer
+            .observe_file(pid, &target, &control)
+            .map(|found| (found.sequence, found.bytes.clone(), found.read_calls));
+        let counts = (observer.observation_count(), observer.retained_bytes());
+        (outcome, counts, observer)
+    });
+    let (outcome, (count, retained), mut observer) = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("observe_file hung on a 0-byte file");
+    let (sequence, bytes, read_calls) = outcome.expect("empty file must observe");
+    assert_eq!(sequence, 0);
+    assert!(bytes.is_empty());
+    assert!(read_calls >= 1, "empty read still charges its call");
+    assert_eq!(count, 1);
+    assert_eq!(retained, 0);
+    observer.shutdown().unwrap();
+}
+
+// S213: race coverage — a naturally clean exit must never report
+// `Killed`, however the shutdown kill races it. A zero status
+// proves our kill did not cause the exit (a delivered SIGTERM
+// never reads 0), so every clean round must report `Exited`.
+#[test]
+fn shutdown_clean_exit_never_reports_killed() {
+    for _ in 0..30 {
+        let mut command = Command::new("true");
+        let mut observer = WorkloadObserver::spawn(
+            test_profile(),
+            test_limits(),
+            test_observer_limits(),
+            &mut command,
+        )
+        .unwrap();
+        let shutdown = observer.shutdown().unwrap();
+        if shutdown.status().success() {
+            assert!(
+                !shutdown.was_killed(),
+                "clean exit misreported as kill"
+            );
+        }
+    }
 }

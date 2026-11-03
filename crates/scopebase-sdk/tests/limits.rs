@@ -184,3 +184,20 @@ fn bad_zero_limit_accepted_would_admit_unbounded_context() {
         "nonzero limits must validate"
     );
 }
+
+#[test]
+fn max_diagnostic_bytes_validates_per_pointer_width() {
+    // S217: documents the 32-bit boundary the diagnostic budget
+    // test must respect — `u64::MAX` validates on 64-bit but
+    // refuses with `OutOfRange` on 32-bit, where `usize` cannot
+    // hold it. Each arm runs only on its own target.
+    let mut limits = valid_limits();
+    limits.diagnostic_bytes = u64::MAX;
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(limits.validate(), Ok(()));
+    #[cfg(target_pointer_width = "32")]
+    assert_eq!(
+        limits.validate(),
+        Err(LimitsError::OutOfRange(LimitField::DiagnosticBytes))
+    );
+}

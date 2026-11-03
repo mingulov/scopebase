@@ -476,3 +476,27 @@ fn parameters_and_input_shape_reject() {
         check_unsupported(&err);
     }
 }
+
+// Executable boundary tests. `run()` unit tests cannot exercise dead
+// stdio; these drive the real binary.
+
+fn bin() -> std::path::PathBuf {
+    // Compile-time lookup (cargo sets this when the binary target is in
+    // the build plan); a filtered run that excludes the binary fails
+    // loudly here instead of skipping vacuously.
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_capture-memveil-reference"))
+}
+
+/// S204: a dead stdout exits 1 with a stderr report, never panics
+/// (old `println!` exited 101).
+#[test]
+fn dead_stdout_exits_1_without_panic() {
+    let full = std::fs::File::create("/dev/full").expect("/dev/full opens");
+    let out = std::process::Command::new(bin())
+        .stdout(full)
+        .output()
+        .expect("spawn binary");
+    assert_eq!(out.status.code(), Some(1), "IO failure, not a panic");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("output write failed"), "{stderr:?}");
+}

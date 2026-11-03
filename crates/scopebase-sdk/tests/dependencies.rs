@@ -46,17 +46,20 @@ fn tree_edges(extra_args: &[&str], edges: &str) -> String {
 
 /// Banned-substring scan over package names only: the local checkout path
 /// itself may contain them, so strip any " (path)" suffix first.
-fn assert_no_banned_inputs(tree: &str) {
+/// Returns the first banned name found, if any.
+fn banned_input_in(tree: &str) -> Option<&'static str> {
     let names: String = tree
         .lines()
         .map(|line| line.split(" (").next().unwrap_or(line))
         .collect::<Vec<_>>()
         .join("\n");
-    for banned in BANNED {
-        assert!(
-            !names.to_lowercase().contains(banned),
-            "dependency tree mentions banned build input {banned}: {tree}"
-        );
+    let lowered = names.to_lowercase();
+    BANNED.into_iter().find(|banned| lowered.contains(banned))
+}
+
+fn assert_no_banned_inputs(tree: &str) {
+    if let Some(banned) = banned_input_in(tree) {
+        panic!("dependency tree mentions banned build input {banned}: {tree}");
     }
 }
 
@@ -95,6 +98,36 @@ fn default_tree_depends_on_capture_without_banned_inputs() {
         "default SDK tree must contain scopebase-capture: {output}"
     );
     assert_no_banned_inputs(&output);
+}
+
+#[test]
+fn build_tree_has_no_banned_inputs() {
+    // S176: the banned list targets build-time tools (cc, cmake,
+    // bindgen), so build edges must be scanned too — normal/dev-only
+    // queries miss a `[build-dependencies]` addition.
+    let output = tree_edges(&[], "normal,build");
+    assert_no_banned_inputs(&output);
+    let build_only = tree_edges(&[], "build");
+    assert_no_banned_inputs(&build_only);
+}
+
+#[test]
+fn banned_scanner_flags_synthetic_tree_lines() {
+    // S176 negative control: the scanner must flag a banned name in a
+    // synthetic tree line and stay quiet on clean lines.
+    assert_eq!(
+        banned_input_in("scopebase-sdk v0.1.0\ncc v1.2.3"),
+        Some("cc")
+    );
+    assert_eq!(
+        banned_input_in("scopebase-sdk v0.1.0 (/some/cc-path/checkout)"),
+        None,
+        "checkout paths are stripped before scanning"
+    );
+    assert_eq!(
+        banned_input_in("scopebase-sdk v0.1.0\nscopebase-capture v0.1.0"),
+        None
+    );
 }
 
 #[test]

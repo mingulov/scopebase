@@ -115,7 +115,11 @@ fn diagnostic_cap_precedes_copy() {
     let profile = Profile::new("aggregate", vec![], vec![]).expect("valid profile");
     let mut limits = test_limits();
     limits.diagnostic_count = 64;
-    limits.diagnostic_bytes = u64::MAX;
+    // S217: `usize::MAX as u64` — the largest valid budget on every
+    // target (`u64::MAX` fails `usize` validation on 32-bit and
+    // panics the `.expect` below). Still far above the 65_536 host
+    // aggregate cap, so the host-cap-binds intent is unchanged.
+    limits.diagnostic_bytes = usize::MAX as u64;
     let mut context = AppContext::new(profile, limits).expect("valid context");
     let chunk = "a".repeat(4_096);
     for _ in 0..16 {

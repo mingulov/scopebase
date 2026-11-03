@@ -13,13 +13,15 @@
 #![cfg(feature = "capture")]
 
 use scopebase_capture::neutral::{
-    validate_v1, NeutralClaim, NeutralCounter, NeutralLimits, NeutralLoss, NeutralMagnitude,
-    NeutralObservationV1, NeutralOrigin, NeutralPolicy, NeutralReason, NeutralSource, NeutralUnit,
+    validate_v1, NeutralClaim, NeutralCorrection, NeutralCounter, NeutralLimits, NeutralLoss,
+    NeutralMagnitude, NeutralObservationV1, NeutralOrigin, NeutralPartition, NeutralPolicy,
+    NeutralReason, NeutralSignal, NeutralSource, NeutralUnit,
 };
 use scopebase_capture::ContractError;
 use scopebase_sdk::context::{
-    AppContext, ComponentBinding, ContextError, CAPTURE_CLAIM_BYTES, CAPTURE_COUNTER_BYTES,
-    CAPTURE_REASON_BYTES, CAPTURE_SNAPSHOT_BASE_BYTES,
+    AppContext, ComponentBinding, ContextError, CAPTURE_CLAIM_BYTES, CAPTURE_CORRECTION_BYTES,
+    CAPTURE_COUNTER_BYTES, CAPTURE_LOSS_BYTES, CAPTURE_PARTITION_BYTES, CAPTURE_REASON_BYTES,
+    CAPTURE_SIGNAL_BYTES, CAPTURE_SNAPSHOT_BASE_BYTES,
 };
 use scopebase_sdk::limits::Limits;
 use scopebase_sdk::profile::{Admission, CapabilityObservation, CapabilityRequirement, Profile};
@@ -436,4 +438,63 @@ fn hard_maxima_refused_before_capture() {
         validate_v1(&full, NeutralLimits::default()),
         Err(ContractError::CapacityExceeded)
     );
+}
+
+#[test]
+fn snapshot_cost_charges_every_lane() {
+    // S214: losses, signals, partitions and corrections all cost
+    // retained payload — not just counters/claims/reasons. The bare
+    // minimal snapshot costs 160 and fits a 160 budget; adding one
+    // lane member must refuse at 160 and fit at 160 + its charge.
+    assert_eq!(CAPTURE_LOSS_BYTES, 16);
+    assert_eq!(CAPTURE_SIGNAL_BYTES, 8);
+    assert_eq!(CAPTURE_PARTITION_BYTES, 4);
+    assert_eq!(CAPTURE_CORRECTION_BYTES, 4);
+    let bare: u64 = CAPTURE_SNAPSHOT_BASE_BYTES + CAPTURE_COUNTER_BYTES;
+    assert_eq!(bare, 160);
+
+    let mut with_loss = minimal_obs();
+    with_loss.losses.push(NeutralLoss {
+        channel: 7,
+        kind: scopebase_capture::neutral::NeutralLossKind::Transport,
+        magnitude: NeutralMagnitude::Exact(3),
+        unit: NeutralUnit::Events,
+    });
+    let mut with_signal = minimal_obs();
+    with_signal.signals.push(NeutralSignal {
+        channel: 6,
+        observed: 1,
+        cap: 9,
+        unit: NeutralUnit::DiagnosticSignals,
+    });
+    let mut with_partition = minimal_obs();
+    with_partition.partitions.push(NeutralPartition {
+        total: 10,
+        parts: vec![2, 3, 5],
+        unit: NeutralUnit::Events,
+    });
+    let mut with_correction = minimal_obs();
+    with_correction
+        .corrections
+        .push(NeutralCorrection { from: 0, to: 1 });
+
+    for (tag, raw, charge) in [
+        ("loss", with_loss, CAPTURE_LOSS_BYTES),
+        ("signal", with_signal, CAPTURE_SIGNAL_BYTES),
+        ("partition", with_partition, CAPTURE_PARTITION_BYTES),
+        ("correction", with_correction, CAPTURE_CORRECTION_BYTES),
+    ] {
+        let validated = validate_v1(&raw, NeutralLimits::default()).expect("valid fixture");
+        let mut short = AppContext::new(test_profile(), test_limits(bare)).expect("valid context");
+        assert_eq!(
+            short.capture(&validated),
+            Err(ContextError::Capacity),
+            "{tag} must cost payload"
+        );
+        assert_eq!(short.capture_snapshot(), None);
+        let mut fits =
+            AppContext::new(test_profile(), test_limits(bare + charge)).expect("valid context");
+        fits.capture(&validated).expect("exact charge fits");
+        assert!(fits.capture_snapshot().is_some());
+    }
 }

@@ -400,12 +400,21 @@ fn parse_script(raw: &[u8]) -> Option<Script<'_>> {
     Some(Script { case, params })
 }
 
-fn param<'a>(script: &'a Script<'_>, key: &str) -> Option<&'a str> {
-    script
-        .params
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| *v)
+/// S173: the one expected parameter, refused unless the script carries
+/// exactly it — no extras, no duplicates (first-match reselection
+/// would silently observe another target).
+fn sole_param<'a>(script: &'a Script<'_>, key: &str) -> Option<&'a str> {
+    if let [(k, v)] = &script.params[..] {
+        if *k == key {
+            return Some(*v);
+        }
+    }
+    None
+}
+
+/// S173: zero-parameter arms refuse any carried parameter.
+fn no_params(script: &Script<'_>) -> bool {
+    script.params.is_empty()
 }
 
 fn proc_limits() -> ProcLimits {
@@ -455,23 +464,31 @@ pub fn run_scenario(op: &str, script: &[u8], _body: Option<&[u8]>) -> ScenarioOu
         return ScenarioOutcome::UnknownCaseOrParameter;
     };
     match (op, script.case) {
-        ("acquire-self", "self") => ScenarioOutcome::Output(acquire_self()),
-        ("acquire", "dead") => ScenarioOutcome::Output(acquire_dead()),
-        ("acquire", "pid") => match param(&script, "pid").and_then(acquire_pid) {
+        ("acquire-self", "self") if no_params(&script) => {
+            ScenarioOutcome::Output(acquire_self())
+        }
+        ("acquire", "dead") if no_params(&script) => {
+            ScenarioOutcome::Output(acquire_dead())
+        }
+        ("acquire", "pid") => match sole_param(&script, "pid").and_then(acquire_pid) {
             Some(body) => ScenarioOutcome::Output(body),
             None => ScenarioOutcome::UnknownCaseOrParameter,
         },
-        ("spawn-observe", "child") => match param(&script, "child") {
+        ("spawn-observe", "child") => match sole_param(&script, "child") {
             Some(child) => match spawn_observe(child) {
                 Ok(body) => ScenarioOutcome::Output(body),
                 Err(error) => ScenarioOutcome::SpawnFailed(error),
             },
             None => ScenarioOutcome::UnknownCaseOrParameter,
         },
-        ("maps-self", "self") => ScenarioOutcome::Output(maps_self()),
-        ("mounts-self", "self") => ScenarioOutcome::Output(mounts_self()),
+        ("maps-self", "self") if no_params(&script) => {
+            ScenarioOutcome::Output(maps_self())
+        }
+        ("mounts-self", "self") if no_params(&script) => {
+            ScenarioOutcome::Output(mounts_self())
+        }
         ("mapping", "empty" | "unmapped" | "incoherent") => {
-            match param(&script, "path") {
+            match sole_param(&script, "path") {
                 Some(path) => ScenarioOutcome::Output(mapping_case(script.case, path)),
                 None => ScenarioOutcome::UnknownCaseOrParameter,
             }
@@ -723,5 +740,48 @@ fn mapping_case(case: &str, path: &str) -> String {
             _ => "verdict=unknown;".to_string(),
         },
         Err(failure) => refusal_of(failure.error()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run_scenario, ScenarioOutcome};
+
+    // S173: twin of S172 — exact param multiset per (op, case); extras
+    // and duplicates refuse instead of truncating to another target.
+    #[test]
+    fn extra_params_refuse() {
+        assert!(matches!(
+            run_scenario("spawn-observe", b"case=child;child=/bin/true;x=y;", None),
+            ScenarioOutcome::UnknownCaseOrParameter
+        ));
+        assert!(matches!(
+            run_scenario("acquire", b"case=pid;pid=1;x=y;", None),
+            ScenarioOutcome::UnknownCaseOrParameter
+        ));
+    }
+
+    #[test]
+    fn duplicate_params_refuse() {
+        assert!(matches!(
+            run_scenario("acquire", b"case=pid;pid=1;pid=2;", None),
+            ScenarioOutcome::UnknownCaseOrParameter
+        ));
+    }
+
+    #[test]
+    fn zero_param_arms_reject_params() {
+        assert!(matches!(
+            run_scenario("maps-self", b"case=self;x=y;", None),
+            ScenarioOutcome::UnknownCaseOrParameter
+        ));
+    }
+
+    #[test]
+    fn exact_single_param_accepts() {
+        assert!(matches!(
+            run_scenario("spawn-observe", b"case=child;child=/bin/true;", None),
+            ScenarioOutcome::Output(_)
+        ));
     }
 }

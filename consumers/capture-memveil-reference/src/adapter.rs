@@ -543,9 +543,16 @@ fn views_partial_then_final() -> Result<String, ContractError> {
     let second = ledger.snapshot(&[ClaimId::new(1)], &bare)?;
     Ok(format!(
         "first={};second={};",
-        reasons_text(&first[0]),
-        reasons_text(&second[0])
+        reasons_text(first_row(&first)?),
+        reasons_text(first_row(&second)?)
     ))
+}
+
+/// S202: checked first-row projection. A snapshot honoring
+/// selected-order yields one row per selected claim, but an empty
+/// result must refuse typed instead of panicking on `rows[0]`.
+fn first_row(rows: &[ClaimAssessment]) -> Result<&ClaimAssessment, ContractError> {
+    rows.first().ok_or(ContractError::MissingProvenance)
 }
 
 fn views_zero_case(at_least: bool) -> Result<String, ContractError> {
@@ -558,7 +565,7 @@ fn views_zero_case(at_least: bool) -> Result<String, ContractError> {
     ledger.record_loss(&loss_fact(magnitude)?, &[ClaimId::new(1)])?;
     let bare = QueryOverlay::new(&[], 4)?;
     let view = ledger.snapshot(&[ClaimId::new(1)], &bare)?;
-    Ok(format!("reasons={};", reasons_text(&view[0])))
+    Ok(format!("reasons={};", reasons_text(first_row(&view)?)))
 }
 
 fn feed_case(complete: bool) -> Result<String, ContractError> {
@@ -656,5 +663,21 @@ fn holder_stale() -> Result<String, ContractError> {
         )),
         Err(other) => Err(other),
         Ok(()) => Ok("unexpected-accept;".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_row;
+    use scopebase_capture::ContractError;
+
+    #[test]
+    fn empty_snapshot_refuses_without_panic() {
+        // S202: the views scenarios must map an empty snapshot to a
+        // typed refusal, never index `rows[0]`.
+        assert_eq!(
+            first_row(&[]).unwrap_err(),
+            ContractError::MissingProvenance
+        );
     }
 }

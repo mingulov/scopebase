@@ -56,6 +56,22 @@ pub const CAPTURE_CLAIM_BYTES: u64 = 8;
 /// Retained-payload cost per validated claim reason in bytes.
 #[cfg(feature = "capture")]
 pub const CAPTURE_REASON_BYTES: u64 = 4;
+/// Retained-payload cost per validated loss in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_LOSS_BYTES: u64 = 16;
+/// Retained-payload cost per validated signal in bytes.
+#[cfg(feature = "capture")]
+pub const CAPTURE_SIGNAL_BYTES: u64 = 8;
+/// Nominal retained-payload cost per validated partition in bytes.
+/// Partitions retain only a validated count (no vec), so this is a
+/// lane policy charge, not a measured size.
+#[cfg(feature = "capture")]
+pub const CAPTURE_PARTITION_BYTES: u64 = 4;
+/// Nominal retained-payload cost per validated correction in bytes.
+/// Corrections retain only a validated count (no vec), so this is a
+/// lane policy charge, not a measured size.
+#[cfg(feature = "capture")]
+pub const CAPTURE_CORRECTION_BYTES: u64 = 4;
 
 /// One bound component: the actual package coordinate plus optional artifact
 /// evidence. Coordinates are owned strings so applications can bind
@@ -398,13 +414,23 @@ impl AppContext {
 }
 
 /// Deterministic retained-payload cost of one validated snapshot: `128 +
-/// 32*counters + 8*claims + 4*reasons`, with checked arithmetic over the
+/// 32*counters + 16*losses + 8*signals + 8*claims + 4*reasons +
+/// 4*partitions + 4*corrections`, with checked arithmetic over the
 /// validated cardinalities. `None` on arithmetic overflow.
 #[cfg(feature = "capture")]
 fn snapshot_cost(report: &ValidatedNeutralV1) -> Option<u64> {
     let mut total = CAPTURE_SNAPSHOT_BASE_BYTES;
     total =
         total.checked_add((report.counters().len() as u64).checked_mul(CAPTURE_COUNTER_BYTES)?)?;
+    total = total.checked_add((report.losses().len() as u64).checked_mul(CAPTURE_LOSS_BYTES)?)?;
+    total =
+        total.checked_add((report.signals().len() as u64).checked_mul(CAPTURE_SIGNAL_BYTES)?)?;
+    total = total.checked_add(
+        (report.partition_count() as u64).checked_mul(CAPTURE_PARTITION_BYTES)?,
+    )?;
+    total = total.checked_add(
+        (report.correction_count() as u64).checked_mul(CAPTURE_CORRECTION_BYTES)?,
+    )?;
     total = total.checked_add((report.claims().len() as u64).checked_mul(CAPTURE_CLAIM_BYTES)?)?;
     let mut reasons: u64 = 0;
     for claim in report.claims() {

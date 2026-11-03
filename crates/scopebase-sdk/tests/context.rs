@@ -696,11 +696,21 @@ fn context_errors_render_without_payloads() {
         (ContextError::DuplicateObservation, "DuplicateObservation"),
         (ContextError::UnknownCapability, "UnknownCapability"),
         (ContextError::Capacity, "Capacity"),
+        // S216: the seventh variant — present in every feature mode,
+        // so the row is feature-safe.
+        (ContextError::CaptureAlreadyPresent, "CaptureAlreadyPresent"),
     ] {
         assert!(!error.to_string().is_empty());
         assert!(format!("{error:?}").contains(name));
         let _: &dyn std::error::Error = &error;
     }
+    // S216 self-review: the finding's second trigger — a wrong
+    // non-empty string — needs the exact sentence, which the table's
+    // non-empty shape cannot catch.
+    assert_eq!(
+        ContextError::CaptureAlreadyPresent.to_string(),
+        "capture snapshot already present"
+    );
 }
 
 #[test]

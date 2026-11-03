@@ -387,12 +387,21 @@ fn parse_script(raw: &[u8]) -> Option<Script<'_>> {
     Some(Script { case, params })
 }
 
-fn param<'a>(script: &'a Script<'_>, key: &str) -> Option<&'a str> {
-    script
-        .params
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| *v)
+/// S172: the one expected parameter, refused unless the script carries
+/// exactly it — no extras, no duplicates (first-match reselection
+/// would silently open another file).
+fn sole_param<'a>(script: &'a Script<'_>, key: &str) -> Option<&'a str> {
+    if let [(k, v)] = &script.params[..] {
+        if *k == key {
+            return Some(*v);
+        }
+    }
+    None
+}
+
+/// S172: zero-parameter arms refuse any carried parameter.
+fn no_params(script: &Script<'_>) -> bool {
+    script.params.is_empty()
 }
 
 /// Run one operation/case scenario over explicit caller paths. `None` names
@@ -412,14 +421,20 @@ pub fn script_value(value: &str) -> Option<&str> {
 pub fn run_scenario(op: &str, script: &[u8], body: Option<&[u8]>) -> Option<String> {
     let script = parse_script(script)?;
     match (op, script.case) {
-        ("open", "ok" | "missing" | "dir" | "symlink") => Some(open_case(param(&script, "path")?)),
-        ("read", "ok" | "empty" | "tiny" | "cancelled") => {
-            Some(read_case(script.case, param(&script, "path")?))
+        ("open", "ok" | "missing" | "dir" | "symlink") => {
+            Some(open_case(sole_param(&script, "path")?))
         }
-        ("parse-maps", "ok" | "live" | "bad") => Some(maps_case(script.case, body?)),
-        ("parse-mountinfo", "ok" | "bad") => Some(mounts_case(script.case, body?)),
+        ("read", "ok" | "empty" | "tiny" | "cancelled") => {
+            Some(read_case(script.case, sole_param(&script, "path")?))
+        }
+        ("parse-maps", "ok" | "live" | "bad") if no_params(&script) => {
+            Some(maps_case(script.case, body?))
+        }
+        ("parse-mountinfo", "ok" | "bad") if no_params(&script) => {
+            Some(mounts_case(script.case, body?))
+        }
         ("walk", "ok" | "tight" | "missing") => {
-            Some(walk_case(script.case, param(&script, "root")?))
+            Some(walk_case(script.case, sole_param(&script, "root")?))
         }
         _ => None,
     }
@@ -568,4 +583,43 @@ fn walk_case(case: &str, root: &str) -> String {
     ledger.record("entries", &paths.join(","));
     ledger.record("done", &done.to_string());
     ledger.render()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_scenario;
+
+    // S172: the script param multiset must be exactly the one key the
+    // (op, case) expects. Extra keys and duplicates refuse instead of
+    // silently selecting (first-match reselection opens another file).
+    #[test]
+    fn extra_params_refuse() {
+        assert_eq!(
+            run_scenario("open", b"case=ok;path=/x;probe=y;", None),
+            None
+        );
+        assert_eq!(run_scenario("walk", b"case=ok;root=/;x=1;", None), None);
+    }
+
+    #[test]
+    fn duplicate_params_refuse() {
+        assert_eq!(
+            run_scenario("open", b"case=ok;path=/real;path=/evil;", None),
+            None
+        );
+    }
+
+    #[test]
+    fn zero_param_arms_reject_params() {
+        assert_eq!(
+            run_scenario("parse-maps", b"case=ok;x=y;", Some(b"body")),
+            None
+        );
+    }
+
+    #[test]
+    fn exact_single_param_accepts() {
+        assert!(run_scenario("open", b"case=ok;path=/x;", None).is_some());
+        assert!(run_scenario("parse-maps", b"case=bad;", Some(b"broken\n")).is_some());
+    }
 }

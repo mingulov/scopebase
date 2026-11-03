@@ -285,6 +285,31 @@ impl ShutdownReport {
 /// Poll granularity for cooperative exit waits.
 const WAIT_POLL: Duration = Duration::from_millis(1);
 
+/// S213: classify a shutdown reap by the kill result AND the
+/// status. `Killed` requires both a delivered signal and signal
+/// death: a failed kill delivered nothing (ESRCH is the common
+/// case — the child exited between our `try_wait` and the kill),
+/// and a delivered SIGTERM that loses to `exit(0)` is still a
+/// clean exit, never a kill. (`Killed(0)` is unrepresentable by
+/// construction.)
+fn classify_shutdown_kill(kill: std::io::Result<()>, status: ExitStatus) -> ShutdownOutcome {
+    use std::os::unix::process::ExitStatusExt;
+    match kill {
+        Ok(()) if status.signal().is_some() => ShutdownOutcome::Killed(status),
+        _ => ShutdownOutcome::Exited(status),
+    }
+}
+
+/// S218: reap-failure mapping shared by every wait site
+/// (`wait_for_exit`, both shutdown waits). Reachable only under OS
+/// fault — a wait syscall failing on our owned live handle (ECHILD
+/// after an external reap, a trapped or seccomp-denied waitpid);
+/// normal exits, kills and timeouts never take this path, so no
+/// deterministic live-child test can reach it.
+fn map_reap_error(_: std::io::Error) -> ObserverError {
+    ObserverError::ReapFailed
+}
+
 /// Owned-workload host observer. Spawn-only custody: the observer records
 /// the PID of the child it spawned and refuses every other PID. Not
 /// [`Clone`]: custody of one child cannot be duplicated.
@@ -433,14 +458,17 @@ impl WorkloadObserver {
         let child = self.child.as_mut().ok_or(ObserverError::ReapFailed)?;
         let deadline = Instant::now().checked_add(timeout);
         loop {
-            match child.try_wait().map_err(|_| ObserverError::ReapFailed)? {
+            match child.try_wait().map_err(map_reap_error)? {
                 Some(status) => {
                     self.child = None;
                     self.last_exit = Some(status);
                     return Ok(WaitOutcome::Exited(status));
                 }
                 None => {
-                    let expired = deadline.is_none_or(|at| Instant::now() >= at);
+                    // S212: an overflowing deadline (`None`) saturates
+                    // to "never expires" — it must not time out
+                    // immediately.
+                    let expired = deadline.is_some_and(|at| Instant::now() >= at);
                     if expired {
                         return Ok(WaitOutcome::Timeout);
                     }
@@ -453,21 +481,24 @@ impl WorkloadObserver {
     /// Shut the observer down and reap the owned child exactly once. A
     /// still-running child is killed first and reported as
     /// [`ShutdownOutcome::Killed`]; an already-exited child is reaped and
-    /// reported as [`ShutdownOutcome::Exited`]. Blocks until the owned
-    /// child is reaped. A second shutdown is refused with
-    /// [`ObserverError::ShutDown`].
+    /// reported as [`ShutdownOutcome::Exited`]. A child that exits
+    /// between the running check and the kill (kill finds no
+    /// process) reports [`ShutdownOutcome::Exited`], never a kill —
+    /// as does a delivered kill that loses to a clean exit status.
+    /// Blocks until the owned child is reaped. A second shutdown is
+    /// refused with [`ObserverError::ShutDown`].
     pub fn shutdown(&mut self) -> Result<ShutdownReport, ObserverError> {
         if self.shut_down {
             return Err(ObserverError::ShutDown);
         }
         let outcome = if let Some(mut child) = self.child.take() {
-            match child.try_wait().map_err(|_| ObserverError::ReapFailed)? {
+            match child.try_wait().map_err(map_reap_error)? {
                 Some(status) => ShutdownOutcome::Exited(status),
                 None => {
-                    let _ = child.kill();
+                    let kill = child.kill();
                     match child.wait() {
-                        Ok(status) => ShutdownOutcome::Killed(status),
-                        Err(_) => return Err(ObserverError::ReapFailed),
+                        Ok(status) => classify_shutdown_kill(kill, status),
+                        Err(e) => return Err(map_reap_error(e)),
                     }
                 }
             }
@@ -498,6 +529,77 @@ impl Drop for WorkloadObserver {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// S213: `Killed` requires a delivered signal AND signal
+    /// death. A failed kill delivered nothing (ESRCH: the child
+    /// exited first); a delivered SIGTERM losing to `exit(0)` is
+    /// still clean — `Killed(0)` is unrepresentable.
+    #[test]
+    fn shutdown_kill_race_maps_esrch_to_exited() {
+        let clean = ExitStatus::from_raw(0);
+        let signaled = ExitStatus::from_raw(9);
+        assert!(!signaled.success());
+        // Delivered + signaled: the genuine kill.
+        assert!(matches!(
+            classify_shutdown_kill(Ok(()), signaled),
+            ShutdownOutcome::Killed(_)
+        ));
+        // Delivered but exited clean anyway: not a kill.
+        assert!(matches!(
+            classify_shutdown_kill(Ok(()), clean),
+            ShutdownOutcome::Exited(s) if s.success()
+        ));
+        // Failed kill + clean reap: natural exit.
+        assert!(matches!(
+            classify_shutdown_kill(
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "esrch")),
+                clean
+            ),
+            ShutdownOutcome::Exited(s) if s.success()
+        ));
+        // Failed kill + signaled status: still not OUR kill (no
+        // signal delivered — e.g. an external killer).
+        assert!(matches!(
+            classify_shutdown_kill(
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "esrch")),
+                signaled
+            ),
+            ShutdownOutcome::Exited(_)
+        ));
+        // Other kill failures also delivered nothing.
+        assert!(matches!(
+            classify_shutdown_kill(
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "eperm")),
+                clean
+            ),
+            ShutdownOutcome::Exited(s) if s.success()
+        ));
+    }
+
+    /// S218: every wait-site OS failure maps to `ReapFailed`,
+    /// whatever the errno. (The live path needs an OS fault no
+    /// deterministic test can stage; this pins the shared mapping
+    /// all three wait sites use.)
+    #[test]
+    fn wait_os_failures_map_to_reap_failed() {
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(matches!(
+                map_reap_error(std::io::Error::new(kind, "os fault")),
+                ObserverError::ReapFailed
+            ));
         }
     }
 }

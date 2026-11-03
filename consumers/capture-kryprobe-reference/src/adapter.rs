@@ -14,7 +14,7 @@ use scopebase_capture::{
     holder::HolderPair,
     loss::{fold_capped_signals, LossFact, LossKind, LossMagnitude},
     provenance::{
-        fold_insertion_identity, IdentityUnknown, LaneIdentity, ObservedIdentity, ProvenanceLane,
+        fold_insertion_identity, LaneIdentity, ProvenanceLane,
     },
     quantity::{Bytes, Count, Events},
     time::{TimeInterval, Timestamp},
@@ -353,7 +353,7 @@ impl ConformanceAdapter for KryprobeReferenceAdapter {
 fn is_known_op(op: &str) -> bool {
     matches!(
         op,
-        "fold" | "identity" | "bytes" | "feed" | "signals" | "delta" | "holder"
+        "fold" | "bytes" | "feed" | "signals" | "delta" | "holder"
     )
 }
 
@@ -423,7 +423,6 @@ pub fn run_scenario(op: &str, case: &str) -> Option<Result<String, ContractError
         ("fold", "duplicate-owner") => Some(fold_duplicate_owner()),
         ("fold", "saturated") => Some(fold_saturated()),
         ("fold", "missing-owner") => Some(fold_missing_owner()),
-        ("identity", "unknown") => Some(identity_unknown()),
         ("bytes", "survive") => Some(bytes_survive()),
         ("feed", "missing") => Some(feed_case(false)),
         ("feed", "complete") => Some(feed_case(true)),
@@ -478,18 +477,6 @@ fn fold_missing_owner() -> Result<String, ContractError> {
     ];
     let fold = fold_insertion_identity(&lanes)?;
     Ok(format!("total={};", fold.total().get()))
-}
-
-fn identity_unknown() -> Result<String, ContractError> {
-    let observed: ObservedIdentity<u64> = ObservedIdentity::Unknown(IdentityUnknown::NotObserved);
-    let name = match &observed {
-        ObservedIdentity::Unknown(IdentityUnknown::NotObserved) => "unknown:NotObserved",
-        ObservedIdentity::Unknown(IdentityUnknown::Ambiguous) => "unknown:Ambiguous",
-        ObservedIdentity::Unknown(IdentityUnknown::Exhausted) => "unknown:Exhausted",
-        ObservedIdentity::Known(_) => "known",
-        _ => "unknown:Other",
-    };
-    Ok(format!("identity={name};"))
 }
 
 fn bytes_survive() -> Result<String, ContractError> {
